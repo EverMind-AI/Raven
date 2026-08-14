@@ -441,22 +441,29 @@ class SessionGetResult(_Strict):
 
 
 class SessionCreateParams(_Strict):
-    channel: str
-    chat_id: str
-    metadata: dict[str, JsonValue] | None = None
+    cols: int | None = Field(default=None, description="Terminal width the client is drawing at.")
+    title: str | None = Field(default=None, description="Accepted and ignored; clients set titles via session.title.")
 
 
 class SessionCreateResult(_Strict):
-    session: SessionInfo
+    """The key is minted lazily -- no file is written until the first save."""
+
+    session_id: str
+    info: "SessionInitInfo"
 
 
 class SessionResumeParams(_Strict):
-    session_key: str
+    session_id: str | None = Field(default=None, description="An unknown key falls back to a freshly minted one.")
+    cols: int | None = None
 
 
 class SessionResumeResult(_Strict):
-    session: SessionInfo
-    last_messages: list[SessionMessage]
+    session_id: str
+    info: "SessionInitInfo"
+    messages: list["TranscriptMessage"] = Field(
+        ...,
+        description="Every stored message, not a sliced history: N stored is N on the wire.",
+    )
 
 
 class SessionDeleteParams(_Strict):
@@ -1133,7 +1140,849 @@ class SubagentsTestCancelResult(_Strict):
 # schema.  Keys MUST match the ``method.name`` strings in openrpc.json.
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# skillhub.* methods
+# ---------------------------------------------------------------------------
+
+
+class SkillhubSearchParams(_Strict):
+    query: str = Field("", description="Natural-language search; empty browses the hub.")
+    category: str = Field("", description="Category enum, e.g. DEV / TESTING / DOC-PROC.")
+    tags: str = Field("", description="Comma-separated tags, intersected.")
+    min_score: float | None = Field(None, ge=0.0, le=1.0)
+    page: int = Field(1, ge=1)
+    limit: int = Field(24, ge=1, le=50)
+
+
+class SkillhubDetailParams(_Strict):
+    id: str = Field(..., description="Hub UUID or dataset skill_id.")
+
+
+class SkillhubInstallParams(_Strict):
+    id: str
+
+
+class SkillhubRemoveParams(_Strict):
+    name: str = Field(..., description="Installed skill directory name.")
+
+
+# ---------------------------------------------------------------------------
+# plughub.* / plug.* — the plugin market
+# ---------------------------------------------------------------------------
+
+
+class McpSnapshot(_Strict):
+    """One server's live connection state, as `MCPConnectionManager` reports it.
+
+    Every mutating `plug.*` call answers with this, and the gateway broadcasts the
+    same shape as an `mcp.status` notification, so a client renders one state
+    machine rather than two.
+    """
+
+    name: str
+    transport: str = Field(..., description="stdio | sse | streamableHttp, or 'unknown'.")
+    state: Literal["disconnected", "connecting", "connected", "auth_required", "error"]
+    connected: bool
+    tool_count: int
+    error: str | None = None
+    enabled: bool
+
+
+class PlughubCatalogItem(_Strict):
+    """The card-sized projection of a catalogue entry."""
+
+    id: str
+    version: str = ""
+    name: str
+    summary: str
+    category: str
+    verified: bool
+    publisher: str
+    risk_tier: int
+    auth_mode: Literal["none", "apikey", "oauth"]
+    transport: str | None = Field(default=None, description="None when the entry contributes no MCP server.")
+    tool_preview_count: int
+    skill_count: int
+    kinds: list[str] = Field(..., description="Which contribution kinds the entry carries: mcp, skill, python.")
+    installed: bool
+
+
+class PlughubSearchParams(_Strict):
+    q: str = ""
+    category: str = ""
+
+
+class PlughubSearchResult(_Strict):
+    items: list[PlughubCatalogItem]
+    categories: list[str]
+
+
+class PlughubDetailParams(_Strict):
+    id: str
+
+
+class PlughubDetailResult(_Strict):
+    # The raw catalogue entry, whose shape the catalogue owns (contributes[],
+    # auth.fields[], tools_preview[], i18n name/summary objects). Typing it here
+    # would put a second, weaker definition of the catalogue format in the
+    # contract, and the first client to trust it over catalog.json would be wrong.
+    item: dict[str, Any]
+    installed: bool
+
+
+class PlugInstallParams(_Strict):
+    id: str
+    form: dict[str, str] = Field(default_factory=dict, description="Values for the entry's auth.fields, by key.")
+
+
+class PlugLedger(_Strict):
+    """What the install actually landed, which is what uninstall replays."""
+
+    catalog_id: str
+    pieces: list[dict[str, Any]] = Field(
+        ..., description="One entry per landed piece: {kind: 'mcp', server} or {kind: 'skill', name, skillhub_id}."
+    )
+
+
+class PlugInstallResult(_Strict):
+    installed: bool = Field(..., description="False while an auth flow is still open; see `pending`.")
+    pending: bool = Field(
+        ..., description="True when the browser round-trip has not settled inside the connect window."
+    )
+    ledger: PlugLedger
+    mcp: McpSnapshot | None = Field(default=None, description="None when no agent loop is running.")
+
+
+class PlugRemoveParams(_Strict):
+    name: str
+
+
+class PlugRemoveResult(_Strict):
+    removed: bool
+    origin: Literal["market", "manual"] = Field(
+        ..., description="'market' when a ledger drove the removal, 'manual' for a hand-written server."
+    )
+
+
+class PlugToggleParams(_Strict):
+    name: str
+    enabled: bool
+
+
+class PlugToggleResult(_Strict):
+    name: str
+    enabled: bool
+    mcp: McpSnapshot | None = None
+
+
+class PlugAuthParams(_Strict):
+    name: str
+
+
+class PlugAuthResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+# ---------------------------------------------------------------------------
+# skillhub.* results (the params models are above)
+# ---------------------------------------------------------------------------
+
+
+class SkillhubItem(_Strict):
+    id: str
+    skill_id: str
+    name: str
+    description: str
+    source: str
+    source_url: str
+    category: str
+    quality_score: float
+    install_count: int
+    github_star: int
+    license: str
+    tags: list[str]
+    installed: bool
+    installed_name: str = Field(..., description="The local directory name when installed, else empty.")
+
+
+class SkillhubSearchResult(_Strict):
+    items: list[SkillhubItem]
+    total: int
+    page: int
+    limit: int
+    base_url: str
+
+
+class SkillhubSubscores(_Strict):
+    utility: int
+    robustness: int
+    safety: int
+    flags: list[str]
+
+
+class SkillhubDetailResult(SkillhubItem):
+    files: list[str]
+    skill_md: str
+    body_tokens: int
+    subscores: SkillhubSubscores
+
+
+class SkillhubInstallResult(_Strict):
+    name: str
+    path: str
+    files: list[str]
+    skipped: list[str] = Field(..., description="Members the suffix/size policy refused, so the gap is visible.")
+    replaced: bool
+    size_bytes: int
+    install_count: int
+
+
+class SkillhubRemoveResult(_Strict):
+    removed: bool
+    name: str
+
+
+# ---------------------------------------------------------------------------
+# The session init bundle.
+#
+# ``session.create`` / ``session.resume`` / ``session.compress`` all hand back
+# the same three pieces: the id, the banner ``info``, and the transcript. The
+# models live here rather than beside the session methods above because
+# ``compress`` returns them too, and one definition is what makes a client able
+# to redraw from any of the three.
+# ---------------------------------------------------------------------------
+
+
+class SessionUsage(_Strict):
+    """``info.usage`` — the boot baseline, refreshed by each turn's completion.
+
+    Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
+    this one carries the context-window fill a banner draws, and its counters
+    are named for the session rather than for one LLM call.
+    """
+
+    input: int
+    output: int
+    cost_usd: float
+    calls: int
+    context_max: int
+    context_used: int
+    context_percent: int
+    context_estimated: bool | None = Field(
+        default=None,
+        description="True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.",
+    )
+
+
+class SessionInitInfo(_Strict):
+    """The banner bundle: which model, which tools and skills, how full."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model: str
+    model_id: str
+    provider: str
+    context_window: int
+    lazy: bool = Field(..., description="True when no agent loop was running, so tools/skills are empty.")
+    skills: dict[str, list[str]] = Field(..., description="Skill names grouped by source.")
+    tools: dict[str, list[str]] = Field(..., description="Tool names in a single 'builtin' bucket.")
+    usage: SessionUsage
+    version: str
+    cwd: str
+    mcp_servers: list[JsonValue]
+    update_available: bool | None = None
+    update_command: str | None = Field(default=None, description="The command that would install the newer release.")
+    endpoint: str | None = Field(
+        default=None,
+        description="Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.",
+    )
+
+
+class TranscriptToolCall(_Strict):
+    id: str
+    name: str
+    arguments: str = Field(..., description="JSON-encoded arguments; re-serialized when stored as an object.")
+
+
+class TranscriptMessage(_Strict):
+    """One stored message in wire form: ``content`` renamed to ``text``."""
+
+    role: str
+    text: str | None = None
+    context: JsonValue = None
+    name: str | None = None
+    tool_call_id: str | None = None
+    timestamp: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[TranscriptToolCall] | None = None
+
+
+class SessionCloseParams(_Strict):
+    session_id: str | None = Field(default=None, description="Absent or unknown is a no-op.")
+
+
+class SessionCloseResult(_Strict):
+    ok: bool
+
+
+class SessionBranchParams(_Strict):
+    session_id: str | None = None
+    name: str | None = Field(default=None, description="Title for the child session.")
+
+
+class SessionBranchResult(_Strict):
+    """``session_id`` is null when the source was unknown or empty, which the
+    caller treats as a no-op rather than an error."""
+
+    session_id: str | None = None
+    title: str | None = None
+    message_count: int | None = None
+
+
+class SessionCompressSummary(_Strict):
+    headline: str
+    noop: bool = Field(..., description="True when nothing moved, including when the context engine owns compaction.")
+    note: str | None = None
+    token_line: str | None = None
+
+
+class SessionCompressParams(_Strict):
+    session_id: str
+    focus_topic: str | None = None
+
+
+class SessionCompressResult(_Strict):
+    """The three redraw fields ride along only when something was archived: a
+    caller that just dropped half the transcript is looking at messages that no
+    longer exist."""
+
+    before_messages: int
+    after_messages: int
+    before_tokens: int
+    after_tokens: int
+    removed: int
+    summary: SessionCompressSummary
+    info: SessionInitInfo | None = None
+    messages: list[TranscriptMessage] | None = None
+    usage: SessionUsage | None = None
+
+
+class SessionStatusParams(_Strict):
+    session_id: str | None = None
+
+
+class SessionStatusResult(_Strict):
+    output: str = Field(..., description="Rich-rendered `raven status` output with ANSI SGR sequences.")
+
+
+# ---------------------------------------------------------------------------
+# The console surface: ext.list / cron.* / settings.* / channels.status / fs.*
+# ---------------------------------------------------------------------------
+
+
+class ExtSkillRow(_Strict):
+    name: str
+    description: str
+    source: str
+    always: bool
+    hub: bool = Field(..., description="Installed from the skill hub, so skillhub.remove can uninstall it.")
+    hub_id: str
+
+
+class ExtPluginRow(_Strict):
+    id: str
+    display_name: str
+    version: str
+    enabled: bool
+    bundled: bool
+
+
+class ExtToolRow(_Strict):
+    name: str
+    description: str
+    enabled: bool
+    mcp_server: str | None = Field(default=None, description="Owning MCP server, or null for a built-in tool.")
+
+
+class ExtListParams(_Strict):
+    pass
+
+
+class ExtListResult(_Strict):
+    skills: list[ExtSkillRow]
+    plugins: list[ExtPluginRow]
+    tools: list[ExtToolRow]
+    mcp: list[McpSnapshot] = Field(
+        ...,
+        description="Live connections, plus configured servers not yet connected, reported as disconnected.",
+    )
+
+
+class CronJobInfo(_Strict):
+    id: str
+    name: str
+    enabled: bool
+    kind: Literal["at", "every", "cron"]
+    expr: str | None = None
+    every_ms: int | None = None
+    at_ms: int | None = None
+    tz: str | None = None
+    message: str
+    deliver: bool
+    next_run_at_ms: int | None = None
+    last_run_at_ms: int | None = None
+    last_status: Literal["ok", "error", "skipped"] | None = None
+    last_error: str | None = None
+
+
+class CronListParams(_Strict):
+    pass
+
+
+class CronListResult(_Strict):
+    jobs: list[CronJobInfo] = Field(..., description="Disabled jobs included.")
+
+
+class CronSaveParams(_Strict):
+    """One shape for all three schedule kinds; which optional field is required
+    follows from ``kind``."""
+
+    kind: Literal["at", "every", "cron"]
+    name: str
+    message: str
+    expr: str | None = None
+    every_seconds: int | None = None
+    at_iso: str | None = None
+    tz: str | None = None
+    deliver: bool | None = None
+    id: str | None = Field(
+        default=None,
+        description="Editing an existing job: the id is kept so its run history does not orphan.",
+    )
+
+
+class CronSaveResult(_Strict):
+    job: CronJobInfo
+
+
+class CronDeleteParams(_Strict):
+    id: str
+
+
+class CronDeleteResult(_Strict):
+    deleted: bool
+
+
+class CronSetEnabledParams(_Strict):
+    id: str
+    enabled: bool
+
+
+class CronSetEnabledResult(_Strict):
+    enabled: bool
+
+
+class CronRunNowParams(_Strict):
+    id: str
+
+
+class CronRunNowResult(_Strict):
+    ok: bool
+
+
+class CronRun(_Strict):
+    at_ms: int | None = None
+    ok: bool
+    preview: str
+
+
+class CronRunsParams(_Strict):
+    id: str
+
+
+class CronRunsResult(_Strict):
+    runs: list[CronRun] = Field(..., description="Newest first, capped at 50.")
+    session_id: str = Field(..., description="The cron:<id> session the history is derived from.")
+
+
+class SettingsGetParams(_Strict):
+    pass
+
+
+class SettingsGetResult(_Strict):
+    settings: dict[str, JsonValue] = Field(..., description="Raw config.json with secret-looking values masked.")
+    config_path: str
+    raven_version: str
+
+
+class SettingsSetParams(_Strict):
+    key: str = Field(..., description="Dotted path; only whitelisted keys are writable through this method.")
+    value: JsonValue
+
+
+class SettingsSetResult(_Strict):
+    applied: bool
+    previous: JsonValue
+
+
+class ApiUsageTotals(_Strict):
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cost_usd: float
+
+
+class ApiUsageModel(ApiUsageTotals):
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model: str
+
+
+class LlmUsage(_Strict):
+    total: ApiUsageTotals
+    models: list[ApiUsageModel] = Field(..., description="Most expensive first.")
+
+
+class ToolUsageCount(_Strict):
+    name: str
+    count: int
+
+
+class ToolUsage(_Strict):
+    total: int
+    counts: list[ToolUsageCount] = Field(..., description="Most called first.")
+
+
+class SettingsUsageParams(_Strict):
+    days: int | None = Field(default=None, description="Window to scan; 30 by default, capped at 90.")
+
+
+class SettingsUsageResult(_Strict):
+    days: int
+    llm: LlmUsage
+    tools: ToolUsage
+
+
+class EverosSection(_Strict):
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model: str = Field(..., description="Empty when the shipped placeholder is still in place.")
+    base_url: str
+    provider: str
+    api_key_set: bool = Field(..., description="Whether a key is stored; the value never goes on the wire.")
+
+
+class SettingsEverosParams(_Strict):
+    pass
+
+
+class SettingsEverosResult(_Strict):
+    sections: dict[str, EverosSection]
+    config_path: str
+
+
+class SettingsEverosSetParams(_Strict):
+    section: str
+    fields: dict[str, str] | None = Field(default=None, description="Merged into the section; ignored when clearing.")
+    clear: bool | None = Field(default=None, description="Drop the section; refused for llm and embedding.")
+
+
+class SettingsEverosSetResult(_Strict):
+    applied: bool
+
+
+class ChannelStatusRow(_Strict):
+    name: str
+    enabled: bool
+    configured: bool
+    missing: list[str] = Field(..., description="Required fields still empty.")
+
+
+class ChannelsStatusParams(_Strict):
+    pass
+
+
+class ChannelsStatusResult(_Strict):
+    channels: list[ChannelStatusRow]
+    gateway_running: bool
+
+
+class FsEntry(_Strict):
+    name: str
+    dir: bool
+    size: int = Field(..., description="Zero for a directory.")
+
+
+class FsListParams(_Strict):
+    path: str | None = Field(default=None, description="Workspace-relative; the root when omitted.")
+
+
+class FsListResult(_Strict):
+    root: str
+    path: str
+    entries: list[FsEntry] = Field(..., description="Directories first, dotfiles omitted, capped at 500.")
+
+
+class FsReadParams(_Strict):
+    path: str
+    max_bytes: int | None = None
+
+
+class FsReadResult(_Strict):
+    content: str = Field(..., description="Decoded as UTF-8 with replacement, so binary never fails the call.")
+    truncated: bool
+    size: int = Field(..., description="Size on disk, which exceeds len(content) when truncated.")
+
+
+class FsUploadParams(_Strict):
+    name: str
+    content_b64: str
+
+
+class FsUploadResult(_Strict):
+    path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
+    abs_path: str
+    size: int
+
+
+# ---------------------------------------------------------------------------
+# memory.* — the EverOS long-term memory browser
+# ---------------------------------------------------------------------------
+
+
+MemoryKind = Literal["episode", "profile", "agent_case", "agent_skill"]
+
+
+class MemoryStatsParams(_Strict):
+    pass
+
+
+class MemoryStatsResult(_Strict):
+    """``ok`` is false when a kind could not be counted; the counts stay zero
+    rather than the call failing, so the page opens with EverOS down."""
+
+    ok: bool
+    base_url: str
+    episodes: int
+    profiles: int
+    agent_cases: int
+    agent_skills: int
+
+
+class MemoryItem(_Strict):
+    """One row, projected card-sized. ``kind`` decides which optional fields
+    carry a value: the four memory types share only ``id`` and ``kind``."""
+
+    id: str
+    kind: MemoryKind
+    score: float | None = Field(default=None, description="Present on search hits only.")
+    session_id: str | None = None
+    timestamp: str | None = None
+    subject: str | None = None
+    summary: str | None = None
+    body: str | None = None
+    profile_data: dict[str, JsonValue] | None = None
+    key_insight: str | None = None
+    quality_score: float | None = None
+    confidence: float | None = None
+    maturity_score: float | None = None
+
+
+class MemoryListParams(_Strict):
+    kind: MemoryKind
+    page: int | None = None
+    page_size: int | None = Field(default=None, description="Capped at 100.")
+    q: str | None = Field(default=None, description="Non-empty switches to search, which returns one page.")
+
+
+class MemoryListResult(_Strict):
+    items: list[MemoryItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class MemoryDeleteParams(_Strict):
+    kind: MemoryKind
+    id: str
+
+
+class MemoryDeleteResult(_Strict):
+    ok: bool
+    removed: int = Field(..., description="Deleting an episode also drops its derived facts and foresight.")
+
+
+# ---------------------------------------------------------------------------
+# The round-trip answer sinks, slash routing, and the rest
+# ---------------------------------------------------------------------------
+
+
+class ApprovalRespondParams(_Strict):
+    """Both identities travel so a delayed answer cannot resolve a newer request
+    that happens to show the same command."""
+
+    approval_id: str
+    choice: str = Field(..., description="allow | deny.")
+    session_id: str | None = None
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class ApprovalRespondResult(_Strict):
+    ok: bool = Field(..., description="False for an unknown, expired or mis-bound request; the caller fails closed.")
+
+
+class ClarifyRespondParams(_Strict):
+    answer: str
+    request_id: str | None = None
+    conversation_id: str | None = None
+
+
+class ClarifyRespondResult(_Strict):
+    ok: bool
+
+
+class ConfirmRespondParams(_Strict):
+    request_id: str
+    answer: bool
+
+
+class ConfirmRespondResult(_Strict):
+    ok: bool
+
+
+class CompleteSlashParams(_Strict):
+    word: str | None = None
+    session_id: str | None = None
+
+
+class CompleteSlashResult(_Strict):
+    """The provider is a no-op that exists to stop the client's
+    completion-unavailable toast, so ``items`` is always empty and its element
+    type is whatever a real provider would later return."""
+
+    items: list[JsonValue]
+    replace_from: int
+
+
+class CompletePathParams(_Strict):
+    word: str | None = None
+
+
+class CompletePathResult(_Strict):
+    items: list[JsonValue]
+
+
+class SlashExecParams(_Strict):
+    command: str = Field(..., description="The slash text without its leading slash; shlex-split into argv.")
+    session_id: str | None = None
+
+
+class SlashExecResult(_Strict):
+    """Never an error frame: an unknown verb, a blacklisted one, a timeout and a
+    non-zero exit all arrive here, because the client's error branch falls
+    through to a method that does not exist."""
+
+    output: str
+    warning: str | None = None
+
+
+class TerminalResizeParams(_Strict):
+    cols: int | None = None
+    rows: int | None = None
+    session_id: str | None = Field(default=None, description="Sent by the client; the handler does not read it.")
+
+
+class TerminalResizeResult(_Strict):
+    ok: bool
+
+
+class SystemUpgradeParams(_Strict):
+    pass
+
+
+class SystemUpgradeResult(_Strict):
+    """Returned once the detached helper owns the install. The shutdown is
+    scheduled a beat later so this reply reaches the client first."""
+
+    status: str
+    from_version: str
+    to_version: str
+    relaunch: bool = Field(..., description="Whether the helper will start `raven serve` again on the same port.")
+
+
+# ---------------------------------------------------------------------------
+# The remaining hermes-only stubs (-32012). Params are what ui-tui sends, which
+# is the only reason to describe a call that cannot succeed: the client is
+# typed against this contract whether the method works or not.
+# ---------------------------------------------------------------------------
+
+
+class VoiceRecordParams(_Strict):
+    action: str | None = None
+    session_id: str | None = None
+
+
+class SessionSaveParams(_Strict):
+    session_id: str | None = None
+
+
+class SessionSteerParams(_Strict):
+    session_id: str | None = None
+    text: str | None = None
+
+
+class SessionUsageParams(_Strict):
+    session_id: str | None = None
+
+
+class SkillsReloadParams(_Strict):
+    pass
+
+
+class ReloadEnvParams(_Strict):
+    pass
+
+
+class SudoRespondParams(_Strict):
+    request_id: str | None = None
+    password: str | None = None
+
+
+class SecretRespondParams(_Strict):
+    request_id: str | None = None
+    value: str | None = None
+
+
+class ImageAttachParams(_Strict):
+    path: str | None = None
+    session_id: str | None = None
+
+
+class PromptSubmitParams(_Strict):
+    session_id: str | None = None
+    text: str | None = None
+
+
+class PromptBackgroundParams(_Strict):
+    session_id: str | None = None
+    text: str | None = None
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
+    # plughub.* / plug.* / skillhub.* — the market
+    "plughub.search": (PlughubSearchParams, PlughubSearchResult),
+    "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
+    "plug.install": (PlugInstallParams, PlugInstallResult),
+    "plug.remove": (PlugRemoveParams, PlugRemoveResult),
+    "plug.toggle": (PlugToggleParams, PlugToggleResult),
+    "plug.auth": (PlugAuthParams, PlugAuthResult),
+    "skillhub.search": (SkillhubSearchParams, SkillhubSearchResult),
+    "skillhub.detail": (SkillhubDetailParams, SkillhubDetailResult),
+    "skillhub.install": (SkillhubInstallParams, SkillhubInstallResult),
+    "skillhub.remove": (SkillhubRemoveParams, SkillhubRemoveResult),
     # session.*
     "session.list": (SessionListParams, SessionListResult),
     "session.get": (SessionGetParams, SessionGetResult),
@@ -1146,6 +1995,40 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.undo": (SessionUndoParams, SessionUndoResult),
     "session.export": (SessionExportParams, SessionExportResult),
     "session.history": (SessionHistoryParams, SessionHistoryResult),
+    "session.close": (SessionCloseParams, SessionCloseResult),
+    "session.branch": (SessionBranchParams, SessionBranchResult),
+    "session.compress": (SessionCompressParams, SessionCompressResult),
+    "session.status": (SessionStatusParams, SessionStatusResult),
+    # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
+    "ext.list": (ExtListParams, ExtListResult),
+    "cron.list": (CronListParams, CronListResult),
+    "cron.save": (CronSaveParams, CronSaveResult),
+    "cron.delete": (CronDeleteParams, CronDeleteResult),
+    "cron.set_enabled": (CronSetEnabledParams, CronSetEnabledResult),
+    "cron.run_now": (CronRunNowParams, CronRunNowResult),
+    "cron.runs": (CronRunsParams, CronRunsResult),
+    "settings.get": (SettingsGetParams, SettingsGetResult),
+    "settings.set": (SettingsSetParams, SettingsSetResult),
+    "settings.usage": (SettingsUsageParams, SettingsUsageResult),
+    "settings.everos": (SettingsEverosParams, SettingsEverosResult),
+    "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
+    "fs.list": (FsListParams, FsListResult),
+    "fs.read": (FsReadParams, FsReadResult),
+    "fs.upload": (FsUploadParams, FsUploadResult),
+    # memory.*
+    "memory.stats": (MemoryStatsParams, MemoryStatsResult),
+    "memory.list": (MemoryListParams, MemoryListResult),
+    "memory.delete": (MemoryDeleteParams, MemoryDeleteResult),
+    # the round-trip answer sinks
+    "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
+    "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),
+    "confirm.respond": (ConfirmRespondParams, ConfirmRespondResult),
+    # slash routing and completion
+    "slash.exec": (SlashExecParams, SlashExecResult),
+    "complete.slash": (CompleteSlashParams, CompleteSlashResult),
+    "complete.path": (CompletePathParams, CompletePathResult),
+    "terminal.resize": (TerminalResizeParams, TerminalResizeResult),
     # turn.*
     "turn.send": (TurnSendParams, TurnSendResult),
     "turn.subscribe": (TurnSubscribeParams, TurnSubscribeResult),
@@ -1184,6 +2067,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),
     "system.version": (SystemVersionParams, SystemVersionResult),
+    "system.upgrade": (SystemUpgradeParams, SystemUpgradeResult),
     # cli.* / setup.* / reload.* / commands.*
     "cli.dispatch": (CliDispatchParams, CliResult),
     "setup.status": (SetupStatusParams, SetupStatusResult),
@@ -1200,36 +2084,21 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "rollback.diff": (RollbackDiffParams, StubResult),
     "rollback.restore": (RollbackRestoreParams, StubResult),
     "tools.configure": (ToolsConfigureParams, StubResult),
+    "voice.record": (VoiceRecordParams, StubResult),
+    "session.save": (SessionSaveParams, StubResult),
+    "session.steer": (SessionSteerParams, StubResult),
+    "session.usage": (SessionUsageParams, StubResult),
+    "skills.reload": (SkillsReloadParams, StubResult),
+    "reload.env": (ReloadEnvParams, StubResult),
+    "sudo.respond": (SudoRespondParams, StubResult),
+    "secret.respond": (SecretRespondParams, StubResult),
+    "image.attach": (ImageAttachParams, StubResult),
+    "prompt.submit": (PromptSubmitParams, StubResult),
+    "prompt.background": (PromptBackgroundParams, StubResult),
     # dag.*
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),
 }
-
-# ---------------------------------------------------------------------------
-# skillhub.* methods
-# ---------------------------------------------------------------------------
-
-
-class SkillhubSearchParams(_Strict):
-    query: str = Field("", description="Natural-language search; empty browses the hub.")
-    category: str = Field("", description="Category enum, e.g. DEV / TESTING / DOC-PROC.")
-    tags: str = Field("", description="Comma-separated tags, intersected.")
-    min_score: float | None = Field(None, ge=0.0, le=1.0)
-    page: int = Field(1, ge=1)
-    limit: int = Field(24, ge=1, le=50)
-
-
-class SkillhubDetailParams(_Strict):
-    id: str = Field(..., description="Hub UUID or dataset skill_id.")
-
-
-class SkillhubInstallParams(_Strict):
-    id: str
-
-
-class SkillhubRemoveParams(_Strict):
-    name: str = Field(..., description="Installed skill directory name.")
-
 
 __all__ = [
     # public types
@@ -1280,11 +2149,33 @@ __all__ = [
     "DagNodeResult",
     "DagRunSnapshot",
     "DagNodeDetail",
+    # market
+    "McpSnapshot",
+    "PlugAuthParams",
+    "PlugAuthResult",
+    "PlugInstallParams",
+    "PlugInstallResult",
+    "PlugLedger",
+    "PlugRemoveParams",
+    "PlugRemoveResult",
+    "PlugToggleParams",
+    "PlugToggleResult",
+    "PlughubCatalogItem",
+    "PlughubDetailParams",
+    "PlughubDetailResult",
+    "PlughubSearchParams",
+    "PlughubSearchResult",
     # skillhub
     "SkillhubDetailParams",
     "SkillhubInstallParams",
+    "SkillhubDetailResult",
+    "SkillhubInstallResult",
+    "SkillhubItem",
     "SkillhubRemoveParams",
+    "SkillhubRemoveResult",
     "SkillhubSearchParams",
+    "SkillhubSearchResult",
+    "SkillhubSubscores",
     # registry
     "METHOD_MODELS",
 ]

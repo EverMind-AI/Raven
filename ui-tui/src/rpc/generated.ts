@@ -54,6 +54,398 @@ export type TurnEvent =
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionCompressSummary".
+ */
+export interface SessionCompressSummary {
+  headline: string;
+  /**
+   * True when nothing moved, including when the context engine owns compaction.
+   */
+  noop: boolean;
+  note?: string;
+  token_line?: string;
+}
+/**
+ * The banner bundle: which model, which tools and skills, how full.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionInitInfo".
+ */
+export interface SessionInitInfo {
+  model: string;
+  model_id: string;
+  provider: string;
+  context_window: number;
+  /**
+   * True when no agent loop was running, so tools/skills are empty.
+   */
+  lazy: boolean;
+  /**
+   * Skill names grouped by source.
+   */
+  skills: {
+    [k: string]: string[];
+  };
+  /**
+   * Tool names in a single 'builtin' bucket.
+   */
+  tools: {
+    [k: string]: string[];
+  };
+  usage: SessionUsage;
+  version: string;
+  cwd: string;
+  mcp_servers: JsonValue[];
+  update_available?: boolean;
+  /**
+   * The command that would install the newer release.
+   */
+  update_command?: string;
+  /**
+   * Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.
+   */
+  endpoint?: string;
+}
+/**
+ * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
+ *
+ * Distinct from :class:`UsageSnapshot`, which is the per-turn event payload:
+ * this one carries the context-window fill a banner draws, and its counters
+ * are named for the session rather than for one LLM call.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionUsage".
+ */
+export interface SessionUsage {
+  input: number;
+  output: number;
+  cost_usd: number;
+  calls: number;
+  context_max: number;
+  context_used: number;
+  context_percent: number;
+  /**
+   * True when context_used is a tiktoken estimate of a resumed transcript, not a measurement.
+   */
+  context_estimated?: boolean;
+}
+/**
+ * One stored message in wire form: ``content`` renamed to ``text``.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptMessage".
+ */
+export interface TranscriptMessage {
+  role: string;
+  text?: string;
+  context?: JsonValue;
+  name?: string;
+  tool_call_id?: string;
+  timestamp?: string;
+  reasoning_content?: string;
+  tool_calls?: TranscriptToolCall[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptToolCall".
+ */
+export interface TranscriptToolCall {
+  id: string;
+  name: string;
+  /**
+   * JSON-encoded arguments; re-serialized when stored as an object.
+   */
+  arguments: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ExtPluginRow".
+ */
+export interface ExtPluginRow {
+  id: string;
+  display_name: string;
+  version: string;
+  enabled: boolean;
+  bundled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ExtSkillRow".
+ */
+export interface ExtSkillRow {
+  name: string;
+  description: string;
+  source: string;
+  always: boolean;
+  /**
+   * Installed from the skill hub, so skillhub.remove can uninstall it.
+   */
+  hub: boolean;
+  hub_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ExtToolRow".
+ */
+export interface ExtToolRow {
+  name: string;
+  description: string;
+  enabled: boolean;
+  /**
+   * Owning MCP server, or null for a built-in tool.
+   */
+  mcp_server?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronJobInfo".
+ */
+export interface CronJobInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  kind: 'at' | 'every' | 'cron';
+  expr?: string;
+  every_ms?: number;
+  at_ms?: number;
+  tz?: string;
+  message: string;
+  deliver: boolean;
+  next_run_at_ms?: number;
+  last_run_at_ms?: number;
+  last_status?: 'ok' | 'error' | 'skipped';
+  last_error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronRun".
+ */
+export interface CronRun {
+  at_ms?: number;
+  ok: boolean;
+  preview: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApiUsageModel".
+ */
+export interface ApiUsageModel {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  model: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApiUsageTotals".
+ */
+export interface ApiUsageTotals {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "LlmUsage".
+ */
+export interface LlmUsage {
+  total: ApiUsageTotals;
+  /**
+   * Most expensive first.
+   */
+  models: ApiUsageModel[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ToolUsage".
+ */
+export interface ToolUsage {
+  total: number;
+  /**
+   * Most called first.
+   */
+  counts: ToolUsageCount[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ToolUsageCount".
+ */
+export interface ToolUsageCount {
+  name: string;
+  count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "EverosSection".
+ */
+export interface EverosSection {
+  /**
+   * Empty when the shipped placeholder is still in place.
+   */
+  model: string;
+  base_url: string;
+  provider: string;
+  /**
+   * Whether a key is stored; the value never goes on the wire.
+   */
+  api_key_set: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelStatusRow".
+ */
+export interface ChannelStatusRow {
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+  /**
+   * Required fields still empty.
+   */
+  missing: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsEntry".
+ */
+export interface FsEntry {
+  name: string;
+  dir: boolean;
+  /**
+   * Zero for a directory.
+   */
+  size: number;
+}
+/**
+ * One row, projected card-sized. ``kind`` decides which optional fields
+ * carry a value: the four memory types share only ``id`` and ``kind``.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryItem".
+ */
+export interface MemoryItem {
+  id: string;
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  /**
+   * Present on search hits only.
+   */
+  score?: number;
+  session_id?: string;
+  timestamp?: string;
+  subject?: string;
+  summary?: string;
+  body?: string;
+  profile_data?: {
+    [k: string]: JsonValue;
+  };
+  key_insight?: string;
+  quality_score?: number;
+  confidence?: number;
+  maturity_score?: number;
+}
+/**
+ * The card-sized projection of a catalogue entry.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlughubCatalogItem".
+ */
+export interface PlughubCatalogItem {
+  id: string;
+  version?: string;
+  name: string;
+  summary: string;
+  category: string;
+  verified: boolean;
+  publisher: string;
+  risk_tier: number;
+  auth_mode: 'none' | 'apikey' | 'oauth';
+  /**
+   * None when the entry contributes no MCP server.
+   */
+  transport?: string;
+  tool_preview_count: number;
+  skill_count: number;
+  /**
+   * Which contribution kinds the entry carries: mcp, skill, python.
+   */
+  kinds: string[];
+  installed: boolean;
+}
+/**
+ * One server's live connection state, as `MCPConnectionManager` reports it.
+ *
+ * Every mutating `plug.*` call answers with this, and the gateway broadcasts the
+ * same shape as an `mcp.status` notification, so a client renders one state
+ * machine rather than two.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "McpSnapshot".
+ */
+export interface McpSnapshot {
+  name: string;
+  /**
+   * stdio | sse | streamableHttp, or 'unknown'.
+   */
+  transport: string;
+  state: 'disconnected' | 'connecting' | 'connected' | 'auth_required' | 'error';
+  connected: boolean;
+  tool_count: number;
+  error?: string;
+  enabled: boolean;
+}
+/**
+ * What the install actually landed, which is what uninstall replays.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugLedger".
+ */
+export interface PlugLedger {
+  catalog_id: string;
+  /**
+   * One entry per landed piece: {kind: 'mcp', server} or {kind: 'skill', name, skillhub_id}.
+   */
+  pieces: {
+    [k: string]: JsonValue;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubItem".
+ */
+export interface SkillhubItem {
+  id: string;
+  skill_id: string;
+  name: string;
+  description: string;
+  source: string;
+  source_url: string;
+  category: string;
+  quality_score: number;
+  install_count: number;
+  github_star: number;
+  license: string;
+  tags: string[];
+  installed: boolean;
+  /**
+   * The local directory name when installed, else empty.
+   */
+  installed_name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubSubscores".
+ */
+export interface SkillhubSubscores {
+  utility: number;
+  robustness: number;
+  safety: number;
+  flags: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionInfo".
  */
 export interface SessionInfo {
@@ -294,6 +686,39 @@ export interface CliResult {
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ToolsConfigureResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "VoiceRecordResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSaveResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSteerResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionUsageResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillsReloadResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ReloadEnvResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SudoRespondResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SecretRespondResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImageAttachResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PromptSubmitResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PromptBackgroundResult".
  */
 export interface StubResult {
   /**
@@ -619,33 +1044,47 @@ export interface SessionGetResult {
  * via the `definition` "SessionCreateParams".
  */
 export interface SessionCreateParams {
-  channel: string;
-  chat_id: string;
-  metadata?: {
-    [k: string]: JsonValue;
-  };
+  /**
+   * Terminal width the client is drawing at.
+   */
+  cols?: number;
+  /**
+   * Accepted and ignored; clients set titles via session.title.
+   */
+  title?: string;
 }
 /**
+ * The key is minted lazily -- no file is written until the first save.
+ *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionCreateResult".
  */
 export interface SessionCreateResult {
-  session: SessionInfo;
+  session_id: string;
+  info: SessionInitInfo;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionResumeParams".
  */
 export interface SessionResumeParams {
-  session_key: string;
+  /**
+   * An unknown key falls back to a freshly minted one.
+   */
+  session_id?: string;
+  cols?: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionResumeResult".
  */
 export interface SessionResumeResult {
-  session: SessionInfo;
-  last_messages: SessionMessage[];
+  session_id: string;
+  info: SessionInitInfo;
+  /**
+   * Every stored message, not a sliced history: N stored is N on the wire.
+   */
+  messages: TranscriptMessage[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1447,19 +1886,950 @@ export interface DagNodeParams {
 export interface DagNodeResult {
   node: DagNodeDetail;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlughubSearchParams".
+ */
+export interface PlughubSearchParams {
+  q?: string;
+  category?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlughubSearchResult".
+ */
+export interface PlughubSearchResult {
+  items: PlughubCatalogItem[];
+  categories: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlughubDetailParams".
+ */
+export interface PlughubDetailParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlughubDetailResult".
+ */
+export interface PlughubDetailResult {
+  item: {
+    [k: string]: JsonValue;
+  };
+  installed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugInstallParams".
+ */
+export interface PlugInstallParams {
+  id: string;
+  /**
+   * Values for the entry's auth.fields, by key.
+   */
+  form?: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugInstallResult".
+ */
+export interface PlugInstallResult {
+  /**
+   * False while an auth flow is still open; see `pending`.
+   */
+  installed: boolean;
+  /**
+   * True when the browser round-trip has not settled inside the connect window.
+   */
+  pending: boolean;
+  ledger: PlugLedger;
+  mcp?: McpSnapshot1;
+}
+/**
+ * One server's live connection state, as `MCPConnectionManager` reports it.
+ *
+ * Every mutating `plug.*` call answers with this, and the gateway broadcasts the
+ * same shape as an `mcp.status` notification, so a client renders one state
+ * machine rather than two.
+ */
+export interface McpSnapshot1 {
+  name: string;
+  /**
+   * stdio | sse | streamableHttp, or 'unknown'.
+   */
+  transport: string;
+  state: 'disconnected' | 'connecting' | 'connected' | 'auth_required' | 'error';
+  connected: boolean;
+  tool_count: number;
+  error?: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRemoveParams".
+ */
+export interface PlugRemoveParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRemoveResult".
+ */
+export interface PlugRemoveResult {
+  removed: boolean;
+  /**
+   * 'market' when a ledger drove the removal, 'manual' for a hand-written server.
+   */
+  origin: 'market' | 'manual';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugToggleParams".
+ */
+export interface PlugToggleParams {
+  name: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugToggleResult".
+ */
+export interface PlugToggleResult {
+  name: string;
+  enabled: boolean;
+  mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugAuthParams".
+ */
+export interface PlugAuthParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugAuthResult".
+ */
+export interface PlugAuthResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubSearchParams".
+ */
+export interface SkillhubSearchParams {
+  /**
+   * Natural-language search; empty browses the hub.
+   */
+  query?: string;
+  /**
+   * Category enum, e.g. DEV / TESTING / DOC-PROC.
+   */
+  category?: string;
+  /**
+   * Comma-separated tags, intersected.
+   */
+  tags?: string;
+  min_score?: number;
+  page?: number;
+  limit?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubSearchResult".
+ */
+export interface SkillhubSearchResult {
+  items: SkillhubItem[];
+  total: number;
+  page: number;
+  limit: number;
+  base_url: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubDetailParams".
+ */
+export interface SkillhubDetailParams {
+  /**
+   * Hub UUID or dataset skill_id.
+   */
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubDetailResult".
+ */
+export interface SkillhubDetailResult {
+  id: string;
+  skill_id: string;
+  name: string;
+  description: string;
+  source: string;
+  source_url: string;
+  category: string;
+  quality_score: number;
+  install_count: number;
+  github_star: number;
+  license: string;
+  tags: string[];
+  installed: boolean;
+  /**
+   * The local directory name when installed, else empty.
+   */
+  installed_name: string;
+  files: string[];
+  skill_md: string;
+  body_tokens: number;
+  subscores: SkillhubSubscores;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubInstallParams".
+ */
+export interface SkillhubInstallParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubInstallResult".
+ */
+export interface SkillhubInstallResult {
+  name: string;
+  path: string;
+  files: string[];
+  /**
+   * Members the suffix/size policy refused, so the gap is visible.
+   */
+  skipped: string[];
+  replaced: boolean;
+  size_bytes: number;
+  install_count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubRemoveParams".
+ */
+export interface SkillhubRemoveParams {
+  /**
+   * Installed skill directory name.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillhubRemoveResult".
+ */
+export interface SkillhubRemoveResult {
+  removed: boolean;
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionCloseParams".
+ */
+export interface SessionCloseParams {
+  /**
+   * Absent or unknown is a no-op.
+   */
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionCloseResult".
+ */
+export interface SessionCloseResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionBranchParams".
+ */
+export interface SessionBranchParams {
+  session_id?: string;
+  /**
+   * Title for the child session.
+   */
+  name?: string;
+}
+/**
+ * ``session_id`` is null when the source was unknown or empty, which the
+ * caller treats as a no-op rather than an error.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionBranchResult".
+ */
+export interface SessionBranchResult {
+  session_id?: string;
+  title?: string;
+  message_count?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionCompressParams".
+ */
+export interface SessionCompressParams {
+  session_id: string;
+  focus_topic?: string;
+}
+/**
+ * The three redraw fields ride along only when something was archived: a
+ * caller that just dropped half the transcript is looking at messages that no
+ * longer exist.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionCompressResult".
+ */
+export interface SessionCompressResult {
+  before_messages: number;
+  after_messages: number;
+  before_tokens: number;
+  after_tokens: number;
+  removed: number;
+  summary: SessionCompressSummary;
+  info?: SessionInitInfo;
+  messages?: TranscriptMessage[];
+  usage?: SessionUsage;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionStatusParams".
+ */
+export interface SessionStatusParams {
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionStatusResult".
+ */
+export interface SessionStatusResult {
+  /**
+   * Rich-rendered `raven status` output with ANSI SGR sequences.
+   */
+  output: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ExtListParams".
+ */
+export interface ExtListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ExtListResult".
+ */
+export interface ExtListResult {
+  skills: ExtSkillRow[];
+  plugins: ExtPluginRow[];
+  tools: ExtToolRow[];
+  /**
+   * Live connections, plus configured servers not yet connected, reported as disconnected.
+   */
+  mcp: McpSnapshot[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronListParams".
+ */
+export interface CronListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronListResult".
+ */
+export interface CronListResult {
+  /**
+   * Disabled jobs included.
+   */
+  jobs: CronJobInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronSaveParams".
+ */
+export interface CronSaveParams {
+  kind: 'at' | 'every' | 'cron';
+  name: string;
+  message: string;
+  expr?: string;
+  every_seconds?: number;
+  at_iso?: string;
+  tz?: string;
+  deliver?: boolean;
+  /**
+   * Editing an existing job: the id is kept so its run history does not orphan.
+   */
+  id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronSaveResult".
+ */
+export interface CronSaveResult {
+  job: CronJobInfo;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronDeleteParams".
+ */
+export interface CronDeleteParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronDeleteResult".
+ */
+export interface CronDeleteResult {
+  deleted: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronSetEnabledParams".
+ */
+export interface CronSetEnabledParams {
+  id: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronSetEnabledResult".
+ */
+export interface CronSetEnabledResult {
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronRunNowParams".
+ */
+export interface CronRunNowParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronRunNowResult".
+ */
+export interface CronRunNowResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronRunsParams".
+ */
+export interface CronRunsParams {
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronRunsResult".
+ */
+export interface CronRunsResult {
+  /**
+   * Newest first, capped at 50.
+   */
+  runs: CronRun[];
+  /**
+   * The cron:<id> session the history is derived from.
+   */
+  session_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsGetParams".
+ */
+export interface SettingsGetParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsGetResult".
+ */
+export interface SettingsGetResult {
+  /**
+   * Raw config.json with secret-looking values masked.
+   */
+  settings: {
+    [k: string]: JsonValue;
+  };
+  config_path: string;
+  raven_version: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsSetParams".
+ */
+export interface SettingsSetParams {
+  /**
+   * Dotted path; only whitelisted keys are writable through this method.
+   */
+  key: string;
+  value: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsSetResult".
+ */
+export interface SettingsSetResult {
+  applied: boolean;
+  previous: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsUsageParams".
+ */
+export interface SettingsUsageParams {
+  /**
+   * Window to scan; 30 by default, capped at 90.
+   */
+  days?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsUsageResult".
+ */
+export interface SettingsUsageResult {
+  days: number;
+  llm: LlmUsage;
+  tools: ToolUsage;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosParams".
+ */
+export interface SettingsEverosParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosResult".
+ */
+export interface SettingsEverosResult {
+  sections: {
+    [k: string]: EverosSection;
+  };
+  config_path: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosSetParams".
+ */
+export interface SettingsEverosSetParams {
+  section: string;
+  /**
+   * Merged into the section; ignored when clearing.
+   */
+  fields?: {
+    [k: string]: string;
+  };
+  /**
+   * Drop the section; refused for llm and embedding.
+   */
+  clear?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosSetResult".
+ */
+export interface SettingsEverosSetResult {
+  applied: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsStatusParams".
+ */
+export interface ChannelsStatusParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsStatusResult".
+ */
+export interface ChannelsStatusResult {
+  channels: ChannelStatusRow[];
+  gateway_running: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsListParams".
+ */
+export interface FsListParams {
+  /**
+   * Workspace-relative; the root when omitted.
+   */
+  path?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsListResult".
+ */
+export interface FsListResult {
+  root: string;
+  path: string;
+  /**
+   * Directories first, dotfiles omitted, capped at 500.
+   */
+  entries: FsEntry[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsReadParams".
+ */
+export interface FsReadParams {
+  path: string;
+  max_bytes?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsReadResult".
+ */
+export interface FsReadResult {
+  /**
+   * Decoded as UTF-8 with replacement, so binary never fails the call.
+   */
+  content: string;
+  truncated: boolean;
+  /**
+   * Size on disk, which exceeds len(content) when truncated.
+   */
+  size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsUploadParams".
+ */
+export interface FsUploadParams {
+  name: string;
+  content_b64: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsUploadResult".
+ */
+export interface FsUploadResult {
+  /**
+   * Workspace-relative path to hand the agent; uploads never return bytes.
+   */
+  path: string;
+  abs_path: string;
+  size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryStatsParams".
+ */
+export interface MemoryStatsParams {}
+/**
+ * ``ok`` is false when a kind could not be counted; the counts stay zero
+ * rather than the call failing, so the page opens with EverOS down.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryStatsResult".
+ */
+export interface MemoryStatsResult {
+  ok: boolean;
+  base_url: string;
+  episodes: number;
+  profiles: number;
+  agent_cases: number;
+  agent_skills: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryListParams".
+ */
+export interface MemoryListParams {
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  page?: number;
+  /**
+   * Capped at 100.
+   */
+  page_size?: number;
+  /**
+   * Non-empty switches to search, which returns one page.
+   */
+  q?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryListResult".
+ */
+export interface MemoryListResult {
+  items: MemoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryDeleteParams".
+ */
+export interface MemoryDeleteParams {
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryDeleteResult".
+ */
+export interface MemoryDeleteResult {
+  ok: boolean;
+  /**
+   * Deleting an episode also drops its derived facts and foresight.
+   */
+  removed: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalRespondParams".
+ */
+export interface ApprovalRespondParams {
+  approval_id: string;
+  /**
+   * allow | deny.
+   */
+  choice: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ApprovalRespondResult".
+ */
+export interface ApprovalRespondResult {
+  /**
+   * False for an unknown, expired or mis-bound request; the caller fails closed.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ClarifyRespondParams".
+ */
+export interface ClarifyRespondParams {
+  answer: string;
+  request_id?: string;
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ClarifyRespondResult".
+ */
+export interface ClarifyRespondResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ConfirmRespondParams".
+ */
+export interface ConfirmRespondParams {
+  request_id: string;
+  answer: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ConfirmRespondResult".
+ */
+export interface ConfirmRespondResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SlashExecParams".
+ */
+export interface SlashExecParams {
+  /**
+   * The slash text without its leading slash; shlex-split into argv.
+   */
+  command: string;
+  session_id?: string;
+}
+/**
+ * Never an error frame: an unknown verb, a blacklisted one, a timeout and a
+ * non-zero exit all arrive here, because the client's error branch falls
+ * through to a method that does not exist.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SlashExecResult".
+ */
+export interface SlashExecResult {
+  output: string;
+  warning?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CompleteSlashParams".
+ */
+export interface CompleteSlashParams {
+  word?: string;
+  session_id?: string;
+}
+/**
+ * The provider is a no-op that exists to stop the client's
+ * completion-unavailable toast, so ``items`` is always empty and its element
+ * type is whatever a real provider would later return.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CompleteSlashResult".
+ */
+export interface CompleteSlashResult {
+  items: JsonValue[];
+  replace_from: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CompletePathParams".
+ */
+export interface CompletePathParams {
+  word?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CompletePathResult".
+ */
+export interface CompletePathResult {
+  items: JsonValue[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalResizeParams".
+ */
+export interface TerminalResizeParams {
+  cols?: number;
+  rows?: number;
+  /**
+   * Sent by the client; the handler does not read it.
+   */
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TerminalResizeResult".
+ */
+export interface TerminalResizeResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SystemUpgradeParams".
+ */
+export interface SystemUpgradeParams {}
+/**
+ * Returned once the detached helper owns the install. The shutdown is
+ * scheduled a beat later so this reply reaches the client first.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SystemUpgradeResult".
+ */
+export interface SystemUpgradeResult {
+  status: string;
+  from_version: string;
+  to_version: string;
+  /**
+   * Whether the helper will start `raven serve` again on the same port.
+   */
+  relaunch: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "VoiceRecordParams".
+ */
+export interface VoiceRecordParams {
+  action?: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSaveParams".
+ */
+export interface SessionSaveParams {
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSteerParams".
+ */
+export interface SessionSteerParams {
+  session_id?: string;
+  text?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionUsageParams".
+ */
+export interface SessionUsageParams {
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SkillsReloadParams".
+ */
+export interface SkillsReloadParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ReloadEnvParams".
+ */
+export interface ReloadEnvParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SudoRespondParams".
+ */
+export interface SudoRespondParams {
+  request_id?: string;
+  password?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SecretRespondParams".
+ */
+export interface SecretRespondParams {
+  request_id?: string;
+  value?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImageAttachParams".
+ */
+export interface ImageAttachParams {
+  path?: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PromptSubmitParams".
+ */
+export interface PromptSubmitParams {
+  session_id?: string;
+  text?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PromptBackgroundParams".
+ */
+export interface PromptBackgroundParams {
+  session_id?: string;
+  text?: string;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;
 export type CliDispatchResult = CliResult;
 export type CommandsCatalogResult = CommandsCatalogResponse;
+export type ImageAttachResult = StubResult;
 export type ProcessStopResult = StubResult;
+export type PromptBackgroundResult = StubResult;
+export type PromptSubmitResult = StubResult;
+export type ReloadEnvResult = StubResult;
 export type RollbackDiffResult = StubResult;
 export type RollbackListResult = StubResult;
 export type RollbackRestoreResult = StubResult;
+export type SecretRespondResult = StubResult;
+export type SessionSaveResult = StubResult;
+export type SessionSteerResult = StubResult;
+export type SessionUsageResult = StubResult;
+export type SkillsReloadResult = StubResult;
 export type SpawnTreeListResult = StubResult;
 export type SpawnTreeLoadResult = StubResult;
 export type SpawnTreeSaveResult = StubResult;
+export type SudoRespondResult = StubResult;
 export type ToolsConfigureResult = StubResult;
+export type VoiceRecordResult = StubResult;
 export type VoiceToggleResult = StubResult;
 
 // ---------------------------------------------------------------------------

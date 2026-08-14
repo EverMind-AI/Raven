@@ -66,70 +66,105 @@
     },
     {
       "name": "session.create",
-      "summary": "Create a new session given a channel + chat_id.",
+      "summary": "Create a new session; the id is minted server-side.",
       "params": [
         {
-          "name": "channel",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "chat_id",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "metadata",
+          "name": "cols",
           "required": false,
           "schema": {
-            "type": "object",
-            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+            "type": "integer",
+            "description": "Terminal width the client is drawing at."
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Accepted and ignored; clients set titles via session.title."
           }
         }
       ],
       "result": {
         "name": "SessionCreateResult",
         "schema": {
-          "type": "object",
           "additionalProperties": false,
-          "required": ["session"],
+          "description": "The key is minted lazily -- no file is written until the first save.",
           "properties": {
-            "session": { "$ref": "#/components/schemas/SessionInfo" }
-          }
+            "session_id": {
+              "type": "string"
+            },
+            "info": {
+              "$ref": "#/components/schemas/SessionInitInfo"
+            }
+          },
+          "required": [
+            "session_id",
+            "info"
+          ],
+          "type": "object"
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
       ]
     },
     {
       "name": "session.resume",
-      "summary": "Resume a session, returning recent messages.",
+      "summary": "Resume a session, returning its full stored transcript.",
       "params": [
         {
-          "name": "session_key",
-          "required": true,
-          "schema": { "type": "string" }
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "An unknown key falls back to a freshly minted one."
+          }
+        },
+        {
+          "name": "cols",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
         }
       ],
       "result": {
         "name": "SessionResumeResult",
         "schema": {
-          "type": "object",
           "additionalProperties": false,
-          "required": ["session", "last_messages"],
           "properties": {
-            "session": { "$ref": "#/components/schemas/SessionInfo" },
-            "last_messages": {
-              "type": "array",
-              "items": { "$ref": "#/components/schemas/SessionMessage" }
+            "session_id": {
+              "type": "string"
+            },
+            "info": {
+              "$ref": "#/components/schemas/SessionInitInfo"
+            },
+            "messages": {
+              "description": "Every stored message, not a sliced history: N stored is N on the wire.",
+              "items": {
+                "$ref": "#/components/schemas/TranscriptMessage"
+              },
+              "type": "array"
             }
-          }
+          },
+          "required": [
+            "session_id",
+            "info",
+            "messages"
+          ],
+          "type": "object"
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/SessionNotFound" },
-        { "$ref": "#/components/errors/TurnInProgress" }
+        {
+          "$ref": "#/components/errors/SessionNotFound"
+        },
+        {
+          "$ref": "#/components/errors/TurnInProgress"
+        }
       ]
     },
     {
@@ -1668,10 +1703,2969 @@
           }
         }
       }
+    },
+    {
+      "name": "plughub.search",
+      "summary": "Search the plugin catalogue; also returns the category list.",
+      "params": [
+        {
+          "name": "q",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "category",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlughubSearchResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/PlughubCatalogItem"
+              },
+              "type": "array"
+            },
+            "categories": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "items",
+            "categories"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plughub.detail",
+      "summary": "One full catalogue entry, plus whether it is installed.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlughubDetailResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "installed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "item",
+            "installed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.install",
+      "summary": "Install a catalogue entry: disk transaction, then a bounded connect.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "form",
+          "required": false,
+          "schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Values for the entry's auth.fields, by key.",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugInstallResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "installed": {
+              "description": "False while an auth flow is still open; see `pending`.",
+              "type": "boolean"
+            },
+            "pending": {
+              "description": "True when the browser round-trip has not settled inside the connect window.",
+              "type": "boolean"
+            },
+            "ledger": {
+              "$ref": "#/components/schemas/PlugLedger"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot",
+              "description": "None when no agent loop is running."
+            }
+          },
+          "required": [
+            "installed",
+            "pending",
+            "ledger"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.remove",
+      "summary": "Uninstall: disconnect, then ledger replay (market) or config removal (manual).",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugRemoveResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            },
+            "origin": {
+              "description": "'market' when a ledger drove the removal, 'manual' for a hand-written server.",
+              "enum": [
+                "market",
+                "manual"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "removed",
+            "origin"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.toggle",
+      "summary": "Set the enabled flag on one configured server and reconcile the live connection.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugToggleResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name",
+            "enabled"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.auth",
+      "summary": "Force-reconnect one server to retry or re-run its authorization.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugAuthResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "skillhub.search",
+      "summary": "Search the skill hub; installed skills are flagged.",
+      "params": [
+        {
+          "name": "query",
+          "required": false,
+          "schema": {
+            "description": "Natural-language search; empty browses the hub.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "category",
+          "required": false,
+          "schema": {
+            "description": "Category enum, e.g. DEV / TESTING / DOC-PROC.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "tags",
+          "required": false,
+          "schema": {
+            "description": "Comma-separated tags, intersected.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "min_score",
+          "required": false,
+          "schema": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        {
+          "name": "page",
+          "required": false,
+          "schema": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillhubSearchResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/SkillhubItem"
+              },
+              "type": "array"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "base_url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "items",
+            "total",
+            "page",
+            "limit",
+            "base_url"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "skillhub.detail",
+      "summary": "One skill plus its SKILL.md body and subscores.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "description": "Hub UUID or dataset skill_id.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillhubDetailResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "skill_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "source_url": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string"
+            },
+            "quality_score": {
+              "type": "number"
+            },
+            "install_count": {
+              "type": "integer"
+            },
+            "github_star": {
+              "type": "integer"
+            },
+            "license": {
+              "type": "string"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "installed": {
+              "type": "boolean"
+            },
+            "installed_name": {
+              "description": "The local directory name when installed, else empty.",
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "skill_md": {
+              "type": "string"
+            },
+            "body_tokens": {
+              "type": "integer"
+            },
+            "subscores": {
+              "$ref": "#/components/schemas/SkillhubSubscores"
+            }
+          },
+          "required": [
+            "id",
+            "skill_id",
+            "name",
+            "description",
+            "source",
+            "source_url",
+            "category",
+            "quality_score",
+            "install_count",
+            "github_star",
+            "license",
+            "tags",
+            "installed",
+            "installed_name",
+            "files",
+            "skill_md",
+            "body_tokens",
+            "subscores"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "skillhub.install",
+      "summary": "Download a skill archive and unpack it into the workspace pool.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillhubInstallResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "skipped": {
+              "description": "Members the suffix/size policy refused, so the gap is visible.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "replaced": {
+              "type": "boolean"
+            },
+            "size_bytes": {
+              "type": "integer"
+            },
+            "install_count": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "path",
+            "files",
+            "skipped",
+            "replaced",
+            "size_bytes",
+            "install_count"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "skillhub.remove",
+      "summary": "Delete a hub-installed skill directory.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "description": "Installed skill directory name.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillhubRemoveResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "removed",
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "session.close",
+      "summary": "Flush any unpersisted messages for a session.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Absent or unknown is a no-op."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionCloseResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "session.branch",
+      "summary": "Fork a session at its head into a new diverging child.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Title for the child session."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionBranchResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "``session_id`` is null when the source was unknown or empty, which the\ncaller treats as a no-op rather than an error.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "message_count": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "session.compress",
+      "summary": "Archive old messages now instead of waiting for the context window.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "focus_topic",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionCompressResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "The three redraw fields ride along only when something was archived: a\ncaller that just dropped half the transcript is looking at messages that no\nlonger exist.",
+          "properties": {
+            "before_messages": {
+              "type": "integer"
+            },
+            "after_messages": {
+              "type": "integer"
+            },
+            "before_tokens": {
+              "type": "integer"
+            },
+            "after_tokens": {
+              "type": "integer"
+            },
+            "removed": {
+              "type": "integer"
+            },
+            "summary": {
+              "$ref": "#/components/schemas/SessionCompressSummary"
+            },
+            "info": {
+              "$ref": "#/components/schemas/SessionInitInfo"
+            },
+            "messages": {
+              "items": {
+                "$ref": "#/components/schemas/TranscriptMessage"
+              },
+              "type": "array"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/SessionUsage"
+            }
+          },
+          "required": [
+            "before_messages",
+            "after_messages",
+            "before_tokens",
+            "after_tokens",
+            "removed",
+            "summary"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "session.status",
+      "summary": "Render `raven status` for the /status slash.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionStatusResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "output": {
+              "description": "Rich-rendered `raven status` output with ANSI SGR sequences.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "output"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "ext.list",
+      "summary": "Everything installed: skills, plugins, tools, and MCP servers.",
+      "params": [],
+      "result": {
+        "name": "ExtListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "skills": {
+              "items": {
+                "$ref": "#/components/schemas/ExtSkillRow"
+              },
+              "type": "array"
+            },
+            "plugins": {
+              "items": {
+                "$ref": "#/components/schemas/ExtPluginRow"
+              },
+              "type": "array"
+            },
+            "tools": {
+              "items": {
+                "$ref": "#/components/schemas/ExtToolRow"
+              },
+              "type": "array"
+            },
+            "mcp": {
+              "description": "Live connections, plus configured servers not yet connected, reported as disconnected.",
+              "items": {
+                "$ref": "#/components/schemas/McpSnapshot"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "skills",
+            "plugins",
+            "tools",
+            "mcp"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.list",
+      "summary": "Every scheduled job, disabled ones included.",
+      "params": [],
+      "result": {
+        "name": "CronListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "jobs": {
+              "description": "Disabled jobs included.",
+              "items": {
+                "$ref": "#/components/schemas/CronJobInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "jobs"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.save",
+      "summary": "Create or edit a scheduled job.",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "enum": [
+              "at",
+              "every",
+              "cron"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "message",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "expr",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "every_seconds",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "at_iso",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "tz",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "deliver",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Editing an existing job: the id is kept so its run history does not orphan."
+          }
+        }
+      ],
+      "result": {
+        "name": "CronSaveResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "job": {
+              "$ref": "#/components/schemas/CronJobInfo"
+            }
+          },
+          "required": [
+            "job"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.delete",
+      "summary": "Remove a scheduled job.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CronDeleteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "deleted": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "deleted"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.set_enabled",
+      "summary": "Enable or disable a scheduled job without deleting it.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "CronSetEnabledResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "enabled"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.run_now",
+      "summary": "Fire a scheduled job immediately, ignoring its schedule.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CronRunNowResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "cron.runs",
+      "summary": "Run history for one job, derived from its cron:<id> session.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CronRunsResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "runs": {
+              "description": "Newest first, capped at 50.",
+              "items": {
+                "$ref": "#/components/schemas/CronRun"
+              },
+              "type": "array"
+            },
+            "session_id": {
+              "description": "The cron:<id> session the history is derived from.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "runs",
+            "session_id"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.get",
+      "summary": "The raw config file, with secret-looking values masked.",
+      "params": [],
+      "result": {
+        "name": "SettingsGetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "settings": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "description": "Raw config.json with secret-looking values masked.",
+              "type": "object"
+            },
+            "config_path": {
+              "type": "string"
+            },
+            "raven_version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "settings",
+            "config_path",
+            "raven_version"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.set",
+      "summary": "Write one whitelisted config key.",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "description": "Dotted path; only whitelisted keys are writable through this method.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "value",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        }
+      ],
+      "result": {
+        "name": "SettingsSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            },
+            "previous": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          "required": [
+            "applied",
+            "previous"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.usage",
+      "summary": "LLM and tool API usage over a window of days.",
+      "params": [
+        {
+          "name": "days",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Window to scan; 30 by default, capped at 90."
+          }
+        }
+      ],
+      "result": {
+        "name": "SettingsUsageResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "days": {
+              "type": "integer"
+            },
+            "llm": {
+              "$ref": "#/components/schemas/LlmUsage"
+            },
+            "tools": {
+              "$ref": "#/components/schemas/ToolUsage"
+            }
+          },
+          "required": [
+            "days",
+            "llm",
+            "tools"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.everos",
+      "summary": "The EverOS model roles behind long-term memory.",
+      "params": [],
+      "result": {
+        "name": "SettingsEverosResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "sections": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/EverosSection"
+              },
+              "type": "object"
+            },
+            "config_path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sections",
+            "config_path"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.everosSet",
+      "summary": "Merge fields into one EverOS section, or clear it.",
+      "params": [
+        {
+          "name": "section",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "description": "Merged into the section; ignored when clearing."
+          }
+        },
+        {
+          "name": "clear",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Drop the section; refused for llm and embedding."
+          }
+        }
+      ],
+      "result": {
+        "name": "SettingsEverosSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "channels.status",
+      "summary": "Which channels are enabled, configured, and whether the gateway is up.",
+      "params": [],
+      "result": {
+        "name": "ChannelsStatusResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "channels": {
+              "items": {
+                "$ref": "#/components/schemas/ChannelStatusRow"
+              },
+              "type": "array"
+            },
+            "gateway_running": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "channels",
+            "gateway_running"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "fs.list",
+      "summary": "List one workspace directory.",
+      "params": [
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Workspace-relative; the root when omitted."
+          }
+        }
+      ],
+      "result": {
+        "name": "FsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "root": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "entries": {
+              "description": "Directories first, dotfiles omitted, capped at 500.",
+              "items": {
+                "$ref": "#/components/schemas/FsEntry"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "root",
+            "path",
+            "entries"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "fs.read",
+      "summary": "Read one workspace file, capped.",
+      "params": [
+        {
+          "name": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "max_bytes",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "FsReadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "description": "Decoded as UTF-8 with replacement, so binary never fails the call.",
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "size": {
+              "description": "Size on disk, which exceeds len(content) when truncated.",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "content",
+            "truncated",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "fs.upload",
+      "summary": "Store an uploaded file in the workspace and return its path.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "content_b64",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "FsUploadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "type": "string"
+            },
+            "abs_path": {
+              "type": "string"
+            },
+            "size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "abs_path",
+            "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "memory.stats",
+      "summary": "How many memories of each kind EverOS holds.",
+      "params": [],
+      "result": {
+        "name": "MemoryStatsResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "``ok`` is false when a kind could not be counted; the counts stay zero\nrather than the call failing, so the page opens with EverOS down.",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "base_url": {
+              "type": "string"
+            },
+            "episodes": {
+              "type": "integer"
+            },
+            "profiles": {
+              "type": "integer"
+            },
+            "agent_cases": {
+              "type": "integer"
+            },
+            "agent_skills": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ok",
+            "base_url",
+            "episodes",
+            "profiles",
+            "agent_cases",
+            "agent_skills"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "memory.list",
+      "summary": "One page of memories of a kind, or the hits for a query.",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "enum": [
+              "episode",
+              "profile",
+              "agent_case",
+              "agent_skill"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Capped at 100."
+          }
+        },
+        {
+          "name": "q",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Non-empty switches to search, which returns one page."
+          }
+        }
+      ],
+      "result": {
+        "name": "MemoryListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/MemoryItem"
+              },
+              "type": "array"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "page": {
+              "type": "integer"
+            },
+            "page_size": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "items",
+            "total",
+            "page",
+            "page_size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "memory.delete",
+      "summary": "Delete one memory; an episode takes its derived rows with it.",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "enum": [
+              "episode",
+              "profile",
+              "agent_case",
+              "agent_skill"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "MemoryDeleteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "removed": {
+              "description": "Deleting an episode also drops its derived facts and foresight.",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ok",
+            "removed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "approval.respond",
+      "summary": "Answer a pending shell-approval request.",
+      "params": [
+        {
+          "name": "approval_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "choice",
+          "required": true,
+          "schema": {
+            "description": "allow | deny.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "ApprovalRespondResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "description": "False for an unknown, expired or mis-bound request; the caller fails closed.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "clarify.respond",
+      "summary": "Answer a pending ask-user question.",
+      "params": [
+        {
+          "name": "answer",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ClarifyRespondResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "confirm.respond",
+      "summary": "Answer a pending confirmation from inside a paused cli.dispatch.",
+      "params": [
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "answer",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "ConfirmRespondResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "slash.exec",
+      "summary": "Route an unrecognized slash command through the CLI.",
+      "params": [
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "description": "The slash text without its leading slash; shlex-split into argv.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "SlashExecResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "Never an error frame: an unknown verb, a blacklisted one, a timeout and a\nnon-zero exit all arrive here, because the client's error branch falls\nthrough to a method that does not exist.",
+          "properties": {
+            "output": {
+              "type": "string"
+            },
+            "warning": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "output"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "complete.slash",
+      "summary": "Completion candidates for a slash name.",
+      "params": [
+        {
+          "name": "word",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CompleteSlashResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "The provider is a no-op that exists to stop the client's\ncompletion-unavailable toast, so ``items`` is always empty and its element\ntype is whatever a real provider would later return.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "array"
+            },
+            "replace_from": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "items",
+            "replace_from"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "complete.path",
+      "summary": "Completion candidates for a filesystem path.",
+      "params": [
+        {
+          "name": "word",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "CompletePathResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "terminal.resize",
+      "summary": "Record the terminal size reported on SIGWINCH.",
+      "params": [
+        {
+          "name": "cols",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "rows",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Sent by the client; the handler does not read it."
+          }
+        }
+      ],
+      "result": {
+        "name": "TerminalResizeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "system.upgrade",
+      "summary": "Install the latest release and restart the gateway.",
+      "params": [],
+      "result": {
+        "name": "SystemUpgradeResult",
+        "schema": {
+          "additionalProperties": false,
+          "description": "Returned once the detached helper owns the install. The shutdown is\nscheduled a beat later so this reply reaches the client first.",
+          "properties": {
+            "status": {
+              "type": "string"
+            },
+            "from_version": {
+              "type": "string"
+            },
+            "to_version": {
+              "type": "string"
+            },
+            "relaunch": {
+              "description": "Whether the helper will start `raven serve` again on the same port.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "status",
+            "from_version",
+            "to_version",
+            "relaunch"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "voice.record",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "action",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "session.save",
+      "summary": "Not supported in Raven v0.1: sessions are append-only.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "session.steer",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "session.usage",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "skills.reload",
+      "summary": "Not supported in Raven v0.1: SkillForge reloads on its own.",
+      "params": [],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "reload.env",
+      "summary": "Not supported in Raven v0.1: env is read once at startup.",
+      "params": [],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "sudo.respond",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "request_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "password",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "secret.respond",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "request_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "value",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "image.attach",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "path",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "prompt.submit",
+      "summary": "Not supported in Raven v0.1: submit inline through the composer.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
+    },
+    {
+      "name": "prompt.background",
+      "summary": "Not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "StubResult",
+        "schema": {
+          "$ref": "#/components/schemas/StubResult"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/NotSupportedInV01"
+        }
+      ]
     }
   ],
   "components": {
     "schemas": {
+      "SessionCompressSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "noop": {
+            "description": "True when nothing moved, including when the context engine owns compaction.",
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          },
+          "token_line": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "noop"
+        ],
+        "type": "object"
+      },
+      "SessionInitInfo": {
+        "additionalProperties": false,
+        "description": "The banner bundle: which model, which tools and skills, how full.",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "context_window": {
+            "type": "integer"
+          },
+          "lazy": {
+            "description": "True when no agent loop was running, so tools/skills are empty.",
+            "type": "boolean"
+          },
+          "skills": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Skill names grouped by source.",
+            "type": "object"
+          },
+          "tools": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "Tool names in a single 'builtin' bucket.",
+            "type": "object"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SessionUsage"
+          },
+          "version": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "mcp_servers": {
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "array"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "update_command": {
+            "type": "string",
+            "description": "The command that would install the newer release."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones."
+          }
+        },
+        "required": [
+          "model",
+          "model_id",
+          "provider",
+          "context_window",
+          "lazy",
+          "skills",
+          "tools",
+          "usage",
+          "version",
+          "cwd",
+          "mcp_servers"
+        ],
+        "type": "object"
+      },
+      "SessionUsage": {
+        "additionalProperties": false,
+        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`UsageSnapshot`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
+        "properties": {
+          "input": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "context_max": {
+            "type": "integer"
+          },
+          "context_used": {
+            "type": "integer"
+          },
+          "context_percent": {
+            "type": "integer"
+          },
+          "context_estimated": {
+            "type": "boolean",
+            "description": "True when context_used is a tiktoken estimate of a resumed transcript, not a measurement."
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "cost_usd",
+          "calls",
+          "context_max",
+          "context_used",
+          "context_percent"
+        ],
+        "type": "object"
+      },
+      "TranscriptMessage": {
+        "additionalProperties": false,
+        "description": "One stored message in wire form: ``content`` renamed to ``text``.",
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tool_call_id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "reasoning_content": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptToolCall"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "TranscriptToolCall": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "description": "JSON-encoded arguments; re-serialized when stored as an object.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "ExtPluginRow": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "bundled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "version",
+          "enabled",
+          "bundled"
+        ],
+        "type": "object"
+      },
+      "ExtSkillRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "always": {
+            "type": "boolean"
+          },
+          "hub": {
+            "description": "Installed from the skill hub, so skillhub.remove can uninstall it.",
+            "type": "boolean"
+          },
+          "hub_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "source",
+          "always",
+          "hub",
+          "hub_id"
+        ],
+        "type": "object"
+      },
+      "ExtToolRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "mcp_server": {
+            "type": "string",
+            "description": "Owning MCP server, or null for a built-in tool."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "CronJobInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "at",
+              "every",
+              "cron"
+            ],
+            "type": "string"
+          },
+          "expr": {
+            "type": "string"
+          },
+          "every_ms": {
+            "type": "integer"
+          },
+          "at_ms": {
+            "type": "integer"
+          },
+          "tz": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "deliver": {
+            "type": "boolean"
+          },
+          "next_run_at_ms": {
+            "type": "integer"
+          },
+          "last_run_at_ms": {
+            "type": "integer"
+          },
+          "last_status": {
+            "enum": [
+              "ok",
+              "error",
+              "skipped"
+            ],
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "kind",
+          "message",
+          "deliver"
+        ],
+        "type": "object"
+      },
+      "CronRun": {
+        "additionalProperties": false,
+        "properties": {
+          "at_ms": {
+            "type": "integer"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "preview": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "preview"
+        ],
+        "type": "object"
+      },
+      "ApiUsageModel": {
+        "additionalProperties": false,
+        "properties": {
+          "calls": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cost_usd",
+          "model"
+        ],
+        "type": "object"
+      },
+      "ApiUsageTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "calls": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "type": "integer"
+          },
+          "cost_usd": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cost_usd"
+        ],
+        "type": "object"
+      },
+      "LlmUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "total": {
+            "$ref": "#/components/schemas/ApiUsageTotals"
+          },
+          "models": {
+            "description": "Most expensive first.",
+            "items": {
+              "$ref": "#/components/schemas/ApiUsageModel"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "total",
+          "models"
+        ],
+        "type": "object"
+      },
+      "ToolUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "counts": {
+            "description": "Most called first.",
+            "items": {
+              "$ref": "#/components/schemas/ToolUsageCount"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "total",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "ToolUsageCount": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "count"
+        ],
+        "type": "object"
+      },
+      "EverosSection": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "Empty when the shipped placeholder is still in place.",
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "api_key_set": {
+            "description": "Whether a key is stored; the value never goes on the wire.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "model",
+          "base_url",
+          "provider",
+          "api_key_set"
+        ],
+        "type": "object"
+      },
+      "ChannelStatusRow": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "missing": {
+            "description": "Required fields still empty.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "enabled",
+          "configured",
+          "missing"
+        ],
+        "type": "object"
+      },
+      "FsEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "boolean"
+          },
+          "size": {
+            "description": "Zero for a directory.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "dir",
+          "size"
+        ],
+        "type": "object"
+      },
+      "MemoryItem": {
+        "additionalProperties": false,
+        "description": "One row, projected card-sized. ``kind`` decides which optional fields\ncarry a value: the four memory types share only ``id`` and ``kind``.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "episode",
+              "profile",
+              "agent_case",
+              "agent_skill"
+            ],
+            "type": "string"
+          },
+          "score": {
+            "type": "number",
+            "description": "Present on search hits only."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "profile_data": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object"
+          },
+          "key_insight": {
+            "type": "string"
+          },
+          "quality_score": {
+            "type": "number"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "maturity_score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PlughubCatalogItem": {
+        "additionalProperties": false,
+        "description": "The card-sized projection of a catalogue entry.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "risk_tier": {
+            "type": "integer"
+          },
+          "auth_mode": {
+            "enum": [
+              "none",
+              "apikey",
+              "oauth"
+            ],
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "description": "None when the entry contributes no MCP server."
+          },
+          "tool_preview_count": {
+            "type": "integer"
+          },
+          "skill_count": {
+            "type": "integer"
+          },
+          "kinds": {
+            "description": "Which contribution kinds the entry carries: mcp, skill, python.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "installed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "category",
+          "verified",
+          "publisher",
+          "risk_tier",
+          "auth_mode",
+          "tool_preview_count",
+          "skill_count",
+          "kinds",
+          "installed"
+        ],
+        "type": "object"
+      },
+      "McpSnapshot": {
+        "additionalProperties": false,
+        "description": "One server's live connection state, as `MCPConnectionManager` reports it.\n\nEvery mutating `plug.*` call answers with this, and the gateway broadcasts the\nsame shape as an `mcp.status` notification, so a client renders one state\nmachine rather than two.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "description": "stdio | sse | streamableHttp, or 'unknown'.",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "disconnected",
+              "connecting",
+              "connected",
+              "auth_required",
+              "error"
+            ],
+            "type": "string"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "tool_count": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "transport",
+          "state",
+          "connected",
+          "tool_count",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "PlugLedger": {
+        "additionalProperties": false,
+        "description": "What the install actually landed, which is what uninstall replays.",
+        "properties": {
+          "catalog_id": {
+            "type": "string"
+          },
+          "pieces": {
+            "description": "One entry per landed piece: {kind: 'mcp', server} or {kind: 'skill', name, skillhub_id}.",
+            "items": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "catalog_id",
+          "pieces"
+        ],
+        "type": "object"
+      },
+      "SkillhubItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "skill_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "quality_score": {
+            "type": "number"
+          },
+          "install_count": {
+            "type": "integer"
+          },
+          "github_star": {
+            "type": "integer"
+          },
+          "license": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "installed_name": {
+            "description": "The local directory name when installed, else empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "skill_id",
+          "name",
+          "description",
+          "source",
+          "source_url",
+          "category",
+          "quality_score",
+          "install_count",
+          "github_star",
+          "license",
+          "tags",
+          "installed",
+          "installed_name"
+        ],
+        "type": "object"
+      },
+      "SkillhubSubscores": {
+        "additionalProperties": false,
+        "properties": {
+          "utility": {
+            "type": "integer"
+          },
+          "robustness": {
+            "type": "integer"
+          },
+          "safety": {
+            "type": "integer"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "utility",
+          "robustness",
+          "safety",
+          "flags"
+        ],
+        "type": "object"
+      },
       "JsonValue": {
         "description": "Recursive JSON value type. Implemented as an unconstrained object in JSON Schema; downstream Pydantic uses typing.Any.",
         "type": ["string", "number", "integer", "boolean", "null", "array", "object"]

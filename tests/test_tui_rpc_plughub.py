@@ -51,7 +51,23 @@ class _FakeManager:
         self.dropped: list[str] = []
 
     def status(self) -> list[dict]:
-        return [{"name": self.name, "state": self.state, "error": "boom" if self.state == "error" else None}]
+        # Every key `MCPConnectionManager._snapshot` returns. Three of them were
+        # missing, and no test noticed: the guard below compares *attribute
+        # names* against the real class, not the shape of what they return, and
+        # the handler tests assert on individual keys rather than validating the
+        # payload. `McpSnapshot` requires transport, connected and tool_count,
+        # so the fake was producing a snapshot the contract forbids.
+        return [
+            {
+                "name": self.name,
+                "transport": "streamableHttp",
+                "state": self.state,
+                "connected": self.state == "connected",
+                "tool_count": 1 if self.state == "connected" else 0,
+                "error": "boom" if self.state == "error" else None,
+                "enabled": True,
+            }
+        ]
 
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         self.dropped.append(name)
@@ -357,3 +373,46 @@ def test_a_ledger_read_answers_for_an_unnameable_id() -> None:
 
     assert read_ledger("_dev") is None
     assert read_ledger("my server") is None
+
+
+# the declared shape, against what these handlers really return
+# ---------------------------------------------------------------------------
+# `test_tui_rpc_contract_shapes` skips this group, on the grounds that it is
+# covered here. It was not: the tests above drive the real handlers but assert
+# on individual keys, and never validate a payload against `METHOD_MODELS`. So
+# ten declarations -- the whole market group -- had nothing checking them
+# against the code. The models are `extra="forbid"`, which is the direction a
+# hand-written contract drifts: a key gets added to a response and nobody opens
+# models.py.
+
+
+def _shape(method: str, payload: dict):
+    from raven.tui_rpc.models import METHOD_MODELS
+
+    _, model = METHOD_MODELS[method]
+    return model.model_validate(payload)
+
+
+async def test_search_and_detail_match_their_declared_models(_isolated) -> None:
+    """Driven over the bundled catalogue, so this needs no network."""
+    search = await rpc_plughub.plughub_search({})
+    _shape("plughub.search", search)
+    assert search["items"], "the bundled catalogue should not be empty"
+
+    detail = await rpc_plughub.plughub_detail({"id": search["items"][0]["id"]})
+    _shape("plughub.detail", detail)
+
+
+async def test_install_and_remove_match_their_declared_models(monkeypatch, _isolated) -> None:
+    entry = _entry("none")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "connected")
+
+    _shape("plug.install", await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop)))
+    _shape(
+        "plug.toggle",
+        # `name`, not `id` -- toggle addresses the configured server, not the
+        # catalogue entry it came from.
+        await rpc_plughub.plug_toggle({"name": "svc", "enabled": False}, agent_loop_factory=_factory(loop)),
+    )
+    _shape("plug.remove", await rpc_plughub.plug_remove({"name": "svc"}, agent_loop_factory=_factory(loop)))
