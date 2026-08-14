@@ -193,3 +193,17 @@ async def test_cli_path_reports_truncation_not_a_missing_field(workspace) -> Non
     assert "[truncated]" in text
     assert "missing required" not in text
     assert "different approach" not in text
+
+
+def test_generation_settings_ships_with_no_opinion_on_max_tokens() -> None:
+    """The shipped default must stay `None`, meaning "resolve it per model".
+
+    Written after a debugging value (60) was committed by a `git add -A` that
+    swept up an unrelated working-tree edit. Nothing else in the suite would
+    have failed: every provider stub sets its own generation, so a wrong
+    default here silently caps real traffic and nothing turns red.
+    """
+    from raven.providers.base import GenerationSettings, LLMResponse
+
+    assert GenerationSettings().max_tokens is None
+    assert LLMResponse(content="x").max_tokens is None

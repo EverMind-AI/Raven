@@ -251,7 +251,7 @@ class LLMResponse:
     # backend claims.
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
-    max_tokens: int | None = 60
+    max_tokens: int | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -318,7 +318,7 @@ class GenerationSettings:
     #: ``None`` means "no opinion" -- the ceiling is resolved from the model's
     #: own metadata at request time. A number pins it, which is what an
     #: explicit ``chat(max_tokens=...)`` at a call site wants.
-    max_tokens: int | None = 60
+    max_tokens: int | None = None
     reasoning_effort: str | None = None
     timeout: float = 600.0
 
