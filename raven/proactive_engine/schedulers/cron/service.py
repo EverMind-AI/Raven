@@ -257,8 +257,11 @@ class CronService:
         }
 
         # Atomic write (temp + rename) so concurrent readers never see a
-        # partially-flushed file.
-        tmp = self.store_path.with_suffix(self.store_path.suffix + ".tmp")
+        # partially-flushed file. The temp name is pid-unique: a shared name
+        # lets two processes steal each other's temp between write and rename
+        # (unlocked start() saves, and every save on Windows where the flock
+        # degrades to a no-op) — the loser crashes on FileNotFoundError.
+        tmp = self.store_path.with_name(f"{self.store_path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self.store_path)
         self._last_mtime = self.store_path.stat().st_mtime_ns
@@ -266,9 +269,13 @@ class CronService:
     async def start(self) -> None:
         """Start the cron service."""
         self._running = True
-        self._load_store()
-        self._recompute_next_runs()
-        self._save_store()
+        # Under the store lock: two runners starting at once both rewrite the
+        # shared file here, and an unlocked load/recompute/save pair can lose
+        # the other runner's update.
+        with self._locked():
+            self._load_store()
+            self._recompute_next_runs()
+            self._save_store()
         self._loop_task = asyncio.create_task(self._run_loop())
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
