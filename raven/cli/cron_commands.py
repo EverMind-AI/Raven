@@ -17,9 +17,9 @@ Cross-cutting:
 
 - All write ops default to a ``[y/N]`` confirm prompt; ``--yes`` skips.
 - ID arguments accept any unique prefix of the 8-char hex job id.
-- ``cron add`` stores ``channel="cli"`` / ``to="direct"`` by default;
-  the stored (channel, to) IS the delivery target — the runner that owns
-  that channel fires it (fire-at-origin, no trigger-time re-routing).
+- ``cron add`` requires ``--channel``; the stored (channel, to) IS the
+  delivery target — the runner that owns that channel fires it
+  (fire-at-origin, no trigger-time re-routing).
 """
 
 from __future__ import annotations

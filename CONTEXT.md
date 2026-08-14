@@ -145,6 +145,15 @@ _Avoid_: using "Sentinel" as the name of the whole proactivity subsystem (stale 
 The time-driven trigger path inside the Proactive Engine: cron jobs and heartbeat.
 _Avoid_: conflating with Sentinel
 
+**Fire-at-origin**:
+The cron ownership rule: a job is claimed and delivered only by the runner that
+owns its creation-time channel binding (`payload.channel/to`) — the gateway for
+enabled IM channels, an interactive session (`tui`/`cli`) for its own channel.
+A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
+dropped at that runner's next startup); there is no trigger-time re-routing.
+_Avoid_: reintroducing fire-time channel selection (the retired
+`cron.forward_channels`) — bind the target at creation instead.
+
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
 proactive side of prediction).
