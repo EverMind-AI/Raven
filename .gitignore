@@ -30,6 +30,8 @@ poetry.lock
 .coverage
 .coverage.*
 coverage.xml
+coverage.json
+coverage-baseline-candidate.json
 htmlcov/
 botpy.log
 nano.*.save

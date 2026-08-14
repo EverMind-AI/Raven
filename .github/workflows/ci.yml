@@ -73,6 +73,8 @@ jobs:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      PYTHON_VERSION: ${{ matrix.python }}
     strategy:
       fail-fast: false
       matrix:
@@ -80,6 +82,8 @@ jobs:
         python: ["3.12"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
@@ -91,15 +95,54 @@ jobs:
         run: uv python install ${{ matrix.python }}
 
       - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --frozen --all-extras --dev --python ${{ matrix.python }}
 
-      - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
+      - name: Unit tests with line and branch coverage
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
         # set, and the highlighter then splits option names with escape codes, so
         # `"--flag" in result.stdout` assertions fail only on CI.
+        run: make coverage
+
+      - name: Coverage summary and lowest-covered files
+        if: ${{ !cancelled() && hashFiles('coverage.json') != '' }}
+        run: make coverage-summary
+
+      - name: Overall coverage ratchet
+        if: ${{ !cancelled() && hashFiles('coverage.json') != '' }}
+        run: make coverage-ratchet
+
+      - name: Coverage baseline cannot decrease
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
-          TERM: dumb
-        run: uv run --all-extras pytest -q
+          COVERAGE_BASE_REF: origin/${{ github.base_ref }}
+        run: make coverage-baseline-check
+
+      - name: PR diff coverage
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && hashFiles('coverage.json') != '' }}
+        env:
+          COVERAGE_BASE_REF: origin/${{ github.base_ref }}
+        run: make coverage-diff
+
+      - name: Explain skipped diff coverage
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        run: echo "Diff coverage is a PR-only gate; push builds still enforce the overall ratchet."
+
+      - name: Create auditable baseline candidate
+        if: ${{ !cancelled() && hashFiles('coverage.json') != '' }}
+        run: make coverage-baseline-candidate
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-py${{ matrix.python }}-${{ matrix.os }}
+          path: |
+            coverage.xml
+            coverage.json
+            htmlcov/
+            coverage-baseline-candidate.json
+          if-no-files-found: warn
+          retention-days: 30
 
   windows-upgrade:
     name: Windows self-upgrade

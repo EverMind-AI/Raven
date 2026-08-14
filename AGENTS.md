@@ -22,6 +22,9 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 ### §1.1 Top rule: don't add comments unless necessary
 
+- Every new code file must document its purpose in English with an appropriate
+  module docstring or equivalent file-level documentation. Inline comments
+  still follow the necessity rules below.
 - Match the style of surrounding lines. If neighboring code has no comments, **don't** add one to your new line.
 - Comment **only** when:
   - the logic is non-obvious;
