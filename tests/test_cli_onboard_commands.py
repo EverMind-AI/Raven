@@ -4530,3 +4530,43 @@ def test_install_sh_all_set_mentions_onboard() -> None:
     text = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
     tail = text[text.index("All set") :]
     assert "raven onboard" in tail
+
+
+def test_pick_model_shows_default_positioning_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Before prompting, ``_pick_model`` explains why the prefilled default
+    model is recommended (not just its name)."""
+    import re
+    from types import SimpleNamespace
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("m1"))
+    spec = SimpleNamespace(
+        name="openai",
+        default_model="m1",
+        litellm_prefix="",
+        skip_prefixes=(),
+        keywords=("openai",),
+    )
+    chosen = onboard_commands._pick_model(
+        "openai",
+        spec,
+        current_model=None,
+        model_ids=["m1", "m2"],
+        probe_status="ok",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+    captured_out = capsys.readouterr().out
+    assert re.search(r"Default: .*—", captured_out)
+    assert chosen == "openai/m1"

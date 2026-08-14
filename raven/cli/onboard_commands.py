@@ -1044,6 +1044,14 @@ def _pick_model(
             )
             model_ids = known
 
+    if default_value and default_value == spec.default_model:
+        console.print(
+            _t(
+                f"  [dim]Default: {default_value} — recommended balance of quality/cost for daily use.[/dim]",
+                f"  [dim]默认:{default_value} — 质量/成本均衡,适合日常使用。[/dim]",
+            )
+        )
+
     if model_ids:
         choices = [_format_model_for_provider(provider, spec, mid) for mid in model_ids]
         # Dedupe: the chain above already prefixes its ids, and _format_ leaves a
