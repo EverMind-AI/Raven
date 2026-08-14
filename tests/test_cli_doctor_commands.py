@@ -360,3 +360,45 @@ def test_memory_section_reaches_the_json_output(healthy_config: Path, no_memory_
     payload = json.loads(r.stdout)
     assert payload["memory"]["capabilities"] == {"llm": True, "embed": False}
     assert payload["memory"]["configured"] == ["llm", "embedding"]
+
+
+
+
+# --------------------------------------------------------------------------- config visibility
+
+
+def _run_doctor_subprocess(home: Path) -> tuple[str, int]:
+    """Run ``raven doctor`` in a subprocess with a sandbox HOME.
+
+    A subprocess (not CliRunner) is required here: the loader's duplicate
+    warning went out over two channels (print + loguru), and loguru's sink
+    holds the real stderr, invisible to in-process capture.
+    """
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    r = subprocess.run(
+        [sys.executable, "-m", "raven", "doctor"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    return r.stdout + r.stderr, r.returncode
+
+
+def _write_home_config(tmp_path: Path, name: str, body: str | None) -> Path:
+    home = tmp_path / name
+    (home / ".raven").mkdir(parents=True)
+    if body is not None:
+        (home / ".raven" / "config.json").write_text(body, encoding="utf-8")
+    return home
+
+
+def test_doctor_bad_config_warns_exactly_once(tmp_path: Path) -> None:
+    home = _write_home_config(tmp_path, "bad", '{"providers": {},}')
+    out, _ = _run_doctor_subprocess(home)
+    assert out.count("not valid JSON") == 1, out

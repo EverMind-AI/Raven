@@ -202,3 +202,14 @@ def test_config_read_error_is_not_runtimeerror() -> None:
 
     assert not issubclass(ConfigReadError, RuntimeError)
     assert issubclass(ConfigReadError, Exception)
+
+
+def test_bad_config_warns_exactly_once(tmp_path: Path, capsys) -> None:
+    """The user-visible bad-config warning fires once per path per process,
+    even across repeated ``load_config`` calls (status/doctor load twice)."""
+    p = tmp_path / "config.json"
+    p.write_text('{"providers": {},}', encoding="utf-8")
+    load_config(p)
+    load_config(p)
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).count("not valid JSON") == 1
