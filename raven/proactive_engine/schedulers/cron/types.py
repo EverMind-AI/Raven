@@ -46,7 +46,7 @@ class CronJobState:
     last_run_at_ms: int | None = None
     last_status: Literal["ok", "error", "skipped"] | None = None
     last_error: str | None = None
-    # Claim fields — set by whichever process grabs the job in _on_timer.
+    # Claim fields — set by whichever process claims the job in a wake tick.
     # Cleared post-run. Stale claims (older than CLAIM_TTL_MS) are stolen.
     claimed_by_pid: int | None = None
     claimed_at_ms: int | None = None

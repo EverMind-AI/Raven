@@ -24,11 +24,14 @@ from raven.proactive_engine.schedulers.cron.types import CronJob, CronJobState, 
 # it (the original process likely crashed mid-job).
 _CLAIM_TTL_MS = 30 * 60 * 1000
 
-# Cap the sleep-until-next-wake so _on_timer runs at least this often. This
-# is how we pick up jobs written to jobs.json by a peer process — _on_timer
-# reloads the store on mtime change. Without this cap, a gateway armed for
-# a far-future wake would miss a sooner job added by REPL.
+# Cap the sleep-until-next-wake so the wake loop runs at least this often.
+# This is how we pick up jobs written to jobs.json by a peer process — the
+# tick reloads the store on mtime change. Without this cap, a gateway parked
+# on a far-future wake would miss a sooner job added by a peer.
 _MAX_WAKE_INTERVAL_S = 30.0
+
+# Backoff after a failed tick so a persistent error cannot spin the loop.
+_ERROR_BACKOFF_S = 5.0
 
 
 def _now_ms() -> int:
@@ -113,7 +116,7 @@ class CronService:
         """
         self.store_path = store_path
         # Sibling file for fcntl advisory locking (survives atomic rename of
-        # the data file, lets concurrent processes coordinate _on_timer).
+        # the data file, lets concurrent processes coordinate claim ticks).
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
         self.on_job = on_job
         self.allowed_channels = allowed_channels
@@ -121,7 +124,11 @@ class CronService:
         # Nanosecond precision: float st_mtime collapses writes ~238ns apart
         # into one value, serving a stale cache after an external rewrite.
         self._last_mtime: int = 0
-        self._timer_task: asyncio.Task | None = None
+        self._loop_task: asyncio.Task | None = None
+        self._wake_event = asyncio.Event()
+        # Job ids whose claim-skip was already logged (one INFO line per job,
+        # not one per tick). Cleared per job on successful claim.
+        self._skip_logged: set[str] = set()
         self._running = False
         # Remember whether fcntl is usable — degrade to lock-less on Windows.
         self._can_lock = sys.platform != "win32"
@@ -270,15 +277,15 @@ class CronService:
         self._load_store()
         self._recompute_next_runs()
         self._save_store()
-        self._arm_timer()
+        self._loop_task = asyncio.create_task(self._run_loop())
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
     def stop(self) -> None:
         """Stop the cron service."""
         self._running = False
-        if self._timer_task:
-            self._timer_task.cancel()
-            self._timer_task = None
+        if self._loop_task:
+            self._loop_task.cancel()
+            self._loop_task = None
 
     def _recompute_next_runs(self) -> None:
         """Recompute next run times for all enabled jobs.
@@ -322,42 +329,90 @@ class CronService:
         times = [j.state.next_run_at_ms for j in self._store.jobs if j.enabled and j.state.next_run_at_ms]
         return min(times) if times else None
 
-    def _arm_timer(self) -> None:
-        """Schedule the next timer tick.
+    def _signal_wake(self) -> None:
+        """Wake the run loop after a job mutation.
 
-        Always sleeps at most ``_MAX_WAKE_INTERVAL_S`` so a peer process's
-        write to jobs.json (e.g. a new reminder from REPL while gateway is
-        running) gets picked up within that window — _on_timer reloads on
-        mtime change.
+        Safe without a running loop: CLI-process services never start the
+        loop, and setting an un-awaited Event is just a flag.
         """
-        if self._timer_task:
-            self._timer_task.cancel()
+        self._wake_event.set()
 
-        if not self._running:
-            return
+    async def _run_loop(self) -> None:
+        """Persistent wake loop: process due jobs, then wait for the next
+        wake (earliest claimable run, capped) or a mutation signal.
 
-        next_wake = self._get_next_wake_ms()
-        if next_wake:
-            delay_s = max(0.0, (next_wake - _now_ms()) / 1000)
-        else:
-            # No pending job — still poll for new writes.
-            delay_s = _MAX_WAKE_INTERVAL_S
-        delay_s = min(delay_s, _MAX_WAKE_INTERVAL_S)
+        Process-then-wait order means an event set during processing stays
+        set and is consumed on the next iteration — a wake is never lost.
+        The loop task is never cancelled by job mutations (the old
+        cancel-and-rearm timer cancelled in-flight executions, skipping the
+        post-run writeback and double-firing one-shot jobs); only stop()
+        cancels it.
+        """
+        while self._running:
+            try:
+                await self._process_due()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Cron: wake tick failed; continuing in {}s", _ERROR_BACKOFF_S)
+                await asyncio.sleep(_ERROR_BACKOFF_S)
+            delay = self._compute_wake_delay()
+            try:
+                await asyncio.wait_for(self._wake_event.wait(), timeout=delay)
+            except (asyncio.TimeoutError, TimeoutError):
+                pass
+            self._wake_event.clear()
 
-        async def tick():
-            await asyncio.sleep(delay_s)
-            if self._running:
-                await self._on_timer()
+    def _may_claim(self, job: CronJob, now: int) -> tuple[bool, str | None]:
+        """Whether this runner may claim ``job`` right now.
 
-        self._timer_task = asyncio.create_task(tick())
+        Not claimable when a live peer holds the claim (fresh within
+        _CLAIM_TTL_MS) or when the job's channel falls outside this runner's
+        ``allowed_channels`` partition. Jobs with an empty/None channel
+        predate channel attribution and stay claimable by any process.
+        Each skip is logged once per job id (reset on successful claim).
+        """
+        reason: str | None = None
+        cb = job.state.claimed_by_pid
+        ca = job.state.claimed_at_ms
+        if cb is not None and cb != os.getpid() and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+            reason = f"claimed by live peer pid {cb}"
+        elif self.allowed_channels is not None and job.payload.channel:
+            if job.payload.channel not in self.allowed_channels:
+                reason = f"channel '{job.payload.channel}' is outside this runner's partition"
+        if reason is None:
+            return True, None
+        if job.id not in self._skip_logged:
+            logger.info("Cron: not claiming job '{}' ({}): {}", job.name, job.id, reason)
+            self._skip_logged.add(job.id)
+        return False, reason
 
-    async def _on_timer(self) -> None:
-        """Handle timer tick - run due jobs.
+    def _compute_wake_delay(self) -> float:
+        """Seconds until the earliest pending run this runner may claim.
+
+        Capped at _MAX_WAKE_INTERVAL_S (peer-write poll), floored at 0.
+        Jobs this runner cannot claim (foreign partition, live peer claim)
+        are excluded so a due-but-unclaimable job cannot busy-loop us.
+        """
+        store = self._load_store()
+        now = self._now_ms()
+        times = [
+            j.state.next_run_at_ms
+            for j in store.jobs
+            if j.enabled and j.state.next_run_at_ms and self._may_claim(j, now)[0]
+        ]
+        if not times:
+            return _MAX_WAKE_INTERVAL_S
+        delay_s = (min(times) - now) / 1000
+        return min(max(delay_s, 0.0), _MAX_WAKE_INTERVAL_S)
+
+    async def _process_due(self) -> None:
+        """Run due jobs once.
 
         Claim phase (under exclusive lock): reload from disk, pick due jobs
-        not already claimed by a live peer, stamp them with this pid+now,
-        save. Execution phase (lock released): run each claimed job; then
-        reacquire the lock to write post-run state and clear the claim.
+        this runner may claim, stamp them with this pid+now, save. Execution
+        phase (lock released): run each claimed job; then reacquire the lock
+        to write post-run state and clear the claim.
         """
         my_pid = os.getpid()
         with self._locked():
@@ -372,52 +427,46 @@ class CronService:
             for j in self._store.jobs:
                 if not (j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms):
                     continue
-                # Channel routing: if the caller set an allow-list, only
-                # claim jobs whose channel is in it. Jobs created before
-                # channel attribution existed (empty/None channel) remain
-                # claimable by any process for backwards compat.
-                if self.allowed_channels is not None and j.payload.channel:
-                    if j.payload.channel not in self.allowed_channels:
-                        continue
-                # Skip if a live peer already has it.
-                cb = j.state.claimed_by_pid
-                ca = j.state.claimed_at_ms
-                if cb is not None and cb != my_pid and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+                if not self._may_claim(j, now)[0]:
                     continue
                 j.state.claimed_by_pid = my_pid
                 j.state.claimed_at_ms = now
+                self._skip_logged.discard(j.id)
                 my_jobs.append(j)
             if my_jobs:
                 self._save_store()
 
         for job in my_jobs:
             await self._execute_job(job)
-            # Post-run flush + clear claim, under lock so concurrent reader
-            # observes the complete updated job record.
-            with self._locked():
-                # Reload + patch our job in case peer wrote intervening state.
-                self._store = None
-                self._load_store()
-                if self._store is None:
-                    continue
-                for j in self._store.jobs:
-                    if j.id == job.id and j.state.claimed_by_pid == my_pid:
-                        j.state.claimed_by_pid = None
-                        j.state.claimed_at_ms = None
-                        j.state.last_run_at_ms = job.state.last_run_at_ms
-                        j.state.last_status = job.state.last_status
-                        j.state.last_error = job.state.last_error
-                        j.state.next_run_at_ms = job.state.next_run_at_ms
-                        j.enabled = job.enabled
-                        j.updated_at_ms = job.updated_at_ms
-                        break
-                # Handle "at"-kind delete_after_run (_execute_job removed from
-                # our local store; reflect on the reloaded store).
-                if job.schedule.kind == "at" and job.delete_after_run:
-                    self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
-                self._save_store()
+            # Shielded so a stop() mid-writeback cannot skip the post-run
+            # flush (claim would leak and one-shots could re-fire).
+            await asyncio.shield(self._writeback_after_run(job, my_pid))
 
-        self._arm_timer()
+    async def _writeback_after_run(self, job: CronJob, my_pid: int) -> None:
+        """Post-run flush + clear claim, under lock so a concurrent reader
+        observes the complete updated job record."""
+        with self._locked():
+            # Reload + patch our job in case peer wrote intervening state.
+            self._store = None
+            self._load_store()
+            if self._store is None:
+                return
+            for j in self._store.jobs:
+                if j.id == job.id and j.state.claimed_by_pid == my_pid:
+                    j.state.claimed_by_pid = None
+                    j.state.claimed_at_ms = None
+                    j.state.last_run_at_ms = job.state.last_run_at_ms
+                    j.state.last_status = job.state.last_status
+                    j.state.last_error = job.state.last_error
+                    j.state.next_run_at_ms = job.state.next_run_at_ms
+                    j.enabled = job.enabled
+                    j.updated_at_ms = job.updated_at_ms
+                    break
+            # Handle "at"-kind delete_after_run (_execute_job removed from
+            # our local store; reflect on the reloaded store).
+            if job.schedule.kind == "at" and job.delete_after_run:
+                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+            self._save_store()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
@@ -598,7 +647,7 @@ class CronService:
                     j.state.next_run_at_ms = _compute_next_run(schedule, now)
                     j.updated_at_ms = now
                     self._save_store()
-                    self._arm_timer()
+                    self._signal_wake()
                     return j
 
             # Message-equal dedup (covers same-intent reminders the LLM
@@ -623,7 +672,7 @@ class CronService:
                     j.schedule.kind,
                     schedule.kind,
                 )
-                self._arm_timer()
+                self._signal_wake()
                 return j
 
             # Cross-kind time-window dedup (covers caregiver-style
@@ -653,7 +702,7 @@ class CronService:
                             j.schedule.kind,
                             schedule.kind,
                         )
-                        self._arm_timer()
+                        self._signal_wake()
                         return j
 
             # Dedup: same recurring schedule + same channel + same recipient
@@ -675,7 +724,7 @@ class CronService:
                     existing.name,
                     existing.id,
                 )
-                self._arm_timer()
+                self._signal_wake()
                 return existing
 
             job = CronJob(
@@ -698,7 +747,7 @@ class CronService:
             )
             store.jobs.append(job)
             self._save_store()
-        self._arm_timer()
+        self._signal_wake()
         logger.info("Cron: added job '{}' ({})", name, job.id)
         return job
 
@@ -739,7 +788,7 @@ class CronService:
             if removed:
                 self._save_store()
         if removed:
-            self._arm_timer()
+            self._signal_wake()
             logger.info("Cron: removed job {}", job_id)
         return removed
 
@@ -757,7 +806,7 @@ class CronService:
                     else:
                         job.state.next_run_at_ms = None
                     self._save_store()
-                    self._arm_timer()
+                    self._signal_wake()
                     return job
         return None
 
@@ -795,7 +844,7 @@ class CronService:
                 if target.schedule.kind == "at" and target.delete_after_run:
                     self._store.jobs = [j for j in self._store.jobs if j.id != target.id]
                 self._save_store()
-        self._arm_timer()
+        self._signal_wake()
         return True
 
     def status(self) -> dict:

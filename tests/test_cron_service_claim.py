@@ -22,8 +22,8 @@ def _add_due_tui_job(svc: CronService) -> str:
         channel="tui",
         to="default",
     )
-    # Force it due: next_run in the past, persisted so _on_timer (which reloads
-    # from disk) sees it.
+    # Force it due: next_run in the past, persisted so _process_due (which
+    # reloads from disk) sees it.
     svc._store.jobs[0].state.next_run_at_ms = 1
     svc._save_store()
     return job.id
@@ -37,7 +37,7 @@ async def _fired_ids(allowed: set[str], store_path: Path) -> list[str]:
 
     svc = CronService(store_path, allowed_channels=allowed)
     svc.on_job = on_job
-    await svc._on_timer()
+    await svc._process_due()
     return fired
 
 
