@@ -355,7 +355,7 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
 async def ensure_everos_server(
     base_url: str,
     *,
-    timeout: float = 30.0,
+    timeout: float = 10.0,
     on_wait: Callable[[], None] | None = None,
 ) -> None:
     """Make sure a server is answering at ``base_url``, starting one if not.
@@ -369,6 +369,16 @@ async def ensure_everos_server(
     reported to the user as a 30s timeout blaming a missing install. A default
     here means "forgot to read the config" is a silent runtime bug rather than a
     signature error, so there is none.
+
+    ``timeout`` is a budget for how long a caller is willing to make the user
+    wait, not a failure detector. Once the poll loop watches the child's exit
+    code, a boot that cannot succeed is reported in about a second regardless of
+    this value, so the only thing left to size is the wait itself. Overrunning it
+    is cheap: the child keeps booting, this session goes without long-term
+    memory, and the next one finds a healthy server -- so a small budget costs at
+    most one session and heals itself, while a large one blocks every first
+    session of a machine's uptime. Measured cold start on a small store is
+    around two seconds.
 
     ``on_wait`` fires once, only when an actual boot is about to be waited on --
     never when a server is already answering. That lets a caller narrate the
@@ -408,10 +418,13 @@ async def ensure_everos_server(
                 + f"Full log: {server_log_path()}"
             )
 
+    # Not phrased as a failure: the process is up and still booting, which is
+    # what the caller should tell the user and what the next session will find.
     raise RuntimeError(
-        f"EverOS server did not become healthy within {timeout}s at {base_url}. "
-        f"The process is still running; check that port {_extract_port(base_url)} "
-        f"is not held by something else, and see {server_log_path()}"
+        f"EverOS server is still starting at {base_url} after {timeout}s. "
+        f"This session runs without long-term memory; the next one should find it. "
+        f"If it never comes up, check that port {_extract_port(base_url)} is free "
+        f"and see {server_log_path()}"
     )
 
 

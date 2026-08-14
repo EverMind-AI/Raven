@@ -455,6 +455,21 @@ class TestThePrimitivesAgainstTheRealOS:
         assert _probe_health(f"http://127.0.0.1:{port}") is False
 
 
+def test_the_wait_budget_stays_small() -> None:
+    """The timeout is a budget for how long a user waits, not a failure detector.
+
+    Once the poll loop watches the child's exit code, a boot that cannot succeed
+    is caught in about a second whatever this value is -- so the only thing left
+    to size is the wait, and overrunning it is cheap: the child keeps booting and
+    the next session finds it. Pinned because the number reads like a safety
+    margin and invites being raised back.
+    """
+    import inspect
+
+    default = inspect.signature(ensure_everos_server).parameters["timeout"].default
+    assert default == 10.0
+
+
 class TestDeadChildDetection:
     """ "Still booting" and "already dead" are different states.
 
@@ -532,7 +547,7 @@ class TestDeadChildDetection:
             return False
 
         with patch("raven.plugin.memory.everos._server._probe_health", side_effect=_probe):
-            with pytest.raises(RuntimeError, match="did not become healthy"):
+            with pytest.raises(RuntimeError, match="is still starting"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
         # One pre-loop probe plus one per 0.5s poll interval across a 1s budget.
@@ -623,7 +638,7 @@ class TestEnsureEverosServer:
                 "raven.plugin.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
-            pytest.raises(RuntimeError, match="did not become healthy"),
+            pytest.raises(RuntimeError, match="is still starting"),
         ):
             await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
