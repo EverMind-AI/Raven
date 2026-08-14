@@ -33,6 +33,7 @@ from rich.console import Console
 from rich.table import Table
 
 from raven import __logo__
+from raven.cli._tty_guard import die_if_not_tty, is_tty
 
 console = Console()
 
@@ -100,6 +101,63 @@ def _warn_empty_credentials(name: str) -> None:
     if empty:
         flags = ", ".join("--" + k.replace("_", "-") for k in empty)
         console.print(f"  [yellow]⚠ Empty credential fields:[/yellow] {flags}")
+
+
+def _missing_required_fields(name: str) -> list[str]:
+    """Required fields whose effective value is still empty for this channel."""
+    from raven.config.update_channels import (
+        channel_field_specs,
+        get_channel_config,
+    )
+
+    specs = channel_field_specs(name)
+    cfg = get_channel_config(name, redact_secrets=False)
+    return [k for k, s in specs.items() if s.get("required") and cfg.get(k) in ("", None, [])]
+
+
+def _gate_open_allow_from(name: str, fields: dict) -> None:
+    """Confirm gate for an enable whose resolved ``allow_from`` contains ``'*'``.
+
+    ``'*'`` means anyone who can reach the channel can command the agent on
+    this host, so it must never be adopted silently: interactive runs confirm
+    (default No), non-interactive runs demand the wildcard be passed
+    explicitly. Raises ``typer.Exit`` to block the enable; returns to allow it.
+    """
+    raw = fields.get("allow_from")
+    if raw is not None:
+        explicit = "*" in str(raw)
+        open_after = explicit
+    else:
+        from raven.config.update_channels import get_channel_config
+
+        explicit = False
+        current = get_channel_config(name, redact_secrets=False).get("allow_from") or []
+        open_after = "*" in current
+
+    if not open_after:
+        return
+
+    if is_tty():
+        console.print(
+            f"[yellow]⚠ allow_from for {name} resolves to '*': anyone who can message "
+            f"this channel can command the agent on this host.[/yellow]"
+        )
+        console.print("  Restrict senders with --allow-from <id1,id2>, or confirm to keep it open.")
+        if not typer.confirm(f"Enable {name} with allow_from='*' (open to anyone)?", default=False):
+            console.print("[yellow]Aborted.[/yellow] Nothing written.")
+            raise typer.Exit(1)
+    elif explicit:
+        console.print(
+            f"[yellow]⚠ allow_from='*': anyone who can message {name} can command "
+            f"the agent on this host.[/yellow]"
+        )
+    else:
+        console.print(
+            f"[red]✗[/red] Refusing to enable {name}: allow_from resolves to '*' (anyone can "
+            f"command this agent) and this terminal is non-interactive. Pass --allow-from '*' "
+            f"explicitly to accept, or restrict with --allow-from <id1,id2>."
+        )
+        raise typer.Exit(1)
 
 
 def _parse_channel_flags(extra_args: list[str], channel_name: str) -> dict:
@@ -220,9 +278,15 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
 
         fields = _parse_channel_flags(ctx.args, name)
         if not fields:
+            missing = _missing_required_fields(name)
+            if missing:
+                flags = ", ".join("--" + k.replace("_", "-") for k in missing)
+                console.print(f"[red]Error: missing required {flags}[/red]")
             _print_schema_table(name)
             console.print("  [dim]Tip: re-run with one or more --flag value pairs to enable + configure.[/dim]")
-            raise typer.Exit(0)
+            raise typer.Exit(1 if missing else 0)
+
+        _gate_open_allow_from(name, fields)
 
         try:
             enable_channel(name, fields)
@@ -473,6 +537,7 @@ def channels_login(
             f"Configure it with: [cyan]raven channels set {channel_name}[/cyan]"
         )
         return
+    die_if_not_tty(f"raven channels login {channel_name} (from an interactive terminal)")
     console.print(f"{__logo__} {spec.display_name} Login\n")
     channel = spec.factory(channel_cfg)
 
