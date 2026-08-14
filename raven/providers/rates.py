@@ -540,9 +540,8 @@ def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) ->
     Anthropic path uses and for the same reason: one constant cannot fit every
     model. Too large for a small model is a 400; too small for a large one
     truncates silently, which is the failure this whole module's callers exist
-    to avoid. ``DEFAULT_MAX_OUTPUT_TOKENS`` is deliberately the value the
-    retired ``agents.defaults.maxTokens`` used to default to, so a model the
-    table does not know behaves exactly as it did before.
+    to avoid. See ``DEFAULT_MAX_OUTPUT_TOKENS`` for how that fallback is
+    chosen; it only ever answers for a model the catalogue has no row for.
     """
     if not model:
         return DEFAULT_MAX_OUTPUT_TOKENS
