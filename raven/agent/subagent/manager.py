@@ -72,7 +72,7 @@ class SubagentManager:
         sandbox_config: "SandboxConfig | None" = None,
         owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
-        max_concurrent: int = 4,
+        max_concurrent: int = 8,
         max_spawns_per_hour: int = 30,
         third_party_subagents: list | None = None,
         session_dir: "Callable[[str], Path] | None" = None,
@@ -185,6 +185,100 @@ class SubagentManager:
         self.provider = provider
         self.model = model
 
+    def _track(
+        self,
+        task_id: str,
+        task: asyncio.Task,
+        session_key: str | None,
+        instance_key: tuple[str, str, str] | None = None,
+    ) -> None:
+        """Index a running task so the cancellation paths can reach it, and
+        un-index it when it ends."""
+        self._running_tasks[task_id] = task
+        if session_key:
+            self._session_tasks.setdefault(session_key, set()).add(task_id)
+        if instance_key is not None:
+            self._instance_tasks.setdefault(instance_key, set()).add(task_id)
+
+        def _cleanup(_: asyncio.Task) -> None:
+            self._running_tasks.pop(task_id, None)
+            if session_key and (ids := self._session_tasks.get(session_key)):
+                ids.discard(task_id)
+                if not ids:
+                    del self._session_tasks[session_key]
+            if instance_key is not None and (ids := self._instance_tasks.get(instance_key)) is not None:
+                ids.discard(task_id)
+                if not ids:
+                    del self._instance_tasks[instance_key]
+
+        task.add_done_callback(_cleanup)
+
+    def _charge_dispatch_quota(self, quota_key: str) -> bool:
+        """Charge one sub-agent dispatch to this session's rolling hour.
+
+        False when the budget is spent. The window is per session (not
+        per-process) so one busy session cannot throttle others, and each deque
+        is pruned on access, so it self-bounds.
+        """
+        now = time.monotonic()
+        window = self._session_spawn_times.setdefault(quota_key, deque())
+        cutoff = now - _SPAWN_WINDOW_SECONDS
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= self._max_spawns_per_hour:
+            return False
+        window.append(now)
+        return True
+
+    def charge_dag_run(self, session_key: str | None) -> str | None:
+        """Charge one DAG run to the same budget as a spawn; the refusal, or None.
+
+        Shared rather than given its own allowance because both feed the one
+        thing the budget exists to stop: a run announces its result as a new
+        turn, which can submit more work, with no user input anywhere in the
+        loop (see ``max_subagent_spawns_per_hour``). The concurrency gate does
+        not bound that -- each dispatch finishes and frees its slot for the
+        next. A run counts once however many nodes it carries; the gate is what
+        rations the nodes.
+        """
+        quota_key = session_key or "default"
+        if self._charge_dispatch_quota(quota_key):
+            return None
+        logger.warning(
+            "DAG run refused: session {!r} hit the sub-agent dispatch rate limit ({}/hour)",
+            quota_key,
+            self._max_spawns_per_hour,
+        )
+        return (
+            f"Error: this session hit its sub-agent dispatch rate limit "
+            f"({self._max_spawns_per_hour} per hour, counting DAG runs and spawns together). "
+            f"No sub-agent was run. It recovers automatically as earlier ones age out -- if this "
+            f"is unexpected, the task may be looping; reconsider the approach instead of "
+            f"submitting the graph again."
+        )
+
+    def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> None:
+        """Put a task this manager did not start under the same reach as a spawn.
+
+        A backgrounded DAG dispatches the same detached CLI children a spawn
+        does, so ``/stop`` and the shutdown sweep have to find it too -- see
+        :meth:`cancel_all` for what an unreachable one leaves behind. Indexed
+        here rather than only on the DAG tool so every entry point's existing
+        teardown covers it with no extra wiring.
+        """
+        self._track(run_id, task, session_key)
+
+    @property
+    def dispatch_gate(self) -> asyncio.Semaphore:
+        """The one gate every sub-agent dispatch waits on, spawns and DAG nodes alike.
+
+        Each dispatch runs its own sandbox VM, so the host resource being
+        rationed is the same whichever tool asked for it. Handed to the DAG tool
+        rather than duplicated there, so ``max_concurrent_subagents`` means the
+        total in flight and not a per-tool allowance that silently multiplies.
+        """
+        return self._gate
+
     async def spawn(
         self,
         task: str,
@@ -210,12 +304,7 @@ class SubagentManager:
                 "spawning; do the work in this turn instead, or ask them to resume."
             )
         quota_key = session_key or "default"
-        now = time.monotonic()
-        window = self._session_spawn_times.setdefault(quota_key, deque())
-        cutoff = now - _SPAWN_WINDOW_SECONDS
-        while window and window[0] < cutoff:
-            window.popleft()
-        if len(window) >= self._max_spawns_per_hour:
+        if not self._charge_dispatch_quota(quota_key):
             logger.warning(
                 "Spawn refused: session {!r} hit spawn rate limit ({}/hour)",
                 quota_key,
@@ -227,7 +316,6 @@ class SubagentManager:
                 f"as earlier spawns age out — if this is unexpected, the task may "
                 f"be looping; reconsider the approach instead of spawning again."
             )
-        window.append(now)
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         # Computed once and carried in `origin` so the concurrency index below
@@ -260,24 +348,7 @@ class SubagentManager:
         bg_task = asyncio.create_task(
             self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
         )
-        self._running_tasks[task_id] = bg_task
-        if session_key:
-            self._session_tasks.setdefault(session_key, set()).add(task_id)
-        if instance_key is not None:
-            self._instance_tasks.setdefault(instance_key, set()).add(task_id)
-
-        def _cleanup(_: asyncio.Task) -> None:
-            self._running_tasks.pop(task_id, None)
-            if session_key and (ids := self._session_tasks.get(session_key)):
-                ids.discard(task_id)
-                if not ids:
-                    del self._session_tasks[session_key]
-            if instance_key is not None and (ids := self._instance_tasks.get(instance_key)) is not None:
-                ids.discard(task_id)
-                if not ids:
-                    del self._instance_tasks[instance_key]
-
-        bg_task.add_done_callback(_cleanup)
+        self._track(task_id, bg_task, session_key, instance_key)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
@@ -438,12 +509,42 @@ Result:
 
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
 
-        # Re-inject to trigger a main-agent turn in the originating session. The
-        # spine path routes by conversation (= originating session) with
-        # origin=SUBAGENT; the reply rides emit -> hub -> outlet (source.channel
-        # is the originating channel). Fire-and-forget — the announce is fixed,
-        # the turn's output isn't read back.
         assert self._submit is not None
+        self._inject(announce_content, origin)
+        logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
+
+    async def announce_dag_result(self, run_id: str, summary: str, origin: dict[str, str]) -> None:
+        """Announce a background DAG run's outcome, the way a spawn's is announced.
+
+        A backgrounded ``run_subagent_dag`` returns before its graph does, so
+        this is the only path its result takes back to the main agent. It lives
+        on the manager rather than on the DAG tool because the spine submit is
+        wired here, once per entry point -- routing the announce through the
+        tool instead would mean a second late-bound hookup at every one of them.
+
+        The summary is delivered verbatim: it is the same text a foreground run
+        returns as its tool result, and a graph's deliverable is its terminal
+        node outputs. Framing it or asking for a two-sentence retelling -- as a
+        spawn's announce does, its result being one agent's single answer --
+        would put a lossy instruction between the agent and the work product.
+        The untrusted fence is not part of that text and stays: node output is
+        attacker-influenceable, and unlike a tool result (which the agent knows
+        it asked for) this arrives shaped like an inbound message.
+        """
+        if self._submit is None:
+            logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
+            return
+        self._inject(wrap_untrusted(summary, source="subagent"), origin)
+        logger.debug("DAG run [{}] announced result to {}", run_id, origin["session_key"])
+
+    def _inject(self, content: str, origin: dict[str, str]) -> None:
+        """Re-inject ``content`` to trigger a main-agent turn in the originating session.
+
+        The spine path routes by conversation (= originating session) with
+        origin=SUBAGENT; the reply rides emit -> hub -> outlet (source.channel
+        is the originating channel). Fire-and-forget — the announce is fixed,
+        the turn's output isn't read back.
+        """
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
         self._submit(
@@ -455,11 +556,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
                     sender_id="subagent",
                     chat_type=ChatType.DM,
                 ),
-                text=announce_content,
+                text=content,
                 conversation=origin["session_key"],
             )
         )
-        logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""

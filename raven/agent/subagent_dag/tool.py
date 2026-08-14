@@ -5,6 +5,11 @@ Exposes the decoupled DAG subsystem to the main agent as an ordinary Raven
 from third-party subagent config (sharing the req5 adapter layer), runs the DAG
 over a local file backend, and returns a readable summary.
 
+A run is backgrounded by default, like ``spawn``: the call returns as soon as
+the graph is accepted and the result comes back later as an announced turn.
+``background=false`` keeps the old behaviour of blocking until the graph
+finishes and returning the summary as the tool result.
+
 Live progress (``dag_run_started`` / ``dag_node_updated`` / ``dag_run_completed``)
 rides a late-bound sink — NOT the spine. The turn's conversation is delivered
 per-turn via ``set_context`` (the loop calls it, like spawn/message); the sink
@@ -19,6 +24,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +39,7 @@ from raven.agent.subagent.backends import (
     third_party_agent_meta,
 )
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
-from raven.agent.subagent_dag import make_run_id, parse_dag_spec
+from raven.agent.subagent_dag import SubAgentDagSpec, make_run_id, parse_dag_spec
 from raven.agent.subagent_dag._capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import validate_and_order
@@ -47,6 +53,55 @@ from raven.agent.tools.base import Tool, ToolResult
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
 # host (gateway wires it to the web channel's emitter).
 ProgressSink = Callable[[str, str, dict], Awaitable[None]]
+
+# (run_id, summary_text, origin) -> awaitable. How a backgrounded run's result
+# reaches the main agent; the host supplies ``SubagentManager.announce_dag_result``.
+DagAnnouncer = Callable[[str, str, dict], Awaitable[None]]
+
+# (run_id, task, session_key) -> None. Hands a backgrounded run to the host's
+# sub-agent lifecycle, so `/stop` and the shutdown sweep reach its CLI children;
+# the host supplies ``SubagentManager.adopt_background_run``.
+TaskAdopter = Callable[[str, "asyncio.Task", str | None], None]
+
+# (session_key) -> refusal text, or None to proceed. Charges this run to the
+# shared sub-agent dispatch budget; the host supplies
+# ``SubagentManager.charge_dag_run``.
+QuotaCharger = Callable[[str | None], "str | None"]
+
+
+@dataclass(frozen=True)
+class _DagOrigin:
+    """Per-turn reply address for a run's progress and its announce.
+
+    Isolated per asyncio task the same way ``spawn``'s is (the tool is shared;
+    a turn runs in its own lane task), and captured into a backgrounded run at
+    call time -- the run outlives the turn that started it, so reading the
+    context variable later would find whatever turn came next.
+    """
+
+    channel: str
+    chat_id: str
+    conversation: str
+
+
+@dataclass(frozen=True)
+class _RunDirs:
+    """The two directories a run works in, read from the turn that submitted it.
+
+    ``workdir`` is the nodes' cwd and what ``{{ ref:<path> }}`` resolves
+    against; ``run_root`` is where the prompt/output records go. Both come from
+    turn-local state that a backgrounded run outlives, so they are resolved at
+    call time rather than looked up once the graph is already running.
+    """
+
+    workdir: str
+    run_root: str
+
+
+# How long a terminal event may take when a run ends without a manifest. It is
+# also emitted from a cancelled task, where an unbounded await can hang a
+# gateway shutdown behind a sink that is already closing.
+_CLOSE_TIMEOUT_SECONDS = 5.0
 
 # The shipped orchestration guide. Named here so the tool description can send
 # the agent to it: this description has room for "what" and "when", not for the
@@ -76,9 +131,10 @@ _NODE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": (
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
-                "session. Only give the same handle to several nodes of a sub-agent the roster tags "
-                "[stateful] -- elsewhere it carries no context and the graph is rejected. To order "
-                "nodes without sharing a session, use depends_on."
+                "session, including across separate runs in this conversation. Only give the same "
+                "handle to several nodes of a sub-agent the roster tags [stateful] -- elsewhere it "
+                "carries no context and the graph is rejected. Omit it and the node starts from a "
+                "clean session every time. To order nodes without sharing a session, use depends_on."
             ),
         },
     },
@@ -93,7 +149,9 @@ class SubAgentDagTool(Tool):
     timeout_seconds = 1800.0
     # Manual stop (request_cancel / the cancel RPCs) replaces the timer
     # ceiling: the registry skips asyncio.wait_for for blocking_interaction
-    # tools, so a long-running DAG is ended by hand, not by a clock.
+    # tools, so a long-running DAG is ended by hand, not by a clock. Declared
+    # for every call, background or not, the same way ``spawn`` declares it
+    # while also returning before its sub-agent does -- see the note there.
     blocking_interaction = True
 
     def __init__(
@@ -106,6 +164,10 @@ class SubAgentDagTool(Tool):
         guide_skill_id: str | None = GUIDE_SKILL_ID,
         session_dir: "Callable[[str], Path] | None" = None,
         is_paused: "Callable[[], bool] | None" = None,
+        gate: asyncio.Semaphore | None = None,
+        announce: DagAnnouncer | None = None,
+        adopt: TaskAdopter | None = None,
+        charge: QuotaCharger | None = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -117,16 +179,27 @@ class SubAgentDagTool(Tool):
         self._session_dir = session_dir
         self._fallback_sessions: Any = None
         self._backend = LocalFileBackend()
-        self._max_concurrency = max_concurrency
+        # One gate for every run this tool starts, not one per run: several can
+        # be in flight at once now that the default is to background them. The
+        # host passes the sub-agent manager's, so spawns count against it too.
+        self._gate = gate if gate is not None else asyncio.Semaphore(max_concurrency)
+        self._announce = announce
+        self._adopt = adopt
+        self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
         self._publisher_override = progress_publisher
         self._sink: ProgressSink | None = None
-        self._conversation: ContextVar[str | None] = ContextVar("dag_conversation", default=None)
+        self._default_origin = _DagOrigin(channel="cli", chat_id="direct", conversation="cli:direct")
+        self._origin: ContextVar[_DagOrigin | None] = ContextVar("dag_origin", default=None)
         self._tool_call_id: ContextVar[str | None] = ContextVar("dag_tool_call_id", default=None)
         self._subagents: dict[str, Any] = {}
         self._subagent_meta: list[AgentMeta] = []
         self._capabilities: dict[str, AgentCapabilities] = {}
         self._cancels: dict[str, asyncio.Event] = {}
+        # Strong references to in-flight background runs. Without them the event
+        # loop only weakly references a bare create_task, and a run can be
+        # garbage-collected mid-graph.
+        self._runs: dict[str, asyncio.Task] = {}
         self.set_third_party_subagents(third_party_subagents or [])
 
     def set_third_party_subagents(self, configs: list) -> None:
@@ -157,8 +230,21 @@ class SubAgentDagTool(Tool):
         self._capabilities = capabilities
 
     def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
-        """Turn-local: record the conversation progress events should fan out to."""
-        self._conversation.set(session_key or f"{channel}:{chat_id}")
+        """Turn-local: record where this turn's progress and announces are addressed."""
+        self._origin.set(
+            _DagOrigin(channel=channel, chat_id=chat_id, conversation=session_key or f"{channel}:{chat_id}")
+        )
+
+    def _turn_conversation(self) -> str | None:
+        """This turn's conversation, or None outside a turn.
+
+        Distinct from ``origin.conversation``, which substitutes a default so a
+        run always has somewhere to report: a history root must stay unresolved
+        when no turn set one, or a read between turns would look under a key
+        nothing was ever written to.
+        """
+        turn = self._origin.get()
+        return turn.conversation if turn is not None else None
 
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this run's progress belongs to.
@@ -199,7 +285,7 @@ class SubAgentDagTool(Tool):
         (raven/agent/subagent_history.py). Falls back to a slug-less manager --
         the gateway's grouping -- when no resolver was injected.
         """
-        key = session_key or self._conversation.get() or ""
+        key = session_key or self._turn_conversation() or ""
         if self._session_dir is not None:
             return str(dag_root(self._session_dir(key)))
         if self._fallback_sessions is None:
@@ -234,14 +320,23 @@ class SubAgentDagTool(Tool):
             max_output_chars=max_output_chars,
         )
 
-    async def _emit_progress(self, name: str, value: dict) -> None:
-        if (call_id := self._tool_call_id.get()) is not None:
-            value = {**value, "tool_call_id": call_id}
-        if self._publisher_override is not None:
-            await self._publisher_override(name, value)
-        conv = self._conversation.get()
-        if self._sink is not None and conv is not None:
-            await self._sink(conv, name, value)
+    def _emitter(self, conversation: str | None, call_id: str | None) -> ProgressPublisher:
+        """A publisher bound to one call's conversation and tool row.
+
+        Both are turn-local context variables, and a backgrounded run reports
+        long after that context is gone -- so they are read once, here, and
+        closed over rather than looked up per event.
+        """
+
+        async def publish(name: str, value: dict) -> None:
+            if call_id is not None:
+                value = {**value, "tool_call_id": call_id}
+            if self._publisher_override is not None:
+                await self._publisher_override(name, value)
+            if self._sink is not None and conversation is not None:
+                await self._sink(conversation, name, value)
+
+        return publish
 
     @property
     def name(self) -> str:
@@ -306,7 +401,8 @@ class SubAgentDagTool(Tool):
             "Orchestrate two or more sub-agent tasks as a single DAG instead of calling sub-agents "
             "one at a time. Independent nodes run concurrently; a node's output is passed to its "
             "dependents through files (large outputs never enter your context). One call carries the "
-            "whole graph -- do not issue a separate call per node. "
+            "whole graph -- do not issue a separate call per node. The graph runs in the background and "
+            "its result is announced to you when it finishes, so do not poll it and do not re-submit it. "
             f"{guide}"
             f"Available sub-agents for the `subagent` field: {names}."
         )
@@ -316,7 +412,16 @@ class SubAgentDagTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."}
+                "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."},
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Default true: return as soon as the run starts and get the result as an "
+                        "announcement when the graph finishes, leaving you free to work meanwhile. "
+                        "Set false only when you cannot continue without the outputs -- that blocks "
+                        "until every node is done and returns the full summary as this call's result."
+                    ),
+                },
             },
             "required": ["nodes"],
         }
@@ -362,7 +467,7 @@ class SubAgentDagTool(Tool):
             )
         return message
 
-    async def execute(self, nodes: list[dict], **kwargs: Any) -> str:
+    async def execute(self, nodes: list[dict], background: bool = True, **kwargs: Any) -> str:
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
         # failure is a refusal rather than a silent recursive fan-out.
@@ -379,42 +484,167 @@ class SubAgentDagTool(Tool):
                 "Error: delegation is paused. The user paused sub-agent spawning; "
                 "do the work in this turn instead, or ask them to resume."
             )
-        # Validation is a distinct phase, ahead of the run: a graph that fails
-        # any check costs zero sub-agent dispatches, so a rejection is always
-        # cheap enough for the model to just fix and re-submit.
+        # Validation is a distinct phase, ahead of the run, in both modes: a
+        # graph that fails any check costs zero sub-agent dispatches and is
+        # rejected in the caller's own turn, so a rejection is always cheap
+        # enough for the model to just fix and re-submit. Backgrounding must not
+        # turn a malformed graph into an announcement that arrives a turn later.
         try:
             spec = parse_dag_spec({"nodes": nodes})
             validate_and_order(spec)
             validate_capabilities(spec, self._capabilities)
+            # ``run_dag`` checks the roster too, but it does so inside the run --
+            # which a backgrounded call has already returned from. Checked here
+            # as well so a misspelled name is still a refusal the model can fix
+            # in the same turn, not an announcement a turn later.
+            for node in spec.nodes:
+                if self._subagents.get(node.subagent) is None:
+                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
         except DagValidationError as exc:
             return self._validation_error(exc)
 
+        origin = self._origin.get() or self._default_origin
+        dirs = _RunDirs(
+            workdir=str(workdir.current() or self._workspace),
+            run_root=self._run_root(self._turn_conversation()),
+        )
+        # Charged after validation so a rejected graph costs no budget, and
+        # before either mode starts so the refusal is the caller's own result.
+        if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
+            return refusal
+        call_id = self._tool_call_id.get()
         run_id = make_run_id()
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
+
+        if not background:
+            return await self._run(spec, run_id, cancel, origin, dirs, call_id)
+
+        task = asyncio.create_task(self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id))
+        self._runs[run_id] = task
+        task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
+        if self._adopt is not None:
+            self._adopt(run_id, task, origin.conversation)
+        return ToolResult(
+            model_text=(
+                f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
+                "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+            ),
+            display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
+        )
+
+    async def _run_and_announce(
+        self,
+        spec: SubAgentDagSpec,
+        run_id: str,
+        cancel: asyncio.Event,
+        origin: _DagOrigin,
+        dirs: _RunDirs,
+        call_id: str | None,
+    ) -> None:
+        """Run a backgrounded graph, then send its summary back as a turn."""
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id)
+        if cancel.is_set():
+            # A stop the user asked for. ``run_dag`` still returns normally,
+            # with every unfinished node skipped, but announcing that would
+            # spend a turn narrating what they just cancelled -- which is why
+            # a cancelled spawn stays silent too.
+            logger.info("DAG run {} was stopped; not announcing a result", run_id)
+            return
+        if self._announce is None:
+            logger.info("DAG run {} finished with no announcer wired; result reaches no one", run_id)
+            return
+        try:
+            await self._announce(
+                run_id,
+                str(getattr(result, "model_text", result)),
+                {"channel": origin.channel, "chat_id": origin.chat_id, "session_key": origin.conversation},
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed announce must not also lose the log line
+            logger.error("DAG run {} finished but its result could not be announced: {}", run_id, exc)
+
+    @staticmethod
+    async def _close_graph(emit: ProgressPublisher, run_id: str, node_count: int, detail: dict) -> None:
+        """Tell a drawn graph the run is over when it ended with no manifest.
+
+        ``dag_run_started`` has already drawn the nodes by the time a collapse
+        or a stop lands, and the drawing only settles on a terminal event.
+        Blocking, the same turn also delivered the outcome as the tool result,
+        so a graph left mid-flight was visible next to it; backgrounded, the
+        tool row already says "started", leaving the graph reading as still
+        running until a reload reconciles it against ``active_run_ids``.
+
+        The manifest carries no counts because the run produced none -- what it
+        asserts is that there will be no more events, plus why. A consumer
+        settles the nodes from the absence of a ``files`` entry, not from the
+        detail (ui-tui/src/domain/dagRun.ts, ``fromCompletion``).
+
+        Bounded and guarded: this is also reached from a cancelled task, where
+        the sink may be on its way out, and a close that hangs or raises must
+        not outweigh the outcome the caller is already carrying.
+        """
+        try:
+            await asyncio.wait_for(
+                emit("dag_run_completed", {"run_id": run_id, "manifest": {**detail, "summary": {"total": node_count}}}),
+                timeout=_CLOSE_TIMEOUT_SECONDS,
+            )
+        except Exception as emit_exc:  # noqa: BLE001
+            logger.error("DAG run {} ended but its graph could not be closed: {}", run_id, emit_exc)
+
+    async def _run(
+        self,
+        spec: SubAgentDagSpec,
+        run_id: str,
+        cancel: asyncio.Event,
+        origin: _DagOrigin,
+        dirs: _RunDirs,
+        call_id: str | None,
+    ) -> str | ToolResult:
+        """Execute one validated graph and render its outcome."""
+        emit = self._emitter(origin.conversation, call_id)
         try:
             result = await run_dag(
                 spec,
                 subagents=self._subagents,
                 backend=self._backend,
-                workdir=str(workdir.current() or self._workspace),
-                run_root=self._run_root(self._conversation.get()),
-                progress_publisher=self._emit_progress,
-                max_concurrency=self._max_concurrency,
-                session_key=self._conversation.get(),
+                workdir=dirs.workdir,
+                run_root=dirs.run_root,
+                progress_publisher=emit,
+                semaphore=self._gate,
+                session_key=origin.conversation,
                 run_id=run_id,
                 cancel=cancel,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
         except Exception as exc:  # noqa: BLE001
-            return f"Error running DAG: {exc}"
+            # Named, like every other shape this method returns: a backgrounded
+            # run's outcome reaches the agent a turn later as a message of its
+            # own, so a bare error is one it cannot attribute to any of the
+            # graphs it has in flight. The summary carries that itself rather
+            # than the announce framing it -- see ``announce_dag_result``.
+            await self._close_graph(emit, run_id, len(spec.nodes), {"error": str(exc)})
+            return f"Error running DAG {run_id}: {exc}"
+        except asyncio.CancelledError:
+            # The other way a run is stopped. ``dag.cancel`` sets the event and
+            # lets ``run_dag`` return, so the graph settles on its own manifest;
+            # ``/stop`` and the shutdown sweep instead cancel the task, a route
+            # this branch opened by adopting the run into the manager's index.
+            # Without this the two disagree and only one of them closes.
+            #
+            # Served at shutdown too rather than only for a live stop: the sink
+            # is on its way out there and awaiting inside a cancelled task is
+            # fragile, which is what the bound in ``_close_graph`` is for. A
+            # close that loses the race changes nothing -- the task ends
+            # cancelled either way.
+            await self._close_graph(emit, run_id, len(spec.nodes), {"stopped": True})
+            raise
         finally:
             self._cancels.pop(run_id, None)
 
         # A terminal event carrying the authoritative manifest, so the web UI can
         # rebuild / finalize the graph (and survive a reload).
-        await self._emit_progress(
+        await emit(
             "dag_run_completed",
             {
                 "run_id": result.run_id,

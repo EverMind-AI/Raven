@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import posixpath
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -316,6 +317,52 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     assert leaked_run_groups == []
 
 
+async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
+    """The cap has to mean total dispatches in flight, not per run.
+
+    Every run used to build its own semaphore, which was equivalent while only
+    one graph could be running; backgrounded runs overlap, so N runs would
+    otherwise each get the full allowance.
+    """
+    live = 0
+    peak = 0
+
+    class _Tracking:
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            await asyncio.sleep(0.02)
+            live -= 1
+            return f"OUT[{task_id}]"
+
+    def _independent_nodes(prefix: str) -> Any:
+        return parse_dag_spec(
+            {"nodes": [{"id": f"{prefix}{i}", "subagent": "x", "prompt_template": "hi"} for i in range(3)]}
+        )
+
+    gate = asyncio.Semaphore(2)
+    backend = _Tracking()
+    results = await asyncio.gather(
+        *[
+            run_dag(
+                _independent_nodes(prefix),
+                subagents={"x": backend},
+                backend=_InMemBackend(),
+                workdir="/w",
+                run_root="/hist/mas_dag",
+                semaphore=gate,
+            )
+            for prefix in ("a", "b")
+        ]
+    )
+
+    # == not <=: the gate has to be saturated for the bound to prove anything.
+    # A private semaphore per run lets all 6 nodes reach 4 in flight instead.
+    assert peak == 2, f"{peak} nodes ran at once under a shared Semaphore(2)"
+    assert all(r.summary == {"total": 3, "completed": 3, "failed": 0, "skipped": 0} for r in results)
+
+
 async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -374,6 +421,31 @@ async def test_run_dag_without_session_key_writes_nothing_to_registry(
 # --- native tool end-to-end (real `cat` CLI backend) ---------------------
 
 
+class _Announces:
+    """A stand-in for the manager's announcer that a test can wait on."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict]] = []
+        self._arrived = asyncio.Event()
+
+    async def __call__(self, run_id: str, summary: str, origin: dict) -> None:
+        self.calls.append((run_id, summary, origin))
+        self._arrived.set()
+
+    async def wait(self, count: int = 1, timeout: float = 10.0) -> list[tuple[str, str, dict]]:
+        async def _poll() -> None:
+            while True:
+                # Clear before re-checking, with no await between the two, so a
+                # call landing here cannot have its flag cleared and be missed.
+                self._arrived.clear()
+                if len(self.calls) >= count:
+                    return
+                await self._arrived.wait()
+
+        await asyncio.wait_for(_poll(), timeout)
+        return list(self.calls)
+
+
 async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     tool = SubAgentDagTool(
         workspace=tmp_path,
@@ -386,7 +458,8 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
         nodes=[
             {"id": "a", "subagent": "echo", "prompt_template": "hello world"},
             {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-        ]
+        ],
+        background=False,
     )
     assert "2 completed" in out.model_text
     assert "hello world" in out.model_text  # a's output flowed to b (the sink) and back
@@ -402,9 +475,379 @@ async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path:
     )
     assert "General Audit" in tool.description
 
-    out = await tool.execute(nodes=[{"id": "a", "subagent": "General Audit", "prompt_template": "hello world"}])
+    out = await tool.execute(
+        nodes=[{"id": "a", "subagent": "General Audit", "prompt_template": "hello world"}], background=False
+    )
     assert "1 completed" in out.model_text
     assert "hello world" in out.model_text
+
+
+class TestBackgroundRun:
+    """The default shape: the call returns as soon as the graph is accepted and
+    the outcome comes back as an announced turn, the way a spawn's does."""
+
+    @staticmethod
+    def _tool(tmp_path: Path, announce: Any = None) -> SubAgentDagTool:
+        return SubAgentDagTool(
+            workspace=tmp_path,
+            third_party_subagents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            announce=announce,
+        )
+
+    async def test_the_call_returns_before_the_graph_does(self, tmp_path: Path) -> None:
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+        tool.set_context("web", "default", "web:sess1")
+
+        out = await tool.execute(
+            nodes=[
+                {"id": "a", "subagent": "echo", "prompt_template": "hello world"},
+                {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+            ]
+        )
+
+        assert "started in the background" in out.model_text
+        assert "2 nodes" in out.model_text
+        # The outcome cannot be in the result -- nothing has run yet.
+        assert "completed" not in out.model_text
+
+        run_id, summary, origin = (await announces.wait())[0]
+        assert run_id in out.model_text, "the announce must name the run the call reported"
+        assert "2 completed" in summary
+        assert "hello world" in summary  # a's output flowed to b and into the announce
+        assert origin == {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
+
+    async def test_two_overlapping_runs_each_report_to_their_own_turn(self, tmp_path: Path) -> None:
+        """Backgrounding makes concurrent runs on one shared tool the normal case.
+
+        The reply address and tool row belong to the call, not to the tool, so
+        each run has to carry its own -- holding the latest on the instance
+        would send the first run's result and graph to the second one's chat.
+        """
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+        events: list[tuple[str, str, str | None]] = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def sink(conversation, name, payload):
+            events.append((payload["run_id"], conversation, payload.get("tool_call_id")))
+            if name == "dag_run_started":
+                # Hold each run at its first event so both are genuinely in
+                # flight together, rather than racing to finish first.
+                started.set()
+                await release.wait()
+
+        tool.set_progress_sink(sink)
+
+        tool.set_context("web", "one", "web:sess1")
+        tool.set_tool_call_id("call-1")
+        first = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        await asyncio.wait_for(started.wait(), 10)
+
+        started.clear()
+        tool.set_context("web", "two", "web:sess2")
+        tool.set_tool_call_id("call-2")
+        second = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        await asyncio.wait_for(started.wait(), 10)
+
+        release.set()
+        calls = await announces.wait(count=2)
+
+        run_one, run_two = str(first.model_text).split()[2], str(second.model_text).split()[2]
+        addressed = {run_id: origin["session_key"] for run_id, _, origin in calls}
+        assert addressed == {run_one: "web:sess1", run_two: "web:sess2"}
+        assert {(conv, call_id) for run_id, conv, call_id in events if run_id == run_one} == {("web:sess1", "call-1")}
+        assert {(conv, call_id) for run_id, conv, call_id in events if run_id == run_two} == {("web:sess2", "call-2")}
+
+    async def test_a_rejected_graph_is_refused_in_the_callers_own_turn(self, tmp_path: Path) -> None:
+        """Backgrounding must not downgrade a refusal into an announcement a turn
+        later -- including the roster check, which the runner only reaches once
+        the call has already returned."""
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "nope", "prompt_template": "hi"}])
+
+        assert out.startswith("Error: invalid DAG")
+        assert announces.calls == []
+        assert not (tmp_path / ".ravenx_dag").exists()
+
+    def test_the_flag_is_declared_and_defaults_to_true(self, tmp_path: Path) -> None:
+        """Backgrounding is opt-out, so the schema has to carry the flag and say
+        which way it points -- a model reading the description alone would
+        otherwise assume the old blocking behaviour it was trained on."""
+        schema = self._tool(tmp_path).parameters
+        assert "background" not in schema["required"]
+        described = schema["properties"]["background"]
+        assert described["type"] == "boolean"
+        assert "Default true" in described["description"]
+
+    @pytest.mark.parametrize("stop", ["by_session", "all", "by_id"])
+    async def test_a_background_run_is_reachable_by_stop_and_shutdown(self, tmp_path: Path, stop: str) -> None:
+        """A backgrounded run dispatches the same detached CLI children a spawn
+        does -- its own process group, no timeout, unreachable by the gateway's
+        Ctrl-C. If `/stop` and the shutdown sweep cannot find it, `cancel_all`'s
+        whole reason for existing is defeated and those children outlive the
+        gateway, still writing to the workspace.
+
+        `by_id` is the overlay's kill button, keyed on the id a run reports. It
+        reaches this run only because the adoption above puts it in the index
+        that route reads -- neither half was written with the other in view.
+        """
+        from raven.agent.subagent.manager import SubagentManager
+
+        class _Provider:
+            def get_default_model(self) -> str:
+                return "m"
+
+        mgr = SubagentManager(provider=_Provider(), workspace=tmp_path)
+        announces = _Announces()
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            third_party_subagents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            announce=announces,
+            gate=mgr.dispatch_gate,
+            adopt=mgr.adopt_background_run,
+        )
+        tool.set_context("web", "default", "web:sess1")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def sink(conversation, name, payload):
+            if name == "dag_run_started":
+                started.set()
+                await release.wait()
+
+        tool.set_progress_sink(sink)
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+        await asyncio.wait_for(started.wait(), 10)
+
+        if stop == "by_session":
+            stopped = await mgr.cancel_by_session("web:sess1")
+        elif stop == "all":
+            stopped = await mgr.cancel_all()
+        else:
+            stopped = int(await mgr.cancel_by_id(run_id))
+
+        assert stopped == 1, "the stop path did not reach the background run"
+        assert tool.active_run_ids() == []
+        # A run torn down under the user's feet has nothing to report back.
+        assert announces.calls == []
+
+    async def test_a_stopped_run_announces_nothing(self, tmp_path: Path) -> None:
+        """`run_dag` returns normally on a stop, with everything skipped. Turning
+        that into an announcement would spend a turn narrating what the user just
+        cancelled -- a cancelled spawn stays silent for the same reason."""
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+        tool.set_context("web", "default", "web:sess1")
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def sink(conversation, name, payload):
+            if name == "dag_run_started":
+                started.set()
+                await release.wait()
+
+        tool.set_progress_sink(sink)
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+        await asyncio.wait_for(started.wait(), 10)
+
+        assert tool.request_cancel(run_id) is True
+        release.set()
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if run_id not in tool.active_run_ids():
+                break
+
+        await asyncio.sleep(0.05)
+        assert announces.calls == []
+
+    async def test_a_run_is_charged_to_the_shared_dispatch_budget(self, tmp_path: Path) -> None:
+        """A background run returns instantly and announces itself back as a new
+        turn, which can submit more runs -- the loop the dispatch budget exists
+        to bound. The concurrency gate does not: each dispatch frees its slot."""
+        charged: list[str | None] = []
+
+        def charge(session_key: str | None) -> str | None:
+            charged.append(session_key)
+            return "Error: budget spent." if len(charged) > 2 else None
+
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            third_party_subagents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            charge=charge,
+        )
+        tool.set_context("web", "default", "web:sess1")
+        node = {"id": "a", "subagent": "echo", "prompt_template": "hi"}
+
+        first = await tool.execute(nodes=[dict(node)])
+        second = await tool.execute(nodes=[dict(node)], background=False)
+        third = await tool.execute(nodes=[dict(node)])
+
+        assert "started in the background" in str(first)
+        assert "1 completed" in str(second), "a foreground run draws on the same budget"
+        assert third == "Error: budget spent."
+        assert charged == ["web:sess1"] * 3
+
+        # A graph that never passes validation must not spend budget either.
+        await tool.execute(nodes=[{"id": "a", "subagent": "nope", "prompt_template": "hi"}])
+        assert len(charged) == 3
+
+    async def test_a_collapsed_run_closes_the_graph_it_drew(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A drawn graph settles on a terminal event, and only on one.
+
+        A collapse mid-run leaves the nodes drawn and running. Blocking, the
+        error landed in the same turn as the tool result, next to the stalled
+        graph; backgrounded, the row already said "started" and the error goes
+        only to the model -- so without a terminal event the graph reads as
+        still running for as long as the tab stays open.
+        """
+        import raven.agent.subagent_dag.tool as tool_mod
+
+        events: list[tuple[str, dict]] = []
+
+        async def _publish(name: str, value: dict) -> None:
+            events.append((name, value))
+
+        async def _crash_after_drawing(spec: Any, *, progress_publisher: Any, run_id: str, **kw: Any) -> None:
+            await progress_publisher("dag_run_started", {"run_id": run_id, "nodes": [{"id": "a"}]})
+            raise RuntimeError("store write failed")
+
+        monkeypatch.setattr(tool_mod, "run_dag", _crash_after_drawing)
+        announces = _Announces()
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            third_party_subagents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            progress_publisher=_publish,
+            announce=announces,
+        )
+        tool.set_context("web", "default", "web:sess1")
+
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+        await announces.wait()
+
+        names = [name for name, _ in events]
+        assert names == ["dag_run_started", "dag_run_completed"], names
+        manifest = events[-1][1]["manifest"]
+        assert events[-1][1]["run_id"] == run_id
+        # The projection reads `manifest` unconditionally; it is what marks the
+        # run finished, and the reason belongs with it.
+        assert "store write failed" in manifest["error"]
+
+    async def test_a_stopped_run_closes_the_graph_the_way_a_collapsed_one_does(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both stop routes have to settle the drawing, not just one.
+
+        `dag.cancel` sets the run's event and lets the runner return, so the
+        graph closes on a real manifest. `/stop` and the shutdown sweep instead
+        cancel the task -- a route this branch opened by adopting the run into
+        the manager's index -- and `CancelledError` is not an `Exception`, so
+        the collapse path above does not see it.
+        """
+        import raven.agent.subagent_dag.tool as tool_mod
+
+        events: list[tuple[str, dict]] = []
+        drawn = asyncio.Event()
+
+        async def _publish(name: str, value: dict) -> None:
+            events.append((name, value))
+
+        async def _draw_then_hang(spec: Any, *, progress_publisher: Any, run_id: str, **kw: Any) -> None:
+            await progress_publisher("dag_run_started", {"run_id": run_id, "nodes": [{"id": "a"}]})
+            drawn.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(tool_mod, "run_dag", _draw_then_hang)
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            third_party_subagents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            progress_publisher=_publish,
+        )
+        tool.set_context("web", "default", "web:sess1")
+
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+        await drawn.wait()
+
+        # Exactly what `SubagentManager.cancel_by_session` does to the task it
+        # was handed by `adopt_background_run`.
+        task = tool._runs[run_id]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        names = [name for name, _ in events]
+        assert names == ["dag_run_started", "dag_run_completed"], names
+        assert events[-1][1]["manifest"]["stopped"] is True
+
+    async def test_a_collapsed_run_still_names_itself(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every shape the summary takes has to identify its own run.
+
+        A finished run is named by its first line and its run dir, and a failed
+        node rides inside one. A run that collapses outright had only the bare
+        exception -- which reaches the agent a turn later as a message of its
+        own, unattributable to any of the graphs it has in flight.
+        """
+        import raven.agent.subagent_dag.tool as tool_mod
+
+        async def _boom(*a, **kw):
+            raise RuntimeError("backend exploded")
+
+        monkeypatch.setattr(tool_mod, "run_dag", _boom)
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+        tool.set_context("web", "default", "web:sess1")
+        node = {"id": "a", "subagent": "echo", "prompt_template": "hi"}
+
+        out = await tool.execute(nodes=[dict(node)])
+        run_id = str(out.model_text).split()[2]
+        _, summary, _ = (await announces.wait())[0]
+
+        assert run_id in summary
+        assert "backend exploded" in summary
+        # The announce is a verbatim copy, so the foreground result is the same
+        # text -- the id belongs to the summary, not to any announce framing.
+        foreground = await tool.execute(nodes=[dict(node)], background=False)
+        assert str(foreground).startswith("Error running DAG ")
+        assert "backend exploded" in str(foreground)
+
+    async def test_a_run_with_no_announcer_still_completes(self, tmp_path: Path) -> None:
+        """Hosts that never wire one (the CLI before its scheduler exists, tests)
+        must not turn a finished graph into an unretrievable crash."""
+        tool = self._tool(tmp_path, None)
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if run_id not in tool.active_run_ids():
+                break
+        assert run_id not in tool.active_run_ids()
+        run = await tool.read_run(run_id)
+        assert run["summary"]["completed"] == 1
+
+    async def test_a_background_run_records_under_the_session_that_started_it(self, tmp_path: Path) -> None:
+        """The history root is the submitting turn's, not whatever is current
+        when the graph finishes -- a reader between turns has only the session
+        key to look under, and a run that wrote elsewhere is unreachable."""
+        announces = _Announces()
+        tool = self._tool(tmp_path, announces)
+        tool.set_context("web", "default", "web:sess1")
+
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+        run_id = str(out.model_text).split()[2]
+        await announces.wait()
+
+        run = await tool.read_run(run_id, "web:sess1")
+        assert run["summary"]["completed"] == 1
 
 
 class TestSubagentRoster:
@@ -635,7 +1078,8 @@ async def test_run_subagent_dag_tool_fans_progress_to_sink(tmp_path: Path) -> No
         nodes=[
             {"id": "a", "subagent": "echo", "prompt_template": "hi"},
             {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-        ]
+        ],
+        background=False,
     )
 
     assert all(conv == "web:sess1" for conv, _, _ in events)
@@ -696,7 +1140,8 @@ class TestCallAndResultLabels:
             nodes=[
                 {"id": "a", "subagent": "echo", "prompt_template": "hi"},
                 {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-            ]
+            ],
+            background=False,
         )
         preview = getattr(out, "display_text", None)
         assert preview is not None, "the result must carry a display string for the transcript"
@@ -719,7 +1164,8 @@ class TestCallAndResultLabels:
             nodes=[
                 {"id": "boom", "subagent": "broken", "prompt_template": "x"},
                 {"id": "after", "subagent": "echo", "prompt_template": "{{ boom.output }}", "depends_on": ["boom"]},
-            ]
+            ],
+            background=False,
         )
         assert out.display_text is not None
         assert "1 failed (boom)" in out.display_text
@@ -742,7 +1188,7 @@ async def test_run_subagent_dag_tool_stamps_tool_call_id_on_every_event(tmp_path
         events.append((name, payload))
 
     tool.set_progress_sink(sink)
-    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}], background=False)
 
     assert events, "expected at least one progress event"
     assert all(p.get("tool_call_id") == "call-42" for _, p in events)
@@ -763,7 +1209,7 @@ async def test_run_subagent_dag_tool_omits_tool_call_id_when_host_sets_none(tmp_
         events.append(payload)
 
     tool.set_progress_sink(sink)
-    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
+    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}], background=False)
 
     assert events
     assert all("tool_call_id" not in p for p in events)
@@ -829,7 +1275,8 @@ class TestCapabilityGate:
             nodes=[
                 {"id": "a", "subagent": "stateless_local", "prompt_template": "hello world"},
                 {"id": "b", "subagent": "boxed", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
-            ]
+            ],
+            background=False,
         )
 
         assert "2 completed" in out.model_text
@@ -849,7 +1296,8 @@ class TestCapabilityGate:
                     "depends_on": ["draft"],
                     "instance": "author",
                 },
-            ]
+            ],
+            background=False,
         )
 
         # A rejection is a plain error string; a graph that ran comes back as a

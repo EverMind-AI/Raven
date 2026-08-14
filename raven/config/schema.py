@@ -276,9 +276,10 @@ class AgentDefaults(Base):
     # finishing, which an httpx per-read timeout never catches.
     llm_call_timeout: int = 600
     max_tool_iterations: int = 40
-    # Cap on subagent VMs running at once (excess spawns queue). ge=1: a
-    # 0/negative cap would deadlock every subagent (Semaphore(0)).
-    max_concurrent_subagents: int = Field(default=4, ge=1)
+    # Cap on subagent VMs running at once, counting spawns and DAG nodes
+    # together (excess queues). ge=1: a 0/negative cap would deadlock every
+    # subagent (Semaphore(0)).
+    max_concurrent_subagents: int = Field(default=8, ge=1)
     # Spawn rate limit per session, per rolling hour — the concurrency gate
     # alone can't stop a prompt-injected agent from spawning indefinitely (each
     # finishes, freeing a slot for the next; the cross-turn re-injection loop

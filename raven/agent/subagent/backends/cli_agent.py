@@ -22,6 +22,7 @@ import shlex
 import signal
 import tempfile
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,7 @@ from raven.agent.subagent.backends.transcript import (
     parse_openclaw_json,
     parse_opencode_json,
 )
-from raven.agent.subagent.instances import InstanceRegistry, get_registry
+from raven.agent.subagent.instances import InstanceRegistry, get_registry, hold_handle
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -205,43 +206,81 @@ class CliAgentBackend:
         cwd = self.cwd or str(workspace)
 
         if self.is_stateful:
-            existing = await self._registry.lookup(skey, self.name, handle)
-            if existing is not None:
-                try:
-                    return await self._attempt(
-                        task,
-                        task_id,
-                        cwd,
-                        agent_id=existing,
-                        template=self.resume_command or self.command,
-                        created=False,
-                        skey=skey,
-                        handle=handle,
-                    )
-                except (CliAgentTimeoutError, CliAgentReportedError):
-                    # Neither is evidence the CLI's session store pruned this id: a
-                    # timeout may just mean the run was slow, and a transcript-level
-                    # error can happen inside a perfectly valid session. Forgetting
-                    # the handle here would discard a valid binding for nothing.
-                    raise
-                except Exception:  # noqa: BLE001 - a hard non-zero exit: the CLI's own session store may have pruned this id
-                    logger.warning(
-                        "Subagent [{}] resume of {}/{!r} failed; forgetting the stale handle and "
-                        "retrying once as a fresh create",
-                        task_id,
-                        self.name,
-                        handle,
-                    )
-                    await self._registry.forget(skey, self.name, handle)
-            # Minted independently of `handle`: a CLI constrains its session
-            # id (claude rejects a non-UUID) while a handle is free-form.
-            agent_id = None if self.id_source == "derived" else str(uuid.uuid4())
-            return await self._attempt(
-                task, task_id, cwd, agent_id=agent_id, template=self.command, created=True, skey=skey, handle=handle
-            )
+            # Held across lookup, run and commit: the whole sequence is what
+            # binds a handle to one CLI session, and a concurrent spawn or DAG
+            # node on the same handle would otherwise resume that session
+            # side by side. See ``hold_handle``.
+            #
+            # Only a named handle has such a session. Without one nothing is
+            # looked up (``resumable`` below), so each run mints its own
+            # agent_id and there is nothing for a second run to interleave with
+            # -- while the key it would serialize on is a DAG node's
+            # author-chosen id, which repeats across graphs by design. Taking
+            # the lock there stalls unrelated runs on the shared dispatch gate,
+            # since a node holds its slot while it waits.
+            resumable = instance is not None
+            guard = hold_handle(skey, self.name, handle) if resumable else nullcontext()
+            async with guard:
+                return await self._run_stateful(task, task_id, cwd, skey, handle, resumable=resumable)
 
         return await self._attempt(
             task, task_id, cwd, agent_id=None, template=self.command, created=False, skey=skey, handle=handle
+        )
+
+    async def _run_stateful(self, task: str, task_id: str, cwd: str, skey: str, handle: str, *, resumable: bool) -> str:
+        """Resume this handle's session, or mint one.
+
+        Only an explicitly named ``instance`` resumes -- that is ``resumable``
+        -- and only that case runs under ``hold_handle``; an unnamed one shares
+        no session, so the caller does not serialize it. Without a name the
+        handle falls back to ``task_id``, which for a DAG node is its
+        author-chosen id -- so a later graph with a node called ``research``
+        would otherwise pick up an earlier graph's session, having asked for
+        nothing of the sort. (A spawn's ``task_id`` is a fresh uuid, so nothing
+        there could ever match anyway.)
+
+        The binding is still committed, and the rule holds in one direction
+        only: an unnamed run never reads one, but what it writes is the bare
+        handle, so a later run naming ``instance="research"`` does resume the
+        session that node left behind. Closing that means namespacing the
+        *write*, not tightening this lookup -- and the web monitor reads the
+        binding by ``<agent>/<node id>`` (deriveInstances.ts), so both sides
+        move together. Predates the gate on ``resumable``, which narrowed the
+        case rather than removing it.
+        """
+        existing = await self._registry.lookup(skey, self.name, handle) if resumable else None
+        if existing is not None:
+            try:
+                return await self._attempt(
+                    task,
+                    task_id,
+                    cwd,
+                    agent_id=existing,
+                    template=self.resume_command or self.command,
+                    created=False,
+                    skey=skey,
+                    handle=handle,
+                )
+            except (CliAgentTimeoutError, CliAgentReportedError):
+                # Neither is evidence the CLI's session store pruned this id: a
+                # timeout may just mean the run was slow, and a transcript-level
+                # error can happen inside a perfectly valid session. Forgetting
+                # the handle here would discard a valid binding for nothing.
+                raise
+            except Exception:  # noqa: BLE001 - a hard non-zero exit: the CLI's own session store may have pruned this id
+                logger.warning(
+                    "Subagent [{}] resume of {}/{!r} failed; forgetting the stale handle and "
+                    "retrying once as a fresh create",
+                    task_id,
+                    self.name,
+                    handle,
+                )
+                await self._registry.forget(skey, self.name, handle)
+        # Minted independently of `handle`: a CLI constrains its session
+        # id (claude rejects a non-UUID) while a handle is free-form.
+        agent_id = None if self.id_source == "derived" else str(uuid.uuid4())
+        return await self._attempt(
+            task, task_id, cwd, agent_id=agent_id, template=self.command, created=True, skey=skey, handle=handle
         )
 
     async def _attempt(

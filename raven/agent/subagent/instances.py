@@ -14,6 +14,9 @@ import asyncio
 import json
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -212,4 +215,41 @@ def get_registry() -> InstanceRegistry:
     return _registry
 
 
-__all__ = ["InstanceRegistry", "get_registry", "default_registry_path"]
+@dataclass
+class _HeldLock:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+_handle_locks: dict[_Key, _HeldLock] = {}
+
+
+@asynccontextmanager
+async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterator[None]:
+    """Serialize everything that resumes one stateful instance handle.
+
+    A handle maps to a single session inside the CLI's own store; two runs
+    resuming it at once interleave that session's transcript or corrupt it.
+    Process-wide and keyed by the handle rather than held on a backend object,
+    because the DAG tool and the sub-agent manager build *separate* backends
+    from the same config -- a per-backend lock would let a spawn and a DAG node
+    resume the same session side by side.
+
+    The refcount is taken before the lock is awaited, so a waiter keeps the
+    entry alive and the map never strands a lock two callers disagree about.
+    """
+    key = (session_key, agent, handle)
+    entry = _handle_locks.get(key)
+    if entry is None:
+        entry = _handle_locks[key] = _HeldLock()
+    entry.users += 1
+    try:
+        async with entry.lock:
+            yield
+    finally:
+        entry.users -= 1
+        if entry.users == 0:
+            _handle_locks.pop(key, None)
+
+
+__all__ = ["InstanceRegistry", "get_registry", "default_registry_path", "hold_handle"]

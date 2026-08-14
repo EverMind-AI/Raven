@@ -638,6 +638,30 @@ class TestDagProgressSink:
         ]
         assert "terminal_outputs" not in payload
 
+    async def test_run_completed_always_carries_files_even_with_no_manifest_to_flatten(self):
+        """A run that ends without a manifest still has to close its graph.
+
+        A collapse or a stop sends the detail and nothing else, so there is no
+        `files` key to flatten -- and the consumer maps over that field
+        unguarded (`fromCompletion`, ui-tui/src/domain/dagRun.ts), settling
+        every node the manifest does not name. The coercion here is what makes
+        that ending a closed graph rather than a crash, so the field has to
+        survive an empty manifest.
+        """
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {"run_id": "dag-1", "manifest": {"stopped": True, "summary": {"total": 2}}},
+        )
+
+        payload = emitter.emitted[0][1]["payload"]
+        assert payload["files"] == []
+        assert payload["summary"] == {"total": 2}
+        assert payload["dir"] == ""
+
     async def test_an_unknown_event_name_is_dropped(self):
         """The sink is shared with the web channel, which may grow events this
         wire protocol has no variant for. Forwarding one blind would reach the

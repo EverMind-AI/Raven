@@ -18,6 +18,7 @@ from raven.agent.subagent_dag.runner import DagRunResult
 from raven.agent.subagent_dag.tool import SubAgentDagTool
 from raven.agent.subagent_history import dag_root, spawn_root
 from raven.agent.workdir import bind
+from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.providers.base import LLMResponse
 from raven.session.manager import SessionManager
 
@@ -156,23 +157,34 @@ async def test_dag_records_go_to_history_while_nodes_run_in_the_bound_workdir(tm
     to the session's history under agent home. Collapsing them back into one
     would either write the audit trail into the user's project or resolve the
     user's file references against the history directory.
+
+    Both are read while the submitting turn still holds them: the run is
+    backgrounded, so the block that bound the working directory has exited by
+    the time the graph reaches the runner.
     """
     home = tmp_path / "home"
     session = tmp_path / "project"
     home.mkdir()
     session.mkdir()
     recorded: dict = {}
+    reached = asyncio.Event()
 
     async def _fake_run_dag(spec, **kwargs):
         recorded.update(kwargs)
+        reached.set()
         return DagRunResult(run_id="r1", dir=str(session))
 
     monkeypatch.setattr(dag_tool_mod, "run_dag", _fake_run_dag)
-    tool = SubAgentDagTool(workspace=home, third_party_subagents=[])
+    tool = SubAgentDagTool(
+        workspace=home,
+        third_party_subagents=[ThirdPartyCliSubagentConfig(name="stub", command="cat")],
+    )
     tool.set_context("web", "chat-1")
 
     with bind(session):
         await tool.execute(nodes=[{"id": "a", "subagent": "stub", "prompt_template": "hi"}])
+
+    await asyncio.wait_for(reached.wait(), timeout=5)
 
     assert recorded["workdir"] == str(session)
     assert recorded["run_root"] == str(dag_root(_sdir(home, "web:chat-1")))
