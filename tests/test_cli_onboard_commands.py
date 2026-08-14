@@ -4570,3 +4570,19 @@ def test_pick_model_shows_default_positioning_line(
     captured_out = capsys.readouterr().out
     assert re.search(r"Default: .*—", captured_out)
     assert chosen == "openai/m1"
+
+
+def test_memory_skip_hints_configure_later(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """The Step 4 skip/non-interactive exit must name the remediation command,
+    matching the give-up exit's 'run raven onboard again' hint."""
+    import re
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    onboard_everos._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
+    out = " ".join(capsys.readouterr().out.split())
+    assert re.search(r"raven onboard.*again", out)
