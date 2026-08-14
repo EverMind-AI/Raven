@@ -2845,11 +2845,16 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .memnote { font-size: 11.5px; color: var(--faint); margin-top: 8px; line-height: 1.7; }
 .mempre { font-size: 12.5px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.pcard { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center;
+/* minmax(0, 1fr), not 1fr: a grid track's automatic minimum is min-content, so
+   one long unbroken string in column 1 -- a probe that reported 2000 characters
+   of an agent's stdout -- widens the track until the controls in column 2 leave
+   the viewport entirely, with no horizontal scroll to reach them. */
+.pcard { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: center;
   background: var(--ink); padding: 13px 15px; }
 .pcard .nm { grid-column: 1; grid-row: 1; display: flex; align-items: center; gap: 8px;
   font-size: 13.5px; font-weight: 600; }
-.pcard .mo { grid-column: 1; grid-row: 2; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.pcard .mo { grid-column: 1; grid-row: 2; font-family: var(--mono); font-size: 11.5px; color: var(--faint);
+  overflow-wrap: anywhere; }
 .pcard .ctl { grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end;
   display: flex; gap: 7px; }
 .pcard .keyrow { grid-row: 3; }
@@ -2881,7 +2886,14 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .led.off { background: var(--line); }
 .pcard .mo.bad, .card .st.bad { color: var(--clay); }
 .pcard .mo.warn, .card .st.warn { color: var(--gold); }
-.pnote { font-size: 11.5px; color: var(--faint); line-height: 1.7; }
+.pnote { font-size: 11.5px; color: var(--faint); line-height: 1.7; overflow-wrap: anywhere; }
+/* A failing agent's own output is the most useful thing on the card and the
+   longest: clamped to four lines so one bad row cannot push every other agent
+   off the screen, and clicking it shows the rest. */
+.pnote.clamp {
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+  overflow: hidden; cursor: pointer;
+}
 .perr { font-size: 12px; color: var(--clay); }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 6px; }
 .chipm {
@@ -6975,7 +6987,11 @@ function drawXa() {
          completes a handshake and reads the agent's own capability list, a cli
          test dispatches a real turn -- so "passed" on its own would flatten two
          quite different claims into one word. */
-      if (row.last_test_detail) r.appendChild(mk('div', 'pnote', row.last_test_detail));
+      if (row.last_test_detail) {
+        const note = mk('div', 'pnote clamp', row.last_test_detail);
+        note.onclick = () => note.classList.toggle('clamp');
+        r.appendChild(note);
+      }
       /* The preset moved to another transport since this entry was written.
          Rewriting it silently would change its command line and invalidate every
          session handle bound to it, so the switch is offered, never applied. */

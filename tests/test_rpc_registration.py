@@ -65,6 +65,7 @@ def _registered() -> set[str]:
         confirm_broker=SimpleNamespace(),
         question_broker=SimpleNamespace(),
         scheduler=SimpleNamespace(),
+        send_frame=SimpleNamespace(),
     )
     return set(dispatcher.methods())
 
@@ -77,12 +78,15 @@ def test_every_contract_method_is_registered() -> None:
 def test_the_capability_gated_groups_do_register_when_their_dependency_is_present() -> None:
     # Pins the reason this module passes stubs at all: without them these seven
     # read as unimplemented, and an allowlist that names them would hide a real
-    # regression on any one of them.
+    # regression on any one of them. `browser.watch` is gated the same way: it
+    # needs the transport's notification sink, so it is absent without one --
+    # which is why this passes a send_frame stub too.
     registered = _registered()
     for name in (
         "approval.respond",
         "clarify.respond",
         "confirm.respond",
+        "browser.watch",
         "turn.cancel",
         "turn.send",
         "turn.subscribe",

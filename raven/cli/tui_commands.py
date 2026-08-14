@@ -786,6 +786,14 @@ async def _run_rpc_server_until_done(
                 _logger.exception(
                     "tui: memory backend stop failed; continuing shutdown",
                 )
+        try:
+            from raven.browser import get_browser
+
+            await get_browser().close()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: browser close failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:

@@ -1981,6 +1981,162 @@ class PromptBackgroundParams(_Strict):
     text: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# browser.* -- the shared page
+#
+# Every one of these answers `ok` plus some subset of the driver's page state,
+# because the handlers spread it in rather than projecting. The subset differs
+# by how far the call got: a browser that was never started reports whether it
+# *could* be (`available` / `reason`) and nothing about a page, and a call that
+# failed reports `error` instead of a new state. So one optional-heavy base is
+# the honest description; a model per call would claim distinctions the handlers
+# do not make.
+# ---------------------------------------------------------------------------
+
+
+class BrowserPageState(_Strict):
+    ok: bool
+    url: str | None = None
+    title: str | None = None
+    started: bool | None = None
+    headful: bool | None = None
+    available: bool | None = Field(default=None, description="False when playwright or its Chromium is missing.")
+    reason: str | None = Field(default=None, description="Why a browser cannot be started, when it cannot.")
+    loading: bool | None = None
+    can_back: bool | None = None
+    can_forward: bool | None = None
+    tab_count: int | None = None
+    error: str | None = Field(
+        default=None,
+        description="A refused navigation or a failed action; the call still answers rather than raising.",
+    )
+
+
+class BrowserStateParams(_Strict):
+    pass
+
+
+class BrowserStateResult(BrowserPageState):
+    pass
+
+
+class BrowserOpenParams(_Strict):
+    url: str | None = Field(
+        default=None,
+        description="http or https only; a bare host is completed to https. Other schemes are refused.",
+    )
+    action: str | None = Field(default=None, description="back | forward | reload | stop, instead of a url.")
+
+
+class BrowserOpenResult(BrowserPageState):
+    pass
+
+
+class BrowserTab(_Strict):
+    index: int
+    url: str
+    title: str
+    active: bool
+    # Per tab, because the page-level flag can only speak for the active one --
+    # and a background tab still loading is exactly what the tab strip is for.
+    loading: bool | None = None
+
+
+class BrowserTabsParams(_Strict):
+    action: str | None = Field(default=None, description="list (default) | new | activate | close.")
+    index: int | None = None
+    url: str | None = Field(default=None, description="Navigate a freshly opened tab in the same call.")
+
+
+class BrowserTabsResult(BrowserPageState):
+    tabs: list[BrowserTab] | None = None
+
+
+class BrowserFrameParams(_Strict):
+    quality: int | None = Field(default=None, description="JPEG quality; 55 by default.")
+
+
+class BrowserFrameResult(BrowserPageState):
+    jpeg: str | None = Field(default=None, description="Base64 JPEG of the page, absent when nothing is started.")
+
+
+class BrowserReadParams(_Strict):
+    pass
+
+
+class BrowserRef(_Strict):
+    """One actionable element, with the id a click can be aimed at."""
+
+    ref: str
+    role: str
+    name: str
+    x: int
+    y: int
+    href: str | None = None
+    value: str | None = Field(default=None, description="Never present for a password field.")
+    disabled: bool | None = None
+
+
+class BrowserConsoleLine(_Strict):
+    type: str
+    text: str
+
+
+class BrowserReadResult(BrowserPageState):
+    text: str | None = Field(default=None, description="Page text, capped.")
+    refs: list[BrowserRef] | None = None
+    console: list[BrowserConsoleLine] | None = None
+
+
+class BrowserInputParams(_Strict):
+    kind: str = Field(
+        ...,
+        description="click | text | key | scroll, or the raw stream kinds move/down/up/wheel/keydown/keyup.",
+    )
+    ref: str | None = None
+    x: float | None = None
+    y: float | None = None
+    dx: float | None = None
+    dy: float | None = None
+    button: str | None = None
+    count: int | None = None
+    key: str | None = None
+    text: str | None = None
+
+
+class BrowserInputResult(BrowserPageState):
+    pass
+
+
+class BrowserModeParams(_Strict):
+    headful: bool = Field(..., description="True pops the page into a real window; false folds it back.")
+
+
+class BrowserModeResult(BrowserPageState):
+    pass
+
+
+class BrowserCloseParams(_Strict):
+    pass
+
+
+class BrowserCloseResult(BrowserPageState):
+    pass
+
+
+class BrowserWatchParams(_Strict):
+    on: bool
+    width: int | None = None
+    height: int | None = None
+    quality: int | None = None
+
+
+class BrowserWatchResult(BrowserPageState):
+    watching: bool | None = None
+    vw: int | None = None
+    vh: int | None = None
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
@@ -2105,6 +2261,16 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "image.attach": (ImageAttachParams, StubResult),
     "prompt.submit": (PromptSubmitParams, StubResult),
     "prompt.background": (PromptBackgroundParams, StubResult),
+    # browser.* -- the shared page
+    "browser.state": (BrowserStateParams, BrowserStateResult),
+    "browser.open": (BrowserOpenParams, BrowserOpenResult),
+    "browser.tabs": (BrowserTabsParams, BrowserTabsResult),
+    "browser.frame": (BrowserFrameParams, BrowserFrameResult),
+    "browser.read": (BrowserReadParams, BrowserReadResult),
+    "browser.input": (BrowserInputParams, BrowserInputResult),
+    "browser.mode": (BrowserModeParams, BrowserModeResult),
+    "browser.close": (BrowserCloseParams, BrowserCloseResult),
+    "browser.watch": (BrowserWatchParams, BrowserWatchResult),
     # dag.*
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),

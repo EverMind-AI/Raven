@@ -3801,10 +3801,791 @@
           "$ref": "#/components/errors/NotSupportedInV01"
         }
       ]
+    },
+    {
+      "name": "browser.state",
+      "summary": "Where the page is, and whether a browser can be started at all.",
+      "params": [],
+      "result": {
+        "name": "BrowserStateResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.open",
+      "summary": "Open a url, or move through history.",
+      "params": [
+        {
+          "name": "url",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "http or https only; a bare host is completed to https. Other schemes are refused."
+          }
+        },
+        {
+          "name": "action",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "back | forward | reload | stop, instead of a url."
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserOpenResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.tabs",
+      "summary": "List, open, activate or close a tab.",
+      "params": [
+        {
+          "name": "action",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "list (default) | new | activate | close."
+          }
+        },
+        {
+          "name": "index",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "url",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Navigate a freshly opened tab in the same call."
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserTabsResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            },
+            "tabs": {
+              "items": {
+                "$ref": "#/components/schemas/BrowserTab"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.frame",
+      "summary": "One JPEG of the page.",
+      "params": [
+        {
+          "name": "quality",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "JPEG quality; 55 by default."
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserFrameResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            },
+            "jpeg": {
+              "type": "string",
+              "description": "Base64 JPEG of the page, absent when nothing is started."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.read",
+      "summary": "The page's actionable elements, with stable refs.",
+      "params": [],
+      "result": {
+        "name": "BrowserReadResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            },
+            "text": {
+              "type": "string",
+              "description": "Page text, capped."
+            },
+            "refs": {
+              "items": {
+                "$ref": "#/components/schemas/BrowserRef"
+              },
+              "type": "array"
+            },
+            "console": {
+              "items": {
+                "$ref": "#/components/schemas/BrowserConsoleLine"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.input",
+      "summary": "A pointer, key, text or scroll event in page coordinates.",
+      "params": [
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "description": "click | text | key | scroll, or the raw stream kinds move/down/up/wheel/keydown/keyup.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "ref",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "x",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "name": "y",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "name": "dx",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "name": "dy",
+          "required": false,
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "name": "button",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "count",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserInputResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.mode",
+      "summary": "Pop the page into a real window, or fold it back.",
+      "params": [
+        {
+          "name": "headful",
+          "required": true,
+          "schema": {
+            "description": "True pops the page into a real window; false folds it back.",
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserModeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.close",
+      "summary": "Shut the browser down.",
+      "params": [],
+      "result": {
+        "name": "BrowserCloseResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "browser.watch",
+      "summary": "Lease or release the live screencast.",
+      "params": [
+        {
+          "name": "on",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "width",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "height",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "quality",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "BrowserWatchResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "started": {
+              "type": "boolean"
+            },
+            "headful": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean",
+              "description": "False when playwright or its Chromium is missing."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why a browser cannot be started, when it cannot."
+            },
+            "loading": {
+              "type": "boolean"
+            },
+            "can_back": {
+              "type": "boolean"
+            },
+            "can_forward": {
+              "type": "boolean"
+            },
+            "tab_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "A refused navigation or a failed action; the call still answers rather than raising."
+            },
+            "watching": {
+              "type": "boolean"
+            },
+            "vw": {
+              "type": "integer"
+            },
+            "vh": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
     "schemas": {
+      "BrowserTab": {
+        "additionalProperties": false,
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "loading": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index",
+          "url",
+          "title",
+          "active"
+        ],
+        "type": "object"
+      },
+      "BrowserConsoleLine": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BrowserRef": {
+        "additionalProperties": false,
+        "description": "One actionable element, with the id a click can be aimed at.",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "href": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "Never present for a password field."
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "role",
+          "name",
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
       "SessionCompressSummary": {
         "additionalProperties": false,
         "properties": {

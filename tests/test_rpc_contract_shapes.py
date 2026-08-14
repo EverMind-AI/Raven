@@ -186,6 +186,34 @@ async def test_fs_round_trip(workspace: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# browser.*
+#
+# Only the two that answer without ever starting Chromium: `state()` returns
+# early while there is no page, and `tabs()` returns [] with no context. The
+# rest need a real browser and belong to their own suite.
+# ---------------------------------------------------------------------------
+
+
+async def test_browser_state_and_tabs_without_a_browser() -> None:
+    from raven.rpc.methods.browser import browser_state, browser_tabs
+
+    _check("browser.state", await browser_state({}))
+    _check("browser.tabs", await browser_tabs({"action": "list"}))
+
+
+def test_a_tab_carries_every_key_the_driver_builds() -> None:
+    """The models are extra="forbid", and the driver's fifth key was missing.
+
+    Nothing validates a `browser.tabs` reply at runtime, so a client that
+    checked against the published contract would have rejected every one of
+    them over a field the handler always sends.
+    """
+    from raven.rpc.models import BrowserTab
+
+    BrowserTab.model_validate({"index": 0, "url": "https://x", "title": "x", "active": True, "loading": True})
+
+
+# ---------------------------------------------------------------------------
 # memory.*
 # ---------------------------------------------------------------------------
 
