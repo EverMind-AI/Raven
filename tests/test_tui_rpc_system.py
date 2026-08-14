@@ -173,3 +173,112 @@ async def test_dispatcher_parse_response_id_echoed():
     resp = await d.dispatch(frame)
     assert resp["id"] == "string-id-abc"
     assert resp["result"]["pong"] is True
+
+
+# ---------------------------------------------------------------------------
+# system.version update hint / system.upgrade
+# ---------------------------------------------------------------------------
+
+
+async def test_version_reports_a_pending_upgrade(monkeypatch: pytest.MonkeyPatch):
+    from raven.cli import update_notice as un
+
+    monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+
+    result = await system_version({})
+
+    assert result["update_available"] is True
+    assert result["latest_version"] == "9.9.9"
+
+
+async def test_version_stays_quiet_without_a_cached_release(monkeypatch: pytest.MonkeyPatch):
+    from raven.cli import update_notice as un
+
+    monkeypatch.setattr(un, "update_notice", lambda _cur: None)
+
+    result = await system_version({})
+
+    assert "update_available" not in result
+    assert "latest_version" not in result
+
+
+async def test_upgrade_refuses_outside_serve():
+    from raven.cli.serve_commands import SERVE
+    from raven.tui_rpc.methods.system import system_upgrade
+
+    assert not SERVE.running
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await system_upgrade({})
+    assert excinfo.value.data["reason"] == "not_serving"
+
+
+async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch: pytest.MonkeyPatch):
+    import asyncio
+
+    from raven.cli import upgrade_commands
+    from raven.cli.serve_commands import SERVE
+    from raven.tui_rpc.methods.system import system_upgrade
+
+    def refuse() -> None:
+        raise upgrade_commands.UpgradeError("Editable Raven installations cannot be upgraded automatically")
+
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", refuse)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+    assert excinfo.value.data["reason"] == "not_upgradable"
+
+
+async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    import asyncio
+
+    from raven.cli import upgrade_commands
+    from raven.cli.serve_commands import SERVE
+    from raven.tui_rpc.methods.system import system_upgrade
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    plan = upgrade_commands.UpgradePlan(
+        current_version="0.1.3",
+        release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url="https://example.invalid/x.whl"),
+        target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
+    )
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    spawned: dict[str, object] = {}
+    monkeypatch.setattr(
+        upgrade_commands,
+        "spawn_detached_upgrade",
+        lambda p, **kw: spawned.update({"plan": p, **kw}),
+    )
+
+    stop = asyncio.Event()
+    SERVE.arm(18792, "tok", "cookie", stop)
+    try:
+        result = await system_upgrade({})
+        assert result == {
+            "status": "started",
+            "from_version": "0.1.3",
+            "to_version": "0.1.4",
+            "relaunch": True,
+        }
+        # The reply must land before the gateway goes down.
+        assert not stop.is_set()
+        await asyncio.sleep(0.9)
+        assert stop.is_set()
+    finally:
+        SERVE.disarm()
+
+    assert spawned["relaunch"] == [str(bin_dir / "raven"), "serve", "--port", "18792"]
+    # Both credentials travel, and that is the point: the browser presents the
+    # cookie, a relauncher needs the shared secret, and since they are no longer
+    # the same string, carrying only one of them would sign the open page out.
+    assert spawned["extra_env"] == {
+        "RAVEN_SERVE_PORT_STRICT": "1",
+        "RAVEN_SERVE_TOKEN": "tok",
+        "RAVEN_SERVE_COOKIE": "cookie",
+    }
+    assert spawned["parent_pid"] > 0

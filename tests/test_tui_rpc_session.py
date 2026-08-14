@@ -14,13 +14,16 @@ optional banner fields actually populated by the stub.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from raven.config.loader import load_config
+from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.session.manager import SessionManager
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.errors import TurnInProgressError
@@ -38,6 +41,7 @@ from raven.tui_rpc.methods.session import (
     session_resume,
     session_title,
 )
+from raven.utils.helpers import estimate_prompt_tokens
 
 _SESSION_ID_RE = re.compile(r"^tui:\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -197,6 +201,77 @@ async def test_session_resume_loads_n_stored_messages(tmp_path: Path, monkeypatc
     assert msgs[1]["text"] == "hi there"
     assert msgs[2]["role"] == "user"
     assert msgs[2]["text"] == "how are you"
+
+
+async def test_session_resume_estimates_only_what_the_next_call_sends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The context meter counts the unconsolidated tail, not the whole file.
+
+    The runtime consolidates on every user-inbound turn and never removes the
+    archived messages from the transcript, so estimating over everything stored
+    reported the size of a context that had already been archived -- a session a
+    quarter full resumed showing a meter pegged at 100%.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_consol"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(4):
+        session.add_message("user", f"message number {i} " * 40)
+    session.last_consolidated = 3
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    used = result["info"]["usage"]["context_used"]
+
+    # The floor is what the tail alone costs; the ceiling keeps this from
+    # passing on a version that counts everything -- four near-identical
+    # messages make the whole file roughly four times the tail.
+    tail_only = estimate_prompt_tokens(session.get_history())
+    assert used == tail_only, "the estimate must be over what get_history() returns"
+    whole_file = estimate_prompt_tokens(
+        [{"role": m["role"], "content": m.get("content", "")} for m in session.messages]
+    )
+    assert used < whole_file / 2, f"{used} looks like the whole transcript ({whole_file}), not the tail"
+
+    # The transcript itself is unchanged: resume still hands back everything on
+    # disk, because that is what the caller draws.
+    assert len(result["messages"]) == 4
+
+
+async def test_session_resume_estimates_past_the_five_hundred_message_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tail is bounded in tokens, not in messages, so it can run past 500.
+
+    `get_history()` defaults to the last 500; the two places that build or
+    measure the real prompt both pass `max_messages=0`. Taking the default here
+    under-reported a long unconsolidated session -- and it does not converge,
+    because the reported number pins at whatever the newest 500 cost while the
+    real prompt keeps growing toward the window.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_long01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(600):
+        session.add_message("user", f"message number {i} " * 10)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    used = result["info"]["usage"]["context_used"]
+
+    whole_tail = estimate_prompt_tokens(session.get_history(max_messages=0))
+    newest_500 = estimate_prompt_tokens(session.get_history())
+    assert newest_500 < whole_tail, "fixture must exceed the default cap for this to mean anything"
+    assert used == whole_tail, f"{used} is the newest 500 ({newest_500}), not the whole tail ({whole_tail})"
 
 
 async def test_session_resume_joins_text_blocks_of_list_content(
@@ -1138,3 +1213,261 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     result = await session_export({"session_id": session_key})
 
     assert result["exported"] is True
+
+
+# ---------------------------------------------------------------------------
+# session.compress: promoted from the stub group to a real handler
+# ---------------------------------------------------------------------------
+
+
+async def test_session_compress_requires_a_session_id() -> None:
+    """No session_id is a caller error, not a silent no-op."""
+    from raven.tui_rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_module.session_compress({})
+
+    assert exc.value.data == {"field": "session_id"}
+
+
+async def test_session_compress_refuses_while_a_turn_is_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compacting under a live turn would archive messages the turn is still
+    reading, so the handler refuses rather than racing it."""
+    session_key = "tui:compress_busy"
+    monkeypatch.setattr(turn_module, "is_turn_active", lambda key: key == session_key)
+
+    with pytest.raises(TurnInProgressError):
+        await session_module.session_compress({"session_id": session_key})
+
+
+async def test_session_compress_is_a_noop_without_a_consolidator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runtime whose context engine owns compaction reports noop with a note,
+    and leaves the message count untouched."""
+    from types import SimpleNamespace
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_noop"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": "hi"}])
+    loop = SimpleNamespace(memory_consolidator=None, sessions=SessionManager(tmp_path))
+
+    result = await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert result["removed"] == 0
+    assert result["before_messages"] == result["after_messages"] == 1
+    assert result["summary"]["noop"] is True
+    assert result["summary"]["note"] == "no memory consolidator in this runtime"
+
+
+async def test_session_compress_reports_what_the_consolidator_archived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a consolidator the handler forces a token pass and reports the
+    before/after counts the clients print verbatim."""
+    from types import SimpleNamespace
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_real"
+    _write_session(
+        tmp_path,
+        session_key,
+        [{"role": "user", "content": f"m{i}"} for i in range(5)],
+    )
+
+    forced: list[bool] = []
+
+    class _Consolidator:
+        async def maybe_consolidate_by_tokens(self, session, force=False):
+            forced.append(force)
+            # Reporting an archive and leaving the session untouched is a state
+            # the real consolidator cannot produce: `archived` is its report,
+            # `last_consolidated` is the fact, and the handler reads the fact.
+            session.last_consolidated = 3
+            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+
+    # A fake is only evidence if it answers to the same contract as the real
+    # thing. This one was written against a signature the shipped consolidator
+    # did not have (`force` was added later, on a branch), so the test passed
+    # while the handler raised TypeError against the module it actually calls.
+    # Binding the real signature is what makes the fake accountable.
+    _real = inspect.signature(MemoryConsolidator.maybe_consolidate_by_tokens)
+    _real.bind(object(), object(), force=True)
+    assert inspect.signature(_Consolidator.maybe_consolidate_by_tokens).parameters.keys() == _real.parameters.keys(), (
+        "the fake consolidator has drifted from MemoryConsolidator"
+    )
+
+    loop = SimpleNamespace(memory_consolidator=_Consolidator(), sessions=SessionManager(tmp_path))
+
+    result = await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert forced == [True], "the point of session.compress is forcing the pass early"
+    assert result["removed"] == 3
+    assert result["before_messages"] == 5
+    assert result["after_messages"] == 2
+    assert result["summary"]["headline"] == "archived 3 messages"
+    assert result["summary"]["noop"] is False
+    assert result["summary"]["token_line"] == "900 -> 300 tokens"
+
+
+# ---------------------------------------------------------------------------
+# Regressions for the three defects this branch set out to fix. Each of these
+# began as a mutation that survived the whole suite: revert the fix, and nothing
+# went red. They exist so that cannot happen twice.
+# ---------------------------------------------------------------------------
+
+
+async def test_session_list_reaches_the_channels_it_was_asked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handler used to hardcode channel="tui" and ignore ``channels``, so
+    scheduled runs -- which live under ``cron:`` -- were unreachable even though
+    they were on disk. Nothing had ever passed the parameter."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:20260610_100000_aaa111", "cron:20260610_110000_bbb222"):
+        s = mgr.get_or_create(key)
+        s.add_message("user", "hello")
+        mgr.save(s)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    both = await session_list({"channels": ["tui", "cron"]})
+    sources = {item["source"] for item in both["sessions"]}
+    assert sources == {"tui", "cron"}, "session.list must return every channel it was given"
+
+    # Asking for one non-default channel alone: the bug only shows when the
+    # caller wants something other than the default, and "both" would still
+    # pass against a handler that ignored the parameter and returned everything.
+    cron_only = await session_list({"channels": ["cron"]})
+    assert [item["source"] for item in cron_only["sessions"]] == ["cron"]
+
+    default = await session_list({})
+    assert {item["source"] for item in default["sessions"]} == {"tui"}, (
+        "omitting channels must keep the old tui-only behaviour for existing callers"
+    )
+
+
+async def test_session_list_orders_by_when_the_user_last_spoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session's place in the list is when its owner last spoke to it, not when
+    a background write last touched the file: a long tail of assistant and tool
+    records would otherwise outrank a conversation the user just left."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    older_user = mgr.get_or_create("tui:20260610_100000_older1")
+    older_user.add_message("user", "spoke first")
+    mgr.save(older_user)
+
+    recent_user = mgr.get_or_create("tui:20260610_110000_recent")
+    recent_user.add_message("user", "spoke second")
+    mgr.save(recent_user)
+
+    # The first session keeps working long after its owner stopped typing.
+    for _ in range(3):
+        older_user.add_message("assistant", "still working")
+    mgr.save(older_user)
+
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    result = await session_list({})
+    assert [item["id"] for item in result["sessions"]][0] == "tui:20260610_110000_recent"
+
+
+async def test_session_compress_persists_what_it_archived(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Compaction that is not saved is a report, not a compaction: the next read
+    of the session would find every message still there."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_persists"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": f"m{i}"} for i in range(5)])
+
+    class _Consolidator:
+        async def maybe_consolidate_by_tokens(self, session, *, force=False):
+            session.last_consolidated = 3
+            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+
+    mgr = SessionManager(tmp_path)
+    loop = SimpleNamespace(memory_consolidator=_Consolidator(), sessions=mgr)
+    await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    reread = SessionManager(tmp_path).get_or_create(session_key)
+    assert reread.last_consolidated == 3, "the archived boundary must survive a reload"
+
+
+async def test_session_list_previews_the_first_thing_the_user_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A scheduled run has no title of its own, so the preview is the only thing
+    distinguishing one row from another."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("tui:20260610_100000_ccc333")
+    # A non-user message first, deliberately: a scan that takes "the first
+    # message" rather than "the first *user* message" previews the machine
+    # talking to itself, and a session opened by a scheduled task or a system
+    # preamble is exactly where that shows.
+    s.add_message("assistant", "[Scheduled Task] Timer fired")
+    s.add_message("user", "summarise the quarterly report")
+    s.add_message("assistant", "sure")
+    mgr.save(s)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_list({})
+    assert result["sessions"][0]["preview"] == "summarise the quarterly report"
+
+
+async def test_session_compress_hands_back_what_the_caller_must_redraw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a compaction the caller is displaying messages that no longer
+    exist, so the reply carries the survivors, refreshed info, and usage."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:compress_redraw"
+    _write_session(tmp_path, session_key, [{"role": "user", "content": f"m{i}"} for i in range(5)])
+
+    class _Consolidator:
+        # Advances the boundary and removes nothing, which is what
+        # MemoryConsolidator does: it annotates through the store and moves
+        # `last_consolidated`. A fake that deleted from the list agreed with a
+        # handler counting `before - archived` and hid that the reply was
+        # handing back every message it had just called archived.
+        async def maybe_consolidate_by_tokens(self, session, force=False):
+            session.last_consolidated = 3
+            return {"before_tokens": 900, "after_tokens": 300, "archived": 3}
+
+    loop = SimpleNamespace(
+        memory_consolidator=_Consolidator(),
+        sessions=SessionManager(tmp_path),
+        context=SimpleNamespace(skills=SimpleNamespace(list_skills=lambda **_kw: [])),
+        tools=SimpleNamespace(tool_names=[], get=lambda _n: None),
+        model="test/model",
+    )
+    result = await session_module.session_compress({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert len(result["messages"]) == 2, "the survivors, so the caller can redraw"
+    # The count and the payload have to come from one slice, or a caller is told
+    # a number that contradicts the list printed beside it.
+    assert result["after_messages"] == len(result["messages"])
+    assert [m["text"] for m in result["messages"]] == ["m3", "m4"]
+    assert result["info"]["model"]
+    assert isinstance(result["usage"], dict)

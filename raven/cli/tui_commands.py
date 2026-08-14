@@ -579,6 +579,7 @@ async def _run_rpc_server_until_done(
     )
     from raven.tui_rpc.methods.system import (
         system_ping,
+        system_upgrade,
         system_version,
     )
     from raven.tui_rpc.question_broker import QuestionBroker
@@ -700,6 +701,11 @@ async def _run_rpc_server_until_done(
     dispatcher.register("system.hello", hello_then_signal)
     dispatcher.register("system.ping", system_ping)
     dispatcher.register("system.version", system_version)
+    # Registered here too, though it only acts inside `raven serve`: the handler
+    # answers with a typed "not_serving" refusal the client can show, which is
+    # more use than the -32601 an unregistered name would give, and it keeps
+    # this path in lock-step with the umbrella (see the drift test).
+    dispatcher.register("system.upgrade", system_upgrade)
     register_aligned_methods_except_system(
         dispatcher,
         emitter=emitter,

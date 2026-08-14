@@ -450,6 +450,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/cli/gateway_commands.py",
         "raven/cli/tui_commands.py",
         "raven/config/update_everos.py",
+        # The RPC surface that renders that EverOS section: the same key,
+        # reduced to a set/unset flag for the settings page. No verdict about
+        # a Raven provider is being made from it.
+        "raven/tui_rpc/methods/console.py",
         "raven/config/update_tools.py",
         "raven/providers/transcription.py",
         # Reads a key in order to *use* it -- put it on the request, redact it

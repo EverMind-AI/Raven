@@ -179,6 +179,7 @@ REGISTERED_COMMAND_NAMES = {
     "provider",
     "sandbox",
     "sentinel",
+    "serve",
     "sessions",
     "skill",
     "status",

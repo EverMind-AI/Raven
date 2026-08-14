@@ -466,3 +466,29 @@ async def test_a_bare_id_the_pinned_provider_lists_itself_keeps_the_pin(fake_hom
     assert result["applied"] is True
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["provider"] == "mistral"
+
+
+async def test_language_is_readable_and_writable_over_rpc(fake_home: Path) -> None:
+    """Both front ends read ``config.language`` to pick their UI language, and it
+    also drives the language the agent replies in. It was missing from the
+    hot-changeable whitelist, so ``config.get`` silently omitted it -- a client
+    asking for the language got an empty answer and fell back to English with no
+    error to explain why.
+    """
+    from raven.tui_rpc.methods.config import CONFIG_WRITABLE_KEYS, config_get
+
+    assert "language" in CONFIG_WRITABLE_KEYS
+
+    result = await config_get({"keys": ["language"]})
+    assert "language" in result["config"], "config.get must answer for a whitelisted key"
+
+
+async def test_language_rejects_a_value_neither_front_end_can_render(fake_home: Path) -> None:
+    # fake_home is not decoration: config_set writes through to a real file,
+    # so without it a validator that stopped rejecting would put the bad
+    # value in the developer's own ~/.raven/config.json.
+    from raven.tui_rpc.errors import ConfigValidationError
+    from raven.tui_rpc.methods.config import config_set
+
+    with pytest.raises(ConfigValidationError):
+        await config_set({"key": "language", "value": "fr"})

@@ -55,6 +55,7 @@ _DEFAULTS: dict[str, Any] = {
     "agent.temperature": 1.0,
     "tui.theme": "default",
     "tui.show_token_usage": True,
+    "language": "en",
 }
 
 
@@ -124,11 +125,23 @@ def _validate_show_token_usage(value: Any) -> bool:
     return value
 
 
+def _validate_language(value: Any) -> str:
+    if value not in ("en", "zh"):
+        raise ConfigValidationError(
+            "language must be 'en' or 'zh'",
+            data={"field": "language", "got": repr(value)},
+        )
+    return value
+
+
 _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "agent.thinking_budget": _validate_thinking_budget,
     "agent.temperature": _validate_temperature,
     "tui.theme": _validate_theme,
     "tui.show_token_usage": _validate_show_token_usage,
+    # Both clients read this to pick their UI language; it also drives the
+    # agent's reply language through the system prompt.
+    "language": _validate_language,
 }
 
 # Public: the canonical writable-key set; consumers can iterate to enumerate
