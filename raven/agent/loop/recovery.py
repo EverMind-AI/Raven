@@ -37,6 +37,11 @@ from raven.providers.base import LLMResponse
 # prefix (``<mm:think>``). A turn cut off inside an inlined block arrives as
 # a lone closing tag, so an opener-only pattern reads it as ordinary prose.
 _THINK_TAG_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
+_NS = r"(?:[a-z][\w.-]{0,15}:)?"
+_THINK_BLOCK_RE = re.compile(
+    rf"<{_NS}(think|thinking|reasoning)>[\s\S]*?</{_NS}\1>",
+    re.IGNORECASE,
+)
 
 POST_TOOL_NUDGE = (
     "You executed tool calls but returned an empty response. Use the tool "
@@ -78,8 +83,19 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
 
 
 def strip_think_blocks(text: str) -> str:
-    """Remove paired ``<think>...</think>`` blocks. Debris is left in place."""
-    return re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+    """Remove paired think blocks. Debris is left in place for the check below.
+
+    Matched by the same shape as ``_THINK_TAG_RE``: any of the three tag names,
+    with or without a vendor namespace prefix. A single spelling here would let
+    a complete ``<mm:think>...</mm:think>`` block through to the user in full,
+    which is the one outcome stripping exists to prevent.
+
+    The backreference keeps the two ends the same tag -- ``<think>x</thinking>``
+    is a malformed pair, and deleting everything between two unrelated tags
+    would take real content with it. The prefixes are not tied to each other:
+    a backend that stamps one end and not the other still wrote one block.
+    """
+    return _THINK_BLOCK_RE.sub("", text).strip()
 
 
 def is_only_think_debris(text: str) -> bool:

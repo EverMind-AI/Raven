@@ -389,3 +389,27 @@ def test_inline_thinking_ignores_prose_about_thinking() -> None:
     assert not has_inline_thinking("I was thinking about the reasoning behind it")
     assert not has_inline_thinking("")
     assert not has_inline_thinking(None)
+
+
+def test_paired_namespaced_block_is_stripped_not_shown() -> None:
+    """A complete block must not reach the user because of its prefix.
+
+    Debris detection and the orphan split both match tags by shape, so a
+    literal-only pattern here was the one place a vendor spelling still got
+    through -- and it got through in the worst form: a whole reasoning block
+    rendered as if it were the answer.
+    """
+    assert AgentLoop._strip_think("<mm:think>weighing options</mm:think>the answer") == "the answer"
+    assert AgentLoop._strip_think("<thinking>weighing</thinking>the answer") == "the answer"
+
+
+def test_a_mismatched_pair_is_not_treated_as_a_block() -> None:
+    """Deleting between two unrelated tags would take real content with it."""
+    text = "<think>weighing</thinking>the answer"
+
+    assert AgentLoop._strip_think(text) == text
+
+
+def test_one_end_namespaced_is_still_one_block() -> None:
+    """A backend that stamps only one end still wrote a single block."""
+    assert AgentLoop._strip_think("<mm:think>weighing</think>the answer") == "the answer"
