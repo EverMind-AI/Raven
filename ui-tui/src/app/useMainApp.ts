@@ -37,7 +37,7 @@ import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } fro
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
 import { getInputSelection } from './inputSelectionStore.js'
-import { type GatewayRpc, type TranscriptRow } from './interfaces.js'
+import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
 import { $overlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
@@ -362,7 +362,11 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   }, [])
 
   const rpc: GatewayRpc = useCallback(
-    async <T extends object = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}) => {
+    async <T extends object = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown> = {},
+      opts: RpcOptions = {}
+    ) => {
       try {
         const result = asRpcResult<T>(await gw.request<T>(method, params))
 
@@ -370,8 +374,19 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
           return result
         }
 
+        // `quiet` rethrows rather than returning null so the caller's own
+        // handler runs at all: reporting here *and* swallowing is what made
+        // every `.catch(() => {})` at a call site dead code.
+        if (opts.quiet) {
+          throw new Error(`invalid response: ${method}`)
+        }
+
         sys(`error: invalid response: ${method}`)
       } catch (e) {
+        if (opts.quiet) {
+          throw e
+        }
+
         sys(`error: ${rpcErrorMessage(e)}`)
       }
 

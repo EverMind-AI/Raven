@@ -909,6 +909,7 @@ class AgentLoop:
                     third_party_subagents=self._third_party_subagents,
                     guide_skill_id=self._dag_guide_skill_id(),
                     session_dir=self.sessions.session_dir,
+                    is_paused=lambda: self.subagents.paused,
                 )
             )
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -1817,6 +1818,7 @@ class AgentLoop:
                 third_party_subagents=configs,
                 guide_skill_id=self._dag_guide_skill_id(),
                 session_dir=self.sessions.session_dir,
+                is_paused=lambda: self.subagents.paused,
             )
             if self._dag_progress_sink is not None:
                 new_tool.set_progress_sink(self._dag_progress_sink)

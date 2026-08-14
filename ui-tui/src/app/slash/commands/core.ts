@@ -111,7 +111,9 @@ export const coreCommands: SlashCommand[] = [
       }
 
       patchUiState({ mouseTracking: next })
-      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'mouse', value: next ? 'on' : 'off' }).catch(() => {})
+      ctx.gateway
+        .rpc<ConfigSetResponse>('config.set', { key: 'mouse', value: next ? 'on' : 'off' }, { quiet: true })
+        .catch(() => {})
 
       queueMicrotask(() => ctx.transcript.sys(`mouse tracking ${next ? 'on' : 'off'}`))
     }
@@ -172,7 +174,7 @@ export const coreCommands: SlashCommand[] = [
       }
 
       ctx.gateway
-        .rpc<SessionStatusResponse>('session.status', { session_id: ctx.sid })
+        .rpc<SessionStatusResponse>('session.status', { session_id: ctx.sid }, { quiet: true })
         .then(ctx.guarded<SessionStatusResponse>(r => ctx.transcript.page(r.output || '(no status)', 'Status')))
         .catch(ctx.guardedErr)
     }
@@ -202,7 +204,7 @@ export const coreCommands: SlashCommand[] = [
 
       if (!arg) {
         ctx.gateway
-          .rpc<SessionTitleResponse>('session.title', { session_id: ctx.sid })
+          .rpc<SessionTitleResponse>('session.title', { session_id: ctx.sid }, { quiet: true })
           .then(
             ctx.guarded<SessionTitleResponse>(r => {
               const current = (r?.title ?? '').trim()
@@ -219,7 +221,7 @@ export const coreCommands: SlashCommand[] = [
       }
 
       ctx.gateway
-        .rpc<SessionTitleResponse>('session.title', { session_id: ctx.sid, title })
+        .rpc<SessionTitleResponse>('session.title', { session_id: ctx.sid, title }, { quiet: true })
         .then(
           ctx.guarded<SessionTitleResponse>(r => {
             const next = (r?.title ?? title).trim()
@@ -242,7 +244,9 @@ export const coreCommands: SlashCommand[] = [
       }
 
       patchUiState({ compact: next })
-      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'compact', value: next ? 'on' : 'off' }).catch(() => {})
+      ctx.gateway
+        .rpc<ConfigSetResponse>('config.set', { key: 'compact', value: next ? 'on' : 'off' }, { quiet: true })
+        .catch(() => {})
 
       queueMicrotask(() => ctx.transcript.sys(`compact ${next ? 'on' : 'off'}`))
     }
@@ -308,7 +312,7 @@ export const coreCommands: SlashCommand[] = [
 
         patchUiState({ sections: mode ? { ...rest, [first]: mode } : rest })
         gateway
-          .rpc<ConfigSetResponse>('config.set', { key: `details_mode.${first}`, value: mode ?? '' })
+          .rpc<ConfigSetResponse>('config.set', { key: `details_mode.${first}`, value: mode ?? '' }, { quiet: true })
           .catch(() => {})
         transcript.sys(`details ${first}: ${mode ?? 'reset'}`)
 
@@ -324,7 +328,9 @@ export const coreCommands: SlashCommand[] = [
       const sections = Object.fromEntries(SECTION_NAMES.map(section => [section, next]))
 
       patchUiState({ detailsMode: next, detailsModeCommandOverride: true, sections })
-      gateway.rpc<ConfigSetResponse>('config.set', { key: 'details_mode', value: next }).catch(() => {})
+      gateway
+        .rpc<ConfigSetResponse>('config.set', { key: 'details_mode', value: next }, { quiet: true })
+        .catch(() => {})
       transcript.sys(`details: ${next}`)
     }
   },
@@ -535,7 +541,9 @@ export const coreCommands: SlashCommand[] = [
       }
 
       patchUiState({ statusBar: next })
-      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'statusbar', value: next }).catch(() => {})
+      ctx.gateway
+        .rpc<ConfigSetResponse>('config.set', { key: 'statusbar', value: next }, { quiet: true })
+        .catch(() => {})
 
       queueMicrotask(() => ctx.transcript.sys(`status bar ${next}`))
     }

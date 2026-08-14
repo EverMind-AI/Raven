@@ -313,9 +313,40 @@ async def turn_cancel(
     return {"cancelled": True}
 
 
+async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
+    """``session.interrupt`` -- Ctrl+C on the pre-typed-chat path.
+
+    ui-tui's ``turnController.interruptTurn`` fires this when no
+    ``ChatStreamHandle`` is attached, then finalizes the transcript itself. So
+    unlike ``turn.cancel`` this emits nothing: the client has already drawn the
+    interrupted state, and a second error frame would double-report it.
+
+    ``ok`` says a live turn was cancelled. False when there was none, which
+    happens routinely -- Ctrl+C on an idle prompt -- and is not an error.
+    """
+    session_key = str(params.get("session_id") or "").strip()
+    handle = _active_turns.get(session_key) if session_key else None
+    if handle is None:
+        return {"ok": False}
+    handle.cancel()
+    await handle.result()
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Dispatcher registration
 # ---------------------------------------------------------------------------
+
+
+def register_session_interrupt_method(dispatcher: "Dispatcher") -> None:
+    """Register ``session.interrupt``.
+
+    Kept out of :func:`register_turn_methods` because that group is skipped
+    when the caller owns no emitter, and this handler needs none -- gating it
+    the same way would put the legacy Ctrl+C path back on -32601 in exactly the
+    configurations that still use it.
+    """
+    dispatcher.register("session.interrupt", session_interrupt)
 
 
 def register_turn_methods(
@@ -367,8 +398,10 @@ def register_turn_methods(
 
 __all__ = [
     "register_turn_methods",
+    "register_session_interrupt_method",
     "turn_send",
     "turn_subscribe",
     "turn_unsubscribe",
     "turn_cancel",
+    "session_interrupt",
 ]
