@@ -758,3 +758,30 @@ async def test_a_failed_swap_that_cannot_be_restored_keeps_the_backup(workspace,
     kept = [p for p in workspace.glob(".demo-skill.old.*/demo-skill/SKILL.md")]
     assert kept, f"the only copy was deleted; pool now: {sorted(p.name for p in workspace.iterdir())}"
     assert kept[0].read_text() == "# v1"
+
+
+# ---------------------------------------------------------------------------
+# the declared shape, against what these handlers really return
+# ---------------------------------------------------------------------------
+# Same gap as in the plughub module: `test_tui_rpc_contract_shapes` skips this
+# group because it is "covered in its own module", and the tests above do drive
+# the real handlers -- but they assert on individual keys and never validate a
+# payload against `METHOD_MODELS`, so the four declarations here had nothing
+# checking them against the code.
+
+
+def _shape(method: str, payload: dict):
+    from raven.tui_rpc.models import METHOD_MODELS
+
+    _, model = METHOD_MODELS[method]
+    return model.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_the_four_methods_match_their_declared_models(workspace, monkeypatch):
+    _stub_hub(monkeypatch, zip_bytes=_zip({"demo-skill/SKILL.md": "# demo"}))
+
+    _shape("skillhub.search", await skillhub.skillhub_search({}))
+    _shape("skillhub.detail", await skillhub.skillhub_detail({"id": "uuid-1"}))
+    _shape("skillhub.install", await skillhub.skillhub_install({"id": "uuid-1"}))
+    _shape("skillhub.remove", await skillhub.skillhub_remove({"name": "demo-skill"}))

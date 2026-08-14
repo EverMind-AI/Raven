@@ -175,3 +175,48 @@ def test_the_scan_actually_finds_calls() -> None:
     invoked = _invoked_by_ui_tui()
     assert len(invoked) > 30, f"call scan found only {len(invoked)} methods; the regex likely broke"
     assert "turn.send" in invoked
+# The other direction. `test_every_contract_method_is_registered` proves a
+# declared method has a handler; this proves a handler is declared. Without it a
+# new method can ship, work, and be called for months while `openrpc.json` and
+# `METHOD_MODELS` never hear about it -- which is what had happened to 52 of the
+# 107, the market's ten included.
+#
+# The cost of the gap is not documentation drift. `ui-tui` generates its
+# TypeScript client from the contract, so an undeclared method has no generated
+# type: the TUI either hand-rolls the call and its shapes (silently diverging
+# from the server) or cannot make it at all.
+#
+# The allowlist below is the argument this comment used to forbid. It held 42
+# names, emptied as they were declared, and was deleted. It is back holding nine
+# that arrived on main afterwards, from the MR that gave them handlers -- and
+# holding nine is the point: the number is the debt, visible, and it only goes
+# down.
+INHERITED_UNDECLARED: set[str] = {
+    "clipboard.paste",
+    "command.dispatch",
+    "delegation.pause",
+    "delegation.status",
+    "input.detect_drop",
+    "session.interrupt",
+    "shell.exec",
+    "skills.manage",
+    "subagent.interrupt",
+}
+
+
+def test_every_registered_method_is_in_the_contract() -> None:
+    undeclared = _registered() - set(METHOD_MODELS) - INHERITED_UNDECLARED
+    assert undeclared == set(), (
+        f"registered but absent from METHOD_MODELS / openrpc.json: {sorted(undeclared)}. "
+        "Add the params/result models and the openrpc.json entry."
+    )
+
+
+def test_the_inherited_list_only_shrinks() -> None:
+    """A name here that has since been declared, or is no longer registered, has
+    to leave -- otherwise the set stops measuring the debt and starts hiding it."""
+    registered = _registered()
+    gone = {m for m in INHERITED_UNDECLARED if m not in registered}
+    declared = {m for m in INHERITED_UNDECLARED if m in METHOD_MODELS}
+    assert gone == set(), f"in INHERITED_UNDECLARED but no longer registered: {sorted(gone)}"
+    assert declared == set(), f"in INHERITED_UNDECLARED but now declared; remove them: {sorted(declared)}"

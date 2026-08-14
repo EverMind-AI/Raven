@@ -429,3 +429,50 @@ async def test_fs_read_clamps_a_caller_supplied_ceiling(tmp_path: Path, monkeypa
 
     assert len(r["content"]) == 400
     assert r["truncated"] is False
+
+
+# ---------------------------------------------------------------------------
+# cron.save with no loop: the handler builds its own service off the config path
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolated_config(tmp_path: Path):
+    """A config path of our own -- the cron store hangs off its parent."""
+    import json
+
+    from raven.config.loader import set_config_path
+
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path / "ws")}}}))
+    set_config_path(cfg_path)
+    yield
+    set_config_path(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_saving_a_job_returns_it(isolated_config: None) -> None:
+    """No `agent_loop_factory`, so this drives the other half of `_cron_service`:
+    the branch that builds a service off `get_cron_dir()` when no loop is bound."""
+    r = await console_module.cron_save({"kind": "cron", "expr": "0 9 * * *", "name": "standup", "message": "hi"})
+
+    assert r["job"]["name"] == "standup"
+    assert r["job"]["expr"] == "0 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_editing_a_job_keeps_its_id(isolated_config: None) -> None:
+    """The id is the job's run history: it lives in the ``cron:<id>`` session, so
+    an edit that mints a fresh id orphans everything the job has ever done."""
+    first = await console_module.cron_save({"kind": "cron", "expr": "0 9 * * *", "name": "standup", "message": "hi"})
+    job_id = first["job"]["id"]
+
+    edited = await console_module.cron_save(
+        {"id": job_id, "kind": "cron", "expr": "0 10 * * *", "name": "standup", "message": "hi there"}
+    )
+
+    assert edited["job"]["id"] == job_id
+    # The stored schedule, not just the recompute its sibling test pins.
+    assert edited["job"]["expr"] == "0 10 * * *"
+    listed = await console_module.cron_list({})
+    assert len(listed["jobs"]) == 1, "an edit must replace the job, not add a second one"
