@@ -174,11 +174,18 @@ class TruncationInfo:
     at_tokens: int | None = None
 
     def as_error(self, tool_name: str) -> str:
+        """The part of the message that is true for every tool.
+
+        Deliberately stops at "do not resend this". What to do instead depends
+        on the tool -- a file can be appended to, a shell command cannot be
+        sent in halves -- so that sentence comes from ``Tool.truncation_hint``
+        and the registry joins the two. A generic instruction here read as
+        advice for tools it did not fit.
+        """
         at = f" at {self.at_tokens} tokens" if self.at_tokens else ""
         return (
             f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}, "
-            f"so this call is incomplete. Do not resend the same content. "
-            f"Write it in several smaller pieces instead."
+            f"so this call is incomplete. Do not resend the same content."
         )
 
 

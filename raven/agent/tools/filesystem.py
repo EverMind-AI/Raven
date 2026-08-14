@@ -209,6 +209,13 @@ class WriteFileTool(_FsTool):
             "required": ["path", "content"],
         }
 
+    @property
+    def truncation_hint(self) -> str:
+        return (
+            "Send a smaller first chunk with mode=overwrite, then append the rest "
+            "with mode=append across as many calls as it takes."
+        )
+
     async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:
         if mode not in ("overwrite", "append"):
             return f"Error: unknown mode '{mode}' for write_file. Use 'overwrite' or 'append'."

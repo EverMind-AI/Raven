@@ -265,3 +265,67 @@ async def test_truncation_note_never_reaches_the_tool() -> None:
     )
 
     assert tool.received == {"path": "a.py", "content": "x"}
+
+
+# ---------------------------------------------------------------------------
+# The advice on a truncated call comes from the tool, not from one template
+# ---------------------------------------------------------------------------
+
+
+class _Appendable(_NeedsPath):
+    """A tool with a smaller form to fall back to."""
+
+    @property
+    def truncation_hint(self) -> str:
+        return "Send a smaller first chunk with mode=overwrite, then append the rest with mode=append."
+
+
+@pytest.mark.asyncio
+async def test_a_tools_own_recovery_advice_reaches_the_model() -> None:
+    """Observed live: the generic "send it in smaller pieces" produced thirty-two
+    iterations of the same call with the content field left out. The model had
+    worked out that it should split the file, and still did not use the append
+    mode -- it is declared in the tool schema, which a model in a retry loop
+    never re-reads. The error message is the one text it does read every turn.
+    """
+    reg = ToolRegistry()
+    reg.register(_Appendable())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "[truncated]" in out
+    assert "mode=append" in out
+
+
+@pytest.mark.asyncio
+async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
+    """And nothing more: a generic "split it up" was wrong for tools like exec,
+    whose argument is one command and has no smaller form.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "[truncated]" in out
+    assert "Do not resend the same content." in out
+    assert "smaller pieces" not in out
+    assert out.rstrip().endswith("Do not resend the same content.")
+
+
+def test_shipped_tools_that_can_be_split_say_how() -> None:
+    """write_file and exec are the two the incident actually cycled through."""
+    from raven.agent.tools.filesystem import WriteFileTool
+    from raven.agent.tools.shell import ExecTool
+
+    assert "mode=append" in (WriteFileTool(".").truncation_hint or "")
+    exec_hint = ExecTool().truncation_hint or ""
+    assert "cannot be sent in pieces" in exec_hint

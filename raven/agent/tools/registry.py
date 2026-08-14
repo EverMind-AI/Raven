@@ -79,7 +79,8 @@ class ToolRegistry:
                     # make -- and its most reasonable next move is to send the
                     # same oversized payload again. Name the real cause and
                     # drop the generic try-another-approach hint with it.
-                    return truncation.as_error(name)
+                    hint = tool.truncation_hint
+                    return truncation.as_error(name) + (f" {hint}" if hint else "")
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S

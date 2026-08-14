@@ -133,6 +133,13 @@ class ExecTool(Tool):
         return "Execute a shell command and return its output. Use with caution."
 
     @property
+    def truncation_hint(self) -> str:
+        # "Send it in smaller pieces" is meaningless for a command: half a
+        # command is not a command. What splits here is the work, not the
+        # argument.
+        return "A command cannot be sent in pieces -- shorten it, or split the work across several runs."
+
+    @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",

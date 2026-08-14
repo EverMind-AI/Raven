@@ -146,6 +146,21 @@ class Tool(ABC):
         """
         return None
 
+    @property
+    def truncation_hint(self) -> str | None:
+        """What to do differently when a call to this tool arrives cut off.
+
+        The generic truncation message can only say "send less", and a model
+        reading that alone tends to send the same call with the content field
+        left out -- observed live, thirty-two iterations of it. What it needs
+        is the next action, and only the tool knows what that is: write_file
+        can be appended to, a shell command can be split into several runs,
+        and some tools have no smaller form at all.
+
+        ``None`` (the default) means the generic message stands on its own.
+        """
+        return None
+
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""
         schema = self.parameters or {}
