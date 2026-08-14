@@ -1205,6 +1205,32 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "dag.node": (DagNodeParams, DagNodeResult),
 }
 
+# ---------------------------------------------------------------------------
+# skillhub.* methods
+# ---------------------------------------------------------------------------
+
+
+class SkillhubSearchParams(_Strict):
+    query: str = Field("", description="Natural-language search; empty browses the hub.")
+    category: str = Field("", description="Category enum, e.g. DEV / TESTING / DOC-PROC.")
+    tags: str = Field("", description="Comma-separated tags, intersected.")
+    min_score: float | None = Field(None, ge=0.0, le=1.0)
+    page: int = Field(1, ge=1)
+    limit: int = Field(24, ge=1, le=50)
+
+
+class SkillhubDetailParams(_Strict):
+    id: str = Field(..., description="Hub UUID or dataset skill_id.")
+
+
+class SkillhubInstallParams(_Strict):
+    id: str
+
+
+class SkillhubRemoveParams(_Strict):
+    name: str = Field(..., description="Installed skill directory name.")
+
+
 __all__ = [
     # public types
     "SessionInfo",
@@ -1254,6 +1280,11 @@ __all__ = [
     "DagNodeResult",
     "DagRunSnapshot",
     "DagNodeDetail",
+    # skillhub
+    "SkillhubDetailParams",
+    "SkillhubInstallParams",
+    "SkillhubRemoveParams",
+    "SkillhubSearchParams",
     # registry
     "METHOD_MODELS",
 ]

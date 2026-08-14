@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
+    from raven.agent.tools.mcp_manager import MCPConnectionManager
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,
@@ -613,7 +614,8 @@ class AgentLoop:
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
-        self._mcp_stack: AsyncExitStack | None = None
+        self._mcp_manager: MCPConnectionManager | None = None
+        self._mcp_event_sink = None
         self._mcp_connected = False
         self._mcp_connecting = False
         self._processing_lock = asyncio.Lock()
@@ -1568,6 +1570,54 @@ class AgentLoop:
                 logger.warning("Error closing Skill Hub client: %s", exc)
             self._skill_hub_client = None
 
+    async def _mcp_executor(self):
+        """The sandbox executor an MCP connect should run under, started."""
+        await self._start_executor()
+        return self._executor
+
+    def set_mcp_event_sink(self, sink) -> None:
+        """Late-bind where per-server MCP events go (same shape as the DAG sink).
+
+        ``sink`` is an async callable ``(method, params)``. Without it the manager
+        still works, but every state change is silent -- and a client waiting on
+        ``mcp.status`` / ``oauth.pending`` has no way to learn that an OAuth
+        connect finished, which is most of what makes a browser round-trip
+        completable at all.
+        """
+        self._mcp_event_sink = sink
+
+    def _emit_mcp_event(self, method: str, params: dict) -> None:
+        """Fire-and-forget bridge: the manager's callbacks are sync, the sink is not."""
+        sink = self._mcp_event_sink
+        if sink is None:
+            return
+        try:
+            asyncio.get_running_loop().create_task(sink(method, params))
+        except RuntimeError:
+            pass  # no loop (a sync CLI path): nothing is listening anyway
+
+    @property
+    def mcp_manager(self) -> "MCPConnectionManager":
+        """The per-server connection lifecycle, created on first use.
+
+        Lazy rather than built in ``__init__`` because a loop with no MCP servers
+        configured should not carry one, and because the registry it writes into
+        is assembled after ``__init__`` in some entry points.
+        """
+        if self._mcp_manager is None:
+            from raven.agent.tools.mcp_manager import MCPConnectionManager
+
+            self._mcp_manager = MCPConnectionManager(
+                self.tools,
+                # MCP servers can register a name that is also blacklisted (e.g.
+                # ``mcp_<server>_search``), and the manager records what survived,
+                # so the blacklist has to be re-applied on every connect.
+                post_connect=self._apply_disabled_tools,
+                on_state_change=lambda snap: self._emit_mcp_event("mcp.status", snap),
+                on_oauth_event=lambda event, payload: self._emit_mcp_event(event, payload),
+            )
+        return self._mcp_manager
+
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
@@ -1576,32 +1626,25 @@ class AgentLoop:
         # context switch occurs here; a lock is not needed for this mutual-exclusion pattern.
         self._mcp_connecting = True
         try:
-            await self._start_executor()  # ensure executor is live before MCP servers connect
-            from raven.agent.tools.mcp import connect_mcp_servers
-
-            self._mcp_stack = AsyncExitStack()
-            await self._mcp_stack.__aenter__()
-            await connect_mcp_servers(
-                self._mcp_servers,
-                self.tools,
-                self._mcp_stack,
-                executor=self._executor,
-            )
-            # Re-apply blacklist: MCP servers may register tool names that
-            # also appear in ``disabled_tools`` (e.g. ``mcp_<server>_search``).
-            self._apply_disabled_tools()
+            await self.sync_mcp(self._mcp_servers)
             self._mcp_connected = True
+        finally:
             self._mcp_connecting = False
-        except Exception:
-            # Reset in-progress flag so a subsequent call can retry.
-            self._mcp_connecting = False
-            if self._mcp_stack:
-                try:
-                    await self._mcp_stack.aclose()
-                except Exception:
-                    pass
-                self._mcp_stack = None
-            raise
+
+    async def sync_mcp(self, cfg_servers: dict) -> dict:
+        """Reconcile live MCP connections with ``cfg_servers``.
+
+        The entry point for everything that changes the server set while the loop
+        runs -- a market install, an uninstall, an enable/disable, a config edit.
+        Each server owns its own transport, so one can be attached or detached
+        without restarting raven, and a disabled server is disconnected here
+        rather than left running with its tools registered.
+        """
+        self._mcp_servers = cfg_servers
+        # The blacklist is re-applied by the manager's post_connect hook, on every
+        # connect rather than only the first -- an MCP server can register a name
+        # that is also in disabled_tools.
+        return await self.mcp_manager.sync(cfg_servers, executor_provider=self._mcp_executor)
 
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.
@@ -2783,12 +2826,12 @@ class AgentLoop:
 
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
-        if self._mcp_stack:
+        if self._mcp_manager is not None:
             try:
-                await self._mcp_stack.aclose()
+                await self._mcp_manager.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
-            self._mcp_stack = None
+            self._mcp_manager = None
         self._mcp_connected = False  # reset so _connect_mcp() can reconnect after close
         self._mcp_connecting = False  # reset so a concurrent caller isn't permanently blocked
         await self.close_executor()  # always runs, even when no MCP servers are configured

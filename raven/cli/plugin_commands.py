@@ -32,6 +32,56 @@ from raven.cli._helpers import load_runtime_config
 
 console = Console()
 
+plugin_app = typer.Typer(help="Manage installed plugins (MCP auth, etc.)")
+
+
+@plugin_app.command("auth")
+def plugin_auth(
+    server: str = typer.Argument(..., help="MCP server name from tools.mcp_servers"),
+    config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
+) -> None:
+    """Run (or refresh) the browser OAuth flow for an MCP server.
+
+    Connects once with a throwaway registry: the flow opens your browser,
+    tokens land under ~/.raven/credentials/mcp/, and any running gateway
+    picks them up on its next connect.
+    """
+    import asyncio
+
+    from raven.config.loader import load_config
+
+    load_runtime_config(config_path)
+    cfg = load_config().tools.mcp_servers.get(server)
+    if cfg is None:
+        console.print(f"[red]no MCP server named '{server}' in tools.mcp_servers[/red]")
+        raise typer.Exit(1)
+    if not cfg.enabled:
+        console.print(f"[red]server '{server}' is disabled; set tools.mcp_servers.{server}.enabled first[/red]")
+        raise typer.Exit(1)
+    if cfg.auth != "oauth":
+        console.print(
+            f"[red]server '{server}' has auth='{cfg.auth}'; set tools.mcp_servers.{server}.auth to 'oauth' first[/red]"
+        )
+        raise typer.Exit(1)
+
+    async def _run() -> dict:
+        from raven.agent.tools.mcp_manager import MCPConnectionManager
+        from raven.agent.tools.registry import ToolRegistry
+
+        mgr = MCPConnectionManager(ToolRegistry())
+        try:
+            return await mgr.connect(server, cfg)
+        finally:
+            await mgr.aclose()
+
+    console.print(f"authorizing '{server}' — your browser will open…")
+    snap = asyncio.run(_run())
+    if snap["state"] == "connected":
+        console.print(f"[green]authorized[/green] — {snap['tool_count']} tools available, tokens saved")
+    else:
+        console.print(f"[red]authorization failed[/red] ({snap['state']}): {snap.get('error') or 'unknown error'}")
+        raise typer.Exit(1)
+
 
 def register(app: typer.Typer) -> None:
     """Attach the ``plugins`` command to ``app``."""

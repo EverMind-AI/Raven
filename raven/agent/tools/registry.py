@@ -65,6 +65,15 @@ class ToolRegistry:
         """Check if a tool is registered."""
         return name in self._tools
 
+    def names(self) -> list[str]:
+        """Every registered tool name.
+
+        Used to attribute registrations to the attempt that made them: an MCP
+        connect registers through this registry, so diffing before and after is
+        the only way to know what a *cancelled* attempt managed to add.
+        """
+        return list(self._tools)
+
     def is_blocking(self, name: str, params: dict[str, Any] | None = None) -> bool:
         """Whether this call is a blocking interaction (execute() is not timer-wrapped).
 

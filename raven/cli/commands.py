@@ -144,6 +144,13 @@ from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
 
+# Singular `plugin` beside the existing plural `plugins` listing: the group holds
+# per-server actions (`plugin auth <server>`), which is a different verb shape
+# from "show me what is installed".
+from raven.cli.plugin_commands import plugin_app
+
+app.add_typer(plugin_app, name="plugin")
+
 from raven.cli.import_commands import import_app
 
 app.add_typer(import_app, name="import")

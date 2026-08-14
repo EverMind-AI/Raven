@@ -175,6 +175,9 @@ REGISTERED_COMMAND_NAMES = {
     "gateway",
     "import",
     "onboard",
+    # Singular: per-server actions (`plugin auth <server>`). Distinct from the
+    # plural listing below, which answers "what is installed".
+    "plugin",
     "plugins",
     "provider",
     "sandbox",
