@@ -18,12 +18,44 @@ All notable changes to Raven are documented here.
   and reclaiming it means deleting the session, which removes its metadata
   directory too. DAG runs dominate the volume, because a node's rendered prompt
   inlines its dependencies' full output.
+- A `run_subagent_dag` graph can read an earlier run's output from the same
+  conversation. A completed node is named by its id alone (`{{ <id>.output }}` /
+  `{{ <id>.output_path }}`, or an `inputs` entry of the form `{"node": "<id>"}`), needing no
+  `depends_on` -- there is nothing left to order. `depends_on` may name it anyway, which
+  records the dependency without ordering anything. Previously nothing carried across runs:
+  the outputs sit under the session's metadata directory, which no working directory can
+  be aimed at, so no relative path reached them. A node with no output to read -- failed,
+  skipped, or in a run still in flight -- keeps its id but is refused, naming which case
+  it is. Node ids are unique per conversation for this to work (see Breaking Changes).
+- A DAG file reference (`{{ ref: }}` / `{{ ref_path: }}` / an `inputs` `{"file": ...}`)
+  resolves inside two roots now, the session working directory and this conversation's
+  sub-agent history (`<session_dir>/subagents/`, so the `spawn` records beside the DAG runs
+  are reachable too), and `@runs/<run_id>/...` addresses the run history by path -- which is
+  what reaches a file that is not a node output, or a run recorded before node ids were
+  indexed. The second root stops at that directory rather than at agent home: agent home
+  also holds user memory, installed skills, and every *other* conversation's transcript and
+  sub-agent history, which `workdir.py` already keeps off the agent's file surface, and a
+  DAG graph is LLM-authored and auto-run.
+  Every `_path` form is now checked to exist before its sub-agent is dispatched.
+- A DAG run stopped by `/stop` or a gateway shutdown now records its unfinished nodes as
+  `skipped` in the session index on the way out. Those routes cancel the run task, which
+  skipped the finalizer, so the ids the run had claimed stayed readable as "still being
+  written" forever -- a later graph could then neither reuse them nor read them, and the two
+  refusals it got contradicted each other. The id-reuse refusal also stops advising a
+  reference to a node that has no output to reference.
 - Sessions started by `raven tui` / `raven agent` record the directory they were
   launched in as `Session.metadata["project_dir"]`. The group directory name is
   a lossy slug, so this is what identifies the project.
 
 ### Breaking Changes
 
+- A `run_subagent_dag` node id must now be unique across the whole conversation, not
+  just within its own graph, and a graph that reuses one an earlier run took is refused
+  before any node is dispatched. That is what makes an id an address: a later graph reads
+  an earlier run's node with `{{ <id>.output }}` and no `depends_on`. Graphs that reused
+  a generic id (`plan`, `step1`) across runs in one conversation used to run and now need
+  a fresh id each time; the refusal says which run holds the id and offers referencing it
+  instead.
 - DAG run directories moved from `<workdir>/.ravenx_dag/<run_id>/` to
   `<agent home>/sessions/<group>/<chat_id>/subagents/mas_dag/<run_id>/`,
   and the per-session `index.json` moved with them. The history is keyed on the

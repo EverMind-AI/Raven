@@ -45,9 +45,10 @@ from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import validate_and_order
 from raven.agent.subagent_dag._reader import read_node as _read_node
 from raven.agent.subagent_dag._reader import read_run as _read_run
+from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_session_nodes
 from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
-from raven.agent.subagent_history import dag_root
+from raven.agent.subagent_history import dag_root, session_history_root
 from raven.agent.tools.base import Tool, ToolResult
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
@@ -86,16 +87,19 @@ class _DagOrigin:
 
 @dataclass(frozen=True)
 class _RunDirs:
-    """The two directories a run works in, read from the turn that submitted it.
+    """The directories a run works in, read from the turn that submitted it.
 
     ``workdir`` is the nodes' cwd and what ``{{ ref:<path> }}`` resolves
-    against; ``run_root`` is where the prompt/output records go. Both come from
-    turn-local state that a backgrounded run outlives, so they are resolved at
-    call time rather than looked up once the graph is already running.
+    against; ``run_root`` is where the prompt/output records go;
+    ``subagents_root`` is its parent, the second directory a file reference may
+    resolve into. All three come from turn-local state that a backgrounded run
+    outlives, so they are resolved at call time rather than looked up once the
+    graph is already running.
     """
 
     workdir: str
     run_root: str
+    subagents_root: str
 
 
 # How long a terminal event may take when a run ends without a manifest. It is
@@ -113,20 +117,46 @@ GUIDE_SKILL_ID = "local/subagent-dag-orchestration"
 _NODE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "id": {"type": "string", "description": "Unique node id (^[A-Za-z0-9_-]+$)."},
+        "id": {
+            "type": "string",
+            "description": (
+                "Node id (^[A-Za-z0-9_-]+$), unique across this whole conversation, not just this graph: "
+                "it is how a later graph names this node's output. Reusing an id an earlier run took is "
+                "rejected -- pick a fresh one (plan_v2, research_pricing) rather than repeating a generic "
+                "one, and to re-do work under the same name give the node a new id."
+            ),
+        },
         "subagent": {"type": "string", "description": "Name of a configured third-party agent to run this node."},
         "prompt_template": {
             "type": "string",
             "description": (
-                "Node prompt. Placeholders: {{ <dep>.output }} / {{ <dep>.output_path }} inject a "
-                "dependency's output text/path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject a literal "
-                "or file input; {{ ref:<path> }} / {{ ref_path:<path> }} read a workspace file. A node may "
-                "only reference ids listed in its depends_on. The _path forms need a sub-agent the roster "
-                "tags [local-files]; for a [no-local-files] one use the contents forms instead."
+                "Node prompt. Placeholders: {{ <node>.output }} / {{ <node>.output_path }} inject a "
+                "node's output text/path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input; "
+                "{{ ref:<path> }} / {{ ref_path:<path> }} read a file. <node> is either a node of this "
+                "graph listed in this node's depends_on, or any node an earlier run in this conversation "
+                "completed, since ids are unique across it. To read a run's file directly, "
+                "{{ ref:@runs/<run_id>/<node>.out.md }}. The _path forms need a "
+                "sub-agent the roster tags [local-files]; for a [no-local-files] one use the contents "
+                "forms instead, and every _path form must name a file that already exists."
             ),
         },
-        "depends_on": {"type": "array", "items": {"type": "string"}, "description": "Ids this node depends on."},
-        "inputs": {"type": "object", "description": 'Per-key literal string, or {"file": <path>}.'},
+        "depends_on": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Ids this node depends on. A node of this graph runs first; a node an earlier run in "
+                "this conversation completed is already done, so listing it only records the "
+                "dependency. Either way you may read it with {{ <node>.output }}."
+            ),
+        },
+        "inputs": {
+            "type": "object",
+            "description": (
+                'Per-key literal string, {"file": <path>}, or {"node": <id>} to take another node\'s '
+                "output -- a dependency of this node, or any node from an earlier run in this "
+                "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
+            ),
+        },
         "instance": {
             "type": "string",
             "description": (
@@ -246,6 +276,43 @@ class SubAgentDagTool(Tool):
         turn = self._origin.get()
         return turn.conversation if turn is not None else None
 
+    async def _session_nodes(self) -> SessionNodes:
+        """What this session's earlier runs did with each node id.
+
+        Runs during validation, so it must not create anything: a rejected
+        graph has to leave the session's directories exactly as it found them.
+        The injected resolver only reads, but the fallback ``SessionManager``
+        creates ``sessions/`` when it is constructed -- so with no resolver and
+        no ``sessions/`` yet there is provably no history to read, and building
+        one just to learn that would itself be the write we are avoiding.
+
+        The root must be the one the run itself will claim ids into -- the same
+        ``_run_root(_turn_conversation())`` pair ``_dirs`` resolves. Validating
+        against one index while claiming into another would refuse nothing and
+        detect nothing.
+        """
+        if self._session_dir is None and not (Path(self._workspace) / "sessions").is_dir():
+            return SessionNodes()
+        root = self._run_root(self._turn_conversation())
+        # Guarded like every other read that decides something, so this cannot
+        # see a half-written index. It is still only a pre-check -- ``run_dag``
+        # repeats it inside the guard that also claims the ids.
+        async with index_guard(root):
+            return await read_session_nodes(self._backend, root)
+
+    def _reference_roots(self) -> tuple[str, ...]:
+        """The directories a node's file references may resolve into.
+
+        The turn's working directory and this conversation's sub-agent history,
+        matching what ``run_dag`` derives -- computed here as well so a graph
+        naming an unreachable file is refused in the caller's own turn, before
+        any node is dispatched.
+        """
+        roots = [str(workdir.current() or self._workspace)]
+        if (history := self._history_root()) is not None:
+            roots.append(history)
+        return tuple(roots)
+
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this run's progress belongs to.
 
@@ -285,14 +352,40 @@ class SubAgentDagTool(Tool):
         (raven/agent/subagent_history.py). Falls back to a slug-less manager --
         the gateway's grouping -- when no resolver was injected.
         """
+        return str(dag_root(self._session_dir_for(session_key)))
+
+    def _session_dir_for(self, session_key: str | None) -> Path:
+        """This conversation's session directory, the parent of both roots.
+
+        Shared by ``_run_root`` and ``_history_root`` so the run directory and
+        the reference root can never be derived from different sessions.
+        """
         key = session_key or self._turn_conversation() or ""
         if self._session_dir is not None:
-            return str(dag_root(self._session_dir(key)))
+            return Path(self._session_dir(key))
         if self._fallback_sessions is None:
             from raven.session.manager import SessionManager
 
             self._fallback_sessions = SessionManager(Path(self._workspace))
-        return str(dag_root(self._fallback_sessions.session_dir(key)))
+        return Path(self._fallback_sessions.session_dir(key))
+
+    def _history_root(self) -> str | None:
+        """This conversation's sub-agent history root, or None if it has none.
+
+        ``<session_dir>/subagents/`` -- the second directory a node's file
+        reference may resolve into, holding this conversation's DAG runs and
+        ``spawn`` records. Narrower than agent home deliberately: see
+        :func:`._paths.check_confined`.
+
+        ``None`` rather than a path when no resolver is injected and no
+        ``sessions/`` exists, because building a ``SessionManager`` to find out
+        would create the directory -- and validation must leave a rejected
+        graph's session exactly as it found it. With no history there is also
+        nothing for a reference to name.
+        """
+        if self._session_dir is None and not (Path(self._workspace) / "sessions").is_dir():
+            return None
+        return str(session_history_root(self._session_dir_for(None)))
 
     async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
         """One run's durable structure + per-node state, read back from disk.
@@ -491,7 +584,7 @@ class SubAgentDagTool(Tool):
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
             spec = parse_dag_spec({"nodes": nodes})
-            validate_and_order(spec)
+            validate_and_order(spec, self._reference_roots(), await self._session_nodes())
             validate_capabilities(spec, self._capabilities)
             # ``run_dag`` checks the roster too, but it does so inside the run --
             # which a backgrounded call has already returned from. Checked here
@@ -504,9 +597,11 @@ class SubAgentDagTool(Tool):
             return self._validation_error(exc)
 
         origin = self._origin.get() or self._default_origin
+        session_dir = self._session_dir_for(self._turn_conversation())
         dirs = _RunDirs(
             workdir=str(workdir.current() or self._workspace),
-            run_root=self._run_root(self._turn_conversation()),
+            run_root=str(dag_root(session_dir)),
+            subagents_root=str(session_history_root(session_dir)),
         )
         # Charged after validation so a rejected graph costs no budget, and
         # before either mode starts so the refusal is the caller's own result.
@@ -609,6 +704,7 @@ class SubAgentDagTool(Tool):
                 backend=self._backend,
                 workdir=dirs.workdir,
                 run_root=dirs.run_root,
+                subagents_root=dirs.subagents_root,
                 progress_publisher=emit,
                 semaphore=self._gate,
                 session_key=origin.conversation,

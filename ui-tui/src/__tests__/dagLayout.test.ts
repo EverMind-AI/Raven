@@ -47,8 +47,10 @@ describe('layoutDag', () => {
   })
 
   it('treats a dependency outside the graph as satisfied', () => {
-    // Defensive: a node whose dep is not in the node list would otherwise be
-    // unplaceable and vanish from the drawing entirely.
+    // Not only defensive: `depends_on` may name a node an earlier run of the
+    // session completed, which by definition is not in this run's node list.
+    // Waiting on it would leave the node unplaceable and drop it from the
+    // drawing entirely.
     expect(ids(layoutDag([node('a', ['ghost'])]))).toEqual([['a']])
   })
 

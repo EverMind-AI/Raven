@@ -587,8 +587,26 @@ a protected subtree, so no working directory can be aimed at it and no tool writ
 the history. Append-only: no expiry, no size cap, reclaimed only by deleting the session.
 DAG runs dominate its volume — a node's rendered `prompt.md` inlines each dependency's full
 output, so a chain stores the same text once per hop.
+The `mas_dag/index.json` is not only a discovery list: it carries each run's node
+ids, claimed when the run starts, and their outcome once it ends, which is what makes a
+**DAG node id** addressable (below). Reads and writes of it are serialized per root
+within a process (`_store.index_guard`); two processes sharing one session still race.
 _Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
 sat in whatever directory the run happened to use and had no `spawn` counterpart.
+
+**DAG node id** (`raven/agent/subagent_dag/_graph.py`, `_store.py`):
+A node's name inside a `run_subagent_dag` graph, and the address a *later* graph in the
+same conversation uses to read what that node produced — `{{ <id>.output }}`, needing no
+`depends_on`, since the node has already finished (naming it there is allowed and orders
+nothing). That second role is why the id is
+**unique per conversation, not per graph**: reusing one an earlier run took is refused, so
+an id names one node and one output. An id is claimed for the whole run, whatever the
+outcome, but only a `completed` node can be referenced; a failed, skipped or still-running
+one keeps its id and is refused with which of the three it is. A run stopped by `/stop` or
+a shutdown records its unfinished nodes as `skipped` on the way out, so "still-running"
+means what it says rather than outliving the run that claimed it. Distinct from an
+`instance` handle, which shares a sub-agent *session* rather than naming an output.
+_Avoid_: "node name" — the id is an address, not a label.
 
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`

@@ -16,12 +16,14 @@ from raven.agent.subagent_dag import (
     DagReadError,
     DagRunStore,
     DagValidationError,
+    check_confined,
     make_run_id,
     parse_dag_spec,
     parse_placeholders,
     read_node,
     read_run,
     render_prompt,
+    split_reference,
     validate_and_order,
     validate_capabilities,
 )
@@ -411,3 +413,84 @@ async def test_read_node_of_a_node_that_never_ran_is_empty_not_an_error() -> Non
     assert node["prompt"] is None
     assert node["output"] is None
     assert node["output_chars"] == 0
+
+
+# --- reference roots -----------------------------------------------------
+
+_ROOTS = ("/work", "/home/agent")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "notes.md",
+        "sub/notes.md",
+        "/work/notes.md",
+        "/home/agent/sessions/web/s1/subagents/mas_dag/r1/a.out.md",
+        "../home/agent/user_memory/facts.md",
+    ],
+)
+def test_a_reference_landing_in_either_root_is_accepted(path: str) -> None:
+    check_confined(path, what="ref", roots=_ROOTS)
+
+
+@pytest.mark.parametrize("path", ["/etc/passwd", "../../etc/passwd", "/home/agent-other/x.md"])
+def test_a_reference_landing_outside_every_root_is_rejected(path: str) -> None:
+    with pytest.raises(DagValidationError, match="outside"):
+        check_confined(path, what="ref", roots=_ROOTS)
+
+
+@pytest.mark.parametrize("path", ["/work/notes.md", "../elsewhere/notes.md"])
+def test_without_roots_a_reference_must_stay_relative(path: str) -> None:
+    with pytest.raises(DagValidationError, match="must be relative"):
+        check_confined(path, what="ref")
+
+
+def test_the_runs_prefix_cannot_escape_the_run_history() -> None:
+    check_confined("@runs/r1/a.out.md", what="ref", roots=_ROOTS)
+    with pytest.raises(DagValidationError, match="DAG run history"):
+        check_confined("@runs/../../etc/passwd", what="ref", roots=_ROOTS)
+    with pytest.raises(DagValidationError, match="empty"):
+        check_confined("@runs/", what="ref", roots=_ROOTS)
+
+
+def test_split_reference_names_the_root() -> None:
+    assert split_reference("@runs/r1/a.out.md") == ("runs", "r1/a.out.md")
+    assert split_reference("notes.md") == ("workdir", "notes.md")
+
+
+# --- render across runs --------------------------------------------------
+
+
+def _one_node(template: str, **extra: object) -> object:
+    return parse_dag_spec({"nodes": [{"id": "n", "subagent": "x", "prompt_template": template, **extra}]}).nodes[0]
+
+
+async def test_render_reaches_an_earlier_run_through_the_runs_prefix() -> None:
+    be = _FakeBackend()
+    be.files["/hist/mas_dag/r1/plan.out.md"] = b"EARLIER"
+
+    node = _one_node("text={{ ref:@runs/r1/plan.out.md }} path={{ ref_path:@runs/r1/plan.out.md }}")
+    rendered = await render_prompt(node, backend=be, cwd="/w", output_paths={}, runs_root="/hist/mas_dag")
+
+    assert "text=EARLIER" in rendered
+    assert "path=/hist/mas_dag/r1/plan.out.md" in rendered
+
+
+async def test_a_runs_reference_is_refused_when_no_history_root_is_known() -> None:
+    node = _one_node("{{ ref:@runs/r1/plan.out.md }}")
+    with pytest.raises(DagValidationError, match="run history"):
+        await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})
+
+
+@pytest.mark.parametrize(
+    ("template", "extra"),
+    [
+        ("{{ ref_path:gone.md }}", {}),
+        ("{{ inputs.k.path }}", {"inputs": {"k": {"file": "gone.md"}}}),
+    ],
+)
+async def test_a_path_placeholder_naming_a_missing_file_is_refused(template: str, extra: dict) -> None:
+    node = _one_node(template, **extra)
+    with pytest.raises(DagValidationError, match="does not exist"):
+        await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})

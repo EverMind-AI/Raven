@@ -98,3 +98,6 @@ demos/skill_retrieval/agent_memory/
 .omo/*
 .ruff_cache/
 subagents/
+
+# Playwright MCP session artifacts (console logs, page snapshots, screenshots)
+.playwright-mcp/

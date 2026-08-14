@@ -22,7 +22,9 @@ export type DagLevel = DagRunNode[]
  * make rows jump under the reader.
  *
  * A dependency not present in `nodes` counts as satisfied — it cannot be waited
- * on, and treating it as unmet would drop the node from the drawing. A cyclic
+ * on, and treating it as unmet would drop the node from the drawing. That is a
+ * declared shape, not just a malformed-frame guard: `depends_on` may name a node
+ * an earlier run of the session completed, which is never in this run. A cyclic
  * graph (which the backend rejects before running, so only a malformed frame
  * gets here) has its unresolvable remainder appended as one final level rather
  * than being dropped or spun on.
