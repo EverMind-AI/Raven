@@ -189,17 +189,14 @@ async def connect_mcp_servers(
 ) -> None:
     """Connect to configured MCP servers and register their tools.
 
-    One-shot connect-all over a shared stack, and the production path: the loop
-    calls this. An earlier version of this docstring described a connection
-    manager taking over and left this reading as test-only, which is a trap for
-    anyone changing it -- that class does not exist on this branch.
+    One-shot connect-all over a shared stack, and no longer the live path: the
+    agent loop connects through
+    :class:`~raven.agent.tools.mcp_manager.MCPConnectionManager`, which owns one
+    stack per server so servers can be attached and detached while raven runs.
 
-    It also does not pass ``http_auth``, so a server behind OAuth fails its
-    connect with a 401 and no browser opens. ``mcp_oauth`` lands here without
-    its consumer on purpose: the retry belongs to per-server connect, which is
-    what the connection manager does, and it wires it there
-    (``mcp_manager._auth_for`` -> ``provider_for``). Wiring a second, one-shot
-    version into this function would be rewritten the moment that lands.
+    This helper stays for callers that want one shot over one stack -- scripts
+    and tests. Note it does **not** honour ``enabled``, so it is not a drop-in
+    for the manager.
     """
     for name, cfg in mcp_servers.items():
         try:

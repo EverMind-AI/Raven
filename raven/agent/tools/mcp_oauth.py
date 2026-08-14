@@ -18,12 +18,12 @@ redirect URL is a process-wide resource (``serve_commands.SERVE`` follows the
 same pattern). The ``state`` value is read from the authorization URL the SDK
 hands to ``redirect_handler`` — the SDK generates it, we only correlate.
 
-Staged, not finished: nothing on this branch calls :func:`provider_for`, so a
-server behind OAuth still fails its connect and ``/oauth/callback`` always
-renders the stale-link page, because the pending map is never populated. The
-consumer is the per-server connection manager, which is where a connect retry
-belongs, and it wires this in (``mcp_manager._auth_for``). This module lands
-first because the callback route and the credential store are gateway-side.
+The consumer is :class:`~raven.agent.tools.mcp_manager.MCPConnectionManager`:
+for a server configured ``auth="oauth"`` it builds a provider through
+:func:`provider_for` and hands it to the transport as an ``httpx.Auth``, so the
+SDK runs the browser flow *inside* the connect. A connect that still fails is
+classified by :func:`is_auth_error` and parked as ``auth_required`` --
+deliberately not retried, until an explicit ``connect()`` (``plug.auth``).
 """
 
 from __future__ import annotations

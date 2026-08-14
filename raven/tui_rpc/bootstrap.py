@@ -79,6 +79,16 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
         # while it works, which reads as a hang rather than as progress.
         agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
 
+        # Per-server MCP events, broadcast rather than conversation-scoped: a
+        # server connecting is not part of anybody's turn. Clients already listen
+        # for these three, and an OAuth connect is not completable without them --
+        # the authorization URL would only ever reach the gateway host's own
+        # browser, which for `raven serve` is not where the user is.
+        async def _mcp_event(method: str, params: dict) -> None:
+            await send_frame({"jsonrpc": "2.0", "method": method, "params": params})
+
+        agent_loop.set_mcp_event_sink(_mcp_event)
+
     def _agent_loop_factory():
         if agent_loop is not None:
             return agent_loop

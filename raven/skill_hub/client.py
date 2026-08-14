@@ -30,10 +30,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
-# Defensive limits for untrusted zip extraction.
-_MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
-_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
-_ALLOWED_SUFFIXES = {
+# Defensive limits for untrusted zip extraction. Public because the skillhub RPC
+# install path unpacks the same archives and must not drift to a laxer policy.
+MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
+MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
+ALLOWED_SUFFIXES = {
     # docs / data / config
     ".md",
     ".txt",
@@ -250,17 +251,23 @@ class SkillHubClient:
                 # entry would be wrongly rejected as unsafe.
                 if not target.is_relative_to(dest.resolve()):
                     raise SkillHubError(f"unsafe zip path: {name!r}")
-                if Path(name).suffix.lower() not in _ALLOWED_SUFFIXES:
+                if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
                     logger.warning("skipping disallowed file in skill zip: %r", name)
                     continue
-                if info.file_size > _MAX_ZIP_ENTRY_BYTES:
+                if info.file_size > MAX_ZIP_ENTRY_BYTES:
                     logger.warning("skipping oversized file in skill zip: %r", name)
                     continue
-                if total + info.file_size > _MAX_ZIP_TOTAL_BYTES:
+                if total + info.file_size > MAX_ZIP_TOTAL_BYTES:
                     raise SkillHubError("zip uncompressed total too large")
                 total += info.file_size
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(zf.read(info))
 
 
-__all__ = ["SkillHubClient", "SkillHubError"]
+__all__ = [
+    "ALLOWED_SUFFIXES",
+    "MAX_ZIP_ENTRY_BYTES",
+    "MAX_ZIP_TOTAL_BYTES",
+    "SkillHubClient",
+    "SkillHubError",
+]

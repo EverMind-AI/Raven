@@ -477,6 +477,23 @@ candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), 
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
+**PlugHub** (`plughub/`):
+The plugin marketplace: a catalogue of installable integrations (`catalog.json`), and the
+transactional installer that lands one. A catalogue entry contributes pieces -- an MCP
+server, credentials, a skill -- and `install` lands them all or none. Distinct from **Skill
+Hub**, which is a remote marketplace for skills alone.
+_Avoid_: "market" on its own for either one -- both surfaces are called that in prose, and
+the RPC groups (`plughub.*` vs `skillhub.*`) are separate.
+
+**Ledger**:
+One JSON file per PlugHub-installed plugin (`plugins/<catalog_id>.json`), recording the
+exact pieces a transaction landed so uninstall replays them in reverse rather than
+guessing. It is also the provenance oracle: a config entry **with** a ledger came from the
+market, **without** one was written by hand -- which is what decides whether removing it
+replays pieces or just deletes a config stanza.
+_Avoid_: "manifest" -- that is the plugin's own declaration; a ledger is the record of one
+install of it.
+
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
 

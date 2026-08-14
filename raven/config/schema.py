@@ -821,6 +821,14 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
+    # Disabled keeps the stanza and any stored credentials but never connects, so
+    # turning a server off does not cost the user their re-authorisation.
+    enabled: bool = True
+    # How this server proves who it is. ``oauth`` means a browser flow whose
+    # tokens land under ~/.raven/credentials/mcp/, which is why the manager has
+    # to distinguish it: an apikey server that fails is broken, an oauth server
+    # that fails may just be waiting for a human.
+    auth: Literal["none", "apikey", "oauth"] = "none"
 
 
 class ToolSearchConfig(Base):

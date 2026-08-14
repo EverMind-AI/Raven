@@ -1,0 +1,359 @@
+"""``plug.*`` handlers — install auth gate: an auth plugin only counts as
+installed once its connection authenticates; settled failures roll back."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from raven.plughub import install as install_mod
+from raven.plughub import ledger as ledger_mod
+from raven.plughub.ledger import read_ledger
+from raven.tui_rpc.errors import ConfigValidationError, InternalError
+from raven.tui_rpc.methods import plughub as rpc_plughub
+
+
+@pytest.fixture(autouse=True)
+def _isolated(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    monkeypatch.setattr(install_mod, "_config_path", lambda: cfg_path)
+    monkeypatch.setattr(ledger_mod, "_plugins_dir", lambda: tmp_path / "plugins")
+    (tmp_path / "plugins").mkdir()
+    import raven.agent.tools.mcp_oauth as oauth
+
+    monkeypatch.setattr(oauth, "delete_credentials", lambda server: None)
+    # The handlers read the loader's own config path (language, configured
+    # servers), which is a module global -- point it at the fixture and put it
+    # back, or a later test in this process reads a directory that has gone.
+    import raven.config.loader as loader
+
+    monkeypatch.setattr(loader, "_current_config_path", cfg_path)
+    yield {"cfg_path": cfg_path}
+
+
+def _entry(auth_mode: str, entry_id: str = "svc") -> dict:
+    contrib = {
+        "kind": "mcp",
+        "connection": {"type": "streamableHttp", "url": "https://svc.example/mcp"},
+        "auth": {"mode": auth_mode},
+    }
+    if auth_mode == "apikey":
+        contrib["auth"]["fields"] = [{"key": "K", "into": "env.K", "secret": True}]
+    return {"id": entry_id, "version": "1.0.0", "contributes": [contrib]}
+
+
+class _FakeManager:
+    def __init__(self, name: str, state: str):
+        self.name = name
+        self.state = state
+        self.dropped: list[str] = []
+
+    def status(self) -> list[dict]:
+        return [{"name": self.name, "state": self.state, "error": "boom" if self.state == "error" else None}]
+
+    async def disconnect(self, name: str, *, drop: bool = False) -> None:
+        self.dropped.append(name)
+
+
+class _FakeLoop:
+    """Stands in for the agent loop, with the surface `plug.*` actually uses.
+
+    ``test_the_fake_loop_does_not_invent_a_contract`` keeps this honest: a fake
+    that grows an attribute the real loop lacks turns every test in this file
+    green while the handler raises AttributeError in production.
+    """
+
+    def __init__(self, name: str, state: str):
+        self.mcp_manager = _FakeManager(name, state)
+
+    async def sync_mcp(self, servers) -> None:
+        pass
+
+    async def _mcp_executor(self):
+        return None
+
+
+def _factory(loop):
+    return lambda: loop
+
+
+def _own_attrs(obj) -> list[str]:
+    """Everything the fake itself defines: instance attributes *and* the methods
+    on its class. The original bug shipped as fake *methods* (`sync_mcp`,
+    `_mcp_executor`), so an instance-only check would have missed it."""
+    from_class = [k for k, v in vars(type(obj)).items() if not k.startswith("__")]
+    return sorted(set(vars(obj)) | set(from_class))
+
+
+def test_the_fake_loop_does_not_invent_a_contract() -> None:
+    from raven.agent.loop.main import AgentLoop
+
+    fake = _FakeLoop("svc", "connected")
+    for attr in _own_attrs(fake):
+        assert hasattr(AgentLoop, attr), f"_FakeLoop.{attr} does not exist on AgentLoop"
+
+    for attr in ("sync_mcp", "_mcp_executor", "mcp_manager"):
+        assert hasattr(AgentLoop, attr), f"AgentLoop is missing {attr}"
+
+
+def test_the_fake_manager_does_not_invent_a_contract() -> None:
+    """Same guard one level down: the handlers reach through the loop into the
+    manager, so a fake manager that grows a method the real one lacks reopens the
+    identical hole.
+
+    Methods only -- a fake's instance attributes are its own bookkeeping (what it
+    recorded, what it was told to answer), which the real manager has no reason
+    to carry."""
+    from raven.agent.tools.mcp_manager import MCPConnectionManager
+
+    methods = [k for k, v in vars(_FakeManager).items() if not k.startswith("__") and callable(v)]
+    assert methods, "the guard would pass vacuously"
+    for attr in methods:
+        assert hasattr(MCPConnectionManager, attr), f"_FakeManager.{attr} is not on MCPConnectionManager"
+
+
+def _patch_catalog(monkeypatch, entry):
+    async def detail(entry_id: str):
+        return entry if entry_id == entry["id"] else None
+
+    monkeypatch.setattr("raven.plughub.catalog_detail", detail)
+
+
+def _server_in_cfg(fixture, name: str) -> bool:
+    try:
+        cfg = json.loads(fixture["cfg_path"].read_text())
+    except FileNotFoundError:
+        return False
+    return name in cfg.get("tools", {}).get("mcpServers", {})
+
+
+async def test_oauth_connected_counts_installed(monkeypatch, _isolated):
+    entry = _entry("oauth")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "connected")
+    r = await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
+    assert r["installed"] is True
+    assert r["pending"] is False
+    assert read_ledger("svc") is not None
+
+
+async def test_oauth_still_connecting_reports_pending(monkeypatch, _isolated):
+    entry = _entry("oauth")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "connecting")
+    r = await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
+    assert r["installed"] is False
+    assert r["pending"] is True
+    assert read_ledger("svc") is not None
+
+
+async def test_oauth_auth_failure_rolls_back(monkeypatch, _isolated):
+    entry = _entry("oauth")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "auth_required")
+    with pytest.raises(ConfigValidationError, match="authentication failed"):
+        await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
+    assert read_ledger("svc") is None
+    assert not _server_in_cfg(_isolated, "svc")
+    assert loop.mcp_manager.dropped == ["svc"]
+
+
+async def test_apikey_error_rolls_back(monkeypatch, _isolated):
+    entry = _entry("apikey")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "error")
+    with pytest.raises(ConfigValidationError, match="authentication failed"):
+        await rpc_plughub.plug_install({"id": "svc", "form": {"K": "v"}}, agent_loop_factory=_factory(loop))
+    assert read_ledger("svc") is None
+    assert not _server_in_cfg(_isolated, "svc")
+
+
+async def test_no_auth_error_still_installs(monkeypatch, _isolated):
+    entry = _entry("none")
+    _patch_catalog(monkeypatch, entry)
+    loop = _FakeLoop("svc", "error")
+    r = await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
+    assert r["installed"] is True
+    assert r["pending"] is False
+    assert read_ledger("svc") is not None
+
+
+async def test_a_hostile_name_is_refused_as_a_validation_error(tmp_path, monkeypatch) -> None:
+    """The ledger refuses the id either way; this pins *how the caller hears it*.
+
+    Without validation at the handler boundary the refusal surfaces as
+    ``-32603 internal_error`` with a traceback tail, which reads as a server
+    fault rather than a bad argument -- and leaves a caller no field to blame.
+    """
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"language": "en"}')
+
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods.plughub import register_plughub_methods
+
+    d = Dispatcher()
+    register_plughub_methods(d, agent_loop_factory=lambda: None)
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "plug.remove", "params": {"name": "../config"}})
+
+    assert resp["error"]["code"] == -32011, resp
+    assert resp["error"]["data"]["field"] == "name"
+    assert cfg.exists(), "the config file must survive a hostile uninstall"
+
+
+async def test_auth_reconnects_one_server(_isolated, monkeypatch) -> None:
+    """plug.auth is the GUI's re-authorize button, and had no test at all."""
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+    )
+    connected: list[tuple] = []
+
+    class _Manager(_FakeManager):
+        async def connect(self, name, cfg, *, executor_provider=None):
+            connected.append((name, executor_provider))
+            self.state = "connected"
+            return {"name": name, "state": "connected", "tool_count": 3, "error": None}
+
+    loop = _FakeLoop("svc", "error")
+    loop.mcp_manager = _Manager("svc", "error")
+
+    out = await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=_factory(loop))
+
+    assert out["mcp"]["state"] == "connected"
+    assert connected[0][0] == "svc"
+    # The executor provider has to be passed through, or a stdio server in a
+    # sandbox connects without one.
+    assert connected[0][1] is not None
+
+
+async def test_auth_refuses_a_disabled_server(_isolated) -> None:
+    _isolated["cfg_path"].write_text(
+        json.dumps(
+            {"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://x/mcp", "enabled": False}}}}
+        )
+    )
+    loop = _FakeLoop("svc", "disconnected")
+
+    with pytest.raises(ConfigValidationError, match="disabled"):
+        await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=_factory(loop))
+
+
+async def test_auth_without_a_running_loop_is_a_clean_refusal(_isolated) -> None:
+    _isolated["cfg_path"].write_text(json.dumps({"tools": {"mcpServers": {"svc": {"url": "https://x/mcp"}}}}))
+
+    with pytest.raises(InternalError):
+        await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=None)
+
+
+async def test_toggle_waits_for_the_disconnect_it_asked_for(_isolated) -> None:
+    """The snapshot must describe the state after the sync, not before it.
+
+    Disabling a connected server is the case where "does this look settled?" is
+    the wrong question: `connected` is still true the instant the sync is kicked
+    off, so an unguarded wait returns immediately and the caller shows a server
+    it just switched off as running.
+    """
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+    )
+
+    class _Loop(_FakeLoop):
+        async def sync_mcp(self, servers) -> None:
+            await asyncio.sleep(0.15)  # the disconnect lands well after the kick
+            self.mcp_manager.state = "disconnected"
+
+    loop = _Loop("svc", "connected")
+
+    out = await rpc_plughub.plug_toggle({"name": "svc", "enabled": False}, agent_loop_factory=_factory(loop))
+
+    assert out["mcp"]["state"] == "disconnected", out
+
+
+async def test_a_config_that_cannot_be_written_is_a_refusal(_isolated, monkeypatch) -> None:
+    """A read-only home is a condition of the machine, not a raven fault: the
+    transaction rolls back and the caller hears why."""
+
+    def _boom(payload):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(install_mod, "_write_config_raw", _boom)
+    _patch_catalog(monkeypatch, _entry("none", "svc"))
+
+    with pytest.raises(ConfigValidationError, match="could not be written"):
+        await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=None)
+
+
+async def test_a_hand_edited_stanza_that_is_not_an_object_is_a_refusal(_isolated) -> None:
+    _isolated["cfg_path"].write_text(json.dumps({"tools": {"mcpServers": {"svc": "https://x/mcp"}}}))
+
+    with pytest.raises(ConfigValidationError, match="cannot be toggled"):
+        await rpc_plughub.plug_toggle({"name": "svc", "enabled": False}, agent_loop_factory=None)
+
+
+# ---------------------------------------------------------------------------
+# a hand-written server is a server, not a catalogue id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["_dev", "my server", "x" * 80])
+async def test_toggle_and_remove_accept_a_hand_written_server_name(_isolated, monkeypatch, name) -> None:
+    """`_installed_names` unions the ledgers with every key in `tools.mcpServers`,
+    so the panel lists hand-written servers as installed. They were then refused
+    by the catalogue-id rule -- which exists to stop an id naming a file, and a
+    server name is never used as one. The user was told their own server name
+    was "not a usable catalog id", with no way to act on it.
+    """
+    import raven.plughub as plughub_pkg
+
+    toggled: list = []
+    removed: list = []
+    monkeypatch.setattr(plughub_pkg, "toggle_server", lambda n, e: toggled.append((n, e)))
+
+    async def _uninstall(n):
+        removed.append(n)
+        return {"removed": True, "origin": "manual"}
+
+    monkeypatch.setattr(plughub_pkg, "uninstall_plugin", _uninstall)
+
+    await rpc_plughub.plug_toggle({"name": name, "enabled": False})
+    assert toggled == [(name, False)]
+
+    await rpc_plughub.plug_remove({"name": name})
+    assert removed == [name]
+
+
+@pytest.mark.parametrize("name", ["_dev", "my server"])
+async def test_auth_accepts_a_hand_written_server_name(_isolated, name) -> None:
+    """The third handler the same rule refused. Every existing auth test uses
+    "svc", which the old catalogue-id rule already accepted, so none of them
+    would notice this one being reverted.
+
+    The refusal here is about the *state* (disconnected), which is proof the
+    name got through: under the old rule it never reached the config lookup.
+    """
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {name: {"url": "https://x/mcp", "enabled": False}}}})
+    )
+    loop = _FakeLoop(name, "disconnected")
+
+    with pytest.raises(ConfigValidationError, match="disabled"):
+        await rpc_plughub.plug_auth({"name": name}, agent_loop_factory=_factory(loop))
+
+
+async def test_an_empty_server_name_is_still_refused(_isolated) -> None:
+    """Relaxing the rule must not mean accepting nothing at all."""
+    from raven.tui_rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError):
+        await rpc_plughub.plug_toggle({"name": "  ", "enabled": False})
+
+
+def test_a_ledger_read_answers_for_an_unnameable_id() -> None:
+    """An id that cannot name a file provably has no ledger, so the read is a
+    None rather than a raise -- which is what lets the handlers above ask the
+    question at all."""
+    from raven.plughub.ledger import read_ledger
+
+    assert read_ledger("_dev") is None
+    assert read_ledger("my server") is None

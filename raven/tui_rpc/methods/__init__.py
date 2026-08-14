@@ -50,11 +50,13 @@ from raven.tui_rpc.methods.delegation import register_delegation_methods
 from raven.tui_rpc.methods.input import register_input_methods
 from raven.tui_rpc.methods.memory import register_memory_methods
 from raven.tui_rpc.methods.model import register_model_methods
+from raven.tui_rpc.methods.plughub import register_plughub_methods
 from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods
 from raven.tui_rpc.methods.shell import register_shell_methods
+from raven.tui_rpc.methods.skillhub import register_skillhub_methods
 from raven.tui_rpc.methods.skills import register_skills_methods
 from raven.tui_rpc.methods.slash_routing import register_slash_routing_methods
 from raven.tui_rpc.methods.subagents import register_subagents_methods
@@ -220,6 +222,12 @@ def register_aligned_methods_except_system(
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
+    # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
+    # already runs: skills (memory_engine.skill_forge) and plugins
+    # (raven.plugin). Registered unconditionally so a network failure reads as a
+    # handler error a caller can show, not as -32601.
+    register_skillhub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_plughub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
 
 
 __all__ = [
@@ -235,7 +243,9 @@ __all__ = [
     "register_dag_methods",
     "register_console_methods",
     "register_memory_methods",
+    "register_plughub_methods",
     "register_session_methods",
+    "register_skillhub_methods",
     "register_terminal_methods",
     "register_stub_methods",
     "register_model_methods",
