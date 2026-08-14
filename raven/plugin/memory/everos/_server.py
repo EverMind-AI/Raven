@@ -235,8 +235,8 @@ def ome_lock_held(root: Path | str) -> bool:
     non-blocking exclusive ``flock`` on ``<root>/.index/sqlite/ome.db.lock``. The
     lock is the only reliable answer to "is this data already being served",
     because it is keyed on the directory rather than on a port: a second server
-    on a different port dies here, which is exactly the failure that looked like
-    a mysterious 30s startup timeout.
+    on a different port dies here, which is the failure that used to surface as a
+    silent startup timeout with no mention of a lock.
 
     Acquire-and-release, so this reports on *other* holders. Two caveats worth
     knowing: ``flock`` is held per open file description, so a raven process that
@@ -366,7 +366,7 @@ async def ensure_everos_server(
     configured there. On a machine that had moved everos off the default port
     the wizard then decided nothing was running, spawned a second instance, and
     that instance died on the OME jobstore lock the first one already held --
-    reported to the user as a 30s timeout blaming a missing install. A default
+    reported to the user as a startup timeout blaming a missing install. A default
     here means "forgot to read the config" is a silent runtime bug rather than a
     signature error, so there is none.
 
