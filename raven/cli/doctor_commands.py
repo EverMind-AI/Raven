@@ -75,6 +75,7 @@ class MemoryInfo:
     reports_capabilities: bool = False
     configured: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    retrieval: Optional[str] = None
 
     @property
     def unbuilt(self) -> list[str]:
@@ -227,6 +228,9 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     )
 
     info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+    # Recall quality is decided by the embedding role in the user-level
+    # everos.toml: with it recall matches meaning, without it only keywords.
+    info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
@@ -375,6 +379,10 @@ def _render_human_output(report: DoctorReport) -> None:
     if memory is not None and memory.backend:
         console.print("\n[bold]Memory[/bold]")
         console.print(f"  Backend:    {memory.backend}")
+        if memory.retrieval == "semantic":
+            console.print("  Retrieval:  semantic")
+        elif memory.retrieval:
+            console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.probe is not None:

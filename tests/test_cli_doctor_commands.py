@@ -421,3 +421,49 @@ def test_doctor_config_line_three_states(tmp_path: Path) -> None:
     out_good, _ = _run_doctor_subprocess(home_good)
     config_line = next(line for line in out_good.splitlines() if "Config:" in line)
     assert "✓" in config_line, out_good
+
+
+def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> None:
+    """The Memory section must say recall is keyword-only when the embedding
+    role is not configured in the user-level everos.toml."""
+    import re
+
+    home = _write_home_config(tmp_path, "everos_nokey", json.dumps({"memory": {"backend": "everos"}}))
+    out, _ = _run_doctor_subprocess(home)
+    out = " ".join(out.split())
+    assert re.search(r"Retrieval:\s*keyword-only", out), out
+    assert "no embedding key" in out, out
+
+
+def test_doctor_everos_with_embedding_shows_semantic(tmp_path: Path) -> None:
+    import re
+
+    home = _write_home_config(tmp_path, "everos_key", json.dumps({"memory": {"backend": "everos"}}))
+    everos_dir = home / ".everos" / "raven"
+    everos_dir.mkdir(parents=True)
+    (everos_dir / "everos.toml").write_text(
+        '[embedding]\nmodel = "m"\napi_key = "sk-x"\nbase_url = "https://api.example.com/v1"\n',
+        encoding="utf-8",
+    )
+    out, _ = _run_doctor_subprocess(home)
+    out = " ".join(out.split())
+    assert re.search(r"Retrieval:\s*semantic", out), out
+
+
+def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
+    home = _write_home_config(tmp_path, "everos_json", json.dumps({"memory": {"backend": "everos"}}))
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    r = subprocess.run(
+        [sys.executable, "-m", "raven", "doctor", "--json"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    payload = json.loads(r.stdout[r.stdout.index("{") :])
+    assert payload["memory"]["retrieval"] == "keyword-only"
