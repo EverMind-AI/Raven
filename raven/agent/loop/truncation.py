@@ -43,6 +43,10 @@ def flag_truncation(
       writing malformed JSON in its first of three calls would otherwise get
       the third one refused and the first one dispatched.
 
+      Where it sits is itself evidence. Only the last call can have been cut,
+      because a cut leaves no later calls to arrive, so a repair anywhere else
+      is the model writing bad JSON no matter what the turn-level signals say.
+
     ``finish_reason`` alone is not enough to rest on: measured through
     openrouter, gpt-4o answers a ceiling hit with ``"tool_calls"`` -- not a
     clean stop but a positive claim of success -- in 4 of 4 probes, with usage
@@ -74,16 +78,15 @@ def flag_truncation(
     # ceiling hit in tracing.
     truncated = response_level
 
-    cut: list[ToolCallRequest] = []
+    # Only the last call can be the cut one, so only it can be re-read as
+    # truncated. An earlier call whose arguments failed to parse was written
+    # badly by the model -- a cut there would have left no later calls to
+    # arrive. Marking those as truncated would tell a model to resend in
+    # pieces something that was never too long.
     if response_level and tool_calls and cut_inside_tool_call is not False:
-        cut.append(tool_calls[-1])
-    if response_level:
-        # Only then is a repair evidence of a cut rather than of bad JSON.
-        cut.extend(tc for tc in repaired if tc not in cut)
-
-    for tc in cut:
-        tc.run_meta = replace(
-            tc.run_meta or RunMeta(),
+        last = tool_calls[-1]
+        last.run_meta = replace(
+            last.run_meta or RunMeta(),
             truncation=TruncationInfo(at_tokens=sent_max_tokens),
         )
 

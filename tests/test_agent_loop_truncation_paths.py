@@ -111,9 +111,16 @@ def test_a_repair_under_a_ceiling_hit_is_a_cut() -> None:
     assert calls[0].run_meta.truncation is not None
 
 
-def test_a_repair_on_an_earlier_call_marks_that_call_not_the_last() -> None:
-    """Three calls, the first one malformed. This is the shape that made the
-    response-level flag wrong: it would refuse the third and dispatch the first.
+def test_an_earlier_malformed_call_is_bad_json_even_when_the_turn_was_cut() -> None:
+    """Three calls, the first malformed, and the turn did hit the ceiling.
+
+    Both get refused, for different reasons, and the position is what tells
+    them apart: a cut leaves no later calls to arrive, so a repair on anything
+    but the last call was the model writing bad JSON. Reading it as a cut
+    would tell the model to resend in pieces something that was never too long.
+
+    This is also the shape that made a per-response boolean wrong -- it would
+    have refused the third call and dispatched the first.
     """
     calls = [_call("write_file"), _call("read_file"), _call("list_dir")]
     calls[0].run_meta = RunMeta(arguments_repaired=True)
@@ -127,8 +134,9 @@ def test_a_repair_on_an_earlier_call_marks_that_call_not_the_last() -> None:
         cut_inside_tool_call=True,
     )
 
-    assert calls[0].run_meta.truncation is not None, "the malformed call must be marked"
-    assert calls[2].run_meta is not None, "the last call is marked by the response-level signal"
+    assert calls[0].run_meta.truncation is None, "an earlier repair is bad JSON, not a cut"
+    assert calls[0].run_meta.arguments_repaired is True, "but it is still refused"
+    assert calls[2].run_meta.truncation is not None, "the last call is the one that was cut"
     assert calls[1].run_meta is None, "the untouched middle call stays dispatchable"
 
 
