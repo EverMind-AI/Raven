@@ -282,3 +282,39 @@ async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.Monk
         "RAVEN_SERVE_COOKIE": "cookie",
     }
     assert spawned["parent_pid"] > 0
+
+
+# ---------------------------------------------------------------------------
+# The handshake reports the channel the dispatcher was actually built for
+# ---------------------------------------------------------------------------
+
+
+async def test_hello_defaults_to_the_shared_local_channel() -> None:
+    """The terminal and the served page share one session pool, so they share
+    one channel: a browser that opened `raven serve` finds the conversations it
+    started in the terminal."""
+    from raven.rpc import LOCAL_CHANNEL
+
+    result = await system_hello({"client_version": "0.1.0"})
+
+    assert result["session"]["default_channel"] == LOCAL_CHANNEL
+    assert result["session"]["default_session_key"] == f"{LOCAL_CHANNEL}:default"
+
+
+async def test_hello_reports_the_channel_it_was_registered_with() -> None:
+    """The web gateway registers these same handlers and runs its turns on
+    ``channel="web"`` (gateway_commands passes it to register_turn_methods). The
+    handshake used to answer the literal "tui" regardless, so a web client was
+    handed the terminal's channel and the terminal's default session key -- for a
+    pool it does not share."""
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher, channel="web")
+
+    response = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "system.hello", "params": {"client_version": "0.1.0"}}
+    )
+
+    assert response["result"]["session"] == {
+        "default_channel": "web",
+        "default_session_key": "web:default",
+    }

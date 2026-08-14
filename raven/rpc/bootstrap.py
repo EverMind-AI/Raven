@@ -16,6 +16,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.rpc import LOCAL_CHANNEL
+
 SendFrame = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -119,8 +121,8 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
                 turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
-                channel_manager=SimpleNamespace(enabled_channels=["tui"]),
-                default_channel="tui",
+                channel_manager=SimpleNamespace(enabled_channels=[LOCAL_CHANNEL]),
+                default_channel=LOCAL_CHANNEL,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()

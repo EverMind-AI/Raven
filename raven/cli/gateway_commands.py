@@ -455,7 +455,9 @@ def register(app: typer.Typer) -> None:
                         system_pool=config.gateway.system_pool,
                     )
                     web_dispatcher = Dispatcher()
-                    register_system_methods(web_dispatcher)
+                    # The same channel its turns run on, or the handshake hands a
+                    # web client the terminal's channel and default session key.
+                    register_system_methods(web_dispatcher, channel="web")
                     register_turn_methods(
                         web_dispatcher,
                         emitter=web_emitter,
