@@ -1859,9 +1859,7 @@ class TestConvergingRavensOwnPort:
         _stubs.setattr(_server, "ensure_everos_server", _ensure)
         _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
 
-        onboard_everos._step4_memory(
-            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
-        )
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert touched == [], "restarted a service that was already where it belongs"
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
@@ -1887,9 +1885,7 @@ class TestConvergingRavensOwnPort:
         _stubs.setattr(_server, "ensure_everos_server", _ensure)
         _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
 
-        onboard_everos._step4_memory(
-            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
-        )
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == ["http://localhost:18791"]
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
@@ -1915,9 +1911,7 @@ class TestConvergingRavensOwnPort:
         reached: list[int] = []
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
 
-        onboard_everos._step4_memory(
-            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
-        )
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert started == [], "spawned into a jobstore lock that is still held"
         assert reached == []
@@ -1939,9 +1933,7 @@ class TestConvergingRavensOwnPort:
         reached: list[int] = []
         _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
 
-        onboard_everos._step4_memory(
-            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
-        )
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         out = " ".join(capsys.readouterr().out.split())
         assert "port 18791 is occupied" in out, "swallowed the reason the restart failed"
