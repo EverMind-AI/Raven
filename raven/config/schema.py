@@ -1245,8 +1245,21 @@ class Config(BaseSettings):
 
     @property
     def workspace_path(self) -> Path:
-        """Get expanded workspace path."""
-        return Path(self.agents.defaults.workspace).expanduser()
+        """Get expanded workspace path.
+
+        The default follows ``RAVEN_HOME`` rather than being the literal it is
+        declared as. Sessions, uploads, exports and the skill pool all live here,
+        so an instance pointed at another home that kept this one would quietly
+        read and write the first installation's conversations -- which is what a
+        separate home exists to avoid. An explicitly configured workspace is
+        always used as written.
+        """
+        from raven.config.loader import raven_home
+
+        raw = self.agents.defaults.workspace
+        if raw == AgentDefaults.model_fields["workspace"].default:
+            return raven_home() / "workspace"
+        return Path(raw).expanduser()
 
     def channel_workspaces(self) -> dict[str, str]:
         """Every channel that names its own working directory.
