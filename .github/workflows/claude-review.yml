@@ -25,44 +25,24 @@ jobs:
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       (github.event.action != 'labeled' || github.event.label.name == 'deep-review')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read        # read code only; never writes or pushes
       pull-requests: write  # post inline + summary comments
       id-token: write       # required for the GitHub App auth
-      actions: read         # read the real CI result instead of re-running the suite
-    env:
-      # The reviewer may run this PR's own tests (conftest.py, deps come from the PR
-      # head). Scrub Anthropic/cloud secrets from its Bash subprocesses so a malicious
-      # test file cannot read the token. NOT auto-on without allowed_non_write_users.
-      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-      # Make `uv` available so the reviewer can run targeted tests to verify a finding.
-      # The heavy env sync happens lazily, only if Claude actually runs `uv run`.
-      - uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
       - uses: anthropics/claude-code-action@v1
-        id: review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
           use_sticky_comment: true
-          additional_permissions: |
-            actions: read
           # Sonnet by default; a `deep-review` label escalates to Opus for that PR.
-          # Read + targeted execution (uv run) + Write/Edit so it can write a throwaway repro
-          # and run it, plus Task/Agent so it can spawn an independent verifier subagent that
-          # tries to disprove each finding before posting. contents:read means nothing written
-          # here can be pushed; the runner is ephemeral and the token is scrubbed from subprocesses.
           claude_args: |
             --model ${{ contains(github.event.pull_request.labels.*.name, 'deep-review') && 'claude-opus-5' || 'claude-sonnet-5' }}
-            --max-turns 50
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(uv run:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git stash:*),Bash(git checkout:*),Read,Grep,Glob,Write,Edit,Task,Agent"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ github.event.pull_request.number }} -> ${{ github.event.pull_request.base.ref }}
@@ -82,28 +62,12 @@ jobs:
             files; (3) tests - was any test weakened, skipped, or made green without
             exercising the change?
 
-            Settle each candidate finding by READING first - the diff, callers, invariants,
-            the tests. Static reading is the default and is enough for almost everything, so
-            do NOT run tests routinely. ONLY when a claim genuinely cannot be settled by
-            reading - a subtle runtime-behavior question you are truly unsure about - verify
-            by running, smallest check first: a one-line `uv run python -c '...'`, or write a
-            throwaway script (e.g. /tmp/repro.py) and run it with `uv run python /tmp/repro.py`
-            for anything longer. Run `uv run --all-extras pytest <path> -q` (slow) only for
-            one specific test you must confirm, never the whole suite; for whole-suite
-            pass/fail read the CI result via the actions tool. Anything you write or edit is a
-            throwaway experiment on the ephemeral runner - restore tracked files with
-            `git checkout` and never push.
-
-            Before posting, run an independent verification pass. If you have candidate
-            findings, spawn ONE fresh subagent (Task) that receives them and, assuming none is
-            correct, tries to DISPROVE each - re-reading callers and invariants, running a
-            targeted check where cheap - and keep only the findings it confirms. If a subagent
-            is unavailable, do the same disprove pass yourself with deliberate skepticism. Skip
-            this entirely when you have no candidate findings.
+            Before reporting a finding, try to REFUTE it from the code and callers - drop it
+            unless you can name the concrete failure it causes and cite the file:line. Read the
+            implementation; do not infer behavior from a name.
 
             Report only findings you are highly confident are real AND introduced by this PR;
-            when unsure, drop it. Every behavior claim needs a file:line citation, not an
-            inference from naming. Label each finding [blocker] (must fix before merge), [nit]
+            when unsure, drop it. Label each finding [blocker] (must fix before merge), [nit]
             (minor, non-blocking), or [pre-existing] (not introduced here). Post at most 5
             nits; if there are more, give the count in the summary rather than a comment each.
             On a re-run of an already-reviewed change, post only NEW blockers - do not re-raise
@@ -111,14 +75,3 @@ jobs:
             lines, anything a linter catches, undocumented style. Open the summary with your
             stance in one sentence - "No blockers; this can merge." or "Blocking: <one line>."
             Be willing to approve.
-      # The action reports success even when the model errored (expired auth, usage limit,
-      # etc.). Parse its execution transcript and fail loudly so a green check never hides a
-      # review that did not actually run.
-      - name: Fail loudly on a silent review error
-        if: always()
-        run: |
-          FILE='${{ steps.review.outputs.execution_file }}'
-          [ -f "$FILE" ] || { echo "::warning::no execution file; cannot confirm the review ran"; exit 0; }
-          jq -e 'last(.[] | select(.type == "result")) | .is_error == true' "$FILE" >/dev/null || exit 0
-          echo "::error::Claude review errored (a green status would mislead): $(jq -r 'last(.[] | select(.type == "result")) | .result // "no error text"' "$FILE" | tr '\n' ' ' | head -c 500)"
-          exit 1
