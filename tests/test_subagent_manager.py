@@ -135,6 +135,68 @@ async def test_gate_of_one_serializes_subagents(monkeypatch):
     assert peak == 1
 
 
+def test_the_dispatch_gate_is_the_one_spawns_wait_on() -> None:
+    """DAG nodes are handed this same object, so `max_concurrent_subagents`
+    counts every sub-agent in flight rather than granting each tool its own
+    allowance. A copy sized the same would silently double the real cap."""
+    mgr = _make_manager(max_concurrent=3)
+    assert mgr.dispatch_gate is mgr._gate
+
+
+async def test_announce_dag_result_addresses_the_originating_conversation() -> None:
+    """A backgrounded DAG returns before its graph does, so this is the only
+    path its outcome takes back to the agent -- and it has to land in the chat
+    that asked."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result(
+        "20260101T000000Z-abcd1234",
+        "DAG run 20260101T000000Z-abcd1234 finished: 2 completed",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+    )
+
+    assert len(submitted) == 1
+    req = submitted[0]
+    assert req.conversation == "web:sess1"
+    assert req.source.channel == "web"
+    assert req.source.chat_id == "default"
+    assert "20260101T000000Z-abcd1234" in req.text
+    assert "2 completed" in req.text
+
+
+async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
+    """The announce carries the run's own summary and nothing else.
+
+    A graph's deliverable is its terminal node outputs, so any framing or
+    retell-in-two-sentences instruction wrapped around them is lossy. The
+    untrusted fence is the one exception: node output is attacker-influenceable
+    and this arrives shaped like an inbound message, not like a tool result.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+    summary = "DAG run r1 finished: 1 completed, 0 failed, 0 skipped (of 1).\n\n### report\nthe deliverable"
+
+    await mgr.announce_dag_result("r1", summary, {"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    # Asserted structurally, not against a second wrap_untrusted call: the fence
+    # mints a fresh nonce each time, so two wraps of one string never compare
+    # equal. Everything between the markers must be the summary, unaltered.
+    lines = submitted[0].text.splitlines()
+    assert lines[0].startswith("[BEGIN UNTRUSTED subagent ")
+    assert lines[-1].startswith("[END UNTRUSTED subagent ")
+    assert "\n".join(lines[1:-1]) == summary
+
+
+async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
+    """The announce runs in a background task; an entry point that never wired
+    the spine must lose the result, not kill the task with an assertion."""
+    mgr = _make_manager(max_concurrent=1)
+    await mgr.announce_dag_result("run-1", "summary", {"channel": "cli", "chat_id": "direct", "session_key": "cli"})
+
+
 async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_path):
     provider = _DeleteRetryProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)

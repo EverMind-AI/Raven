@@ -345,7 +345,7 @@ class AgentLoop:
         runtime_config: "RuntimeConfig | None" = None,
         interactive: bool = True,
         jina_api_key: str | None = None,
-        max_concurrent_subagents: int = 4,
+        max_concurrent_subagents: int = 8,
         max_subagent_spawns_per_hour: int = 30,
         third_party_subagents: list | None = None,
         media_config: Any = None,
@@ -910,6 +910,10 @@ class AgentLoop:
                     guide_skill_id=self._dag_guide_skill_id(),
                     session_dir=self.sessions.session_dir,
                     is_paused=lambda: self.subagents.paused,
+                    gate=self.subagents.dispatch_gate,
+                    announce=self.subagents.announce_dag_result,
+                    adopt=self.subagents.adopt_background_run,
+                    charge=self.subagents.charge_dag_run,
                 )
             )
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -1819,6 +1823,10 @@ class AgentLoop:
                 guide_skill_id=self._dag_guide_skill_id(),
                 session_dir=self.sessions.session_dir,
                 is_paused=lambda: self.subagents.paused,
+                gate=self.subagents.dispatch_gate,
+                announce=self.subagents.announce_dag_result,
+                adopt=self.subagents.adopt_background_run,
+                charge=self.subagents.charge_dag_run,
             )
             if self._dag_progress_sink is not None:
                 new_tool.set_progress_sink(self._dag_progress_sink)

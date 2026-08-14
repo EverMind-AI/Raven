@@ -21,7 +21,8 @@ For work that clears that bound, test three things before running the steps one 
 time:
 
 - **Independence** — can two or more steps run at the same time? Independent nodes are
-  scheduled concurrently (up to 5 at a time).
+  scheduled concurrently, up to the shared sub-agent cap
+  (`max_concurrent_subagents` — `spawn` draws on the same allowance).
 - **Artifact size** — does a step hand a large result to the next one? A node's output
   is written to a file the downstream node reads, so it never passes through your
   context.
@@ -48,14 +49,47 @@ You submit a flat list of `nodes`. A scheduler runs every node whose dependencie
 met, as soon as they are met. Each node's prompt is rendered from its template,
 dispatched to its sub-agent, and the reply is written to a file under the run
 directory. Downstream nodes reference upstream outputs through template placeholders.
-When the run finishes you get the terminal-node outputs inline plus every node's
-output-file path.
+When the run finishes you get the terminal-node outputs plus every node's output-file
+path — as a message once the run ends, or as the call's own result when you asked for
+`background: false`.
 
 A DAG run has no timeout — a long run is ended by hand (manual stop), not by a clock.
 
+## Background by default
+
+The call returns as soon as the graph is accepted, naming the run:
+
+```
+DAG run 20260729T031500Z-1a2b3c4d started in the background (3 nodes). I'll report the
+result when it finishes -- keep working, and do not submit this graph again.
+```
+
+The graph keeps running after your turn ends, and its full result is delivered to you as a
+new message when it finishes — the same way a `spawn` reports back. So:
+
+- **Don't** re-submit the same graph, and don't call the tool again to check on it. There is
+  nothing to poll; the result comes to you.
+- **Do** carry on with whatever else the task needs while it runs.
+- Tell the user the work is under way, without promising the outcome you have not seen yet.
+
+Pass `background: false` only when you genuinely cannot continue without the outputs — for
+instance when the very next thing you must do is read them. That blocks your turn until every
+node is done and returns the summary below as the call's result.
+
+A malformed graph is rejected in your own turn either way, before anything is dispatched, so
+a call that returns "started" has already passed every check.
+
+A stopped run reports nothing back — if the user cancels it, no announcement arrives.
+
+Each run costs one unit of the same per-hour budget `spawn` draws on
+(`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop
+exhausts it and the next call is refused, so express the work as one graph rather than
+several.
+
 ## Input format
 
-Call `run_subagent_dag` with a single argument `nodes`: a list of node objects.
+Call `run_subagent_dag` with `nodes`: a list of node objects. The optional `background`
+flag (default `true`) is described above.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -65,6 +99,11 @@ Call `run_subagent_dag` with a single argument `nodes`: a list of node objects.
 | `depends_on` | no | Upstream node ids that must finish before this node runs. |
 | `inputs` | no | Object mapping a key to a literal string, or to `{"file": "<path relative to the working directory>"}`. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
+
+A handle reaches beyond one run: two graphs in the same conversation that name the same
+handle share one sub-agent session, in whichever order they reach it. Reuse a handle across
+runs only when you mean to continue that conversation; give the later graph a different one
+otherwise. A node with no `instance` always starts from a clean session, whatever its id.
 
 ### Sub-agent capability tags
 
@@ -171,7 +210,8 @@ carries context from the draft into the revision. This shape needs an agent tagg
 
 ## Reading the result
 
-The tool returns text like:
+Whether it arrives as the announcement of a background run or as a foreground call's return
+value, the summary has the same shape:
 
 ```
 DAG run 20260729T031500Z-1a2b3c4d finished: 3 completed, 0 failed, 0 skipped (of 3).
@@ -200,6 +240,10 @@ Terminal outputs:
 - **Don't** dispatch sub-agents one at a time in a loop when a DAG expresses the work.
 - **Don't** build a DAG for steps only your own tools can do — nodes reach third-party
   sub-agents, not your tools. Many steps alone is not a reason.
+- **Don't** call the tool again to check on a background run, and don't re-submit its graph —
+  the result is delivered to you; a second call runs the whole thing a second time.
+- **Don't** reach for `background: false` to "make sure it finishes". It finishes either way;
+  blocking only costs you the turn.
 - **Don't** inline large upstream content with `{{ <id>.output }}` when you only need to
   pass it along; use `{{ <id>.output_path }}` — unless the agent is `[no-local-files]`.
 - **Don't** reference an id in a template without listing it in that node's `depends_on`.

@@ -96,6 +96,7 @@ async def run_dag(
     run_root: str,
     sandbox: Any = None,
     max_concurrency: int = 5,
+    semaphore: asyncio.Semaphore | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
     run_id: str | None = None,
@@ -115,6 +116,10 @@ async def run_dag(
     session's DAG history root, where the prompt/output records are written --
     an audit trail that outlives whatever the working directory is pointed at
     (raven/agent/subagent_history.py).
+    ``semaphore`` caps how many nodes dispatch at once. Pass one in to share the
+    cap with everything else that runs a sub-agent -- concurrent runs, and
+    ``spawn`` -- rather than letting each run hold its own; ``max_concurrency``
+    only sizes the private fallback built when none is given.
     ``session_key`` scopes each node's stateful ``instance`` handle (see
     :mod:`raven.agent.subagent.instances`) to this DAG's conversation, the same
     way ``spawn`` scopes its ``instance`` handle. It also scopes this run's node
@@ -127,7 +132,7 @@ async def run_dag(
     flight so its semaphore slot is released; the run still finishes normally
     and returns a result describing what was skipped, rather than raising.
     """
-    if max_concurrency < 1:
+    if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
     validate_and_order(spec)
     by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
@@ -157,7 +162,7 @@ async def run_dag(
     prompt_written: set[str] = set()
     node_started_at: dict[str, int] = {}
     node_ended_at: dict[str, int] = {}
-    semaphore = asyncio.Semaphore(max_concurrency)
+    gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
 
     dependents: dict[str, list[str]] = {nid: [] for nid in by_id}
     for nid, node in by_id.items():
@@ -214,7 +219,7 @@ async def run_dag(
                     prompt_written=prompt_written,
                     node_started_at=node_started_at,
                     node_ended_at=node_ended_at,
-                    semaphore=semaphore,
+                    semaphore=gate,
                     progress_publisher=progress_publisher,
                     session_key=session_key,
                 )

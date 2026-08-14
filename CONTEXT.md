@@ -58,7 +58,8 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
-`max_concurrent` (default 4) and a per-session hourly rate limit.
+`max_concurrent` (default 8) and a per-session hourly rate limit, both shared with the
+nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
 **Tool** (`agent/tools/`):

@@ -89,6 +89,12 @@ def _dag_payload(name: str, payload: dict) -> dict:
     # dag_run_completed. ``terminal_outputs`` is deliberately dropped: every sink
     # node's full text is already in the tool result, and repeating it here would
     # put an unbounded blob on a progress frame.
+    #
+    # The ``or []`` on ``files`` is load-bearing, not defensive: a run that ends
+    # without a manifest -- collapsed or stopped -- carries no ``files`` key at
+    # all, and the consumer maps over this field unguarded (``fromCompletion``,
+    # ui-tui/src/domain/dagRun.ts). Coercing here is what turns that ending into
+    # a closed graph rather than a crash, so the field must always be sent.
     manifest = payload.get("manifest") or {}
     files = [
         {"node": entry.get("node"), "status": entry.get("status"), **_present(entry, ("output_file", "error"))}

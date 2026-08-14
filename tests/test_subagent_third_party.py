@@ -406,12 +406,13 @@ class _FakeProvider:
         return "fake-model"
 
 
-def _mgr(tmp_path: Path, third_party=None) -> SubagentManager:
+def _mgr(tmp_path: Path, third_party=None, **kwargs) -> SubagentManager:
     return SubagentManager(
         provider=_FakeProvider(),
         workspace=tmp_path,
         model="fake-model",
         third_party_subagents=third_party or [],
+        **kwargs,
     )
 
 
@@ -613,6 +614,35 @@ def test_apply_third_party_subagents_registers_dag_tool_once_enabled(tmp_path: P
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     loop.apply_third_party_subagents([on])
     assert loop.tools.get("run_subagent_dag") is not None
+
+
+@pytest.mark.parametrize("registered_at", ["construction", "hot_apply"])
+def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(tmp_path: Path, registered_at: str) -> None:
+    """A backgrounded run is only bounded, stoppable, reportable and pausable
+    because the host handed the tool these five hooks. A construction site that
+    forgets one loses a guarantee silently -- an unbudgeted run, one `/stop`
+    cannot reach, one whose result reaches nobody, or a graph that keeps fanning
+    out behind a paused HUD -- and there are two such sites.
+    """
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    if registered_at == "construction":
+        loop = _make_agent_loop(tmp_path, [on])
+    else:
+        loop = _make_agent_loop(tmp_path, [])
+        loop.apply_third_party_subagents([on])
+
+    tool = loop.tools.get("run_subagent_dag")
+    mgr = loop.subagents
+    assert tool._gate is mgr.dispatch_gate, "DAG nodes must share the spawn concurrency gate"
+    assert tool._charge == mgr.charge_dag_run
+    assert tool._adopt == mgr.adopt_background_run
+    assert tool._announce == mgr.announce_dag_result
+    # A lambda reading through to the manager's flag, so this asserts the read
+    # rather than the identity a comparison could not see.
+    mgr.set_paused(True)
+    assert tool._is_paused is not None and tool._is_paused() is True
+    mgr.set_paused(False)
+    assert tool._is_paused() is False
 
 
 # --- spawn tool ----------------------------------------------------------
@@ -1239,6 +1269,150 @@ async def test_cli_backend_stateless_ignores_instance(tmp_path: Path) -> None:
     assert out == "hi"
 
 
+async def test_one_stateful_handle_admits_one_run_at_a_time(tmp_path: Path) -> None:
+    """A handle names one session inside the CLI's own store, so two runs
+    resuming it at once interleave or corrupt that session.
+
+    Two backend objects on purpose: the DAG tool and the sub-agent manager each
+    build their own from the same config, so a lock held on a backend instance
+    would not stop a spawn and a DAG node meeting on one handle. The nodes of a
+    single DAG run are already serialized by the runner; this is the case that
+    is not.
+    """
+    script = tmp_path / "slow.sh"
+    script.write_text("sleep 0.2\nprintf ok\n", encoding="utf-8")
+    live = 0
+    peak = 0
+
+    def _backend() -> CliAgentBackend:
+        return CliAgentBackend(
+            name="agent",
+            command=f"sh {script}",
+            resume_command=f"sh {script} {{agent_id}}",
+            registry=InstanceRegistry(path=tmp_path / "inst.json"),
+        )
+
+    async def _run(be: CliAgentBackend, task_id: str) -> None:
+        nonlocal live, peak
+        original = be._attempt
+
+        async def _counted(*a, **kw):
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            try:
+                return await original(*a, **kw)
+            finally:
+                live -= 1
+
+        be._attempt = _counted
+        await be.run("hi", task_id=task_id, workspace=tmp_path, executor=None, session_key="s1", instance="author")
+
+    await asyncio.gather(_run(_backend(), "t1"), _run(_backend(), "t2"))
+
+    assert peak == 1, f"{peak} runs held the handle 'author' at once"
+
+
+async def test_an_unnamed_handle_does_not_serialize_runs_that_share_nothing(tmp_path: Path) -> None:
+    """Without an `instance` there is no session to protect, so no lock.
+
+    The handle falls back to `task_id`, which for a DAG node is its
+    author-chosen id -- so two graphs that both contain a node called
+    `research` meet on one key while sharing nothing: neither resumes, each
+    mints its own agent_id. Serializing them costs more than their own time,
+    because a node holds its slot on the shared dispatch gate while it waits,
+    so unrelated spawns queue behind a lock that guards nothing.
+    """
+    script = tmp_path / "slow.sh"
+    script.write_text("sleep 0.2\nprintf ok\n", encoding="utf-8")
+    live = 0
+    peak = 0
+
+    def _backend() -> CliAgentBackend:
+        return CliAgentBackend(
+            name="agent",
+            command=f"sh {script}",
+            resume_command=f"sh {script} {{agent_id}}",
+            registry=InstanceRegistry(path=tmp_path / "inst.json"),
+        )
+
+    async def _run(be: CliAgentBackend) -> None:
+        original = be._attempt
+
+        async def _counted(*a: Any, **kw: Any) -> str:
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            try:
+                return await original(*a, **kw)
+            finally:
+                live -= 1
+
+        be._attempt = _counted
+        await be.run("hi", task_id="research", workspace=tmp_path, executor=None, session_key="s1")
+
+    await asyncio.gather(_run(_backend()), _run(_backend()))
+
+    assert peak == 2, f"two unnamed runs on the id 'research' serialized (peak {peak})"
+
+
+def _handle_probe_cmd(tmp_path: Path) -> str:
+    """A stateful CLI that logs `<mode> <agent_id>` per invocation."""
+    log = tmp_path / "invocations.log"
+    script = tmp_path / "probe.sh"
+    script.write_text(f'printf "%s %s\\n" "$1" "$2" >> {log}\nprintf ok\n', encoding="utf-8")
+    return f"sh {script}"
+
+
+def _invocations(tmp_path: Path) -> list[tuple[str, str]]:
+    lines = (tmp_path / "invocations.log").read_text().strip().splitlines()
+    return [(ln.split()[0], ln.split()[1]) for ln in lines]
+
+
+async def test_a_run_without_a_named_instance_never_resumes_an_earlier_one(tmp_path: Path) -> None:
+    """The handle falls back to ``task_id``, which for a DAG node is its
+    author-chosen id -- so a second graph with a node called ``n`` would pick up
+    the first graph's session having asked for nothing of the sort. Only an
+    explicit ``instance`` may resume.
+    """
+    base = _handle_probe_cmd(tmp_path)
+    be = CliAgentBackend(
+        name="writer",
+        command=f"{base} CREATE {{agent_id}}",
+        resume_command=f"{base} RESUME {{agent_id}}",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    for _ in range(2):
+        await be.run("hi", task_id="n", workspace=tmp_path, executor=None, session_key="web:s1")
+
+    modes = [mode for mode, _ in _invocations(tmp_path)]
+    ids = {agent_id for _, agent_id in _invocations(tmp_path)}
+    assert modes == ["CREATE", "CREATE"]
+    assert len(ids) == 2, "the second run inherited the first run's session"
+    # The binding is still recorded: it is what says which session a node ran
+    # in, and the web monitor reads it by `<agent>/<node id>`.
+    assert await be._registry.lookup("web:s1", "writer", "n") is not None
+
+
+async def test_a_named_instance_still_resumes(tmp_path: Path) -> None:
+    """The other half of the rule: naming a handle is how a caller asks for the
+    session to carry over, and that must keep working."""
+    base = _handle_probe_cmd(tmp_path)
+    be = CliAgentBackend(
+        name="writer",
+        command=f"{base} CREATE {{agent_id}}",
+        resume_command=f"{base} RESUME {{agent_id}}",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    for _ in range(2):
+        await be.run("hi", task_id="n", workspace=tmp_path, executor=None, session_key="web:s1", instance="author")
+
+    modes = [mode for mode, _ in _invocations(tmp_path)]
+    ids = {agent_id for _, agent_id in _invocations(tmp_path)}
+    assert modes == ["CREATE", "RESUME"]
+    assert len(ids) == 1
+
+
 def _fixture_cmd(tmp_path: Path, name: str, lines: list[str]) -> str:
     """A `cat` command that replays a canned transcript.
 
@@ -1691,7 +1865,10 @@ async def test_manager_cancel_releases_the_concurrency_slot(tmp_path: Path) -> N
     # must unwind so the slot is reusable. Proven observably rather than by
     # reading the semaphore's private counter: fill every slot, cancel one,
     # and confirm a spawn that was blocked on the full gate then starts.
-    hang_started = [asyncio.Event() for _ in range(4)]
+    # The cap is pinned here rather than taken from the default -- what is
+    # under test is that a slot comes back, not how many there are.
+    slots = 4
+    hang_started = [asyncio.Event() for _ in range(slots)]
     canary_started = asyncio.Event()
 
     class _Hang:
@@ -1709,18 +1886,18 @@ async def test_manager_cancel_releases_the_concurrency_slot(tmp_path: Path) -> N
             await asyncio.sleep(3600)
             return "never"
 
-    mgr = _mgr(tmp_path, [])
+    mgr = _mgr(tmp_path, [], max_concurrent=slots)
     for i, ev in enumerate(hang_started):
         mgr._backends[f"hang{i}"] = _Hang(ev)
     mgr._backends["canary"] = _Canary()
     mgr.set_submit(lambda req: None)
 
-    for i in range(4):
+    for i in range(slots):
         await mgr.spawn("t", session_key="web:s1", agent=f"hang{i}", instance=f"h{i}")
     await asyncio.wait_for(asyncio.gather(*(ev.wait() for ev in hang_started)), timeout=5)
 
-    # All four slots are held: a fifth spawn's coroutine blocks on the gate
-    # before its backend ever runs.
+    # Every slot is held: the next spawn's coroutine blocks on the gate before
+    # its backend ever runs.
     await mgr.spawn("t", session_key="web:s1", agent="canary", instance="c1")
     await asyncio.sleep(0.05)
     assert not canary_started.is_set(), "the canary should still be blocked on a full gate"
