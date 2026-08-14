@@ -39,7 +39,6 @@ def populated_cron(fake_cron_dir: Path) -> CronService:
         name="morning meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="妈妈吃药提醒：早晨",
-        deliver=True,
         channel="cli",
         to="direct",
     )
@@ -47,7 +46,6 @@ def populated_cron(fake_cron_dir: Path) -> CronService:
         name="lunch break",
         schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
         message="水分提醒",
-        deliver=True,
         channel="feishu",
         to="ou_xxx",
     )
@@ -126,7 +124,6 @@ def test_get_shows_topic_tag(runner, fake_cron_dir):
         name="meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="吃药",
-        deliver=True,
         channel="cli",
         to="direct",
         topic_tag="medication_morning",
@@ -323,7 +320,6 @@ def test_run_warns_when_active_claim_present(
         name="x",
         schedule=_Sched(kind="every", every_ms=60_000),
         message="m",
-        deliver=True,
         channel="cli",
         to="direct",
     )
@@ -357,7 +353,6 @@ def test_run_one_shot_at_with_delete_warns_about_removal(
         name="future thing",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),  # year 2033
         message="x",
-        deliver=True,
         channel="cli",
         to="direct",
         delete_after_run=True,  # this is the default for at-kind
@@ -383,7 +378,6 @@ def test_run_one_shot_at_without_delete_warns_about_disable(
         name="future demo",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),
         message="x",
-        deliver=True,
         channel="cli",
         to="direct",
         delete_after_run=False,
@@ -719,61 +713,24 @@ def test_config_get_all_shows_defaults(runner, isolated_config):
     """No flags → ``cron config get`` lists schema defaults as a table."""
     r = runner.invoke(cron_app, ["config", "get"])
     assert r.exit_code == 0, r.output
-    assert "forward_channels" in r.stdout
-    assert "*" in r.stdout
     assert "default_timezone" in r.stdout
     assert "Asia/Shanghai" in r.stdout
 
 
 def test_config_get_single_flag(runner, isolated_config):
-    """``--forward-channels`` flag prints just that key's value."""
-    r = runner.invoke(cron_app, ["config", "get", "--forward-channels"])
-    assert r.exit_code == 0, r.output
-    assert "*" in r.stdout
-    # Single-flag mode: no table header → no 'default_timezone' row leaks in
-    assert "Asia/Shanghai" not in r.stdout
-
-
-def test_config_get_both_flags(runner, isolated_config):
-    """Multiple flags → one value per line, no table."""
-    r = runner.invoke(
-        cron_app,
-        ["config", "get", "--forward-channels", "--default-timezone"],
-    )
+    """``--default-timezone`` flag prints just that key's value, no table."""
+    r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
-    assert lines == ["*", "Asia/Shanghai"]
+    assert lines == ["Asia/Shanghai"]
 
 
-def test_config_set_forward_channels_star(runner, isolated_config):
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "*"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["*"]
-
-
-def test_config_set_forward_channels_csv(runner, isolated_config):
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "telegram,feishu"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram", "feishu"]
-
-
-def test_config_set_forward_channels_none(runner, isolated_config):
-    """``none`` (sentinel) → empty list = no broadcast on next cron fire."""
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "none"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == []
+def test_config_retired_forward_channels_flag_rejected(runner, isolated_config):
+    """forward_channels died with trigger-time routing — the flag is gone
+    and must fail as an unknown option, never write anything."""
+    r = runner.invoke(cron_app, ["config", "set", "--forward-channels", "*"])
+    assert r.exit_code == 2
+    assert not isolated_config.exists()
 
 
 def test_config_set_default_timezone_valid(runner, isolated_config):
@@ -807,56 +764,12 @@ def test_config_set_no_flags_errors(runner, isolated_config):
     assert not isolated_config.exists()
 
 
-def test_config_set_multiple_flags_one_call(runner, isolated_config):
-    """Setting two keys in one invocation patches both atomically (well,
-    serially; each write is atomic, and parse failures abort before any
-    write so a single bad value never corrupts state)."""
-    r = runner.invoke(
-        cron_app,
-        [
-            "config",
-            "set",
-            "--forward-channels",
-            "telegram",
-            "--default-timezone",
-            "UTC",
-        ],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram"]
-    assert data["cron"]["defaultTimezone"] == "UTC"
-
-
-def test_config_set_multiple_flags_invalid_one_aborts_all(
-    runner,
-    isolated_config,
-):
-    """If any flag's value fails validation, NO key is written — pre-parse
-    pass guarantees we never half-write."""
-    r = runner.invoke(
-        cron_app,
-        [
-            "config",
-            "set",
-            "--forward-channels",
-            "telegram",  # valid
-            "--default-timezone",
-            "Mars/Olympus",  # invalid
-        ],
-    )
-    assert r.exit_code == 1
-    assert "Invalid value" in r.stdout or "unknown timezone" in r.stdout
-    # No file written: pre-parse pass aborted before any update_cron_config call
-    assert not isolated_config.exists()
-
-
 def test_config_reset_with_yes(runner, isolated_config):
     """Reset removes the entire cron section from disk."""
     isolated_config.write_text(
         json.dumps(
             {
-                "cron": {"forwardChannels": ["telegram"], "defaultTimezone": "UTC"},
+                "cron": {"defaultTimezone": "UTC"},
                 "agents": {"defaults": {"model": "kept"}},
             }
         )
@@ -873,7 +786,7 @@ def test_config_reset_aborts_on_no(runner, isolated_config):
     isolated_config.write_text(
         json.dumps(
             {
-                "cron": {"forwardChannels": ["telegram"]},
+                "cron": {"defaultTimezone": "UTC"},
             }
         )
     )
@@ -881,15 +794,15 @@ def test_config_reset_aborts_on_no(runner, isolated_config):
     assert r.exit_code == 0
     assert "Aborted" in r.stdout
     data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 def test_config_set_then_get_round_trip(runner, isolated_config):
     """Set, then get, returns the new value (dynamic reload)."""
     runner.invoke(
         cron_app,
-        ["config", "set", "--forward-channels", "telegram"],
+        ["config", "set", "--default-timezone", "America/New_York"],
     )
-    r = runner.invoke(cron_app, ["config", "get", "--forward-channels"])
+    r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
-    assert "telegram" in r.stdout
+    assert "America/New_York" in r.stdout

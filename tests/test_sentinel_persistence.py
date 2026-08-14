@@ -330,7 +330,6 @@ def test_cron_channel_filter_routes_to_right_process(tmp_state_dir: Path, monkey
         name="reminder",
         schedule=CronSchedule(kind="at", at_ms=now_ms + 500),
         message="drink water",
-        deliver=True,
         channel="feishu",
         to="ou_xxx",
         delete_after_run=True,

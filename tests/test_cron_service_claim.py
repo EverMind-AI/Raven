@@ -18,7 +18,6 @@ def _add_due_tui_job(svc: CronService) -> str:
         name="tui reminder",
         schedule=CronSchedule(kind="every", every_ms=60_000),
         message="drink water",
-        deliver=True,
         channel="tui",
         to="default",
     )

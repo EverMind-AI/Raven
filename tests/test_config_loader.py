@@ -26,6 +26,26 @@ def test_missing_file_uses_defaults(tmp_path: Path) -> None:
     assert cfg.agents.defaults.max_tool_iterations == 40
 
 
+def test_legacy_cron_forward_channels_stripped(tmp_path: Path) -> None:
+    """Old configs may still carry ``cron.forward_channels`` (retired with
+    trigger-time delivery routing). CronConfig is extra='forbid', so the
+    loader must strip both spellings or every legacy config fails to load."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "cron": {
+                "forwardChannels": ["*"],
+                "forward_channels": ["telegram"],
+                "defaultTimezone": "UTC",
+            },
+        },
+    )
+    cfg = load_config(p)
+    assert cfg.cron.default_timezone == "UTC"
+    assert not hasattr(cfg.cron, "forward_channels")
+
+
 def test_legacy_everos_block_silently_dropped(tmp_path: Path) -> None:
     """Old configs may still carry ``agents.defaults.everos``. The
     migration strips it so model_validate doesn't reject the file."""

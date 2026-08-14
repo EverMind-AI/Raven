@@ -186,9 +186,7 @@ class CronService:
                                 tz=j["schedule"].get("tz"),
                             ),
                             payload=CronPayload(
-                                kind=j["payload"].get("kind", "agent_turn"),
                                 message=j["payload"].get("message", ""),
-                                deliver=j["payload"].get("deliver", False),
                                 channel=j["payload"].get("channel"),
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
@@ -200,12 +198,10 @@ class CronService:
                                 last_error=j.get("state", {}).get("lastError"),
                                 claimed_by_pid=j.get("state", {}).get("claimedByPid"),
                                 claimed_at_ms=j.get("state", {}).get("claimedAtMs"),
-                                silent_fire_count=j.get("state", {}).get("silentFireCount", 0),
                             ),
                             created_at_ms=j.get("createdAtMs", 0),
                             updated_at_ms=j.get("updatedAtMs", 0),
                             delete_after_run=j.get("deleteAfterRun", False),
-                            silent_fire_limit=j.get("silentFireLimit", 12),
                         )
                     )
                 self._store = CronStore(jobs=jobs)
@@ -239,9 +235,7 @@ class CronService:
                         "tz": j.schedule.tz,
                     },
                     "payload": {
-                        "kind": j.payload.kind,
                         "message": j.payload.message,
-                        "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
                         "topicTag": j.payload.topic_tag,
@@ -253,12 +247,10 @@ class CronService:
                         "lastError": j.state.last_error,
                         "claimedByPid": j.state.claimed_by_pid,
                         "claimedAtMs": j.state.claimed_at_ms,
-                        "silentFireCount": j.state.silent_fire_count,
                     },
                     "createdAtMs": j.created_at_ms,
                     "updatedAtMs": j.updated_at_ms,
                     "deleteAfterRun": j.delete_after_run,
-                    "silentFireLimit": j.silent_fire_limit,
                 }
                 for j in self._store.jobs
             ],
@@ -519,57 +511,6 @@ class CronService:
 
     # ========== Public API ==========
 
-    def record_silent_fire(self, job_id: str) -> bool:
-        """Increment silent_fire_count for a job; auto-disable when it
-        crosses silent_fire_limit. Called by harness/dispatch path right
-        after a cron fire is delivered. Returns True if the job was
-        auto-disabled this call."""
-        with self._locked():
-            self._store = None
-            store = self._load_store()
-            for j in store.jobs:
-                if j.id != job_id:
-                    continue
-                j.state.silent_fire_count += 1
-                limit = j.silent_fire_limit
-                disabled = False
-                if limit is not None and limit > 0 and j.state.silent_fire_count >= limit:
-                    j.enabled = False
-                    j.state.next_run_at_ms = None
-                    disabled = True
-                    logger.warning(
-                        "Cron: auto-disabled job '{}' ({}) — {} silent fires without user activity (limit={})",
-                        j.name,
-                        j.id,
-                        j.state.silent_fire_count,
-                        limit,
-                    )
-                self._save_store()
-                return disabled
-            return False
-
-    def notify_user_active(self, channel: str | None = None, to: str | None = None) -> int:
-        """Reset silent_fire_count for jobs matching (channel, to) — call
-        whenever a genuine user-originated message arrives so recently-
-        firing crons don't decay toward auto-disable. None matches all.
-        Returns count of jobs whose state was reset."""
-        reset = 0
-        with self._locked():
-            self._store = None
-            store = self._load_store()
-            for j in store.jobs:
-                if not j.enabled or j.state.silent_fire_count == 0:
-                    continue
-                if channel is not None and j.payload.channel != channel:
-                    continue
-                if to is not None and j.payload.to != to:
-                    continue
-                j.state.silent_fire_count = 0
-                reset += 1
-            if reset > 0:
-                self._save_store()
-        return reset
-
     def list_jobs(self, include_disabled: bool = False) -> list[CronJob]:
         """List all jobs."""
         store = self._load_store()
@@ -581,7 +522,6 @@ class CronService:
         name: str,
         schedule: CronSchedule,
         message: str,
-        deliver: bool = False,
         channel: str | None = None,
         to: str | None = None,
         delete_after_run: bool = False,
@@ -653,7 +593,6 @@ class CronService:
                         schedule.kind,
                     )
                     j.payload.message = message
-                    j.payload.deliver = deliver
                     j.name = name
                     j.schedule = schedule
                     j.state.next_run_at_ms = _compute_next_run(schedule, now)
@@ -722,7 +661,6 @@ class CronService:
             existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to)
             if existing is not None:
                 existing.payload.message = message
-                existing.payload.deliver = deliver
                 existing.name = name
                 existing.updated_at_ms = now
                 # Recompute next_run_at_ms only if the existing job already
@@ -745,9 +683,7 @@ class CronService:
                 enabled=True,
                 schedule=schedule,
                 payload=CronPayload(
-                    kind="agent_turn",
                     message=message,
-                    deliver=deliver,
                     channel=channel,
                     to=to,
                     topic_tag=topic_tag,

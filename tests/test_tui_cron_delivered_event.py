@@ -130,17 +130,19 @@ async def test_fanout_cron_delivered_no_active_sessions() -> None:
 async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> None:
     """``_build_cron_callback_spine`` SHALL run the base callback (the spine
     submit + read-back) and fan its reply out as cron.delivered with the job's
-    metadata; a deliver=False job SHALL NOT fan out."""
+    metadata; a job whose turn produced no reply SHALL NOT fan out."""
     from types import SimpleNamespace
 
     from raven.cli.tui_commands import _build_cron_callback_spine
 
+    replies = {"j7": "reminder body", "j8": None}
+
     async def base_on_cron(job):
-        return "reminder body"  # the read-back reply
+        return replies[job.id]  # the read-back reply
 
     wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
 
-    job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(deliver=True))
+    job = SimpleNamespace(id="j7", name="standup")
     await wrapped(job)
 
     emitter_spy.emit.assert_awaited_once()
@@ -151,8 +153,8 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
     assert event["payload"]["text"] == "reminder body"
     assert event["payload"]["fired_at"]  # stamped by the wrapper
 
-    # deliver=False job: base runs (side-effects) but nothing is fanned out.
+    # No reply read back: base runs (side-effects) but nothing is fanned out.
     emitter_spy.emit.reset_mock()
-    silent = SimpleNamespace(id="j8", name="silent", payload=SimpleNamespace(deliver=False))
+    silent = SimpleNamespace(id="j8", name="silent")
     await wrapped(silent)
     emitter_spy.emit.assert_not_awaited()

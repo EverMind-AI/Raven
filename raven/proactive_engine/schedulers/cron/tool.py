@@ -1,100 +1,17 @@
 """Cron tool for scheduling reminders and tasks.
 
-Two layers live here:
-
-1. ``CronTool`` — the LLM-facing agent tool. Creates jobs with the
-   request-time channel/chat_id verbatim; no forwarding decision here.
-2. ``resolve_cron_delivery`` — delivery resolver consumed at TRIGGER
-   time by ``raven.cli._cron_handler``. Pass-through for real
-   channels; broadcast/forward for ephemeral ones (cli/tui).
+``CronTool`` is the LLM-facing agent tool. It binds the delivery target at
+creation: the request-time channel/chat_id is stored on the job verbatim,
+and the runner that owns that channel delivers the fire directly
+(fire-at-origin — no trigger-time re-routing).
 """
 
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from raven.agent.tools.base import Tool
 from raven.proactive_engine.schedulers.cron.service import CronService
 from raven.proactive_engine.schedulers.cron.types import CronSchedule
-
-if TYPE_CHECKING:
-    from raven.session.manager import SessionManager
-
-
-# ────────────────────────────────────────────────────────────────────
-# Delivery resolution (consumed at TRIGGER time, not at job creation)
-# ────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class DeliveryTarget:
-    """One concrete (channel, chat_id) the cron handler should deliver to."""
-
-    channel: str
-    chat_id: str
-
-
-def is_ephemeral_channel(channel: str, enabled_channels: set[str]) -> bool:
-    """An ephemeral channel cannot deliver to itself after its host
-    process exits (cli/tui REPL closes; webui session ends). Rule:
-    anything not in ``ChannelManager.enabled_channels`` is ephemeral
-    and needs forwarding.
-
-    Today this matches ``cli`` + ``tui``. Future webui / desktop
-    frontends are covered automatically with no code change.
-    """
-    return channel not in enabled_channels
-
-
-def resolve_cron_delivery(
-    *,
-    channel: str,
-    chat_id: str,
-    forward_channels: list[str],
-    enabled_channels: set[str],
-    session_manager: "SessionManager | None" = None,
-) -> tuple[list[DeliveryTarget], list[str]]:
-    """Resolve final delivery targets for a cron job at trigger time.
-
-    Returns ``(targets, warnings)``:
-      - non-ephemeral channels pass through directly (per-job binding);
-      - ephemeral channels (cli/tui) broadcast per ``forward_channels``:
-        ``["*"]`` expands to ``enabled_channels``, specific names
-        restrict; each target's chat_id comes from ``session_manager``
-        (most-recent session). Channels with no recent session are
-        skipped with a warning.
-
-    Warnings are surfaced via log, never raised — one stale forward
-    target won't break a fire that has other valid targets.
-    """
-    if not is_ephemeral_channel(channel, enabled_channels):
-        return [DeliveryTarget(channel=channel, chat_id=chat_id)], []
-
-    if not forward_channels:
-        return [], [f"{channel}: no forward_channels configured"]
-
-    if "*" in forward_channels:
-        targets_channels = list(enabled_channels)
-    else:
-        targets_channels = [c for c in forward_channels if c in enabled_channels]
-
-    if not targets_channels:
-        return [], [f"{channel}: forward_channels has no overlap with enabled"]
-
-    results: list[DeliveryTarget] = []
-    warnings: list[str] = []
-    for ch in targets_channels:
-        cid = session_manager.find_most_recent_chat_id(ch) if session_manager is not None else None
-        if cid:
-            results.append(DeliveryTarget(channel=ch, chat_id=cid))
-        else:
-            warnings.append(f"{ch}: no recent session, skipped")
-    return results, warnings
-
-
-# ────────────────────────────────────────────────────────────────────
-# CronTool (LLM-facing)
-# ────────────────────────────────────────────────────────────────────
 
 
 class CronTool(Tool):
@@ -317,15 +234,13 @@ class CronTool(Tool):
         else:
             return "Error: either every_seconds, cron_expr, or at is required"
 
-        # Store request-time channel/chat_id verbatim. Delivery resolution
-        # (per-job pass-through vs ephemeral forward) happens at trigger
-        # time in ``raven.cli._cron_handler`` via ``resolve_cron_delivery``.
+        # Store request-time channel/chat_id verbatim — this binding IS the
+        # delivery target; the runner owning that channel fires it directly.
         try:
             job = self._cron.add_job(
                 name=message[:30],
                 schedule=schedule,
                 message=message,
-                deliver=True,
                 channel=self._channel,
                 to=self._chat_id,
                 delete_after_run=delete_after,

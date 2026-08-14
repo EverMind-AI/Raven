@@ -181,7 +181,6 @@ def _handle_cron(args: list[str], console: "Console") -> bool:
         _invoke(
             console,
             cc.cron_config_get,
-            forward_channels=_has_flag(rest, "--forward-channels"),
             default_timezone=_has_flag(rest, "--default-timezone"),
         )
         return True

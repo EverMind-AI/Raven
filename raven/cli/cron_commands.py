@@ -17,9 +17,9 @@ Cross-cutting:
 
 - All write ops default to a ``[y/N]`` confirm prompt; ``--yes`` skips.
 - ID arguments accept any unique prefix of the 8-char hex job id.
-- ``cron add`` stores ``channel="cli"`` / ``to="direct"`` by default
-  (ephemeral); delivery target is resolved at trigger time per
-  ``cron.forward_channels`` (see ``raven cron config``).
+- ``cron add`` stores ``channel="cli"`` / ``to="direct"`` by default;
+  the stored (channel, to) IS the delivery target — the runner that owns
+  that channel fires it (fire-at-origin, no trigger-time re-routing).
 """
 
 from __future__ import annotations
@@ -86,15 +86,6 @@ def _format_next_run(j: CronJob) -> str:
         return "-"
     ts = datetime.fromtimestamp(j.state.next_run_at_ms / 1000)
     return ts.strftime("%Y-%m-%d %H:%M")
-
-
-def _format_silent(j: CronJob) -> str:
-    n = j.state.silent_fire_count
-    if n == 0:
-        return "0"
-    if n >= 5:
-        return f"[yellow]{n} ⚠[/yellow]"
-    return str(n)
 
 
 def _resolve_id(service: CronService, prefix: str, *, include_disabled: bool = True) -> CronJob:
@@ -183,7 +174,6 @@ def cron_list(
 
     Helps answer:
     - "What reminders does the user currently have?"
-    - "Which jobs are firing too often (silent-fire ≥ 5)?"
     - "When's the next wake-up?"
 
     Default hides disabled jobs; pass ``--all`` to include them.
@@ -226,7 +216,6 @@ def cron_list(
     table.add_column("Schedule")
     table.add_column("Next Run")
     table.add_column("Last", style="dim")
-    table.add_column("Silent", justify="right")
     table.add_column("Channel")
     table.add_column("Name")
     for j in jobs:
@@ -244,7 +233,6 @@ def cron_list(
             _format_schedule(j.schedule),
             _format_next_run(j),
             last_styled,
-            _format_silent(j),
             j.payload.channel or "-",
             (j.name or "-")[:36],
         )
@@ -259,7 +247,7 @@ def cron_get(
     id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
 ):
     """Show full detail of one cron job (schedule, payload, state,
-    silent-fire counter, claim status).
+    claim status).
 
     Helps answer:
     - "Why is this job firing weird?"
@@ -278,14 +266,11 @@ def cron_get(
     table.add_row("Enabled", "[green]True[/green]" if job.enabled else "[red]False[/red]")
     table.add_row("Schedule", _format_schedule(job.schedule))
     table.add_row("delete_after_run", str(job.delete_after_run))
-    table.add_row("silent_fire_limit", str(job.silent_fire_limit) if job.silent_fire_limit else "-")
 
     # Payload
     table.add_row("─ Payload ─", "")
-    table.add_row("kind", job.payload.kind)
     table.add_row("channel", job.payload.channel or "-")
     table.add_row("to", job.payload.to or "-")
-    table.add_row("deliver", str(job.payload.deliver))
     table.add_row("topic_tag", job.payload.topic_tag or "-")
     table.add_row(
         "message",
@@ -304,7 +289,6 @@ def cron_get(
     table.add_row("last_status", job.state.last_status or "-")
     if job.state.last_error:
         table.add_row("last_error", f"[red]{job.state.last_error[:200]}[/red]")
-    table.add_row("silent_fire_count", _format_silent(job))
     if job.state.claimed_by_pid:
         table.add_row("claimed_by_pid", str(job.state.claimed_by_pid))
         if job.state.claimed_at_ms:
@@ -599,12 +583,12 @@ def cron_add(
     channel: str = typer.Option(
         None,
         "--channel",
-        help="Delivery channel; defaults to 'cli' (ephemeral, routed at trigger time via cron.forward_channels)",
+        help="Delivery channel the job is bound to; defaults to 'cli'",
     ),
     to: str = typer.Option(
         None,
         "--to",
-        help="Recipient chat_id; defaults to 'direct' for ephemeral cli channel",
+        help="Recipient chat_id; defaults to 'direct' for the cli channel",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
 ):
@@ -627,9 +611,10 @@ def cron_add(
     calendar-anchored schedules).
 
     When ``--channel`` / ``--to`` are omitted, the job is stored as
-    ``channel="cli"`` / ``to="direct"`` (ephemeral) and routed at
-    trigger time according to ``cron.forward_channels`` — see
-    ``raven cron config get`` for current routing.
+    ``channel="cli"`` / ``to="direct"``. The stored (channel, to) is the
+    delivery target: the runner that owns that channel fires the job
+    (fire-at-origin), so a cli-bound job only fires while a cli session
+    is open.
     """
     # Validate schedule: exactly one of the three
     schedule_flags = [
@@ -705,7 +690,6 @@ def cron_add(
             name=name[:30],
             schedule=schedule,
             message=message,
-            deliver=True,
             channel=channel,
             to=to,
             delete_after_run=delete_after,
@@ -729,26 +713,6 @@ cron_config_app = typer.Typer(
 cron_app.add_typer(cron_config_app, name="config")
 
 
-def _parse_forward_channels(value: str) -> list[str]:
-    """Parse a CLI value into ``cron.forward_channels``.
-
-    Accepts:
-      - ``"*"`` / ``"all"`` → ``["*"]``                 (broadcast)
-      - ``""``  / ``"none"`` → ``[]``                   (no delivery)
-      - CSV (``"telegram,feishu"``) → ``["telegram", "feishu"]``
-    """
-    raw = value.strip()
-    if raw in ("", "none"):
-        return []
-    if raw in ("*", "all"):
-        return ["*"]
-    parts = [p.strip() for p in raw.split(",")]
-    parts = [p for p in parts if p]
-    if not parts:
-        raise ValueError("list value parsed to empty after stripping")
-    return parts
-
-
 def _parse_timezone(value: str) -> str:
     """Validate via zoneinfo; pass through on success."""
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -762,10 +726,6 @@ def _parse_timezone(value: str) -> str:
 
 
 _KEY_HANDLERS: dict[str, dict[str, Any]] = {
-    "forward_channels": {
-        "parse": _parse_forward_channels,
-        "display": lambda v: ",".join(v) if v else "(none)",
-    },
     "default_timezone": {
         "parse": _parse_timezone,
         "display": lambda v: v,
@@ -775,11 +735,6 @@ _KEY_HANDLERS: dict[str, dict[str, Any]] = {
 
 @cron_config_app.command("get")
 def cron_config_get(
-    forward_channels: bool = typer.Option(
-        False,
-        "--forward-channels",
-        help="Show only forward_channels value",
-    ),
     default_timezone: bool = typer.Option(
         False,
         "--default-timezone",
@@ -794,10 +749,7 @@ def cron_config_get(
     config = load_config()
     selected = [
         k
-        for k, picked in (
-            ("forward_channels", forward_channels),
-            ("default_timezone", default_timezone),
-        )
+        for k, picked in (("default_timezone", default_timezone),)
         if picked
     ]
     if not selected:
@@ -816,11 +768,6 @@ def cron_config_get(
 
 @cron_config_app.command("set")
 def cron_config_set(
-    forward_channels: str | None = typer.Option(
-        None,
-        "--forward-channels",
-        help="New forward_channels (CSV / '*' / 'all' / 'none' / '')",
-    ),
     default_timezone: str | None = typer.Option(
         None,
         "--default-timezone",
@@ -833,13 +780,11 @@ def cron_config_set(
     from raven.config.update import update_cron_config
 
     raw_updates: list[tuple[str, str]] = []
-    if forward_channels is not None:
-        raw_updates.append(("forward_channels", forward_channels))
     if default_timezone is not None:
         raw_updates.append(("default_timezone", default_timezone))
 
     if not raw_updates:
-        console.print("[red]Must specify at least one flag, e.g. --forward-channels / --default-timezone.[/red]")
+        console.print("[red]Must specify at least one flag, e.g. --default-timezone.[/red]")
         raise typer.Exit(1)
 
     # Parse all first so a bad value never half-writes.
@@ -863,7 +808,7 @@ def cron_config_reset(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirm prompt"),
 ) -> None:
     """Reset the whole cron section to schema defaults
-    (``forward_channels=['*']``, ``default_timezone='Asia/Shanghai'``)."""
+    (``default_timezone='Asia/Shanghai'``)."""
     from raven.config.update import reset_cron_config
 
     if not _confirm_destructive(

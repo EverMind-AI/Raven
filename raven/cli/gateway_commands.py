@@ -410,12 +410,8 @@ def register(app: typer.Typer) -> None:
                     send_max_retries=config.gateway.send_max_retries,
                 )
                 cron.on_job = make_on_cron_job(
-                    agent,
-                    gw_hub,
                     submit=gw_scheduler.submit,
                     readback_texts=gw_readback_texts,
-                    channel_manager=channels,
-                    session_manager=session_manager,
                     default_channel="cli",
                     system_events=system_events,
                     wake=wake,
