@@ -1840,6 +1840,113 @@ class TestConvergingRavensOwnPort:
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["base_url"] == "http://localhost:1995"
 
+    def test_a_root_already_on_the_standard_address_is_left_alone(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """The steady state after a convergence: nothing to stop, nothing to start."""
+        import questionary
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, declared_url="http://localhost:18791"))
+        touched: list[str] = []
+        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            touched.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+
+        onboard_everos._step4_memory(
+            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+        )
+
+        assert touched == [], "restarted a service that was already where it belongs"
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:18791"
+
+    def test_an_owned_root_that_is_simply_down_still_converges(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """Otherwise the legacy address survives every future run: the service
+        would be started at the old port and set_everos_api would write it
+        straight back into the toml."""
+        import questionary
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:1995"))
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+
+        onboard_everos._step4_memory(
+            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+        )
+
+        assert started == ["http://localhost:18791"]
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:18791"
+
+    def test_a_lock_that_could_not_be_freed_stops_the_step(
+        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Spawning into a lock that is still held is the failure this whole step
+        exists to prevent, so a stop that did not stop must not fall through."""
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=True))
+        _stubs.setattr(_server, "find_recorded_server", lambda _r: {"pid": 1, "root": str(root)})
+        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: _server.StopOutcome.STILL_DRAINING)
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        reached: list[int] = []
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+
+        onboard_everos._step4_memory(
+            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+        )
+
+        assert started == [], "spawned into a jobstore lock that is still held"
+        assert reached == []
+        out = " ".join(capsys.readouterr().out.split())
+        assert "still finishing memory work" in out or "还在跑" in out
+
+    def test_a_restart_that_fails_is_reported_and_stops_the_step(
+        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    ) -> None:
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:1995"))
+
+        async def _boom(_url: str, **_kw: object) -> None:
+            raise RuntimeError("port 18791 is occupied")
+
+        _stubs.setattr(_server, "ensure_everos_server", _boom)
+        reached: list[int] = []
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+
+        onboard_everos._step4_memory(
+            skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
+        )
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "port 18791 is occupied" in out, "swallowed the reason the restart failed"
+        assert reached == []
+
     def test_data_held_by_an_unidentifiable_process_stops_the_step(
         self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
     ) -> None:
