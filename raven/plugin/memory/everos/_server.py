@@ -283,6 +283,24 @@ def _last_error_line() -> str:
     return ""
 
 
+def _child_env() -> dict[str, str]:
+    """The environment the spawned server gets.
+
+    EverOS resolves settings as ``init_args > env_vars > everos.toml``, so an
+    ``EVEROS_API__PORT`` inherited from raven's own environment would outrank the
+    ``[api]`` section this module just wrote -- and the whole point of dropping
+    ``--port`` was to make that section the single authority on where a server
+    for this root listens. Anything that could re-open that gap is removed;
+    everything else is passed through, EVEROS_ROOT included, since the child
+    still needs it for the imports that do not read ``--root``.
+    """
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith("EVEROS_API__"):
+            del env[key]
+    return env
+
+
 def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     """Try to acquire the startup lock and launch the server.
 
@@ -305,10 +323,13 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     everos = _everos_executable()
     root = everos_root()
     parsed = urlparse(base_url)
-    set_everos_api(host=parsed.hostname or "127.0.0.1", port=int(parsed.port or 80))
 
     try:
         with file_lock(_lock_path(), blocking=False):
+            # Inside the lock: losing the race means another process is already
+            # spawning, and rewriting the declared address on the way out would
+            # move the goalposts for a server that is starting or already up.
+            set_everos_api(host=parsed.hostname or "127.0.0.1", port=int(parsed.port or 80))
             log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:
@@ -321,6 +342,7 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
+                    env=_child_env(),
                 )
             logger.info("started everos server for {} at {} (log: {})", root, base_url, log_path)
             _write_pidfile(proc.pid, base_url=base_url, root=root)

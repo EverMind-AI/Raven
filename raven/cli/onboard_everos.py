@@ -1443,9 +1443,9 @@ def _converge_owned_root(state: Any) -> bool:
     from raven.plugin.memory.everos._server import StopOutcome, find_recorded_server, stop_recorded_server
 
     target = _discover.default_new_root_url()
-    _set_base_url(state.declared_url or target)
 
     if state.serving and state.declared_url == target:
+        _set_base_url(target)
         return True
 
     if state.serving and state.declared_url != target:
@@ -1466,36 +1466,10 @@ def _converge_owned_root(state: Any) -> bool:
         )
         outcome = stop_recorded_server(state.root)
         if outcome is not StopOutcome.STOPPED:
-            # Each of these is a different situation for the user, and saying the
-            # wrong one is worse than saying nothing: a server still draining
-            # memory work is not a foreign process.
-            reason = {
-                StopOutcome.NOT_OURS: oc._t(
-                    "Raven did not start this process.",
-                    "这个进程不是 Raven 启动的。",
-                ),
-                StopOutcome.SIGNAL_FAILED: oc._t(
-                    "the stop signal could not be delivered.",
-                    "停止信号发送失败（权限不足？）。",
-                ),
-                StopOutcome.STILL_DRAINING: oc._t(
-                    "it is shutting down but still finishing memory work.",
-                    "它正在收尾，可能有记忆任务还在跑。",
-                ),
-            }[outcome]
-            oc.console.print(
-                oc._t(
-                    f"  [yellow]! Could not move it: {reason}[/yellow]\n"
-                    f"  [dim]Keeping {state.declared_url}. Re-run `raven onboard` "
-                    "once it has stopped.[/dim]",
-                    f"  [yellow]⚠ 无法迁移：{reason}[/yellow]\n"
-                    f"  [dim]继续使用 {state.declared_url}。等它停下后重跑 raven onboard 即可。[/dim]",
-                ),
-                highlight=False,
-            )
+            oc.console.print(_stop_failure_line(outcome, keeping=state.declared_url), highlight=False)
+            _set_base_url(state.declared_url or target)
             return True
-        _set_base_url(target)
-        return True
+        return _restart_here(state.root, target)
 
     if state.busy_elsewhere:
         oc.console.print()
@@ -1522,8 +1496,81 @@ def _converge_owned_root(state: Any) -> bool:
                 highlight=False,
             )
             return False
-        stop_recorded_server(state.root)
-        _set_base_url(target)
+        outcome = stop_recorded_server(state.root)
+        if outcome is not StopOutcome.STOPPED:
+            # The lock is still held. Walking on to spawn would put a second
+            # instance straight into it -- the failure this whole step exists to
+            # prevent -- so stop here rather than discard the outcome.
+            oc.console.print(_stop_failure_line(outcome, keeping=state.declared_url))
+            return False
+        return _restart_here(state.root, target)
+
+    # Owned, configured, and simply not running: still converge, or the legacy
+    # address survives every future run. ``ensure_everos_server`` would otherwise
+    # start a server at the old address and write it straight back into [api].
+    return _restart_here(state.root, target)
+
+
+def _stop_failure_line(outcome: Any, *, keeping: str | None) -> str:
+    """One sentence per stop outcome. Saying the wrong one sends the user
+    looking for the wrong thing -- a server draining memory work is not a
+    foreign process."""
+    from raven.plugin.memory.everos._server import StopOutcome
+
+    reason = {
+        StopOutcome.NOT_OURS: oc._t("Raven did not start this process.", "这个进程不是 Raven 启动的。"),
+        StopOutcome.SIGNAL_FAILED: oc._t("the stop signal could not be delivered.", "停止信号发送失败（权限不足？）。"),
+        StopOutcome.STILL_DRAINING: oc._t(
+            "it is shutting down but still finishing memory work.",
+            "它正在收尾，可能有记忆任务还在跑。",
+        ),
+    }[outcome]
+    tail = oc._t(f"Keeping {keeping}. ", f"继续使用 {keeping}。") if keeping else oc._t("", "")
+    return oc._t(
+        f"  [yellow]! Could not move it: {reason}[/yellow]\n"
+        f"  [dim]{tail}Re-run `raven onboard` once it has stopped.[/dim]",
+        f"  [yellow]⚠ 无法迁移：{reason}[/yellow]\n  [dim]{tail}等它停下后重跑 raven onboard 即可。[/dim]",
+    )
+
+
+def _restart_here(root: Any, target: str) -> bool:
+    """Start the service at ``target`` and record the address it now serves.
+
+    Convergence is stop -> write -> start, and the last step has to belong to
+    the same function as the first two. Leaving it to "whatever runs later"
+    meant that a user who picked ``Keep it enabled`` -- the first option, and the
+    answer an existing install gives -- left the wizard with the service stopped:
+    it had been shut down to move ports and the branch that would have restarted
+    it was never reached.
+    """
+    import asyncio
+
+    from raven.plugin.memory.everos._server import ensure_everos_server
+
+    _set_base_url(target)
+    oc.console.print(
+        oc._t(
+            f"  [dim]Starting the service at {target}...[/dim]",
+            f"  [dim]正在于 {target} 启动服务...[/dim]",
+        )
+    )
+    try:
+        asyncio.run(ensure_everos_server(target))
+    except RuntimeError as exc:
+        oc.console.print(
+            oc._t(
+                f"  [red]x Could not start it at {target}: {exc}[/red]",
+                f"  [red]✗ 无法在 {target} 启动：{exc}[/red]",
+            ),
+            highlight=False,
+        )
+        return False
+    oc.console.print(
+        oc._t(
+            f"  [green]v EverOS service is running at {target}.[/green]",
+            f"  [green]✓ EverOS 服务已在 {target} 运行。[/green]",
+        )
+    )
     return True
 
 
@@ -1594,6 +1641,7 @@ def _step4_memory(
 
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
+    from raven.config.update_everos import default_everos_root
     from raven.plugin.memory.everos import _discover
 
     oc.console.print(
@@ -1607,7 +1655,14 @@ def _step4_memory(
         outcome = _reuse_unowned_root(found)
         if outcome is not _OWN_ROOT_INSTEAD:
             return outcome
-        found = None  # declined the reuse -> build raven its own root below
+        # Record the decision here rather than leaving it to the branch that
+        # builds the root. Everything downstream -- _memory_enabled(), which
+        # reads the recorded root and would still find the user's configured
+        # llm, and everos_root() itself -- has to see the new answer, and
+        # _memory_enabled() returns from this function before the building
+        # branch is ever reached.
+        _record_root(default_everos_root(), owned=True)
+        found = None
 
     if found is not None and found.owned:
         _record_root(found.root, owned=True)

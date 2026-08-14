@@ -416,6 +416,11 @@ class EverosBackend:
                 from raven.plugin.memory.everos._server import _probe_health
 
                 if await asyncio.to_thread(_probe_health, base_url):
+                    # Say what it can actually do, exactly as the owned path
+                    # does. The argument for the warning is stronger here, not
+                    # weaker: raven cannot repair someone else's embedding
+                    # config, so telling them is the only move it has.
+                    await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
                     return
                 declared = await asyncio.to_thread(everos_declared_address)
                 where = declared or base_url

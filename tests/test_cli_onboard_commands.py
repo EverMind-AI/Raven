@@ -1705,12 +1705,34 @@ class TestReusingAnEverosTheUserManages:
         _no_writes.setattr(ue, "default_everos_root", lambda: mine)
         _no_writes.setattr(ue, "legacy_everos_root", lambda: tmp_env.parent / "legacy")
         # The state a previous session's reuse leaves behind.
+        # Their root has to hold a real configured llm, and memory.backend has to
+        # be on: _memory_enabled() reads both, and if either is missing it is
+        # false, the keep/reconfigure branch is skipped, and the branch that used
+        # to discard the decision -- the one this test exists for -- is never
+        # entered. The first two attempts at this test passed for exactly that
+        # reason.
+        theirs.mkdir(parents=True, exist_ok=True)
+        (theirs / "everos.toml").write_text('[llm]\nmodel = "m"\napi_key = "k"\n', encoding="utf-8")
         tmp_env.write_text(
-            json.dumps({"plugins": {"config": {"everos-memory": {"root": str(theirs), "owned": False}}}}),
+            json.dumps(
+                {
+                    "memory": {"backend": "everos"},
+                    "plugins": {"config": {"everos-memory": {"root": str(theirs), "owned": False}}},
+                }
+            ),
             encoding="utf-8",
         )
-        _found(_no_writes, _root_state(theirs, owned=False))
-        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("own"))
+        # Assert the branch is reachable before asserting what it does. Without
+        # this the test can pass because it never got there -- which is how two
+        # earlier versions of it passed while the decision was being discarded.
+        assert onboard_everos._memory_enabled() is True
+
+        _found(_no_writes, _root_state(theirs, owned=False, declared_url="http://localhost:8000"))
+        # Two screens: decline the reuse, then answer the keep/reconfigure menu
+        # the way an existing install would. A single stubbed answer let "own"
+        # stand in for both and slipped past the branch under test.
+        answers = iter(["own", "keep"])
+        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
         reached: list[int] = []
         _no_writes.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
         _no_writes.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
@@ -1773,16 +1795,28 @@ class TestConvergingRavensOwnPort:
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
         stopped: list[Path] = []
+        started: list[str] = []
         _stubs.setattr(
             _server,
             "stop_recorded_server",
             lambda r, **_kw: (stopped.append(r), _server.StopOutcome.STOPPED)[1],
         )
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        # "Keep it enabled" is the first option, and the answer an existing
+        # install gives -- the path that used to exit with the service stopped.
         _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert stopped == [root]
+        # Asserting only "it stopped" and "the config moved" is what let the
+        # service stay down: convergence is stop -> write -> start, and the last
+        # step has to be part of the same claim.
+        assert started == ["http://localhost:18791"], "stopped the service and never started it again"
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["base_url"] == "http://localhost:18791"
 
