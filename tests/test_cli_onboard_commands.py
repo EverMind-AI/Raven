@@ -1224,6 +1224,7 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
             return self._a
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("none"))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
     data = json.loads(tmp_env.read_text())
     assert data["tools"]["sandbox"]["backend"] == "none"
@@ -1243,6 +1244,7 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
             return self._a
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
     monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
     # Failure submenu picks "fall back to host".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "host")
@@ -4586,3 +4588,71 @@ def test_memory_skip_hints_configure_later(
     onboard_everos._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
     out = " ".join(capsys.readouterr().out.split())
     assert re.search(r"raven onboard.*again", out)
+
+
+def test_sandbox_host_choice_warns_and_confirms(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Interactively picking host must show the prompt-injection risk warning
+    and pass through an explicit confirmation before persisting."""
+    import re
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    confirm_calls: list = []
+
+    def _confirm(*a, **kw):
+        confirm_calls.append((a, kw))
+        return _FQ(True)
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("none"))
+    monkeypatch.setattr(questionary, "confirm", _confirm)
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+    out = capsys.readouterr().out
+    confirm_called = bool(confirm_calls)
+    assert confirm_called
+    assert re.search(r"full host privileges|host access", out, re.I)
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "none"
+
+
+def test_sandbox_host_decline_returns_to_menu(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining the host confirmation re-shows the run-location menu instead
+    of persisting; the next pick (boxlite) wins."""
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    answers = iter(["none", "boxlite"])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (True, "ok"))
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "boxlite"
+
+
+def test_sandbox_non_interactive_host_warns(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Non-interactive runs landing on host still surface the risk warning
+    (without blocking, keeping headless usable)."""
+    import re
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    onboard_commands._step2_sandbox(skip=False, non_interactive=True)
+    out = capsys.readouterr().out
+    assert re.search(r"full host privileges|host access", out, re.I)

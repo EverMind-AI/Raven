@@ -2019,6 +2019,33 @@ def _probe_boxlite() -> tuple[bool, str]:
     return True, "ok"
 
 
+def _warn_host_risk() -> None:
+    console.print(
+        _t(
+            "  [yellow]⚠ Third-party messages (channels, imports) can inject instructions.[/yellow]\n"
+            "  [yellow]⚠ On the host, injected commands execute with full host privileges.[/yellow]",
+            "  [yellow]⚠ 第三方消息(渠道、导入内容)可能向智能体注入指令。[/yellow]\n"
+            "  [yellow]⚠ 本机模式下,注入的命令将以宿主机全部权限执行。[/yellow]",
+        )
+    )
+
+
+def _confirm_host_run(questionary: Any) -> bool:
+    """Warn about host-mode risk and ask for explicit confirmation (default No)."""
+    from raven.cli._styles import RAVEN_STYLE
+
+    _warn_host_risk()
+    confirmed = questionary.confirm(
+        _t("Run directly on the host anyway?", "仍要在本机直接运行吗?"),
+        default=False,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if confirmed is None:
+        raise typer.Exit(1)
+    return bool(confirmed)
+
+
 def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     """Step 2 — choose run location (host / boxlite sandbox)."""
     _step_header(2, _t("Choose where Raven runs code / commands", "选择 Raven 运行代码 / 命令的位置"))
@@ -2030,6 +2057,8 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                 "  [dim]保持运行位置:本机直接运行。[/dim]",
             )
         )
+        if _current_sandbox_backend() == "none":
+            _warn_host_risk()
         return None
 
     questionary = _require_questionary()
@@ -2061,16 +2090,20 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         ]
     )
 
-    picked = questionary.select(
-        _t("Run location:", "运行位置:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
-    ).ask()
-    if picked is None:
-        raise typer.Exit(1)
-    if picked is _BACK:
-        return _BACK
-    if picked == "keep":
-        return None
-    if picked == "none":
+    while True:
+        picked = questionary.select(
+            _t("Run location:", "运行位置:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
+        ).ask()
+        if picked is None:
+            raise typer.Exit(1)
+        if picked is _BACK:
+            return _BACK
+        if picked == "keep":
+            return None
+        if picked != "none":
+            break
+        if not _confirm_host_run(questionary):
+            continue
         _persist_sandbox_backend("none")
         console.print(
             _t(
@@ -2126,6 +2159,8 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         if choice == "retry":
             continue
         if choice == "host":
+            if not _confirm_host_run(questionary):
+                continue
             _persist_sandbox_backend("none")
             console.print(
                 _t(
