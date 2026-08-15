@@ -737,3 +737,39 @@ def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatc
         source = inspect.getsource(fn)
         assert "child_env()" in source, f"{fn.__name__} builds its own env"
         assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"
+
+
+def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bare ``raven`` calls ``tui`` as a plain function, so typer never fills
+    its defaults: any option the call site forgets arrives as an ``OptionInfo``
+    sentinel instead. That is not inert -- ``--home``'s sentinel is truthy, so
+    ``load_runtime_config`` assigns it over ``agents.defaults.workspace`` and
+    the next ``Path()`` raises TypeError before the TUI ever starts.
+
+    Asserted over the whole signature rather than the two flags that broke, so
+    the next option added to ``tui`` fails here instead of at a user's prompt.
+    """
+    import inspect
+
+    from typer.models import OptionInfo
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, tui_commands
+
+    options = {
+        name
+        for name, param in inspect.signature(tui_commands.tui).parameters.items()
+        if isinstance(param.default, OptionInfo)
+    }
+    received: dict[str, Any] = {}
+
+    def recorder(_ctx, **kwargs: Any) -> None:
+        received.update(kwargs)
+
+    monkeypatch.setattr(tui_commands, "tui", recorder)
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
+
+    assert r.exit_code == 0, r.output
+    assert received.keys() == options
+    assert [name for name, value in received.items() if isinstance(value, OptionInfo)] == []

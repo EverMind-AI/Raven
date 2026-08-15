@@ -33,11 +33,32 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * into; `installedCount`/`uninstalledCount`/`presetsCount` are the section
  * sizes in `flat`'s order (installed, then not-installed, then presets),
  * which both the selection math and the section headers key off.
+ *
+ * `uninstalled` is a cli-only section, keyed on `group` rather than on whether
+ * an entry was saved: a cli row with no binary belongs there whether or not it
+ * was configured, because nothing can make it run from this overlay and
+ * offering it under presets only invites a failed add.
+ *
+ * An `openai` row never lands there, no matter what `group` says. The backend
+ * derives its group from whether an api key is set (see `_group`), so "not
+ * installed" for that kind means "no key yet" -- and the key is typed into the
+ * add/edit form reached from these very sections. Filing it as unavailable
+ * would hide the one control that fixes it. So an openai row is placed on
+ * `configured` alone: saved ones under `installed`, the rest under `presets`,
+ * where a keyless preset is in fact addable. `probe_detail` on the row still
+ * reports the missing key, so the state stays visible either way.
+ *
+ * Stated as one predicate so the three sections are visibly exhaustive and
+ * disjoint: `uninstalled` is its exact complement, and `installed`/`presets`
+ * split the rest on `configured`. No row can fall out of every section.
  */
 export function flattenSubagentRows(rows: SubagentRow[]): FlattenedSubagentRows {
-  const installed = rows.filter(r => r.configured && r.group === 'installed')
-  const uninstalled = rows.filter(r => r.configured && r.group === 'uninstalled')
-  const presets = rows.filter(r => !r.configured)
+  // An openai row always has an endpoint to reach, so only a cli row can be
+  // missing the thing it runs.
+  const hasSomethingToRun = (r: SubagentRow) => r.kind === 'openai' || r.group === 'installed'
+  const installed = rows.filter(r => r.configured && hasSomethingToRun(r))
+  const uninstalled = rows.filter(r => !hasSomethingToRun(r))
+  const presets = rows.filter(r => !r.configured && hasSomethingToRun(r))
 
   return {
     flat: [...installed, ...uninstalled, ...presets],
@@ -230,41 +251,98 @@ function SubagentRowLine({
   )
 }
 
-/** One renderable line: a section header, or a row tagged with its index into
- *  `flat` (what `idx` selects by). Headers and rows share one array so
- *  `windowItems` can window across the whole list in render order -- a
- *  section boundary is not a reason for the selected row to be able to
- *  scroll out of view. */
-type DisplayLine = { kind: 'header'; title: string } | { flatIndex: number; kind: 'row'; row: SubagentRow }
+const SECTION_TITLES = { installed: 'INSTALLED', presets: 'AVAILABLE PRESETS', uninstalled: 'NOT INSTALLED' } as const
 
-const SECTION_TITLES = ['INSTALLED', 'NOT INSTALLED', 'AVAILABLE PRESETS'] as const
+/** Which list the overlay is showing: the roster, or the drill-in that holds
+ *  the not-installed rows the roster folds away. */
+export type SubagentView = 'main' | 'uninstalled'
 
-function buildDisplayLines(
-  installed: SubagentRow[],
-  uninstalled: SubagentRow[],
-  presets: SubagentRow[]
-): DisplayLine[] {
+/** One selectable entry. `idx` indexes into an array of these, so the
+ *  not-installed group has to be one of them rather than a header: on the
+ *  main view it is a single line the user selects and opens, and the rows it
+ *  stands for are not selectable there at all. */
+export type SubagentItem = { kind: 'group'; rows: SubagentRow[] } | { kind: 'row'; row: SubagentRow }
+
+/** One renderable line: a section header, or a selectable item tagged with its
+ *  index. Headers and items share one array so `windowItems` can window across
+ *  the whole list in render order -- a section boundary is not a reason for the
+ *  selected row to be able to scroll out of view. */
+export type DisplayLine = { item: SubagentItem; itemIndex: number; kind: 'item' } | { kind: 'header'; title: string }
+
+export interface SubagentDisplay {
+  items: SubagentItem[]
+  lines: DisplayLine[]
+}
+
+/** The selectable entries and the lines that render them, for one view.
+ *
+ *  On `main` the not-installed rows collapse into a single `group` entry:
+ *  a roster's uninstalled presets are the rows a user is least likely to act
+ *  on, so they cost one line instead of N until Enter drills into them. The
+ *  `uninstalled` view is that drill-in, and the only place those rows can be
+ *  selected -- which is why `items` is derived per view rather than being
+ *  `flattenSubagentRows`'s `flat` in every case. Pure, per this file's
+ *  convention of keeping keystroke-driven terminal assertions to a minimum. */
+export function buildSubagentView(rows: SubagentRow[], view: SubagentView): SubagentDisplay {
+  const { flat, installedCount, uninstalledCount } = flattenSubagentRows(rows)
+  const installed = flat.slice(0, installedCount)
+  const uninstalled = flat.slice(installedCount, installedCount + uninstalledCount)
+  const presets = flat.slice(installedCount + uninstalledCount)
+
+  const items: SubagentItem[] = []
   const lines: DisplayLine[] = []
-  let flatIndex = 0
+  const push = (item: SubagentItem) => {
+    lines.push({ item, itemIndex: items.length, kind: 'item' })
+    items.push(item)
+  }
 
-  for (const [title, group] of [
-    [SECTION_TITLES[0], installed],
-    [SECTION_TITLES[1], uninstalled],
-    [SECTION_TITLES[2], presets]
-  ] as const) {
-    if (!group.length) {
-      continue
+  if (view === 'uninstalled') {
+    if (uninstalled.length) {
+      lines.push({ kind: 'header', title: SECTION_TITLES.uninstalled })
+
+      for (const row of uninstalled) {
+        push({ kind: 'row', row })
+      }
     }
 
-    lines.push({ kind: 'header', title })
+    return { items, lines }
+  }
 
-    for (const row of group) {
-      lines.push({ flatIndex, kind: 'row', row })
-      flatIndex += 1
+  if (installed.length) {
+    lines.push({ kind: 'header', title: SECTION_TITLES.installed })
+
+    for (const row of installed) {
+      push({ kind: 'row', row })
     }
   }
 
-  return lines
+  if (presets.length) {
+    lines.push({ kind: 'header', title: SECTION_TITLES.presets })
+
+    for (const row of presets) {
+      push({ kind: 'row', row })
+    }
+  }
+
+  // Last, below every actionable row: nothing in here can be configured, so it
+  // is the least likely thing on the roster to be wanted and has no claim on
+  // the reading order the actionable sections need.
+  if (uninstalled.length) {
+    push({ kind: 'group', rows: uninstalled })
+  }
+
+  return { items, lines }
+}
+
+/** The collapsed not-installed group, as one selectable line. Carries its own
+ *  count so the roster still says how much is hidden behind it. */
+function GroupLine({ count, selected, t }: { count: number; selected: boolean; t: Theme }) {
+  return (
+    <Text bold color={selected ? t.color.accent : t.color.label} inverse={selected} wrap="truncate-end">
+      {selected ? '▸ ' : '  '}
+      {SECTION_TITLES.uninstalled} ({count}) - Enter to open
+    </Text>
+  )
 }
 
 type Stage = 'confirm-delete' | 'form' | 'list'
@@ -320,6 +398,7 @@ function FormFieldLine({
 export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   const [rows, setRows] = useState<SubagentRow[]>([])
   const [idx, setIdx] = useState(0)
+  const [view, setView] = useState<SubagentView>('main')
   const [stage, setStage] = useState<Stage>('list')
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -392,28 +471,50 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     })
   }, [rows])
 
-  const { flat, installedCount, uninstalledCount } = useMemo(() => flattenSubagentRows(rows), [rows])
-  const installed = useMemo(() => flat.slice(0, installedCount), [flat, installedCount])
-  const uninstalled = useMemo(
-    () => flat.slice(installedCount, installedCount + uninstalledCount),
-    [flat, installedCount, uninstalledCount]
-  )
-  const presets = useMemo(() => flat.slice(installedCount + uninstalledCount), [flat, installedCount, uninstalledCount])
-  const selected = flat[idx]
+  // Both views are built on every rows change, not just the active one: leaving
+  // the drill-in has to land the cursor back on the group entry it came
+  // through, which means knowing that entry's index while still inside the
+  // drill-in.
+  const main = useMemo(() => buildSubagentView(rows, 'main'), [rows])
+  const drilldown = useMemo(() => buildSubagentView(rows, 'uninstalled'), [rows])
+  const { items, lines } = view === 'main' ? main : drilldown
+  const selectedItem = items[idx]
+  const selected = selectedItem?.kind === 'row' ? selectedItem.row : undefined
   const runningNames = useMemo(() => runningTestNames(rows, testing), [rows, testing])
 
   useEffect(() => {
-    setIdx(i => Math.min(i, Math.max(0, flat.length - 1)))
-  }, [flat.length])
+    setIdx(i => Math.min(i, Math.max(0, items.length - 1)))
+  }, [items.length])
 
-  // One flat, render-ordered list so the visible window can be computed once
-  // across section boundaries instead of per-section (see `windowItems` use
-  // below) -- otherwise "the selected row never scrolls out of view" would
-  // only hold within whichever section happens to be selected.
-  const lines = useMemo(() => buildDisplayLines(installed, uninstalled, presets), [installed, uninstalled, presets])
+  // Installing the last not-installed agent (or removing it) empties the
+  // drill-in, which would otherwise leave the overlay on a blank list whose
+  // only exit is Esc. Bounce back to the roster instead.
+  useEffect(() => {
+    if (view === 'uninstalled' && drilldown.items.length === 0) {
+      setView('main')
+    }
+  }, [drilldown.items.length, view])
+
+  const openDrilldown = () => {
+    setView('uninstalled')
+    setIdx(0)
+  }
+  const backToMain = () => {
+    setView('main')
+    setIdx(
+      Math.max(
+        0,
+        main.items.findIndex(i => i.kind === 'group')
+      )
+    )
+  }
+
+  // Windowed over `lines` (headers included, in render order) rather than
+  // per-section, so "the selected row never scrolls out of view" holds across
+  // a section boundary instead of only within the selected row's own section.
   const selectedLine = Math.max(
     0,
-    lines.findIndex(l => l.kind === 'row' && l.flatIndex === idx)
+    lines.findIndex(l => l.kind === 'item' && l.itemIndex === idx)
   )
   const { items: visibleLines, offset } = windowItems(lines, selectedLine, VISIBLE)
 
@@ -569,6 +670,15 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
       // Cancels every running test, not just the selected row's: testing A,
       // moving the cursor to B, then pressing Esc must still reach A -- a
       // test does not stop being in flight just because the cursor moved.
+      // Ranked above backing out of the drill-in for the same reason it is
+      // ranked above closing: a test in flight is the more urgent thing Esc
+      // can be about, and the next press still gets you out.
+      if (runningNames.length === 0 && view === 'uninstalled') {
+        backToMain()
+
+        return
+      }
+
       if (runningNames.length > 0) {
         // A locally-started test's own `subagents.test` promise refreshes on
         // its way out (see `runTest`'s `finally`), but a test known only
@@ -668,10 +778,47 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     }
 
     if (key.downArrow) {
-      if (idx < flat.length - 1) {
+      if (idx < items.length - 1) {
         setIdx(i => i + 1)
       }
 
+      return
+    }
+
+    // Left is the drill-in's other exit, alongside Esc: a nested list is
+    // conventionally left with the key that walks back out of it, and Esc is
+    // already overloaded with cancelling a running test.
+    if (key.leftArrow && view === 'uninstalled') {
+      backToMain()
+
+      return
+    }
+
+    // Ahead of the no-row guard below, because this is the one entry on the
+    // roster that is not a row.
+    if (key.return && selectedItem?.kind === 'group') {
+      openDrilldown()
+
+      return
+    }
+
+    // Re-probing is roster-wide, so it does not need a row under the cursor --
+    // otherwise 'r' would be dead while the collapsed group is selected. It is
+    // also the one action the drill-in keeps: a probe only reads, and "did my
+    // install land yet" is the question that list exists to answer.
+    if (ch.toLowerCase() === 'r') {
+      probe()
+
+      return
+    }
+
+    // A preset that was never added is view-only: there is nothing configured
+    // to act on, so Enter and every configuring key below does nothing. Keyed
+    // on the row rather than the view, because this list also holds configured
+    // agents whose binary has since gone missing -- losing a binary must not
+    // cost the ability to edit or delete the agent, or a broken one becomes
+    // unremovable from here.
+    if (view === 'uninstalled' && !selected?.configured) {
       return
     }
 
@@ -693,12 +840,6 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
     if (ch.toLowerCase() === 't') {
       runTest(selected)
-
-      return
-    }
-
-    if (ch.toLowerCase() === 'r') {
-      probe()
 
       return
     }
@@ -813,7 +954,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   return (
     <Box flexDirection="column" width={width}>
       <Text bold color={t.color.accent}>
-        Subagents
+        Subagents{view === 'uninstalled' ? ` · ${SECTION_TITLES.uninstalled}` : ''}
       </Text>
 
       {err ? <Text color={t.color.label}>error: {err}</Text> : null}
@@ -826,12 +967,14 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
           <Text bold color={t.color.label} key={`header:${line.title}`} wrap="truncate-end">
             {line.title}
           </Text>
+        ) : line.item.kind === 'group' ? (
+          <GroupLine count={line.item.rows.length} key="group:uninstalled" selected={line.itemIndex === idx} t={t} />
         ) : (
           <SubagentRowLine
-            key={line.row.name}
-            row={line.row}
-            selected={line.flatIndex === idx}
-            startedAt={testing.get(line.row.name)}
+            key={line.item.row.name}
+            row={line.item.row}
+            selected={line.itemIndex === idx}
+            startedAt={testing.get(line.item.row.name)}
             t={t}
           />
         )
@@ -847,7 +990,11 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
       {runningNames.length > 0 ? <OverlayHint t={t}>Esc cancels the running test</OverlayHint> : null}
       <OverlayHint t={t}>
-        ↑/↓ select · Enter add/edit · space toggle · t test · d delete · r refresh · Esc/q close
+        {view === 'main'
+          ? '↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close'
+          : selected?.configured
+            ? '↑/↓ select · Enter edit · space toggle · t test · d delete · r refresh · ←/Esc back · q close'
+            : '↑/↓ select · r refresh · ←/Esc back · q close'}
       </OverlayHint>
       <OverlayHint t={t}>custom agents: web UI /subagents or ~/.raven/config.json</OverlayHint>
     </Box>

@@ -75,9 +75,10 @@ def main(
     from raven.cli.tui_commands import tui as _tui_entry
 
     # Delegate to the exact `raven tui` callback so the onboarding gate and
-    # launch behavior are identical for both entry points. Pass explicit
-    # plain defaults (the function's typer.Option defaults are OptionInfo
-    # sentinels, only resolved when typer drives the command).
+    # launch behavior are identical for both entry points. Every option of
+    # `tui` must be passed an explicit plain default: its typer.Option
+    # defaults are OptionInfo sentinels that only typer resolves, and an
+    # omitted one arrives here as a sentinel that reads as "flag was set".
     _tui_entry(
         ctx,
         check=False,
@@ -85,6 +86,8 @@ def main(
         color=None,
         print_colors=False,
         preview_colors=False,
+        workspace=None,
+        home=None,
     )
 
 
