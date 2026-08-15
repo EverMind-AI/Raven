@@ -347,3 +347,76 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
     )
     await builder.build(_ctx("task"))
     assert captured == [["read_file", "exec", "flat_form"]]
+
+
+# ----------------------------------------------------------------------
+# Safety policy — min_safety after detail hydrate, blocklist, install audit
+# ----------------------------------------------------------------------
+
+
+async def test_low_safety_hub_hit_dropped_after_hydrate() -> None:
+    """A hub skill whose detail metadata carries a score_safety below the
+    bar must be dropped from the pool: never injected, never installed."""
+    src = _StubSource("hub", [_hit("hub/bad1", "tag-memory")])
+    hub = _StubHubClient({"bad1": {"skill_md": "evil body", "score_safety": 0.2}})
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    seg = await builder.build(_ctx("remember this"))
+    assert "tag-memory" not in (seg.text or "")
+    assert "evil body" not in (seg.text or "")
+    assert hub.install_calls == []
+    assert seg.meta["injected_skill_ids"] == []
+
+
+async def test_safe_hub_hit_still_injected() -> None:
+    src = _StubSource("hub", [_hit("hub/good1", "good-skill")])
+    hub = _StubHubClient({"good1": {"skill_md": "safe body", "score_safety": 0.93}})
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    seg = await builder.build(_ctx("remember this"))
+    assert "good-skill" in seg.text
+    assert len(hub.install_calls) == 1
+
+
+async def test_hub_hit_without_score_passes() -> None:
+    """Deployments whose detail payload omits score_safety keep working."""
+    src = _StubSource("hub", [_hit("hub/nos1", "scoreless")])
+    hub = _StubHubClient({"nos1": {"skill_md": "body"}})
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    seg = await builder.build(_ctx("remember this"))
+    assert "scoreless" in seg.text
+
+
+async def test_blocklisted_hit_dropped_any_source() -> None:
+    """Blocklist drops matching candidates from every source before the
+    gate, case-insensitively."""
+    local = _StubSource("local", [_hit("local/tm", "Tag-Memory", "local body")])
+    hub = _StubSource("hub", [_hit("hub/ok", "fine-skill")])
+    client = _StubHubClient({"ok": {"skill_md": "fine body", "score_safety": 0.9}})
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([local, hub]),
+        hub_client=client,
+        blocklist=["tag-memory"],
+    )
+    seg = await builder.build(_ctx("remember this"))
+    assert "Tag-Memory" not in seg.text
+    assert "fine-skill" in seg.text
+
+
+async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
+    audit = tmp_path / "installs.jsonl"
+    src = _StubSource("hub", [_hit("hub/good1", "good-skill")])
+    hub = _StubHubClient(
+        {"good1": {"skill_md": "safe body", "score_safety": 0.9, "slug": "good-skill", "version": "v3"}}
+    )
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([src]),
+        hub_client=hub,
+        install_audit_path=audit,
+    )
+    await builder.build(_ctx("remember this"))
+    lines = audit.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["slug"] == "good-skill"
+    assert rec["trigger"] == "auto_inject"
+    assert rec["score_safety"] == 0.9
+    assert rec["ts"]

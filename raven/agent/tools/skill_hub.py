@@ -31,8 +31,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
+from raven.skill_hub.audit import record_install
+from raven.skill_hub.policy import is_blocked, normalize_blocklist, refuses_low_safety
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
+
     from raven.memory_engine.skill_local.registry import SkillRegistry
     from raven.skill_hub import SkillHubClient
 
@@ -127,9 +132,16 @@ class UseSkillTool(Tool):
         self,
         client: "SkillHubClient | None" = None,
         registry: "SkillRegistry | None" = None,
+        *,
+        min_safety: float = 0.7,
+        blocklist: "Iterable[str] | None" = None,
+        install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._min_safety = min_safety
+        self._blocklist = normalize_blocklist(blocklist)
+        self._install_audit_path = install_audit_path
 
     @property
     def name(self) -> str:
@@ -168,6 +180,12 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
+        if is_blocked(self._blocklist, native):
+            return (
+                f"Error: skill {native!r} is on the operator blocklist "
+                f"(skillForge.blocklist) and cannot be used."
+            )
+
         if source in ("local", "everos"):
             return self._use_on_disk(source, native)
         if source == "hub":
@@ -188,13 +206,51 @@ class UseSkillTool(Tool):
         return f"## {meta.name}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{meta.content}"
 
     async def _use_hub(self, native: str) -> str:
-        """Download + extract a Hub skill, then expose its scripts dir."""
+        """Policy-check, then download + extract a Hub skill.
+
+        The detail metadata is fetched first because it is the only
+        payload that carries ``score_safety`` (catalog search omits it);
+        on pass it doubles as ``prefetched_meta`` so install() skips the
+        redundant round-trip.
+        """
         if self._client is None:
             return "Error: Skill Hub is not configured; cannot fetch a remote skill."
         try:
-            info = await self._client.install(native)
+            meta = await self._client.get(native)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
             return f"Error: failed to install skill {native!r} from the Hub: {e}"
+
+        slug = str(meta.get("slug") or meta.get("name") or native)
+        if is_blocked(self._blocklist, slug, meta.get("skill_id"), meta.get("name")):
+            return (
+                f"Error: skill {slug!r} is on the operator blocklist "
+                f"(skillForge.blocklist) and cannot be used."
+            )
+        score = meta.get("score_safety")
+        if refuses_low_safety(score, self._min_safety):
+            return (
+                f"Error: refusing to install hub skill {slug!r}: "
+                f"score_safety {score} is below the configured minimum {self._min_safety}."
+            )
+
+        try:
+            info = await self._client.install(native, prefetched_meta=meta)
+        except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
+            return f"Error: failed to install skill {native!r} from the Hub: {e}"
+        record_install(
+            self._install_audit_path,
+            slug=str(info.get("slug") or slug),
+            version=str(info.get("version") or ""),
+            trigger="use_skill",
+            score_safety=score,
+            skill_dir=info.get("dir"),
+        )
+        logger.warning(
+            "installed hub skill %s@%s via use_skill (score_safety=%s)",
+            info.get("slug") or slug,
+            info.get("version") or "",
+            score,
+        )
         # Best-effort: make the freshly extracted skill visible to the
         # registry on subsequent turns. No-op if the cache isn't a scanned
         # source yet; the returned scripts_dir is usable this turn regardless.

@@ -481,6 +481,12 @@ class AgentLoop:
             workspace,
             skill_forge_router_config,
         )
+        # Install-policy knobs for the use_skill tool (registered later in
+        # ``_register_builtin_tools``, which no longer sees these configs).
+        self._skill_min_safety = float(
+            getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
+        )
+        self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
 
         self.context_engine: "ContextEngine" = build_context_engine(
             workspace=workspace,
@@ -854,7 +860,17 @@ class AgentLoop:
             from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
 
             self.tools.register(
-                UseSkillTool(client=self._skill_hub_client, registry=skill_registry),
+                UseSkillTool(
+                    client=self._skill_hub_client,
+                    registry=skill_registry,
+                    min_safety=self._skill_min_safety,
+                    blocklist=self._skill_blocklist,
+                    install_audit_path=(
+                        self.workspace / "skills" / "hub" / "installs.jsonl"
+                        if self._skill_hub_client is not None
+                        else None
+                    ),
+                ),
             )
             if self._skill_hub_client is not None:
                 self.tools.register(

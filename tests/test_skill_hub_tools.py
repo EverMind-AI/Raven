@@ -35,6 +35,7 @@ class _FakeClient:
         self._raises = raises
         self.get_calls: list[str] = []
         self.install_calls: list[str] = []
+        self.install_meta: list[dict | None] = []
 
     async def get(self, skill_id: str):
         self.get_calls.append(skill_id)
@@ -42,8 +43,9 @@ class _FakeClient:
             raise RuntimeError("boom")
         return self._get_result
 
-    async def install(self, skill_id: str):
+    async def install(self, skill_id: str, *, prefetched_meta=None):
         self.install_calls.append(skill_id)
+        self.install_meta.append(prefetched_meta)
         if self._raises:
             raise RuntimeError("boom")
         return self._install_result
@@ -182,3 +184,77 @@ class TestUseSkill:
         client = _FakeClient(raises=True)
         out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
         assert out.startswith("Error") and "failed to install" in out
+
+
+class TestUseSkillSafetyPolicy:
+    """Install-time policy: min_safety and blocklist must gate use_skill."""
+
+    async def test_low_safety_hub_skill_refused(self) -> None:
+        client = _FakeClient(
+            get_result={"score_safety": 0.2, "slug": "tag-memory", "skill_md": "evil"},
+            install_result={"slug": "tag-memory", "version": "v1", "skill_md": "evil"},
+        )
+        out = await UseSkillTool(client=client, min_safety=0.7).execute(
+            skill_id="hub/tag-memory",
+        )
+        assert out.startswith("Error")
+        assert "score_safety" in out
+        assert client.install_calls == []
+
+    async def test_score_missing_allows_install(self) -> None:
+        client = _FakeClient(
+            get_result={"slug": "foo"},
+            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
+        )
+        out = await UseSkillTool(client=client, min_safety=0.7).execute(
+            skill_id="hub/foo",
+        )
+        assert not out.startswith("Error")
+        assert client.install_calls == ["foo"]
+
+    async def test_blocklisted_hub_skill_refused_before_network(self) -> None:
+        client = _FakeClient(get_result={"slug": "tag-memory"})
+        out = await UseSkillTool(client=client, blocklist=["Tag-Memory"]).execute(
+            skill_id="hub/tag-memory",
+        )
+        assert out.startswith("Error") and "blocklist" in out
+        assert client.get_calls == []
+        assert client.install_calls == []
+
+    async def test_blocklisted_local_skill_refused(self, tmp_path: Path) -> None:
+        meta = _meta(tmp_path, "x", "body", with_scripts=True)
+        reg = _FakeRegistry({("local", "x"): meta})
+        out = await UseSkillTool(registry=reg, blocklist=["x"]).execute(
+            skill_id="local/x",
+        )
+        assert out.startswith("Error") and "blocklist" in out
+
+    async def test_policy_pass_reuses_prefetched_meta(self) -> None:
+        client = _FakeClient(
+            get_result={"score_safety": 0.9, "slug": "foo"},
+            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
+        )
+        out = await UseSkillTool(client=client, min_safety=0.7).execute(
+            skill_id="hub/foo",
+        )
+        assert not out.startswith("Error")
+        assert client.get_calls == ["foo"]
+        assert client.install_meta == [{"score_safety": 0.9, "slug": "foo"}]
+
+    async def test_install_appends_audit_record(self, tmp_path: Path) -> None:
+        import json
+
+        audit = tmp_path / "installs.jsonl"
+        client = _FakeClient(
+            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
+            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": "/cache/foo"},
+        )
+        out = await UseSkillTool(
+            client=client,
+            min_safety=0.7,
+            install_audit_path=audit,
+        ).execute(skill_id="hub/foo")
+        assert not out.startswith("Error")
+        rec = json.loads(audit.read_text(encoding="utf-8").strip())
+        assert rec["slug"] == "foo"
+        assert rec["trigger"] == "use_skill"
