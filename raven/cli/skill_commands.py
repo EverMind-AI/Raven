@@ -7,6 +7,12 @@ Read-only inspection (registry-level):
 - ``skill list``                — list skills visible to SkillForge
 - ``skill get <name>``          — show one skill's metadata (and optionally body)
 
+Lifecycle management (Hub install policy):
+
+- ``skill block <name>``        — add to skillForge.blocklist (refused everywhere)
+- ``skill unblock <name>``      — remove from skillForge.blocklist
+- ``skill remove <name>``       — delete an installed Hub bundle from the workspace
+
 ``commands.py`` imports :data:`skill_app` and registers it on the top-level
 ``app`` via ``app.add_typer(skill_app, name="skill")``.
 """
@@ -21,7 +27,7 @@ from rich.table import Table
 console = Console()
 
 
-skill_app = typer.Typer(help="Inspect SkillForge registry (read-only)")
+skill_app = typer.Typer(help="Inspect and manage SkillForge skills")
 
 
 def _build_skill_service():
@@ -83,6 +89,56 @@ def skill_get(
         if body:
             console.print("\n[bold]── SKILL.md ──[/bold]")
             console.print(Markdown(body))
+
+
+@skill_app.command("block")
+def skill_block(name: str = typer.Argument(..., help="Skill name / slug to refuse everywhere")):
+    """Add a skill to skillForge.blocklist (dropped from the injection pool
+    and refused by use_skill on the next agent/gateway start)."""
+    from raven.config.update import set_skill_blocked
+
+    blocklist = set_skill_blocked(name, True)
+    console.print(f"[green]Blocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
+
+
+@skill_app.command("unblock")
+def skill_unblock(name: str = typer.Argument(..., help="Skill name / slug to allow again")):
+    """Remove a skill from skillForge.blocklist."""
+    from raven.config.update import set_skill_blocked
+
+    blocklist = set_skill_blocked(name, False)
+    console.print(f"[green]Unblocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
+
+
+@skill_app.command("remove")
+def skill_remove(
+    name: str = typer.Argument(..., help="Installed Hub skill slug to delete"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+):
+    """Delete an installed Hub bundle (<workspace>/skills/hub/<slug>@<version>).
+
+    Removal alone does not stop a re-install on the next catalog hit —
+    pair it with ``skill block`` to keep the skill out."""
+    import shutil
+
+    from raven.config.loader import load_config
+
+    hub_dir = load_config().workspace_path / "skills" / "hub"
+    matches = [d for d in hub_dir.glob("*@*") if d.is_dir() and d.name.rsplit("@", 1)[0].casefold() == name.casefold()]
+    if not matches:
+        console.print(f"[red]No installed Hub bundle found for {name!r} under {hub_dir}[/red]")
+        raise typer.Exit(1)
+
+    for d in matches:
+        console.print(f"  {d}")
+    if not yes and not typer.confirm(f"Delete {len(matches)} bundle dir(s)?"):
+        raise typer.Exit(1)
+    for d in matches:
+        shutil.rmtree(d)
+    console.print(f"[green]Removed[/green] {len(matches)} bundle(s) of {name!r}.")
+    console.print("[dim]Tip: `raven skill block " + name + "` prevents silent re-install.[/dim]")
 
 
 __all__ = ["skill_app"]

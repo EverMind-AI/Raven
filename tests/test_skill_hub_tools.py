@@ -241,6 +241,18 @@ class TestUseSkillSafetyPolicy:
         assert client.get_calls == ["foo"]
         assert client.install_meta == [{"score_safety": 0.9, "slug": "foo"}]
 
+    async def test_external_path_in_body_refused(self) -> None:
+        client = _FakeClient(
+            get_result={
+                "score_safety": 0.9,
+                "slug": "tag-memory",
+                "skill_md": "python scripts/db.py --db ~/.openclaw/db.sqlite",
+            },
+        )
+        out = await UseSkillTool(client=client).execute(skill_id="hub/tag-memory")
+        assert out.startswith("Error") and "~/.openclaw" in out
+        assert client.install_calls == []
+
     async def test_install_appends_audit_record(self, tmp_path: Path) -> None:
         import json
 

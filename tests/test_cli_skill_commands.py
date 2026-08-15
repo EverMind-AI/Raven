@@ -34,11 +34,11 @@ def tmp_config(tmp_path: Path) -> Path:
 def test_skill_help_lists_all_subcommands() -> None:
     r = runner.invoke(app, ["skill", "--help"])
     assert r.exit_code == 0
-    for sub in ("list", "get"):
+    for sub in ("list", "get", "block", "unblock", "remove"):
         assert sub in r.stdout, f"missing subcommand in --help: {sub}"
 
 
-@pytest.mark.parametrize("subcmd", ["list", "get"])
+@pytest.mark.parametrize("subcmd", ["list", "get", "block", "unblock", "remove"])
 def test_skill_subcommand_help_works(subcmd: str) -> None:
     """Every skill subcommand exposes ``--help`` without crashing."""
     r = runner.invoke(app, ["skill", subcmd, "--help"])
@@ -131,3 +131,80 @@ def test_skill_get_with_body_renders_markdown(tmp_config: Path, monkeypatch: pyt
     r = runner.invoke(app, ["skill", "get", "alpha", "--with-body"])
     assert r.exit_code == 0
     assert "SKILL.md" in r.stdout
+
+
+# ============================================================================
+# skill block / unblock  (on-disk skillForge.blocklist)
+# ============================================================================
+
+
+def _read_blocklist(cfg: Path) -> list[str]:
+    import json
+
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    return data.get("skillForge", {}).get("blocklist", [])
+
+
+def test_skill_block_adds_to_config(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["skill", "block", "tag-memory"])
+    assert r.exit_code == 0
+    assert "tag-memory" in r.stdout
+    assert _read_blocklist(tmp_config) == ["tag-memory"]
+
+
+def test_skill_block_is_idempotent_case_insensitive(tmp_config: Path) -> None:
+    runner.invoke(app, ["skill", "block", "tag-memory"])
+    r = runner.invoke(app, ["skill", "block", "Tag-Memory"])
+    assert r.exit_code == 0
+    assert _read_blocklist(tmp_config) == ["tag-memory"]
+
+
+def test_skill_unblock_removes_from_config(tmp_config: Path) -> None:
+    runner.invoke(app, ["skill", "block", "tag-memory"])
+    runner.invoke(app, ["skill", "block", "other"])
+    r = runner.invoke(app, ["skill", "unblock", "Tag-Memory"])
+    assert r.exit_code == 0
+    assert _read_blocklist(tmp_config) == ["other"]
+
+
+def test_skill_unblock_absent_is_noop(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["skill", "unblock", "ghost"])
+    assert r.exit_code == 0
+
+
+# ============================================================================
+# skill remove  (installed Hub bundle dirs)
+# ============================================================================
+
+
+def _workspace_config(cfg: Path, tmp_path: Path) -> Path:
+    import json
+
+    ws = tmp_path / "ws"
+    (ws / "skills" / "hub").mkdir(parents=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"workspace": str(ws)}}}),
+        encoding="utf-8",
+    )
+    return ws
+
+
+def test_skill_remove_deletes_matching_bundles(tmp_config: Path, tmp_path: Path) -> None:
+    ws = _workspace_config(tmp_config, tmp_path)
+    bundle = ws / "skills" / "hub" / "tag-memory@v1"
+    bundle.mkdir()
+    (bundle / "SKILL.md").write_text("x", encoding="utf-8")
+    other = ws / "skills" / "hub" / "keep-me@v2"
+    other.mkdir()
+
+    r = runner.invoke(app, ["skill", "remove", "Tag-Memory", "--yes"])
+    assert r.exit_code == 0
+    assert not bundle.exists()
+    assert other.exists()
+
+
+def test_skill_remove_unknown_exits_1(tmp_config: Path, tmp_path: Path) -> None:
+    _workspace_config(tmp_config, tmp_path)
+    r = runner.invoke(app, ["skill", "remove", "ghost", "--yes"])
+    assert r.exit_code == 1
+    assert "No installed Hub bundle" in r.stdout

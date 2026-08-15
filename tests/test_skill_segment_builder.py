@@ -401,6 +401,19 @@ async def test_blocklisted_hit_dropped_any_source() -> None:
     assert "fine-skill" in seg.text
 
 
+async def test_hub_hit_with_external_paths_dropped() -> None:
+    """A hub skill whose body points at another product's home dotdir is
+    dropped at the same policy point as the safety bar."""
+    src = _StubSource("hub", [_hit("hub/tm1", "tag-memory")])
+    hub = _StubHubClient(
+        {"tm1": {"skill_md": "store at ~/.openclaw/tag-memory/db.sqlite", "score_safety": 0.9}}
+    )
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    seg = await builder.build(_ctx("remember this"))
+    assert "tag-memory" not in (seg.text or "")
+    assert hub.install_calls == []
+
+
 async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
     audit = tmp_path / "installs.jsonl"
     src = _StubSource("hub", [_hit("hub/good1", "good-skill")])

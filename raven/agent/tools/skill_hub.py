@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
 from raven.skill_hub.audit import record_install
-from raven.skill_hub.policy import is_blocked, normalize_blocklist, refuses_low_safety
+from raven.skill_hub.policy import SkillPolicy, is_blocked
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -139,8 +139,7 @@ class UseSkillTool(Tool):
     ) -> None:
         self._client = client
         self._registry = registry
-        self._min_safety = min_safety
-        self._blocklist = normalize_blocklist(blocklist)
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
         self._install_audit_path = install_audit_path
 
     @property
@@ -180,7 +179,7 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
-        if is_blocked(self._blocklist, native):
+        if is_blocked(self._policy.blocklist, native):
             return (
                 f"Error: skill {native!r} is on the operator blocklist "
                 f"(skillForge.blocklist) and cannot be used."
@@ -221,17 +220,10 @@ class UseSkillTool(Tool):
             return f"Error: failed to install skill {native!r} from the Hub: {e}"
 
         slug = str(meta.get("slug") or meta.get("name") or native)
-        if is_blocked(self._blocklist, slug, meta.get("skill_id"), meta.get("name")):
-            return (
-                f"Error: skill {slug!r} is on the operator blocklist "
-                f"(skillForge.blocklist) and cannot be used."
-            )
         score = meta.get("score_safety")
-        if refuses_low_safety(score, self._min_safety):
-            return (
-                f"Error: refusing to install hub skill {slug!r}: "
-                f"score_safety {score} is below the configured minimum {self._min_safety}."
-            )
+        refusal = self._policy.refusal_for_detail(meta, native)
+        if refusal is not None:
+            return f"Error: refusing to install hub skill: {refusal}."
 
         try:
             info = await self._client.install(native, prefetched_meta=meta)

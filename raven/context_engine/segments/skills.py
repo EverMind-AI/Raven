@@ -35,7 +35,7 @@ from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
 from raven.memory_engine.skill_forge.refs import resolve_refs
 from raven.skill_hub.audit import record_install
-from raven.skill_hub.policy import is_blocked, normalize_blocklist, refuses_low_safety
+from raven.skill_hub.policy import SkillPolicy, is_blocked
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
@@ -81,8 +81,7 @@ class SkillsSegmentBuilder:
         self._pool_size = gate_pool_size if gate is not None else skill_top_k
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
-        self._min_safety = min_safety
-        self._blocklist = normalize_blocklist(blocklist)
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
         self._install_audit_path = install_audit_path
         self._audited_installs: set[str] = set()
 
@@ -129,10 +128,10 @@ class SkillsSegmentBuilder:
         )
 
         # ── ②b Blocklist — hard drop across every source ──────────────
-        if self._blocklist:
+        if self._policy.blocklist:
             kept: list["RouterHit"] = []
             for c in candidates:
-                if is_blocked(self._blocklist, c.name, c.meta.get("skill_id")):
+                if is_blocked(self._policy.blocklist, c.name, c.meta.get("skill_id")):
                     log.warning("dropping blocklisted skill from pool: %s", c.qualified_id)
                 else:
                     kept.append(c)
@@ -203,17 +202,13 @@ class SkillsSegmentBuilder:
         for (i, c), m in zip(targets, metas):
             if m is None:
                 continue
-            # Authoritative min_safety check: the catalog payload omits
+            # Authoritative policy check: the catalog payload omits
             # score_safety (HubSkillSource's guard no-ops there), so the
-            # detail metadata fetched here is the first place the score
-            # is actually available.
-            if refuses_low_safety(m.get("score_safety"), self._min_safety):
-                log.warning(
-                    "dropping hub skill %s: score_safety %s below min_safety %.2f",
-                    c.qualified_id,
-                    m.get("score_safety"),
-                    self._min_safety,
-                )
+            # detail metadata fetched here is the first place the full
+            # policy (safety bar + blocklist + body path lint) can run.
+            refusal = self._policy.refusal_for_detail(m, c.name)
+            if refusal is not None:
+                log.warning("dropping hub skill %s: %s", c.qualified_id, refusal)
                 dropped.add(i)
                 continue
             prefetched_meta[c.qualified_id] = m

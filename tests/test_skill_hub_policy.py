@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 
 from raven.skill_hub.audit import record_install
-from raven.skill_hub.policy import is_blocked, normalize_blocklist, refuses_low_safety
+from raven.skill_hub.policy import (
+    SkillPolicy,
+    is_blocked,
+    lint_external_paths,
+    normalize_blocklist,
+    refuses_low_safety,
+)
 
 
 class TestNormalizeBlocklist:
@@ -48,6 +54,52 @@ class TestRefusesLowSafety:
     def test_malformed_score_passes(self) -> None:
         assert not refuses_low_safety("n/a", 0.7)
         assert not refuses_low_safety({}, 0.7)
+
+
+class TestLintExternalPaths:
+    def test_empty_and_clean_bodies(self) -> None:
+        assert lint_external_paths(None) == []
+        assert lint_external_paths("") == []
+        assert lint_external_paths("run scripts/db.py --db ./data.db") == []
+
+    def test_own_dotdir_allowed(self) -> None:
+        assert lint_external_paths("state lives in ~/.raven/skills") == []
+
+    def test_foreign_dotdirs_flagged_deduped(self) -> None:
+        body = (
+            "python scripts/db.py --db ~/.openclaw/tag-memory/db.sqlite\n"
+            "or $HOME/.openclaw/config.json, also /Users/bob/.claude/skills\n"
+            "and /home/alice/.openclaw/x"
+        )
+        assert lint_external_paths(body) == ["~/.claude", "~/.openclaw"]
+
+
+class TestSkillPolicy:
+    def test_allows_clean_meta(self) -> None:
+        policy = SkillPolicy.create()
+        assert policy.refusal_for_detail({"slug": "ok", "score_safety": 0.9, "skill_md": "clean"}) is None
+
+    def test_refuses_in_order_blocklist_first(self) -> None:
+        policy = SkillPolicy.create(blocklist=["bad"])
+        reason = policy.refusal_for_detail({"slug": "bad", "score_safety": 0.1})
+        assert reason is not None and "blocklist" in reason
+
+    def test_refuses_low_safety(self) -> None:
+        policy = SkillPolicy.create(min_safety=0.7)
+        reason = policy.refusal_for_detail({"slug": "x", "score_safety": 0.2})
+        assert reason is not None and "score_safety" in reason
+
+    def test_refuses_external_paths_in_body(self) -> None:
+        policy = SkillPolicy.create()
+        reason = policy.refusal_for_detail(
+            {"slug": "tag-memory", "score_safety": 0.9, "skill_md": "write to ~/.openclaw/db"},
+        )
+        assert reason is not None and "~/.openclaw" in reason
+
+    def test_extra_identifiers_hit_blocklist(self) -> None:
+        policy = SkillPolicy.create(blocklist=["native-id"])
+        reason = policy.refusal_for_detail({}, "native-id")
+        assert reason is not None and "blocklist" in reason
 
 
 class TestRecordInstall:
