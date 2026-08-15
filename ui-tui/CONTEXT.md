@@ -58,9 +58,15 @@ token/cost aggregates); opened with `/agents`, including for past turns by histo
 **Subagents Overlay**:
 The overlay for configuring third-party sub-agents - listing them by whether they can
 actually run, adding one from a preset, enabling, testing and deleting; opened with
-`/subagents`. It edits `~/.raven/config.json` and hot-applies the result, so it changes
-what the model may dispatch to. Not to be confused with the Agents Overlay, which shows
-live delegation state and writes nothing.
+`/subagents`. A row with no binary on the login shell PATH is collected behind a single
+not-installed entry at the foot of the roster, which opens a list of its own. An un-added
+preset there is read-only, since there is nothing to configure until the binary exists; a
+configured agent whose binary went missing keeps every action, so a broken one can still
+be edited or removed. Only cli rows are filed that way - an openai row is placed on
+whether it was saved, so a preset needing just an api key stays directly addable. It edits
+`~/.raven/config.json` and hot-applies the result, so it changes what the model may
+dispatch to. Not to be confused with the Agents Overlay, which shows live delegation state
+and writes nothing.
 
 **Confirm Overlay**:
 The countdown overlay a destructive Confirm Round-Trip presents; the answer resolves

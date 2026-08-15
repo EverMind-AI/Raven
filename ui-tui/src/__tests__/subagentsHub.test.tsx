@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SubagentRow, SubagentsListResult } from '../rpc/generated.js'
 
 import {
+  buildSubagentView,
   failureDetailLine,
   flattenSubagentRows,
   mergeProbeColumns,
@@ -75,6 +76,7 @@ const normalize = (raw: string) =>
 const ESC = String.fromCharCode(27)
 const DOWN = `${String.fromCharCode(27)}[B`
 const UP = `${String.fromCharCode(27)}[A`
+const LEFT = `${String.fromCharCode(27)}[D`
 const TAB = '\t'
 const ENTER = '\r'
 const CTRL_S = String.fromCharCode(19)
@@ -138,11 +140,17 @@ const OPENCODE_ROW = ROWS[2]!
 
 // A kind: 'openai' preset, unconfigured -- the only shape that shows the
 // API key field. No has_api_key, so no stored-key hint expected.
+//
+// `group: 'uninstalled'` is what the backend actually emits here: `_group`
+// keys an openai entry on whether its api key is set, and a shipped preset has
+// none (`mirothinker` is the live instance). Unconfigured + uninstalled +
+// openai is therefore the production shape, and the section rules have to put
+// it somewhere it can still be given a key.
 const OPENAI_PRESET_ROW: SubagentRow = {
   configured: false,
   description: 'openai preset agent',
   enabled: false,
-  group: 'installed',
+  group: 'uninstalled',
   has_api_key: false,
   kind: 'openai',
   last_test_at_ms: undefined,
@@ -302,14 +310,152 @@ describe('flattenSubagentRows', () => {
     expect(flat.map(r => r.name)).toEqual(['Guard', 'Second'])
   })
 
-  it('an unconfigured row lands in presets regardless of its group field', () => {
-    const bothUnconfigured: SubagentRow = { ...OPENCODE_ROW, group: 'uninstalled' }
-    const { flat, installedCount, presetsCount, uninstalledCount } = flattenSubagentRows([bothUnconfigured])
+  // A cli preset with no binary is grouped by install state, not by whether an
+  // entry was saved: it belongs with the other not-installed rows, the same way
+  // the web UI files it under Uninstalled. Otherwise AVAILABLE PRESETS offers a
+  // row whose cli is missing as though it were addable.
+  it('an unconfigured cli row with nothing to run lands in uninstalled, not presets', () => {
+    const unconfiguredMissing: SubagentRow = { ...OPENCODE_ROW, group: 'uninstalled' }
+    const { flat, installedCount, presetsCount, uninstalledCount } = flattenSubagentRows([unconfiguredMissing])
 
     expect(installedCount).toBe(0)
+    expect(uninstalledCount).toBe(1)
+    expect(presetsCount).toBe(0)
+    expect(flat[0]?.name).toBe('opencode')
+  })
+
+  // An openai row's group reports whether its api key is set, not whether
+  // anything is installed, and the form that takes the key is reached from
+  // these sections -- so filing one under not-installed hides the only control
+  // that fixes it. `mirothinker` ships in exactly this shape.
+  it('keeps a keyless openai preset in presets, never in uninstalled', () => {
+    const { flat, installedCount, presetsCount, uninstalledCount } = flattenSubagentRows([OPENAI_PRESET_ROW])
+
     expect(uninstalledCount).toBe(0)
     expect(presetsCount).toBe(1)
-    expect(flat[0]?.name).toBe('opencode')
+    expect(installedCount).toBe(0)
+    expect(flat[0]?.name).toBe('openai-agent')
+  })
+
+  // The other half of the same rule: a saved openai entry whose key is blank or
+  // rejected has to land under installed. Excluding openai from uninstalled
+  // without this would leave it in no section at all, dropping the row off the
+  // overlay entirely.
+  it('keeps a configured keyless openai entry in installed, never dropped', () => {
+    const configuredKeyless: SubagentRow = { ...OPENAI_CONFIGURED_ROW, group: 'uninstalled', has_api_key: false }
+    const { installedCount, presetsCount, uninstalledCount } = flattenSubagentRows([configuredKeyless])
+
+    expect(installedCount).toBe(1)
+    expect(uninstalledCount).toBe(0)
+    expect(presetsCount).toBe(0)
+  })
+
+  it('places every kind/group/configured combination in exactly one section', () => {
+    const rows: SubagentRow[] = []
+    for (const kind of ['cli', 'openai'] as const) {
+      for (const group of ['installed', 'uninstalled'] as const) {
+        for (const configured of [true, false]) {
+          rows.push({ ...CODER_ROW, configured, group, kind, name: `${kind}-${group}-${String(configured)}` })
+        }
+      }
+    }
+    const { flat, installedCount, presetsCount, uninstalledCount } = flattenSubagentRows(rows)
+
+    expect(installedCount + uninstalledCount + presetsCount).toBe(rows.length)
+    expect(new Set(flat.map(r => r.name)).size).toBe(rows.length)
+  })
+
+  it('keeps an unconfigured but ready row in presets', () => {
+    const { presetsCount, uninstalledCount } = flattenSubagentRows([OPENCODE_ROW])
+
+    expect(presetsCount).toBe(1)
+    expect(uninstalledCount).toBe(0)
+  })
+})
+
+// The collapse itself, asserted on the pure builder rather than through
+// keystrokes: which entries are selectable in each view is what every key
+// handler keys off, and it needs no terminal to prove.
+describe('buildSubagentView', () => {
+  // Last, below every row that can actually be acted on.
+  it('collapses the not-installed rows into one group entry below every actionable row', () => {
+    const { items } = buildSubagentView(ROWS, 'main')
+
+    expect(items).toHaveLength(3)
+    expect(items[0]).toEqual({ kind: 'row', row: CODER_ROW })
+    expect(items[1]).toEqual({ kind: 'row', row: OPENCODE_ROW })
+    expect(items[2]).toEqual({ kind: 'group', rows: [GUARD_ROW] })
+  })
+
+  it('makes the not-installed rows unselectable on the roster', () => {
+    const { items } = buildSubagentView(ROWS, 'main')
+
+    expect(items.map(i => (i.kind === 'row' ? i.row.name : 'GROUP'))).toEqual(['Coder', 'opencode', 'GROUP'])
+  })
+
+  it('renders the roster with the installed and preset headers only', () => {
+    const { lines } = buildSubagentView(ROWS, 'main')
+
+    expect(lines.filter(l => l.kind === 'header').map(l => (l.kind === 'header' ? l.title : ''))).toEqual([
+      'INSTALLED',
+      'AVAILABLE PRESETS'
+    ])
+  })
+
+  it('exposes exactly the not-installed rows in the drill-in view', () => {
+    const { items, lines } = buildSubagentView(ROWS, 'uninstalled')
+
+    expect(items).toEqual([{ kind: 'row', row: GUARD_ROW }])
+    expect(lines[0]).toEqual({ kind: 'header', title: 'NOT INSTALLED' })
+  })
+
+  // The reported case: openclaw ships as a preset, is not on the login shell
+  // PATH, and was never added -- so it has to be collected by the collapsed
+  // entry rather than sitting in AVAILABLE PRESETS as if it were addable.
+  it('collects an unconfigured, not-installed preset into the group entry', () => {
+    const openclaw: SubagentRow = {
+      ...GUARD_ROW,
+      configured: false,
+      name: 'openclaw',
+      preset: 'openclaw',
+      probe_detail: 'openclaw is not on the login shell PATH'
+    }
+    const { items } = buildSubagentView([CODER_ROW, openclaw, OPENCODE_ROW], 'main')
+
+    expect(items.map(i => (i.kind === 'row' ? i.row.name : 'GROUP'))).toEqual(['Coder', 'opencode', 'GROUP'])
+    const group = items[2]
+    expect(group?.kind === 'group' && group.rows.map(r => r.name)).toEqual(['openclaw'])
+  })
+
+  it('omits the group entry entirely when nothing is not-installed', () => {
+    const { items } = buildSubagentView([CODER_ROW, OPENCODE_ROW], 'main')
+
+    expect(items.some(i => i.kind === 'group')).toBe(false)
+    expect(items).toHaveLength(2)
+  })
+
+  // The view-only guard keys on `configured` alone, which is only sound because
+  // an openai row can never reach this list. Otherwise a keyless openai preset
+  // would be selectable here and then refused -- the thing that made
+  // `mirothinker` unaddable from the TUI.
+  it('never puts an openai row in the drill-in, whatever its group says', () => {
+    const rows = [OPENAI_PRESET_ROW, { ...OPENAI_CONFIGURED_ROW, group: 'uninstalled' as const }]
+
+    expect(buildSubagentView(rows, 'uninstalled').items).toEqual([])
+  })
+
+  it('yields an empty drill-in, header included, when nothing is not-installed', () => {
+    expect(buildSubagentView([CODER_ROW], 'uninstalled')).toEqual({ items: [], lines: [] })
+  })
+
+  it('numbers item indices in render order across a section boundary', () => {
+    const { lines } = buildSubagentView(ROWS, 'main')
+
+    expect(lines.filter(l => l.kind === 'item').map(l => (l.kind === 'item' ? l.itemIndex : -1))).toEqual([0, 1, 2])
+  })
+
+  it('handles an empty row list', () => {
+    expect(buildSubagentView([], 'main')).toEqual({ items: [], lines: [] })
   })
 })
 
@@ -325,17 +471,187 @@ describe('SubagentsHub', () => {
     h.unmount()
   })
 
-  it('renders all three section headers, and each row name', async () => {
+  // The not-installed rows are collapsed behind one entry, so the roster shows
+  // two section headers and the group line rather than three sections of rows.
+  // Asserting Guard's absence is sound despite frame() being append-only: it
+  // never legitimately renders on the roster at all, so a hit can only mean the
+  // collapse regressed.
+  it('renders the installed and preset sections, with the not-installed rows collapsed behind one entry', async () => {
     const h = mount()
     await waitForFrame(h, 'Coder')
 
     const frame = h.frame()
     expect(frame).toContain('INSTALLED')
-    expect(frame).toContain('NOT INSTALLED')
+    expect(frame).toContain('NOT INSTALLED (1)')
     expect(frame).toContain('AVAILABLE PRESETS')
     expect(frame).toContain('Coder')
-    expect(frame).toContain('Guard')
     expect(frame).toContain('opencode')
+    expect(frame).not.toContain('Guard')
+
+    h.unmount()
+  })
+
+  // The single-not-installed-row fixture makes the group entry the only thing on
+  // the roster, so one Enter reaches the drill-in. Deliberately not the
+  // three-row fixture plus a down-arrow: every extra keystroke these cases need
+  // before their assertion is another chance for arrow delivery to slip under a
+  // loaded parallel run, and which entry the group sits at is already asserted
+  // on `buildSubagentView` above.
+  it('enter on the collapsed entry drills in and lists the not-installed rows', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+
+    // The middot is not asserted: ink can emit a cursor-forward move in place
+    // of the spaces around it, which `normalize` collapses away.
+    expect(h.frame()).toMatch(/Guard\s+·?\s*openclaw \[off\]/)
+
+    h.unmount()
+  })
+
+  // The drill-in is view-only, so Enter and the other configuring keys are
+  // no-ops there. Asserted through the RPCs *not* made, which is what "cannot
+  // configure" means at the wire level, plus never reaching the form or the
+  // delete confirm -- neither string renders on this path unless it regresses.
+  it('makes enter and every other configuring key a no-op inside the drill-in', async () => {
+    const openclaw: SubagentRow = { ...GUARD_ROW, configured: false, name: 'openclaw', preset: 'openclaw' }
+    const h = mount({ rows: [openclaw] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'openclaw')
+
+    h.gw.request.mockClear()
+    await h.type(ENTER)
+    await h.type(' ')
+    await h.type('t')
+    await h.type('d')
+    // Nothing to poll for when the expectation is that nothing happens; give
+    // any (incorrect) call time to surface before asserting its absence.
+    await delay(120)
+
+    for (const method of [
+      'subagents.add',
+      'subagents.update',
+      'subagents.toggle',
+      'subagents.test',
+      'subagents.remove'
+    ]) {
+      expect(h.gw.request).not.toHaveBeenCalledWith(method, expect.anything())
+    }
+    expect(h.frame()).not.toContain('Add subagent')
+    expect(h.frame()).not.toContain('openclaw? y/n')
+
+    h.unmount()
+  })
+
+  it("keeps 'r' working inside the drill-in, since a probe only reads", async () => {
+    const openclaw: SubagentRow = { ...GUARD_ROW, configured: false, name: 'openclaw', preset: 'openclaw' }
+    const h = mount({ rows: [openclaw] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'openclaw')
+
+    h.gw.request.mockClear()
+    await h.type('r')
+    await waitForRpcCall(h.gw.request, 'subagents.probe')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.probe', {})
+
+    h.unmount()
+  })
+
+  // View-only is keyed on the row, not the list: this list also collects a
+  // configured agent whose binary has gone missing (a custom agent whose
+  // interpreter moved, say). Losing a binary must not cost the ability to take
+  // that agent off the roster, or a broken one becomes unremovable here -- the
+  // very problem the enable toggle exists to solve.
+  it('keeps a configured row in the drill-in togglable', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Guard' })
+
+    h.unmount()
+  })
+
+  it('keeps a configured row in the drill-in deletable', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+    await h.type('d')
+    await waitForFrame(h, 'Guard? y/n')
+
+    h.gw.request.mockClear()
+    await h.type('y')
+    await waitForRpcCall(h.gw.request, 'subagents.remove')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.remove', { name: 'Guard' })
+
+    h.unmount()
+  })
+
+  it('opens the edit form for a configured row inside the drill-in', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+    await h.type(ENTER)
+    await waitForFrame(h, 'Edit subagent')
+
+    h.unmount()
+  })
+
+  it('esc backs out of the drill-in instead of closing, and the next esc closes', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+
+    await h.type(ESC)
+    // A lone Escape sits in the terminal parser's 50ms flush window before it
+    // is delivered as key.escape (it could be the start of a CSI sequence).
+    await delay(90)
+
+    expect(h.onClose).not.toHaveBeenCalled()
+
+    await h.type(ESC)
+    await waitForMockCall(h.onClose)
+
+    expect(h.onClose).toHaveBeenCalled()
+
+    h.unmount()
+  })
+
+  // Left is the drill-in's other exit. Proven by where the *following* Esc
+  // lands: on the roster it closes the overlay, whereas inside the drill-in it
+  // would only have backed out -- so onClose firing is what says Left already
+  // took us out.
+  it('left arrow is the drill-in other exit', async () => {
+    const h = mount({ rows: [GUARD_ROW] })
+    await waitForFrame(h, 'NOT INSTALLED (1)')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Guard')
+    await h.type(LEFT)
+    await h.type(ESC)
+    await waitForMockCall(h.onClose)
+
+    expect(h.onClose).toHaveBeenCalled()
 
     h.unmount()
   })
@@ -462,15 +778,18 @@ describe('SubagentsHub', () => {
     h.unmount()
   })
 
-  it("'t' on Guard tests it as a configured entry", async () => {
-    const h = mount({ rows: [GUARD_ROW] })
-    await waitForFrame(h, 'Guard')
+  // Uses an installed row: a not-installed one now lives in the view-only
+  // drill-in, where 't' is refused by design (covered separately above), so it
+  // can no longer carry the source: 'config' contract.
+  it("'t' on a configured, installed row tests it as a configured entry", async () => {
+    const h = mount({ rows: [CODER_ROW] })
+    await waitForFrame(h, 'Coder')
 
     h.gw.request.mockClear()
     await h.type('t')
     await waitForRpcCall(h.gw.request, 'subagents.test')
 
-    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'Guard', source: 'config' })
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'Coder', source: 'config' })
 
     h.unmount()
   })
@@ -479,18 +798,19 @@ describe('SubagentsHub', () => {
   // (the pure-function tests above cover the flattening/offset math, but not
   // whether `key.downArrow` actually moves `idx`, or whether the `offset`
   // values threaded into rendering match it). Uses the three-row fixture and
-  // a real down-arrow rather than a pre-selected single-row fixture, since
-  // the thing under test here is that navigation reaches the second row.
-  it("'down' then 't' tests the second row (Guard), not the first (Coder)", async () => {
+  // real arrow keys rather than a pre-selected single-row fixture, since
+  // the thing under test here is that navigation reaches a later entry. The
+  // preset is the second entry now that the collapsed group sits last.
+  it("'down' then 't' tests the second entry (opencode), not the first (Coder)", async () => {
     const h = mount()
-    await waitForFrame(h, 'Guard')
+    await waitForFrame(h, 'opencode')
 
     await h.type(DOWN)
     h.gw.request.mockClear()
     await h.type('t')
     await waitForRpcCall(h.gw.request, 'subagents.test')
 
-    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'Guard', source: 'config' })
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'opencode', source: 'preset' })
 
     h.unmount()
   })
@@ -725,9 +1045,11 @@ describe('SubagentsHub form and delete confirm', () => {
     h.unmount()
   })
 
+  // An installed row: the form is unreachable for a not-installed one, which
+  // now sits in the view-only drill-in.
   it("renders no 'API key' field for a kind: 'cli' row", async () => {
-    const h = mount({ rows: [GUARD_ROW] })
-    await waitForFrame(h, 'Guard')
+    const h = mount({ rows: [CODER_ROW] })
+    await waitForFrame(h, 'Coder')
 
     await h.type(ENTER)
     await waitForFrame(h, 'Edit subagent')
@@ -1292,7 +1614,7 @@ describe('SubagentsHub test_running survival across close/reopen', () => {
     h.unmount()
   })
 
-  it('esc cancels a running test even after the selection has moved to a different row', async () => {
+  it('esc cancels every running test, including one whose row is no longer selected', async () => {
     const h = mount({
       requestImpl: method => (method === 'subagents.test' ? new Promise(() => {}) : undefined)
     })
@@ -1301,15 +1623,34 @@ describe('SubagentsHub test_running survival across close/reopen', () => {
     await h.type('t')
     await waitForRpcCall(h.gw.request, 'subagents.test')
 
+    // Starting a second test is what proves the arrow landed, and it proves it
+    // by RPC argument rather than by frame text: `source: 'preset'` can only
+    // come from the opencode row. No frame assertion can stand in here -- ink
+    // repaints only the cells that changed, so a moved selection adds a bare
+    // '▸ ' to the append-only frame and a repainted word arrives with holes in
+    // it ('opencode' as 'open ode'), which no substring or spacing-tolerant
+    // match can recover. A fixed sleep would not survive a loaded parallel run.
     await h.type(DOWN)
-    await waitForFrame(h, 'Guard')
+    h.gw.request.mockClear()
+    await h.type('t')
+    await waitForRpcCall(h.gw.request, 'subagents.test')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'opencode', source: 'preset' })
 
     h.gw.request.mockClear()
     await h.type(ESC)
     await delay(60)
     await waitForRpcCall(h.gw.request, 'subagents.test_cancel')
 
+    // Both in-flight tests are cancelled, not only the selected row's -- the
+    // fan-out `runningNames` exists for, and this is the one case that has two
+    // running at once, so it is the only place it can be asserted. The length
+    // check is the half with teeth: the two `toHaveBeenCalledWith` lines cannot
+    // tell "cancelled both" from "cancelled both plus a third", which is the
+    // shape a refactor of `runningNames` would leak.
     expect(h.gw.request).toHaveBeenCalledWith('subagents.test_cancel', { name: 'Coder' })
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.test_cancel', { name: 'opencode' })
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.test_cancel')).toHaveLength(2)
     expect(h.onClose).not.toHaveBeenCalled()
 
     h.unmount()
