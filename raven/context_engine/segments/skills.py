@@ -185,10 +185,8 @@ class SkillsSegmentBuilder:
             try:
                 return await self._hub_client.get(c.meta["id"])
             except Exception as e:
-                # warning, not debug: a body-hydrate miss means the gate
-                # only sees catalog metadata for this candidate and may
-                # silently down-rank it for the wrong reason. Same level
-                # as the post-gate install failure further down.
+                # warning, not debug: a failed detail fetch means the
+                # candidate cannot be vetted and is dropped below.
                 log.warning(
                     "hub body hydrate failed for %s: %s",
                     c.meta.get("id"),
@@ -201,6 +199,16 @@ class SkillsSegmentBuilder:
         dropped: set[int] = set()
         for (i, c), m in zip(targets, metas):
             if m is None:
+                # Fail closed: the policy runs on the detail metadata, so a
+                # candidate whose detail fetch failed is unvetted. Leaving it
+                # in the pool would let the post-gate step call install()
+                # with prefetched_meta=None, whose internal re-fetch bypasses
+                # SkillPolicy entirely.
+                log.warning(
+                    "dropping hub skill %s: detail fetch failed, cannot vet",
+                    c.qualified_id,
+                )
+                dropped.add(i)
                 continue
             # Authoritative policy check: the catalog payload omits
             # score_safety (HubSkillSource's guard no-ops there), so the
@@ -240,10 +248,19 @@ class SkillsSegmentBuilder:
                 resolved, _ = resolve_refs(h.content, h.meta.get("skill_dir"))
                 return replace(h, content=resolved)
             if source == "hub" and self._hub_client is not None:
+                vetted = prefetched_meta.get(h.qualified_id)
+                if vetted is None:
+                    # Never hand install() a hub hit without vetted detail
+                    # metadata — its internal re-fetch would skip SkillPolicy.
+                    log.warning(
+                        "skipping install for %s: no vetted detail metadata",
+                        h.qualified_id,
+                    )
+                    return h
                 try:
                     installed = await self._hub_client.install(
                         h.meta["id"],
-                        prefetched_meta=prefetched_meta.get(h.qualified_id),
+                        prefetched_meta=vetted,
                     )
                 except Exception as e:
                     # Install failures fall back to the unresolved body
@@ -256,7 +273,7 @@ class SkillsSegmentBuilder:
                         e,
                     )
                     return h
-                self._notify_install(installed, prefetched_meta.get(h.qualified_id))
+                self._notify_install(installed, vetted)
                 body = installed.get("skill_md", "") or h.content
                 resolved, _ = resolve_refs(body, installed.get("dir"))
                 new_meta = dict(h.meta)

@@ -414,6 +414,38 @@ async def test_hub_hit_with_external_paths_dropped() -> None:
     assert hub.install_calls == []
 
 
+class _FlakyGetClient(_StubHubClient):
+    """get() always fails transiently; install() would succeed if reached."""
+
+    async def get(self, skill_id: str) -> dict[str, Any]:
+        self.get_calls.append(skill_id)
+        raise RuntimeError("transient 503")
+
+
+async def test_hub_hit_dropped_when_detail_fetch_fails() -> None:
+    """A hub candidate whose detail fetch fails is unvetted and must be
+    dropped: leaving it in the pool lets the post-gate step call
+    install(prefetched_meta=None), whose internal re-fetch bypasses
+    SkillPolicy entirely."""
+    src = _StubSource("hub", [_hit("hub/flaky1", "flaky-skill")])
+    hub = _FlakyGetClient({"flaky1": {"skill_md": "body", "score_safety": 0.2, "slug": "flaky-skill"}})
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    seg = await builder.build(_ctx("remember this"))
+    assert "flaky-skill" not in (seg.text or "")
+    assert hub.install_calls == []
+
+
+async def test_hub_hit_without_vetted_meta_never_installs() -> None:
+    """A hub hit that skipped the hydrate (content prefilled) carries no
+    vetted detail metadata; the install step must refuse rather than let
+    install() re-fetch unvetted."""
+    src = _StubSource("hub", [_hit("hub/pre1", "prefilled", "already has body")])
+    hub = _StubHubClient({"pre1": {"skill_md": "already has body", "score_safety": 0.9}})
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), hub_client=hub)
+    await builder.build(_ctx("remember this"))
+    assert hub.install_calls == []
+
+
 async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
     audit = tmp_path / "installs.jsonl"
     src = _StubSource("hub", [_hit("hub/good1", "good-skill")])
