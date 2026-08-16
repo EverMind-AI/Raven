@@ -180,10 +180,7 @@ class UseSkillTool(Tool):
         source, native = _split_qualified_id(skill_id)
 
         if is_blocked(self._policy.blocklist, native):
-            return (
-                f"Error: skill {native!r} is on the operator blocklist "
-                f"(skillForge.blocklist) and cannot be used."
-            )
+            return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 
         if source in ("local", "everos"):
             return self._use_on_disk(source, native)

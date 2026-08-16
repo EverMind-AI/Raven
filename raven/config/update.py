@@ -191,7 +191,9 @@ def set_skill_blocked(
         current = [x for x in current if x.casefold() != name.casefold()]
     section["blocklist"] = current
     _write_atomic(path, data)
-    logger.info("config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name)
+    logger.info(
+        "config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name
+    )
     return current
 
 
