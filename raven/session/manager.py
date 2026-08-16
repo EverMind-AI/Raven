@@ -94,6 +94,16 @@ class Session:
         """Add a message to the session."""
         self.record({"role": role, "content": content, **kwargs})
 
+    def set_title(self, title: str) -> None:
+        """Set a human-given title.
+
+        Clears the ``title_auto`` marker so fork inheritance treats the
+        title as human even when the session was auto-named before. Every
+        rename path must come through here, not assign metadata directly.
+        """
+        self.metadata["title"] = title
+        self.metadata.pop("title_auto", None)
+
     def record(self, msg: dict[str, Any]) -> None:
         """Append a message dict, stamping a wall-clock timestamp.
 
@@ -381,6 +391,7 @@ class SessionManager:
             auto_title = _first_user_auto_title(session.messages)
             if auto_title:
                 session.metadata["title"] = auto_title
+                session.metadata["title_auto"] = True
 
         channel, _, chat_id = session.key.partition(":")
         reserved = {
@@ -466,9 +477,11 @@ class SessionManager:
         (interaction wait-state is not history). The child is persisted eagerly.
 
         Only a human-given source title is inherited (as ``<title> (fork)``);
-        a title that equals the auto-derived title of the source's first user
-        message is treated as auto-named and not carried over, so children of
-        never-explicitly-titled sessions stay untitled.
+        a title stamped with the ``title_auto`` metadata marker (written by
+        ``save`` when it auto-names) is not carried over, so children of
+        never-explicitly-titled sessions stay untitled. A title without the
+        marker counts as human, which keeps sessions saved before the marker
+        existed inheriting as before.
 
         Returns the persisted child, or None when the source does not exist or
         has zero messages (a fork of an empty session has no value).
@@ -487,7 +500,7 @@ class SessionManager:
             child.metadata["title"] = title
         else:
             parent_title = (source.metadata or {}).get("title")
-            if parent_title and parent_title != _first_user_auto_title(source.messages):
+            if parent_title and not (source.metadata or {}).get("title_auto"):
                 child.metadata["title"] = f"{parent_title} (fork)"
         child.metadata["parent_session_id"] = source_key
         self.save(child)

@@ -127,7 +127,7 @@ def session_create(
     manager = _open_manager()
     session = manager.get_or_create(key)
     if title is not None:
-        session.metadata["title"] = title
+        session.set_title(title)
     manager.save(session)
 
     if title is not None:

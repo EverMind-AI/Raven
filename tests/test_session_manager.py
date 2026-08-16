@@ -785,10 +785,13 @@ def test_fork_deepcopies_messages(tmp_path: Path):
 
 
 def test_fork_default_title_appends_fork_suffix(tmp_path: Path):
-    """Without an explicit title, a titled parent yields '<title> (fork)'."""
+    """Without an explicit title, a titled parent yields '<title> (fork)'.
+
+    The parent was auto-named on its first save; the human rename via
+    set_title clears the marker, so the new title is inherited."""
     mgr = SessionManager(tmp_path)
     src = _seed(mgr, "cli:src10", ("user", "x"))
-    src.metadata["title"] = "My chat"
+    src.set_title("My chat")
     mgr.save(src)
 
     child = mgr.fork("cli:src10")
@@ -814,6 +817,36 @@ def test_fork_explicit_title_overrides(tmp_path: Path):
     child = mgr.fork("cli:src12", title="Custom")
 
     assert child.metadata["title"] == "Custom"
+
+
+def test_fork_inherits_human_title_equal_to_auto_derivation(tmp_path: Path):
+    """A human title that happens to equal the auto-derived text of the first
+    user message is still human: the child inherits '<title> (fork)'."""
+    mgr = SessionManager(tmp_path)
+    src = mgr.get_or_create("cli:src13")
+    src.set_title("Plan the trip")
+    src.add_message("user", "Plan the trip")
+    mgr.save(src)
+
+    child = mgr.fork("cli:src13")
+
+    assert child.metadata["title"] == "Plan the trip (fork)"
+
+
+def test_fork_skips_auto_named_title_via_marker(tmp_path: Path):
+    """An auto-named source carries title_auto in its persisted metadata and
+    the child does not inherit the title, even after a disk round-trip."""
+    mgr = SessionManager(tmp_path)
+    _seed(mgr, "cli:src14", ("user", "Plan the trip"))
+
+    reloaded_mgr = SessionManager(tmp_path)
+    source = reloaded_mgr.peek("cli:src14")
+    assert source.metadata.get("title") == "Plan the trip"
+    assert source.metadata.get("title_auto") is True
+
+    child = reloaded_mgr.fork("cli:src14")
+
+    assert child.metadata.get("title") is None
 
 
 # ── resolve_key (shared cross-channel resolution core) ─────────────────
