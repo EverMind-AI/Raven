@@ -80,6 +80,37 @@ _GATEWAY_IM_CHANNELS: tuple[str, ...] = (
 )
 
 
+def _risk_banner(config) -> str | None:
+    """Startup banner for the dangerous default combo: no sandbox + a channel
+    open to anyone. Returns the banner text, or None when either leg is safe.
+
+    Printed, not gated: gateways run unattended, so blocking on a confirm
+    would strand headless restarts -- visibility is the fix here.
+    """
+    if getattr(config.tools.sandbox, "backend", None) != "none":
+        return None
+
+    open_channels = []
+    for name in type(config.channels).model_fields:
+        section = getattr(config.channels, name, None)
+        if section is None or not getattr(section, "enabled", False):
+            continue
+        if "*" in (getattr(section, "allow_from", None) or []):
+            open_channels.append(name)
+    if not open_channels:
+        return None
+
+    lines = [
+        "!! SECURITY WARNING: dangerous configuration combination",
+        "   - sandbox.backend = none (agent tools run with full host privileges)",
+    ]
+    for name in sorted(open_channels):
+        lines.append(f"   - channels.{name}.allow_from contains '*' (anyone can command this agent)")
+    lines.append("   Restrict senders:  raven channels set <name> --allow-from <id1,id2>")
+    lines.append("   Enable a sandbox:  set tools.sandbox.backend to 'auto' or 'boxlite' in your config")
+    return "\n".join(lines)
+
+
 def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
     enabled IM channels only.
@@ -177,6 +208,9 @@ def register(app: typer.Typer) -> None:
 
         console.print(f"{__logo__} Starting Raven gateway on port {port}...")
         console.print(f"[dim]📝 Logs → {log_path}[/dim]")
+        banner = _risk_banner(config)
+        if banner is not None:
+            console.print(banner, style="bold red", markup=False)
         sync_workspace_templates(config.workspace_path)
         provider = make_provider(config)
         session_manager = SessionManager(config.workspace_path)

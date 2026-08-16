@@ -18,6 +18,7 @@ from rich.table import Table
 
 from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.cli._theme import POINTER, QMARK
+from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
@@ -686,6 +687,7 @@ def _platform_choice_label(platform: Platform, width: int, results: list[ScanRes
 
 
 async def _pick_platform(results: list[ScanResult], skill_count: int) -> Platform | None:
+    die_if_not_tty("raven import run --platform <platform> --tier <tier> --yes")
     try:
         questionary = _require_questionary()
     except SystemExit:
@@ -712,6 +714,7 @@ async def _pick_platform(results: list[ScanResult], skill_count: int) -> Platfor
 
 
 async def _pick_tier(results: list[ScanResult], skill_count: int) -> Tier | None:
+    die_if_not_tty("raven import run --platform <platform> --tier <tier> --yes")
     try:
         questionary = _require_questionary()
     except SystemExit:

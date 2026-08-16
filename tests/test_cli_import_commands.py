@@ -470,6 +470,8 @@ class TestRun:
             ),
             patch("raven.cli.import_commands._default_state", return_value=state),
             patch("raven.cli.import_commands._require_questionary", return_value=questionary),
+            # CliRunner is never a TTY; these tests exercise the pickers, not TTY policy.
+            patch("raven.cli.import_commands.die_if_not_tty", new=lambda *a, **k: None),
         ):
             stack.enter_context(ctx)
         return stack
@@ -931,6 +933,35 @@ class TestPrintSummary:
 
         assert "Profile:" not in out
         assert "Skills:" not in out
+
+
+class TestNonTTYGuard:
+    def test_import_run_nontty_no_traceback(self) -> None:
+        """``run`` without --platform (two platforms found) in a non-TTY
+        terminal exits 2 with a re-run hint instead of crashing in questionary."""
+        results = [
+            _scan_result("a", platform=Platform.CLAUDE_CODE),
+            _scan_result("b", platform=Platform.CODEX),
+        ]
+        with patch(
+            "raven.importer.scanners.scan_all",
+            new=AsyncMock(return_value=results),
+        ):
+            result = runner.invoke(import_app, ["run"])
+        assert result.exit_code == 2
+        assert "Traceback" not in result.output
+        assert "Re-run with:" in result.output
+
+    def test_import_run_nontty_tier_picker_guarded(self) -> None:
+        """The tier picker (no --tier) is guarded the same way."""
+        with patch(
+            "raven.importer.scanners.scan_all",
+            new=AsyncMock(return_value=_make_scan_results()),
+        ):
+            result = runner.invoke(import_app, ["run", "--platform", "claude_code"])
+        assert result.exit_code == 2
+        assert "Traceback" not in result.output
+        assert "Re-run with:" in result.output
 
 
 class TestStatusCancelled:

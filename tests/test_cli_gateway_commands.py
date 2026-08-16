@@ -275,3 +275,36 @@ def test_build_routing_ecoclaw_no_key_disabled():
     router, out = build_model_routing(_routing_config_obj(routing), prov)
     assert router is None
     assert out is prov
+
+
+# ---------------------------------------------------------------------------
+# _risk_banner: sandbox=none + open allow_from startup warning
+# ---------------------------------------------------------------------------
+
+
+def _config_with(*, backend: str, telegram_enabled: bool, allow_from: list[str]):
+    from raven.config.schema import Config
+
+    cfg = Config()
+    cfg.tools.sandbox.backend = backend
+    cfg.channels.telegram.enabled = telegram_enabled
+    cfg.channels.telegram.allow_from = allow_from
+    return cfg
+
+
+def test_risk_banner_fires_on_combo() -> None:
+    from raven.cli.gateway_commands import _risk_banner
+
+    banner = _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["*"]))
+    assert banner
+    assert "sandbox" in banner
+    assert "allow_from" in banner
+    assert "telegram" in banner
+
+
+def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
+    from raven.cli.gateway_commands import _risk_banner
+
+    assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
+    assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
+    assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
