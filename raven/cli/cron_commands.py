@@ -649,8 +649,7 @@ def cron_add(
         ...,
         "--channel",
         help=(
-            "Delivery channel the job is bound to (required): 'tui', 'cli', "
-            "or an enabled IM channel (e.g. 'telegram')"
+            "Delivery channel the job is bound to (required): 'tui', 'cli', or an enabled IM channel (e.g. 'telegram')"
         ),
     ),
     to: str = typer.Option(
@@ -819,11 +818,7 @@ def cron_config_get(
     from raven.config.loader import load_config
 
     config = load_config()
-    selected = [
-        k
-        for k, picked in (("default_timezone", default_timezone),)
-        if picked
-    ]
+    selected = [k for k, picked in (("default_timezone", default_timezone),) if picked]
     if not selected:
         table = Table(title="cron config (effective values)", show_lines=False)
         table.add_column("key", style="cyan")
