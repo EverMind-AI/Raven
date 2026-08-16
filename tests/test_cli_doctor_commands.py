@@ -362,8 +362,6 @@ def test_memory_section_reaches_the_json_output(healthy_config: Path, no_memory_
     assert payload["memory"]["configured"] == ["llm", "embedding"]
 
 
-
-
 # --------------------------------------------------------------------------- config visibility
 
 
@@ -421,6 +419,28 @@ def test_doctor_config_line_three_states(tmp_path: Path) -> None:
     out_good, _ = _run_doctor_subprocess(home_good)
     config_line = next(line for line in out_good.splitlines() if "Config:" in line)
     assert "✓" in config_line, out_good
+
+
+def test_doctor_empty_config_is_invalid(tmp_path: Path) -> None:
+    """An empty config.json runs on defaults (load_config sees a JSON syntax
+    error), so doctor must not paint the Config line green."""
+    home = _write_home_config(tmp_path, "empty", "")
+    out, code = _run_doctor_subprocess(home)
+    config_line = next(line for line in out.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out
+    assert "empty" in config_line, out
+    assert code == 1, out
+
+
+def test_doctor_non_object_config_is_invalid(tmp_path: Path) -> None:
+    """A valid-JSON non-object top level (e.g. null) carries no settings, so
+    doctor must classify it invalid instead of green."""
+    home = _write_home_config(tmp_path, "nonobject", "null")
+    out, code = _run_doctor_subprocess(home)
+    config_line = next(line for line in out.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out
+    assert "not a JSON object" in config_line, out
+    assert code == 1, out
 
 
 def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> None:

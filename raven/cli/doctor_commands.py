@@ -34,6 +34,7 @@ class PathsInfo:
     config_path: str
     config_exists: bool
     config_valid: bool = False
+    config_invalid_reason: str = ""
     workspace_path: str = ""
     workspace_exists: bool = False
 
@@ -138,12 +139,7 @@ class DoctorReport:
 
 def _gather_static_checks() -> DoctorReport:
     """Inspect config / routing / features. Strictly zero-network."""
-    from raven.config.loader import (
-        ConfigReadError,
-        get_config_path,
-        load_config,
-        read_raw_or_raise,
-    )
+    from raven.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     paths = PathsInfo(
@@ -155,14 +151,22 @@ def _gather_static_checks() -> DoctorReport:
     if not paths.config_exists:
         return report
 
-    # Classify JSON validity directly: load_config swallows syntax errors
-    # and returns defaults, so it cannot distinguish valid from invalid.
+    # Classify config validity with load_config's eyes: a syntax error, an
+    # empty file, and a non-object top level all mean no settings were read.
+    # Inspect the file directly -- load_config swallows syntax errors into
+    # defaults, and read_raw_or_raise folds the last two cases into {} for
+    # its read-modify-write callers, so neither can classify all three.
     try:
-        read_raw_or_raise(config_path)
-    except ConfigReadError:
-        paths.config_valid = False
+        text = config_path.read_text(encoding="utf-8")
+        data = json.loads(text) if text.strip() else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        paths.config_invalid_reason = "invalid JSON"
     else:
-        paths.config_valid = True
+        if not text.strip():
+            paths.config_invalid_reason = "empty"
+        elif not isinstance(data, dict):
+            paths.config_invalid_reason = "not a JSON object"
+    paths.config_valid = not paths.config_invalid_reason
 
     try:
         config = load_config()
@@ -327,7 +331,8 @@ def _render_human_output(report: DoctorReport) -> None:
     if not paths.config_exists:
         console.print(f"  Config:    {paths.config_path}  [red]✗  (not found)[/red]")
     elif not paths.config_valid:
-        console.print(f"  Config:    {paths.config_path}  [yellow]⚠  invalid JSON (running on defaults)[/yellow]")
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"  Config:    {paths.config_path}  [yellow]⚠  {reason} (running on defaults)[/yellow]")
     else:
         console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
     if paths.config_exists:
@@ -339,7 +344,14 @@ def _render_human_output(report: DoctorReport) -> None:
         return
 
     if not report.config_loaded:
-        console.print("\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it.")
+        if paths.config_valid:
+            console.print(
+                "\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it."
+            )
+        else:
+            reason = paths.config_invalid_reason or "invalid JSON"
+            console.print(f"\n[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
+            console.print(f"Fix [cyan]{paths.config_path}[/cyan] or run [cyan]raven onboard --reset[/cyan].")
         return
 
     routing = report.routing
@@ -411,7 +423,8 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("[green]✓ All checks passed.[/green]")
     elif not paths.config_valid:
-        console.print("[yellow]⚠ Config file is invalid JSON; the checks above ran on built-in defaults.[/yellow]")
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
         console.print(f"Fix [cyan]{paths.config_path}[/cyan] (JSON allows no comments or trailing commas).")
     elif routing and routing.provider is None:
         console.print(
