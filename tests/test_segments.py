@@ -6,6 +6,7 @@ reproduce the segment its old inline block in ``ContextBuilder`` emitted.
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
 
 from raven.agent.context import ContextBuilder
@@ -16,6 +17,7 @@ from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
+    render,
 )
 from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
@@ -64,6 +66,15 @@ class _Source:
 # ---------------------------------------------------------------------------
 
 
+def _provider_config(model: str, provider: str, api_key: str | None = None, api_base: str | None = None):
+    """A config stand-in exposing exactly what _resolved_model_id reads."""
+    cfg = types.SimpleNamespace(agents=types.SimpleNamespace(defaults=types.SimpleNamespace(model=model)))
+    cfg.get_provider_name = lambda m=None: provider
+    cfg.get_api_key = lambda m=None: api_key
+    cfg.get_api_base = lambda m=None: api_base
+    return cfg
+
+
 class TestIdentityBootstrap:
     async def test_identity_matches_legacy(self, tmp_path: Path) -> None:
         seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
@@ -80,6 +91,39 @@ class TestIdentityBootstrap:
         assert seg is not None
         assert "## TOOLS.md" in seg.text
         assert "tool docs" in seg.text
+
+    def test_identity_contains_model_id(self, tmp_path: Path) -> None:
+        prompt = render.identity_text(tmp_path, model="openrouter/some-model")
+        assert "openrouter/some-model" in prompt
+
+    def test_identity_default_model_resolved_lazily(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
+        assert "openrouter/acme/lazy-model" in render.identity_text(tmp_path)
+
+    def test_legacy_identity_contains_model_id(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
+        legacy = ContextBuilder(workspace=tmp_path)._get_identity()
+        assert "openrouter/acme/lazy-model" in legacy
+
+    def test_resolved_model_id_codex_matches_wire_form(self, monkeypatch) -> None:
+        """openai_codex bypasses LiteLLM and its client strips the provider
+        prefix before sending; the identity line must report that wire form,
+        not the stored one."""
+        cfg = _provider_config("openai-codex/gpt-5.1-codex", "openai_codex")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+        assert render._resolved_model_id() == "gpt-5.1-codex"
+
+    def test_resolved_model_id_azure_matches_wire_form(self, monkeypatch) -> None:
+        """azure_openai sends the id as a URL deployment name with the prefix
+        stripped; the identity line must match."""
+        cfg = _provider_config("azure_openai/gpt-4o", "azure_openai")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+        assert render._resolved_model_id() == "gpt-4o"
+
+    def test_resolved_model_id_gateway_prefix_applied(self, monkeypatch) -> None:
+        cfg = _provider_config("acme/some-model", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+        assert render._resolved_model_id() == "openrouter/acme/some-model"
 
 
 class TestMemory:
