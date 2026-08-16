@@ -693,6 +693,27 @@ def test_enable_restricted_allowfrom_skips_gate(tmp_config: Path) -> None:
     assert section["allowFrom"] == ["alice"]
 
 
+def test_enable_star_inside_id_does_not_trigger_gate(tmp_config: Path) -> None:
+    """An ID merely containing ``*`` (e.g. ``user*1``) is not the wildcard:
+    the confirm gate must not fire on substring matches."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "user*1"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["user*1"]
+
+
+def test_enable_star_item_in_list_triggers_gate(tmp_config: Path) -> None:
+    """An exact ``*`` item anywhere in the comma list still counts as the
+    explicit wildcard: non-TTY prints the risk warning and proceeds."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "a,*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["allowFrom"] == ["a", "*"]
+
+
 def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
     """Bare ``enable telegram`` (required --token unset) must error on the first
     line and exit non-zero; the schema table stays as follow-up detail."""
