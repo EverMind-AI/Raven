@@ -445,7 +445,7 @@ async def session_title(
 
     if title is not None:
         session = mgr.get_or_create(session_key)
-        session.metadata["title"] = title
+        session.set_title(title)
         if mgr.exists(session_key):
             try:
                 mgr.save(session)

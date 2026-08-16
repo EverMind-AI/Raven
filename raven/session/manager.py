@@ -25,6 +25,29 @@ def new_chat_id(now: datetime | None = None) -> str:
     return f"{ts}_{uuid.uuid4().hex[:6]}"
 
 
+_AUTO_TITLE_MAX_CHARS = 40
+
+
+def _derive_title(content: Any) -> str | None:
+    """Derive an auto-title from message content: first non-empty line,
+    whitespace collapsed, truncated to 40 characters. None when the
+    content is not a usable string (e.g. structured multimodal parts)."""
+    if not isinstance(content, str):
+        return None
+    stripped = content.strip()
+    if not stripped:
+        return None
+    collapsed = " ".join(stripped.splitlines()[0].split())
+    return collapsed[:_AUTO_TITLE_MAX_CHARS] or None
+
+
+def _first_user_auto_title(messages: list[dict[str, Any]]) -> str | None:
+    for m in messages:
+        if m.get("role") == "user":
+            return _derive_title(m.get("content"))
+    return None
+
+
 @dataclass(frozen=True)
 class SessionResolution:
     """Outcome of resolving a user-supplied session id to a full key.
@@ -70,6 +93,16 @@ class Session:
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
         self.record({"role": role, "content": content, **kwargs})
+
+    def set_title(self, title: str) -> None:
+        """Set a human-given title.
+
+        Clears the ``title_auto`` marker so fork inheritance treats the
+        title as human even when the session was auto-named before. Every
+        rename path must come through here, not assign metadata directly.
+        """
+        self.metadata["title"] = title
+        self.metadata.pop("title_auto", None)
 
     def record(self, msg: dict[str, Any]) -> None:
         """Append a message dict, stamping a wall-clock timestamp.
@@ -201,6 +234,11 @@ class SessionManager:
         to get the authoritative session key ``<channel>:<chat_id>`` and
         ``updated_at``; recency is decided by ``updated_at``, falling back
         to file mtime for files that lack it.
+
+        Sessions with messages take priority: a freshly minted zero-message
+        session (``sessions create``) must not hijack delivery away from the
+        user's real last conversation. Empty sessions are only considered
+        when the channel has no session with messages at all.
         """
         channel_dir = self.sessions_dir / safe_filename(channel)
         if not channel_dir.is_dir():
@@ -208,8 +246,10 @@ class SessionManager:
 
         best_chat_id: str | None = None
         best_updated = ""
+        best_empty_chat_id: str | None = None
+        best_empty_updated = ""
         for p in channel_dir.glob("*.jsonl"):
-            meta, _count = self._scan_file(p)
+            meta, count = self._scan_file(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -224,10 +264,14 @@ class SessionManager:
                     updated = datetime.fromtimestamp(p.stat().st_mtime).isoformat()
                 except OSError:
                     continue
-            if updated > best_updated:
-                best_chat_id = chat_id
-                best_updated = updated
-        return best_chat_id
+            if count > 0:
+                if updated > best_updated:
+                    best_chat_id = chat_id
+                    best_updated = updated
+            elif updated > best_empty_updated:
+                best_empty_chat_id = chat_id
+                best_empty_updated = updated
+        return best_chat_id if best_chat_id is not None else best_empty_chat_id
 
     @staticmethod
     def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int]:
@@ -334,8 +378,20 @@ class SessionManager:
         under a cross-process lock, so concurrent writers never lose each
         other's turns and a turn's messages stay contiguous. A shrunken
         message list (clear) rewrites the file atomically instead.
+
+        An untitled session is auto-named here from its first user message
+        (first line, collapsed whitespace, capped at 40 chars); a title set
+        by the user is never overwritten. Forked children are excluded —
+        their first user message names the fork point's ancestor, not the
+        fork — so they stay untitled unless titled explicitly.
         """
         path = self._get_session_path(session.key)
+
+        if not session.metadata.get("title") and not session.metadata.get("parent_session_id"):
+            auto_title = _first_user_auto_title(session.messages)
+            if auto_title:
+                session.metadata["title"] = auto_title
+                session.metadata["title_auto"] = True
 
         channel, _, chat_id = session.key.partition(":")
         reserved = {
@@ -420,6 +476,13 @@ class SessionManager:
         matches the source at the fork point) and resets ``pending_clarification``
         (interaction wait-state is not history). The child is persisted eagerly.
 
+        Only a human-given source title is inherited (as ``<title> (fork)``);
+        a title stamped with the ``title_auto`` metadata marker (written by
+        ``save`` when it auto-names) is not carried over, so children of
+        never-explicitly-titled sessions stay untitled. A title without the
+        marker counts as human, which keeps sessions saved before the marker
+        existed inheriting as before.
+
         Returns the persisted child, or None when the source does not exist or
         has zero messages (a fork of an empty session has no value).
         """
@@ -437,7 +500,7 @@ class SessionManager:
             child.metadata["title"] = title
         else:
             parent_title = (source.metadata or {}).get("title")
-            if parent_title:
+            if parent_title and not (source.metadata or {}).get("title_auto"):
                 child.metadata["title"] = f"{parent_title} (fork)"
         child.metadata["parent_session_id"] = source_key
         self.save(child)
