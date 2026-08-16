@@ -206,9 +206,7 @@ def test_pid_is_viewer_windows_detects_node_via_tasklist(monkeypatch):
     filters the pid and a node image means the viewer is alive."""
     calls: list = []
     monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(
-        tc.subprocess, "run", _windows_run(calls, "node.exe                     4242 Console")
-    )
+    monkeypatch.setattr(tc.subprocess, "run", _windows_run(calls, "node.exe                     4242 Console"))
     assert tc._pid_is_viewer(4242) is True
     assert calls == [["tasklist", "/FI", "PID eq 4242"]]
 
