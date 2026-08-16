@@ -145,17 +145,30 @@ class TestDiscoveryOrder:
 
         assert _discover.pick(_discover.discover()) is None
 
-    def test_the_users_own_root_is_offered_only_as_a_last_resort(self, _isolate) -> None:
-        """Suggesting it while raven has memories of its own would invite the
-        user to abandon them."""
+    def test_the_users_own_root_is_never_offered(self, _isolate) -> None:
+        """Discovery scans raven's own roots and nothing else.
+
+        Offering the user's ``~/.everos`` made the wizard propose a decision the
+        user had not come to make, and the answer it invited -- "reuse it" --
+        was one raven could only honour by never touching the thing it had just
+        adopted. Choosing to point raven at an EverOS of one's own is now an
+        explicit turn in the wizard, with an address typed by the person who
+        knows it.
+        """
         bare = self.legacy.parent
         _write_root(bare)
 
-        offered = [s for s in _discover.discover() if s.root == bare]
-        assert offered and offered[0].owned is False
+        assert not [s for s in _discover.discover() if s.root == bare]
 
         _write_root(self.default)
         assert not [s for s in _discover.discover() if s.root == bare]
+
+    def test_every_discovered_root_is_ravens_own(self, _isolate) -> None:
+        _write_root(self.default)
+        _write_root(self.legacy)
+
+        roots = {s.root for s in _discover.discover()}
+        assert roots <= {self.default, self.legacy}
 
     def test_a_recorded_unowned_root_keeps_its_ownership(self, tmp_path: Path, _isolate) -> None:
         from raven.config import update_everos as ue

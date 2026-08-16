@@ -113,10 +113,12 @@ def discover() -> list[RootState]:
     even when it is in a worse state than another candidate, because switching
     roots behind the user's back would silently change which memories raven has.
 
-    The user's own ``~/.everos`` is offered only when raven has no root of its
-    own to use. Suggesting it while raven has memories of its own would invite
-    the user to abandon them, and adopting it costs them exclusive use of their
-    data.
+    Only roots raven creates for itself are scanned. An EverOS the user runs is
+    never discovered: finding one means offering it, offering it means asking
+    for a decision the user did not come to make, and the only answer raven can
+    honour -- read-only reuse -- is one it cannot infer from a path anyway.
+    Pointing raven at such a server is an explicit turn in the wizard where the
+    person who knows the address types it.
     """
     from raven.config.update_everos import (
         _recorded_slice,
@@ -144,11 +146,6 @@ def discover() -> list[RootState]:
     for root in (default_everos_root(), legacy_everos_root()):
         if root not in seen:
             add(root, owned=True)
-
-    if not any(s.exists and s.configured for s in states):
-        bare = legacy_everos_root().parent
-        if bare not in seen and (bare / "everos.toml").is_file():
-            add(bare, owned=False)
 
     return states
 
