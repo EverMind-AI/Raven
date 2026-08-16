@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.skill_hub.audit import record_install
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import (
     SkillPolicy,
     is_blocked,
@@ -142,6 +142,30 @@ class TestInstallSkipReason:
         monkeypatch.setattr("builtins.input", lambda _prompt="": "")
         reason = SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
         assert reason is not None and "declined" in reason
+
+
+class TestWriteInstallMeta:
+    def test_none_dir_is_noop(self) -> None:
+        write_install_meta(None, slug="x", version="v1", trigger="use_skill")
+
+    def test_writes_meta_into_skill_dir(self, tmp_path: Path) -> None:
+        write_install_meta(str(tmp_path), slug="foo", version="v2", trigger="auto_inject")
+        record = json.loads((tmp_path / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["slug"] == "foo"
+        assert record["version"] == "v2"
+        assert record["source"] == "hub"
+        assert record["trigger"] == "auto_inject"
+        assert record["installed_at"]
+
+    def test_first_install_wins(self, tmp_path: Path) -> None:
+        write_install_meta(tmp_path, slug="foo", version="v2", trigger="auto_inject")
+        write_install_meta(tmp_path, slug="foo", version="v2", trigger="use_skill")
+        record = json.loads((tmp_path / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["trigger"] == "auto_inject"
+
+    def test_missing_dir_is_best_effort_noop(self, tmp_path: Path) -> None:
+        write_install_meta(tmp_path / "ghost", slug="foo", version="v1", trigger="use_skill")
+        assert not (tmp_path / "ghost").exists()
 
 
 class TestRecordInstall:

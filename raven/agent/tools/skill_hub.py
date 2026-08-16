@@ -31,7 +31,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
-from raven.skill_hub.audit import record_install
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
 
 if TYPE_CHECKING:
@@ -243,6 +243,12 @@ class UseSkillTool(Tool):
             trigger="use_skill",
             score_safety=score,
             skill_dir=info.get("dir"),
+        )
+        write_install_meta(
+            info.get("dir"),
+            slug=str(info.get("slug") or slug),
+            version=str(info.get("version") or ""),
+            trigger="use_skill",
         )
         logger.warning(
             "installed hub skill %s@%s via use_skill (score_safety=%s)",

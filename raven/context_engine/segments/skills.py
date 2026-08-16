@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
 from raven.memory_engine.skill_forge.refs import resolve_refs
-from raven.skill_hub.audit import record_install
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
 from raven.tracing import semconv, trace
 
@@ -326,6 +326,12 @@ class SkillsSegmentBuilder:
             trigger="auto_inject",
             score_safety=score,
             skill_dir=installed.get("dir"),
+        )
+        write_install_meta(
+            installed.get("dir"),
+            slug=slug,
+            version=version,
+            trigger="auto_inject",
         )
 
     def _collect_tool_names(self) -> list[str] | None:

@@ -271,6 +271,24 @@ class TestUseSkillSafetyPolicy:
         assert rec["slug"] == "foo"
         assert rec["trigger"] == "use_skill"
 
+    async def test_install_writes_install_meta(self, tmp_path: Path) -> None:
+        import json
+
+        skill_dir = tmp_path / "foo@v2"
+        skill_dir.mkdir()
+        client = _FakeClient(
+            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
+            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": str(skill_dir)},
+        )
+        out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
+        assert not out.startswith("Error")
+        rec = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
+        assert rec["slug"] == "foo"
+        assert rec["version"] == "v2"
+        assert rec["source"] == "hub"
+        assert rec["trigger"] == "use_skill"
+        assert rec["installed_at"]
+
 
 class _FakeStdin:
     def __init__(self, *, tty: bool) -> None:
