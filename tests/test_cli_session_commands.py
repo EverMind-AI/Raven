@@ -404,7 +404,7 @@ def test_export_write_failure_exits_cleanly(patched_workspace: Path, manager: Se
     assert r.exception is None or isinstance(r.exception, SystemExit)
 
 
-# ── create/delete roundtrip (frozen acceptance) ───────────────────────
+# ── create/delete roundtrip ───────────────────────────────────────────
 
 
 def test_session_create_list_delete_roundtrip(patched_workspace: Path) -> None:
@@ -425,7 +425,7 @@ def test_session_delete_unknown_id_still_clear(patched_workspace: Path) -> None:
     assert "not found" in r.output.lower()
 
 
-# ── auto-title (frozen acceptance) ────────────────────────────────────
+# ── auto-title ────────────────────────────────────────────────────────
 
 
 def test_session_autotitle_from_first_message(patched_workspace: Path, manager: SessionManager) -> None:
