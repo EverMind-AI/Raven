@@ -76,11 +76,46 @@ def _language_directive() -> str:
     return ""
 
 
-def identity_text(workspace: Path) -> str:
-    """Segment 1 — the core identity / runtime block."""
+def _resolved_model_id() -> str:
+    """The routed model id (gateway/provider prefix applied) from config.
+
+    Delegates the storage-to-wire conversion to ``providers.wire`` instead
+    of constructing a provider — that would import litellm and mutate env
+    vars during prompt assembly. Reads config lazily and never raises;
+    ``""`` means "unknown" and the identity block skips the line.
+    """
+    try:
+        from raven.config.loader import load_config
+        from raven.providers.registry import find_by_name, find_gateway
+        from raven.providers.wire import wire_model
+
+        config = load_config()
+        model = config.agents.defaults.model
+        provider_name = config.get_provider_name(model)
+        gateway = find_gateway(
+            provider_name,
+            config.get_api_key(model),
+            config.get_api_base(model),
+        )
+        # spec mirrors the non-LiteLLM call sites (codex / azure strip their
+        # own prefix on the wire); a gateway still decides alone when set.
+        return wire_model(model, spec=find_by_name(provider_name), gateway=gateway)
+    except Exception:
+        return ""
+
+
+def identity_text(workspace: Path, model: str | None = None) -> str:
+    """Segment 1 — the core identity / runtime block.
+
+    ``model`` is the resolved routed model id (full ``provider/model``
+    form) told to the model so it never guesses its own identity from
+    pretraining. ``None`` (the default) resolves it lazily from config.
+    """
     workspace_path = str(workspace.expanduser().resolve())
     system = platform.system()
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+    resolved_model = model if model is not None else _resolved_model_id()
+    model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
 
     if system == "Windows":
         platform_policy = """## Platform Policy (Windows)
@@ -99,7 +134,7 @@ def identity_text(workspace: Path) -> str:
 You are Raven, a helpful AI assistant.
 {_language_directive()}
 ## Runtime
-{runtime}
+{runtime}{model_line}
 
 ## Workspace
 Your workspace is at: {workspace_path}
