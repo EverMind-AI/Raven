@@ -429,6 +429,15 @@ skill body (`~/.raven` is allowed; any other dotdir reference refuses the instal
 candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
 Every install that passes is appended to a JSONL audit trail
 (`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
+`install_skip_reason()` is the separate operator-consent gate over the bundle download
+itself (`skillForge.autoInstall`: `auto` / `prompt` / `off`), consulted by both call sites
+right before `install()`, after all safety vetting. A consent decline is a **skip**, not a
+refusal: the already-vetted skill body still injects (and `read_skill` still works), only
+the on-disk bundle is withheld. Alongside the JSONL trail, a passing install stamps a
+one-time `.install-meta.json` into the skill directory (`write_install_meta`, first
+install wins) — the O(1) provenance source behind `raven skill list`'s Installed column.
+_Avoid_: calling an autoInstall skip a "refusal" or "block" — refusals are safety verdicts
+on the skill; a skip is withheld operator consent for the download.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.

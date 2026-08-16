@@ -487,6 +487,7 @@ class AgentLoop:
             getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
         )
         self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine" = build_context_engine(
             workspace=workspace,
@@ -865,6 +866,7 @@ class AgentLoop:
                     registry=skill_registry,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
                         if self._skill_hub_client is not None

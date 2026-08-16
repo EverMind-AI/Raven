@@ -31,7 +31,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
-from raven.skill_hub.audit import record_install
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
 
 if TYPE_CHECKING:
@@ -135,11 +135,16 @@ class UseSkillTool(Tool):
         *,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(
+            min_safety=min_safety,
+            blocklist=blocklist,
+            auto_install=auto_install,
+        )
         self._install_audit_path = install_audit_path
 
     @property
@@ -222,6 +227,11 @@ class UseSkillTool(Tool):
         if refusal is not None:
             return f"Error: refusing to install hub skill: {refusal}."
 
+        skip = await self._policy.install_skip_reason(slug)
+        if skip is not None:
+            logger.info("use_skill install skipped: %s", skip)
+            return f"Skill install skipped: {skip}. Use read_skill to view the skill body."
+
         try:
             info = await self._client.install(native, prefetched_meta=meta)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
@@ -233,6 +243,12 @@ class UseSkillTool(Tool):
             trigger="use_skill",
             score_safety=score,
             skill_dir=info.get("dir"),
+        )
+        write_install_meta(
+            info.get("dir"),
+            slug=str(info.get("slug") or slug),
+            version=str(info.get("version") or ""),
+            trigger="use_skill",
         )
         logger.warning(
             "installed hub skill %s@%s via use_skill (score_safety=%s)",

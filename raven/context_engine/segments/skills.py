@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
 from raven.memory_engine.skill_forge.refs import resolve_refs
-from raven.skill_hub.audit import record_install
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked
 from raven.tracing import semconv, trace
 
@@ -69,6 +69,7 @@ class SkillsSegmentBuilder:
         get_tool_definitions: "Any | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._router = router
@@ -81,7 +82,11 @@ class SkillsSegmentBuilder:
         self._pool_size = gate_pool_size if gate is not None else skill_top_k
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(
+            min_safety=min_safety,
+            blocklist=blocklist,
+            auto_install=auto_install,
+        )
         self._install_audit_path = install_audit_path
         self._audited_installs: set[str] = set()
 
@@ -257,6 +262,13 @@ class SkillsSegmentBuilder:
                         h.qualified_id,
                     )
                     return h
+                skip = await self._policy.install_skip_reason(h.name)
+                if skip is not None:
+                    # Consent skip, not a failure: the body already
+                    # hydrated in step ③ still injects — only the bundle
+                    # download is withheld.
+                    log.info("hub auto-install skipped: %s", skip)
+                    return h
                 try:
                     installed = await self._hub_client.install(
                         h.meta["id"],
@@ -314,6 +326,12 @@ class SkillsSegmentBuilder:
             trigger="auto_inject",
             score_safety=score,
             skill_dir=installed.get("dir"),
+        )
+        write_install_meta(
+            installed.get("dir"),
+            slug=slug,
+            version=version,
+            trigger="auto_inject",
         )
 
     def _collect_tool_names(self) -> list[str] | None:

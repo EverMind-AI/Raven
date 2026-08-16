@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
 
-from raven.skill_hub.audit import record_install
+import pytest
+
+from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import (
     SkillPolicy,
     is_blocked,
@@ -100,6 +104,125 @@ class TestSkillPolicy:
         policy = SkillPolicy.create(blocklist=["native-id"])
         reason = policy.refusal_for_detail({}, "native-id")
         assert reason is not None and "blocklist" in reason
+
+
+class _FakeStdin(io.StringIO):
+    def __init__(self, *, tty: bool) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+class TestInstallSkipReason:
+    async def test_auto_allows(self) -> None:
+        assert await SkillPolicy.create().install_skip_reason("foo") is None
+
+    async def test_unknown_mode_behaves_like_auto(self) -> None:
+        assert await SkillPolicy.create(auto_install="sometimes").install_skip_reason("foo") is None
+
+    async def test_off_skips(self) -> None:
+        reason = await SkillPolicy.create(auto_install="off").install_skip_reason("foo")
+        assert reason is not None
+        assert "'off'" in reason and "foo" in reason
+
+    async def test_prompt_without_tty_behaves_like_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
+        reason = await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        assert reason is not None and "prompt" in reason
+
+    async def test_prompt_tty_accepts_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+        assert await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo") is None
+
+    async def test_prompt_tty_declines_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+        reason = await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        assert reason is not None and "declined" in reason
+
+    async def test_prompt_confirm_does_not_block_the_event_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The pending stdin read must leave the event loop free: the fake
+        input() below is released only by code running ON the loop, so a
+        blocking implementation would dead-wait until the timeout."""
+        import asyncio
+        import threading
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        release = threading.Event()
+
+        def blocking_input(_prompt: str = "") -> str:
+            assert release.wait(timeout=5), "event loop never ran while input() was pending"
+            return "y"
+
+        monkeypatch.setattr("builtins.input", blocking_input)
+        policy = SkillPolicy.create(auto_install="prompt")
+        task = asyncio.ensure_future(policy.install_skip_reason("foo"))
+        loop_turns = 0
+        while not task.done() and loop_turns < 10:
+            await asyncio.sleep(0.01)
+            loop_turns += 1
+            if loop_turns >= 3:
+                release.set()
+        assert loop_turns >= 3
+        assert await task is None
+
+    async def test_concurrent_prompts_are_serialized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two gathered hydrates must never interleave two stdin reads."""
+        import asyncio
+        import threading
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def counting_input(_prompt: str = "") -> str:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            import time
+
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return "y"
+
+        monkeypatch.setattr("builtins.input", counting_input)
+        policy = SkillPolicy.create(auto_install="prompt")
+        results = await asyncio.gather(
+            policy.install_skip_reason("a"),
+            policy.install_skip_reason("b"),
+        )
+        assert results == [None, None]
+        assert max_active == 1
+
+
+class TestWriteInstallMeta:
+    def test_none_dir_is_noop(self) -> None:
+        write_install_meta(None, slug="x", version="v1", trigger="use_skill")
+
+    def test_writes_meta_into_skill_dir(self, tmp_path: Path) -> None:
+        write_install_meta(str(tmp_path), slug="foo", version="v2", trigger="auto_inject")
+        record = json.loads((tmp_path / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["slug"] == "foo"
+        assert record["version"] == "v2"
+        assert record["source"] == "hub"
+        assert record["trigger"] == "auto_inject"
+        assert record["installed_at"]
+
+    def test_first_install_wins(self, tmp_path: Path) -> None:
+        write_install_meta(tmp_path, slug="foo", version="v2", trigger="auto_inject")
+        write_install_meta(tmp_path, slug="foo", version="v2", trigger="use_skill")
+        record = json.loads((tmp_path / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["trigger"] == "auto_inject"
+
+    def test_missing_dir_is_best_effort_noop(self, tmp_path: Path) -> None:
+        write_install_meta(tmp_path / "ghost", slug="foo", version="v1", trigger="use_skill")
+        assert not (tmp_path / "ghost").exists()
 
 
 class TestRecordInstall:
