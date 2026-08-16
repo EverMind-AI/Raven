@@ -162,6 +162,41 @@ def set_sentinel_nudge_quota(
     return changed
 
 
+def set_skill_blocked(
+    name: str,
+    blocked: bool,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Add/remove a skill name on ``skillForge.blocklist``; returns the new
+    list. Matching is case-insensitive; adding an already-listed name or
+    removing an absent one is a no-op (the file is still not rewritten).
+
+    The blocklist is read at process start (AgentLoop / context engine
+    construction), so a change takes effect on the next agent/gateway
+    start, not on a running process.
+    """
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    section = data.setdefault("skillForge", {})
+    current = [str(x) for x in (section.get("blocklist") or [])]
+    lowered = {x.casefold() for x in current}
+    if blocked:
+        if name.casefold() in lowered:
+            return current
+        current.append(name)
+    else:
+        if name.casefold() not in lowered:
+            return current
+        current = [x for x in current if x.casefold() != name.casefold()]
+    section["blocklist"] = current
+    _write_atomic(path, data)
+    logger.info(
+        "config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name
+    )
+    return current
+
+
 def set_language(
     language: str,
     *,
@@ -353,5 +388,6 @@ __all__ = [
     "set_default_model",
     "set_sandbox_backend",
     "set_memory_backend",
+    "set_skill_blocked",
     "init_extension_block_defaults",
 ]

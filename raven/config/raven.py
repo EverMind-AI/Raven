@@ -805,6 +805,12 @@ class SkillForgeConfig(_Base):
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
 
+    blocklist: list[str] = Field(default_factory=list)
+    """Skill names refused everywhere (config key ``skillForge.blocklist``):
+    dropped from the injection pool for every source and refused by
+    ``use_skill``. Matched case-insensitively against the skill's name,
+    slug, and native id."""
+
     router: "SkillForgeRouterConfig" = Field(
         default_factory=lambda: SkillForgeRouterConfig(),
     )
@@ -1152,8 +1158,11 @@ class HubSourceConfig(_Base):
     """Per-request timeout (hot turn-path)."""
 
     min_safety: float = 0.7
-    """Skills with ``score_safety`` below this are filtered out of the
-    catalog (and refused by ``use_skill``)."""
+    """Skills with ``score_safety`` below this are dropped. Catalog hits
+    that carry a score are filtered by ``HubSkillSource``; the standard
+    catalog payload omits the score, so the authoritative check runs on
+    the detail metadata — ``SkillsSegmentBuilder`` drops low-scored hits
+    after the pre-gate hydrate, and ``use_skill`` refuses the install."""
 
     source: str = "raven"
     """Download ``source`` tag for Hub usage stats."""
