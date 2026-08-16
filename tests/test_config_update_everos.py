@@ -68,6 +68,10 @@ def test_legacy_root_is_kept_when_it_holds_a_config(monkeypatch: pytest.MonkeyPa
     (legacy / "everos.toml").write_text("[llm]\n", encoding="utf-8")
     monkeypatch.setattr(ue, "_recorded_slice", dict)
     monkeypatch.setattr(ue, "legacy_everos_root", lambda: legacy)
+    # State the premise: the legacy root is only a candidate for the
+    # installation that could have created it, and set_config_path is a
+    # process global another test may have moved.
+    monkeypatch.setattr(ue, "_is_default_installation", lambda: True)
 
     assert ue.everos_root() == legacy
 
@@ -342,3 +346,66 @@ def test_fallback_root_reads_no_raven_config(monkeypatch: pytest.MonkeyPatch, tm
     monkeypatch.setattr(ue, "_recorded_slice", _boom)
 
     assert ue.fallback_everos_root() == tmp_path / "mine"
+
+
+class TestTheLegacyRootBelongsToTheDefaultInstall:
+    """``~/.everos/raven`` is one machine-wide path, not a per-instance one.
+
+    Every other root raven uses is derived from its config directory, so moving
+    the installation moves them. This one is a literal, which made it leak in
+    two directions: it ignored the home the process was told to use, and an
+    instance running from a moved config would adopt -- and converge, and
+    rewrite the ``[api]`` of -- the default installation's root.
+    """
+
+    def test_it_follows_the_home_in_use(self, tmp_path, monkeypatch) -> None:
+        """``Path("~/...").expanduser()`` reads $HOME directly, so it slipped
+        past the ``Path.home`` redirection the test fixtures isolate with and
+        reached the developer's own machine."""
+        from raven.config import update_everos as ue
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert ue.legacy_everos_root() == tmp_path / ".everos" / "raven"
+
+    def test_the_default_install_still_considers_it(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update_everos as ue
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / ".raven" / "config.json")
+
+        assert ue.applicable_legacy_root() == tmp_path / ".everos" / "raven"
+
+    def test_a_moved_install_does_not(self, tmp_path, monkeypatch) -> None:
+        """The isolated instance never created this root, so treating it as a
+        candidate would have one installation converge another's service."""
+        from raven.config import update_everos as ue
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+
+        assert ue.applicable_legacy_root() is None
+
+    def test_classification_is_unconditional(self, tmp_path, monkeypatch) -> None:
+        """Selecting the root and recognising it are different questions. A
+        config that already records it recorded a root raven created, whichever
+        installation is reading now."""
+        from raven.config import update_everos as ue
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+
+        assert ue.root_is_raven_owned(tmp_path / ".everos" / "raven") is True
+
+    def test_the_fallback_skips_it_when_moved(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update_everos as ue
+
+        legacy = tmp_path / ".everos" / "raven"
+        legacy.mkdir(parents=True)
+        (legacy / "everos.toml").write_text("", encoding="utf-8")
+        mine = tmp_path / "elsewhere" / "everos"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: tmp_path / "elsewhere" / "config.json")
+        monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
+
+        assert ue.fallback_everos_root() == mine

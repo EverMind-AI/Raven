@@ -110,6 +110,9 @@ class TestDiscoveryOrder:
         self.legacy = tmp_path / "home" / ".everos" / "raven"
         monkeypatch.setattr(ue, "default_everos_root", lambda: self.default)
         monkeypatch.setattr(ue, "legacy_everos_root", lambda: self.legacy)
+        # Discovery only offers the legacy root to the installation that could
+        # have created it; these cases are about ordering, so say which we are.
+        monkeypatch.setattr(ue, "_is_default_installation", lambda: True)
         monkeypatch.setattr(ue, "_recorded_slice", dict)
         monkeypatch.setattr(_discover, "_probe_health", lambda _u: False)
         monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: False)

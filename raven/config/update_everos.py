@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ``~/.everos/raven`` is exactly the directory EverOS gives an app_id of
 # "raven" -- so new installs get ``<raven data dir>/everos`` instead. Existing
 # installs keep this one; discovery finds it and nothing is moved.
-_LEGACY_EVEROS_BASE = Path("~/.everos/raven")
+_LEGACY_EVEROS_SUFFIX = (".everos", "raven")
 
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal", "api")
 
@@ -69,8 +69,38 @@ def default_everos_root() -> Path:
 
 
 def legacy_everos_root() -> Path:
-    """raven's pre-move EverOS home, still in use by existing installs."""
-    return _LEGACY_EVEROS_BASE.expanduser()
+    """raven's pre-move EverOS home, still in use by existing installs.
+
+    Built from :meth:`Path.home` rather than ``Path("~/...").expanduser()``:
+    expanduser reads ``$HOME`` out of the environment directly, so it walked
+    straight past the home redirection callers and tests install and reached
+    the real one.
+    """
+    return Path.home().joinpath(*_LEGACY_EVEROS_SUFFIX)
+
+
+def _is_default_installation() -> bool:
+    """Whether this process is the installation that owns ``~/.raven``."""
+    from raven.config.loader import get_config_path
+
+    return get_config_path() == Path.home() / ".raven" / "config.json"
+
+
+def applicable_legacy_root() -> Path | None:
+    """The legacy root, when this installation is the one that could have made it.
+
+    Every other root is derived from the config directory, so pointing raven at
+    another home moves them together. This one is a single machine-wide path,
+    which means an instance running from a moved config would otherwise pick up
+    the default installation's root -- and then converge it, stopping a service
+    and rewriting an ``[api]`` belonging to an installation it is meant to be
+    isolated from.
+
+    Selection only. :func:`root_is_raven_owned` still recognises the path
+    unconditionally, because a config that records it recorded a root raven
+    created, whichever installation is reading it now.
+    """
+    return legacy_everos_root() if _is_default_installation() else None
 
 
 def raven_owned_roots() -> tuple[Path, ...]:
@@ -120,8 +150,8 @@ def fallback_everos_root() -> Path:
     while holding a config dict of its own -- calling :func:`everos_root` there
     would re-read whatever path is globally current, not the file being migrated.
     """
-    legacy = legacy_everos_root()
-    if (legacy / "everos.toml").is_file():
+    legacy = applicable_legacy_root()
+    if legacy is not None and (legacy / "everos.toml").is_file():
         return legacy
     return default_everos_root()
 

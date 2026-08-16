@@ -123,7 +123,7 @@ def discover() -> list[RootState]:
     from raven.config.update_everos import (
         _recorded_slice,
         default_everos_root,
-        legacy_everos_root,
+        applicable_legacy_root,
         root_is_raven_owned,
     )
 
@@ -143,8 +143,8 @@ def discover() -> list[RootState]:
         owned = bool(slice_["owned"]) if "owned" in slice_ else root_is_raven_owned(root)
         add(root, owned=owned)
 
-    for root in (default_everos_root(), legacy_everos_root()):
-        if root not in seen:
+    for root in (default_everos_root(), applicable_legacy_root()):
+        if root is not None and root not in seen:
             add(root, owned=True)
 
     return states
