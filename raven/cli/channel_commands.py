@@ -148,8 +148,7 @@ def _gate_open_allow_from(name: str, fields: dict) -> None:
             raise typer.Exit(1)
     elif explicit:
         console.print(
-            f"[yellow]⚠ allow_from='*': anyone who can message {name} can command "
-            f"the agent on this host.[/yellow]"
+            f"[yellow]⚠ allow_from='*': anyone who can message {name} can command the agent on this host.[/yellow]"
         )
     else:
         console.print(

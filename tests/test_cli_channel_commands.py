@@ -629,9 +629,7 @@ def tty_mock(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("raven.cli.channel_commands.is_tty", lambda: True)
 
 
-def test_enable_open_allowfrom_requires_confirm(
-    tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_enable_open_allowfrom_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
     """Interactive enable resolving to allow_from='*' must ask for confirmation
     (default No); declining writes nothing."""
     calls: list[dict] = []
