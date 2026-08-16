@@ -5171,6 +5171,8 @@ def test_everos_role_optionality_matches_design():
     assert "skip_note" not in _EVEROS_ROLES["llm"]
     for role in DEGRADING_SECTIONS:
         assert "skip_note" in _EVEROS_ROLES[role]
+
+
 class TestMemoryEnabledRespectsOwnership:
     """ "Configured" means something different for a root raven does not own.
 
