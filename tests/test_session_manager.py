@@ -278,6 +278,33 @@ def test_find_most_recent_reflects_latest_append(tmp_path: Path):
     assert mgr.find_most_recent_chat_id("tui") == "first"
 
 
+def test_find_most_recent_prefers_sessions_with_messages(tmp_path: Path):
+    """A freshly minted zero-message session (bare ``sessions create``) must
+    not hijack recency: the newest session WITH messages wins even when an
+    empty one carries a later updated_at."""
+    mgr = SessionManager(tmp_path)
+    real = mgr.get_or_create("cli:real01")
+    real.add_message("user", "hello")
+    real.updated_at = datetime(2026, 6, 10, 10, 0, 0)
+    mgr.save(real)
+
+    empty = mgr.get_or_create("cli:empty01")
+    empty.updated_at = datetime(2026, 6, 10, 11, 0, 0)
+    mgr.save(empty)
+
+    assert mgr.find_most_recent_chat_id("cli") == "real01"
+
+
+def test_find_most_recent_falls_back_to_empty_when_all_empty(tmp_path: Path):
+    """When every session on the channel has zero messages, the newest empty
+    one is still returned rather than None."""
+    _seed_nested(tmp_path, "cli", "older", "2026-06-10T10:00:00")
+    _seed_nested(tmp_path, "cli", "newer", "2026-06-10T11:00:00")
+
+    mgr = SessionManager(tmp_path)
+    assert mgr.find_most_recent_chat_id("cli") == "newer"
+
+
 def test_loader_skips_partial_trailing_line(tmp_path: Path):
     """A crash mid-append leaves a partial trailing line; loader skips it."""
     session_dir = tmp_path / "sessions" / "tui"
