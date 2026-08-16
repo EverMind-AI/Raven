@@ -108,7 +108,10 @@ class QueryRewriter:
             if getattr(resp, "finish_reason", None) == "error":
                 raise RuntimeError(content or "provider error")
         except Exception as e:
-            log.warning("query rewrite failed (%s); defaulting to retrieval", e)
+            # debug, not warning: rewrite failure silently falls back to plain
+            # retrieval, and the main turn surfaces the provider error itself —
+            # a user-visible line here would just duplicate it.
+            log.debug("query rewrite failed (%s); defaulting to retrieval", e)
             return RewriteResult(need_retrieval=True)
         return self._parse(content)
 

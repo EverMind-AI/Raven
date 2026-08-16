@@ -365,3 +365,121 @@ def test_agent_message_mode_mocked_provider(tmp_config: Path, monkeypatch: pytes
         assert not isinstance(r.exception, (NameError, AttributeError, ImportError)), (
             f"Crash-class exception leaked through: {r.exception!r}"
         )
+
+
+# ============================================================================
+# Provider error rendering
+# ============================================================================
+
+
+def test_agent_auth_error_exit_nonzero_with_guidance(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 from the provider must exit non-zero, show a fix hint, and must
+    not dump the duplicated exception name or the raw JSON error body.
+
+    The provider is a real ``LiteLLMProvider`` whose ``acompletion`` is stubbed
+    to raise the same exception shape litellm raises on an OpenRouter 401 —
+    no network involved.
+    """
+    import os as _os
+
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+    from raven.spine import Text, TurnOutcome, Usage
+
+    cfg = Config()
+    cfg.providers.openrouter.api_key = "sk-or-v1-stub-invalid"
+    save_config(cfg)
+
+    class AuthenticationError(Exception):
+        status_code = 401
+
+    async def _raise_401(**_kwargs):
+        raise AuthenticationError(
+            "litellm.AuthenticationError: AuthenticationError: OpenrouterException - "
+            '{"error":{"message":"User not found.","code":401}}'
+        )
+
+    # Pre-register the env var with monkeypatch so the provider's _setup_env
+    # write is rolled back with the test instead of leaking a fake key.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-stub-invalid")
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", _raise_401)
+
+    class _StubSubagents:
+        def set_submit(self, _submit) -> None:
+            pass
+
+    class _AuthFailAgentLoop:
+        def __init__(self, **kwargs):
+            self.channels_config = kwargs.get("channels_config")
+            self.subagents = _StubSubagents()
+
+        def configure_personalization(self, *_args) -> None:
+            pass
+
+        async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
+            from raven.providers.litellm_provider import LiteLLMProvider
+
+            provider = LiteLLMProvider(
+                api_key="sk-or-v1-stub-invalid",
+                default_model="anthropic/claude-opus-4-5",
+                provider_name="openrouter",
+            )
+            resp = await provider.chat_with_retry(messages=[{"role": "user", "content": req.text}])
+            await emit(Text(content=resp.content or "", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+        async def await_pending_extractions(self, **_kw) -> None:
+            pass
+
+        async def close_mcp(self) -> None:
+            pass
+
+    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    result = runner.invoke(app, ["agent", "-m", "hi", "-w", str(ws)])
+
+    assert result.exit_code != 0
+    assert result.output.count("AuthenticationError") <= 1
+    assert "raven provider" in result.output
+    assert '{"error"' not in result.output
+
+
+def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.CaptureFixture) -> None:
+    """``_print_llm_error`` turns the canonical error content into a
+    diagnosis + fix hint and marks the one-shot exit code; ordinary reply
+    content is left for the normal renderer."""
+    from raven.cli import agent_commands
+    from raven.providers.base import LLMProvider, format_llm_error
+
+    class _AuthError(Exception):
+        status_code = 401
+
+    exc = _AuthError(
+        "litellm.AuthenticationError: AuthenticationError: OpenrouterException - "
+        '{"error":{"message":"User not found.","code":401}}'
+    )
+    content = format_llm_error(exc, LLMProvider.classify_error(exc), provider="openrouter")
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        assert agent_commands._print_llm_error(content) is True
+        out = capsys.readouterr().out
+        assert "API key invalid" in out
+        assert "openrouter 401" in out
+        assert "raven provider test openrouter" in out
+        assert '{"error"' not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        assert agent_commands._print_llm_error("just a normal reply") is False
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 0
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
