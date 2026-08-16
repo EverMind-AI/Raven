@@ -259,6 +259,7 @@ def test_enable_with_api_base_flag_writes_it(tmp_path: Path, monkeypatch):
 
 def test_enable_no_flags_enters_interactive(monkeypatch):
     called: list = []
+    monkeypatch.setattr(drc, "die_if_not_tty", lambda *a, **k: None)  # CliRunner is never a TTY
     monkeypatch.setattr(drc, "configure_deep_research", lambda **k: called.append(k))
     assert runner.invoke(deep_research_app, ["enable"]).exit_code == 0
     assert called and called[0].get("non_interactive") is False
@@ -342,3 +343,17 @@ def test_configure_ctrl_c_at_validation_action_menu_exits(tmp_path: Path, monkey
     _setup_interactive(monkeypatch, tmp_path, ["configure", None], validate=lambda *a, **k: fail)
     with pytest.raises(typer.Exit):
         configure_deep_research(non_interactive=False, warnings=[])
+
+
+# ── non-TTY guard ──
+
+
+def test_deep_research_enable_nontty_no_traceback(tmp_path: Path, monkeypatch):
+    """No-flag ``enable`` in a non-interactive terminal exits 2 with a re-run
+    hint instead of the prompt_toolkit OSError traceback."""
+    monkeypatch.setattr(ut, "get_config_path", lambda: tmp_path / "config.json")
+    result = runner.invoke(deep_research_app, ["enable"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "Re-run with:" in result.output
+    assert "--key" in result.output
