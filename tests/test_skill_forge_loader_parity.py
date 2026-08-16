@@ -472,6 +472,66 @@ class TestBuildSkillsSummary:
         assert svc.build_skills_summary(only=[]) == ""
 
 
+class TestCatalogBlocklist:
+    """skillForge.blocklist enforcement on the catalog paths that bypass
+    the router pool: BM25 index, always-skills, and prompt rendering."""
+
+    def _catalog(self, workspace, builtin, blocklist):
+        from types import SimpleNamespace
+
+        return LocalSkillCatalog(
+            workspace,
+            config=SimpleNamespace(blocklist=blocklist),
+            builtin_skills_dir=builtin,
+            start_watcher=False,
+        )
+
+    def test_pool_hides_blocked_skills(self, tmp_workspace, tmp_builtin):
+        allowed = self._catalog(tmp_workspace, tmp_builtin, [])
+        assert any(h.name == "simple" for h in allowed.pool.search("simple builtin skill"))
+        svc = self._catalog(tmp_workspace, tmp_builtin, ["SIMPLE"])
+        assert all(h.name != "simple" for h in svc.pool.search("simple builtin skill"))
+
+    def test_get_always_skills_excludes_blocked(self, tmp_workspace, tmp_builtin):
+        svc = self._catalog(tmp_workspace, tmp_builtin, ["always_flag_top"])
+        always = {m.name for m in svc.get_always_skills()}
+        assert "always_flag_top" not in always
+        assert "always_flag_nested" in always
+
+    def test_load_skills_for_context_excludes_blocked(self, tmp_workspace, tmp_builtin):
+        svc = self._catalog(tmp_workspace, tmp_builtin, ["simple"])
+        metas = [m for m in svc._registry.list_all() if m.name in {"simple", "always_flag_top"}]
+        out = svc.load_skills_for_context(metas)
+        assert "### Skill: simple" not in out
+        assert "### Skill: always_flag_top" in out
+
+    def test_build_skills_summary_excludes_blocked(self, tmp_workspace, tmp_builtin):
+        svc = self._catalog(tmp_workspace, tmp_builtin, ["user_custom"])
+        xml = svc.build_skills_summary()
+        assert "<name>user_custom</name>" not in xml
+        assert "<name>simple</name>" in xml
+
+    def test_gather_all_skills_keeps_blocked_for_inspection(self, tmp_workspace, tmp_builtin):
+        svc = self._catalog(tmp_workspace, tmp_builtin, ["simple"])
+        assert "simple" in {m.name for m in svc.gather_all_skills()}
+
+    def test_init_logs_one_line_skip_notice(self, tmp_workspace, tmp_builtin, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="raven.memory_engine.skill_forge.catalog"):
+            self._catalog(tmp_workspace, tmp_builtin, ["simple"])
+        notices = [r for r in caplog.records if "blocklist" in r.getMessage()]
+        assert len(notices) == 1
+        assert "simple" in notices[0].getMessage()
+
+    def test_empty_blocklist_logs_nothing(self, tmp_workspace, tmp_builtin, caplog):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="raven.memory_engine.skill_forge.catalog"):
+            self._catalog(tmp_workspace, tmp_builtin, [])
+        assert not [r for r in caplog.records if "blocklist" in r.getMessage()]
+
+
 # ----------------------------------------------------------------------
 # Rendering helpers
 # ----------------------------------------------------------------------
