@@ -87,9 +87,7 @@ def register(app: typer.Typer) -> None:
                     state = "[green]✓[/green]"
                 console.print(f"{label}: {state}")
             if unconfigured:
-                console.print(
-                    f"[dim]{unconfigured} providers not configured (raven provider list to see all)[/dim]"
-                )
+                console.print(f"[dim]{unconfigured} providers not configured (raven provider list to see all)[/dim]")
 
 
 __all__ = ["register"]

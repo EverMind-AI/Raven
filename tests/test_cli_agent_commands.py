@@ -577,9 +577,7 @@ def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.Cap
     assert (second.out + second.err).strip() == ""
 
 
-def _invoke_agent_with_usage(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False
-):
+def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
     """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
     the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
     import os as _os
@@ -642,8 +640,6 @@ def test_turn_summary_line_present(tmp_config: Path, tmp_path: Path, monkeypatch
     assert re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
 
 
-def test_turn_summary_respects_config_off(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_turn_summary_respects_config_off(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = _invoke_agent_with_usage(monkeypatch, tmp_path, turn_summary_off=True)
     assert not re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
