@@ -276,11 +276,11 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         from raven.config.update_channels import enable_channel
 
         fields = _parse_channel_flags(ctx.args, name)
-        if not fields:
-            missing = _missing_required_fields(name)
-            if missing:
-                flags = ", ".join("--" + k.replace("_", "-") for k in missing)
-                console.print(f"[red]Error: missing required {flags}[/red]")
+        missing = [k for k in _missing_required_fields(name) if fields.get(k) in ("", None, [])]
+        if missing:
+            flags = ", ".join("--" + k.replace("_", "-") for k in missing)
+            console.print(f"[red]Error: missing required {flags}[/red]")
+        if missing or not fields:
             _print_schema_table(name)
             console.print("  [dim]Tip: re-run with one or more --flag value pairs to enable + configure.[/dim]")
             raise typer.Exit(1 if missing else 0)

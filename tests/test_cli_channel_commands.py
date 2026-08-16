@@ -301,8 +301,12 @@ def test_channels_bare_prints_help_not_error() -> None:
 
 
 def test_enable_warns_empty_credentials(tmp_config: Path) -> None:
-    """Enabling a channel without supplying its secret fields must warn."""
-    r = runner.invoke(app, ["channels", "enable", "telegram", "--allow-from", "alice"])
+    """Enabling a channel whose secret fields are optional must warn, not fail.
+
+    Uses weixin (secret ``token`` is not required): required-but-empty fields
+    now error out instead, so telegram no longer exercises the warn path.
+    """
+    r = runner.invoke(app, ["channels", "enable", "weixin", "--allow-from", "alice"])
     assert r.exit_code == 0
     assert "Empty credential fields" in r.stdout
     assert "--token" in r.stdout
