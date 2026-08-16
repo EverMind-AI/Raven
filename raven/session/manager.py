@@ -224,6 +224,11 @@ class SessionManager:
         to get the authoritative session key ``<channel>:<chat_id>`` and
         ``updated_at``; recency is decided by ``updated_at``, falling back
         to file mtime for files that lack it.
+
+        Sessions with messages take priority: a freshly minted zero-message
+        session (``sessions create``) must not hijack delivery away from the
+        user's real last conversation. Empty sessions are only considered
+        when the channel has no session with messages at all.
         """
         channel_dir = self.sessions_dir / safe_filename(channel)
         if not channel_dir.is_dir():
@@ -231,8 +236,10 @@ class SessionManager:
 
         best_chat_id: str | None = None
         best_updated = ""
+        best_empty_chat_id: str | None = None
+        best_empty_updated = ""
         for p in channel_dir.glob("*.jsonl"):
-            meta, _count = self._scan_file(p)
+            meta, count = self._scan_file(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -247,10 +254,14 @@ class SessionManager:
                     updated = datetime.fromtimestamp(p.stat().st_mtime).isoformat()
                 except OSError:
                     continue
-            if updated > best_updated:
-                best_chat_id = chat_id
-                best_updated = updated
-        return best_chat_id
+            if count > 0:
+                if updated > best_updated:
+                    best_chat_id = chat_id
+                    best_updated = updated
+            elif updated > best_empty_updated:
+                best_empty_chat_id = chat_id
+                best_empty_updated = updated
+        return best_chat_id if best_chat_id is not None else best_empty_chat_id
 
     @staticmethod
     def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int]:
