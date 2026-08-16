@@ -116,32 +116,89 @@ class _FakeStdin(io.StringIO):
 
 
 class TestInstallSkipReason:
-    def test_auto_allows(self) -> None:
-        assert SkillPolicy.create().install_skip_reason("foo") is None
+    async def test_auto_allows(self) -> None:
+        assert await SkillPolicy.create().install_skip_reason("foo") is None
 
-    def test_unknown_mode_behaves_like_auto(self) -> None:
-        assert SkillPolicy.create(auto_install="sometimes").install_skip_reason("foo") is None
+    async def test_unknown_mode_behaves_like_auto(self) -> None:
+        assert await SkillPolicy.create(auto_install="sometimes").install_skip_reason("foo") is None
 
-    def test_off_skips(self) -> None:
-        reason = SkillPolicy.create(auto_install="off").install_skip_reason("foo")
+    async def test_off_skips(self) -> None:
+        reason = await SkillPolicy.create(auto_install="off").install_skip_reason("foo")
         assert reason is not None
         assert "'off'" in reason and "foo" in reason
 
-    def test_prompt_without_tty_behaves_like_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_prompt_without_tty_behaves_like_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
-        reason = SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        reason = await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
         assert reason is not None and "prompt" in reason
 
-    def test_prompt_tty_accepts_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_prompt_tty_accepts_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
         monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
-        assert SkillPolicy.create(auto_install="prompt").install_skip_reason("foo") is None
+        assert await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo") is None
 
-    def test_prompt_tty_declines_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_prompt_tty_declines_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
         monkeypatch.setattr("builtins.input", lambda _prompt="": "")
-        reason = SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        reason = await SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
         assert reason is not None and "declined" in reason
+
+    async def test_prompt_confirm_does_not_block_the_event_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The pending stdin read must leave the event loop free: the fake
+        input() below is released only by code running ON the loop, so a
+        blocking implementation would dead-wait until the timeout."""
+        import asyncio
+        import threading
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        release = threading.Event()
+
+        def blocking_input(_prompt: str = "") -> str:
+            assert release.wait(timeout=5), "event loop never ran while input() was pending"
+            return "y"
+
+        monkeypatch.setattr("builtins.input", blocking_input)
+        policy = SkillPolicy.create(auto_install="prompt")
+        task = asyncio.ensure_future(policy.install_skip_reason("foo"))
+        loop_turns = 0
+        while not task.done() and loop_turns < 10:
+            await asyncio.sleep(0.01)
+            loop_turns += 1
+            if loop_turns >= 3:
+                release.set()
+        assert loop_turns >= 3
+        assert await task is None
+
+    async def test_concurrent_prompts_are_serialized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Two gathered hydrates must never interleave two stdin reads."""
+        import asyncio
+        import threading
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def counting_input(_prompt: str = "") -> str:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            import time
+
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+            return "y"
+
+        monkeypatch.setattr("builtins.input", counting_input)
+        policy = SkillPolicy.create(auto_install="prompt")
+        results = await asyncio.gather(
+            policy.install_skip_reason("a"),
+            policy.install_skip_reason("b"),
+        )
+        assert results == [None, None]
+        assert max_active == 1
 
 
 class TestWriteInstallMeta:

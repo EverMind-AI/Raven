@@ -227,7 +227,7 @@ class UseSkillTool(Tool):
         if refusal is not None:
             return f"Error: refusing to install hub skill: {refusal}."
 
-        skip = self._policy.install_skip_reason(slug)
+        skip = await self._policy.install_skip_reason(slug)
         if skip is not None:
             logger.info("use_skill install skipped: %s", skip)
             return f"Skill install skipped: {skip}. Use read_skill to view the skill body."

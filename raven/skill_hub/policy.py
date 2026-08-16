@@ -24,6 +24,7 @@ package is extracted for reuse outside Raven.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
 from dataclasses import dataclass, field
@@ -88,6 +89,12 @@ class SkillPolicy:
     min_safety: float = 0.7
     blocklist: frozenset[str] = field(default_factory=frozenset)
     auto_install: str = "auto"
+    _prompt_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def create(
@@ -103,7 +110,7 @@ class SkillPolicy:
             auto_install=auto_install,
         )
 
-    def install_skip_reason(self, name: str) -> str | None:
+    async def install_skip_reason(self, name: str) -> str | None:
         """Consent reason to skip a Hub bundle download, or ``None`` to
         proceed (``skillForge.autoInstall``).
 
@@ -112,6 +119,11 @@ class SkillPolicy:
         declined; any other value (``auto`` included) proceeds. Distinct
         from :meth:`refusal_for_detail`: this is operator consent for the
         download itself, not a safety verdict on the skill.
+
+        Async on purpose: both install paths run on the agent's shared
+        event loop, so the blocking stdin read happens on a worker thread
+        (``asyncio.to_thread``); the per-policy lock keeps concurrently
+        gathered hydrates from interleaving two prompts on one stdin.
         """
         if self.auto_install == "off":
             return f"skill {name!r}: skillForge.autoInstall is 'off'"
@@ -122,7 +134,8 @@ class SkillPolicy:
                 interactive = False
             if not interactive:
                 return f"skill {name!r}: skillForge.autoInstall is 'prompt' but no interactive terminal is attached"
-            answer = input(f"Install skill {name!r} from the Skill Hub? [y/N] ")
+            async with self._prompt_lock:
+                answer = await asyncio.to_thread(input, f"Install skill {name!r} from the Skill Hub? [y/N] ")
             if answer.strip().casefold() in ("y", "yes"):
                 return None
             return f"skill {name!r}: install declined at the autoInstall prompt"

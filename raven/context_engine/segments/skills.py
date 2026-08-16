@@ -262,7 +262,7 @@ class SkillsSegmentBuilder:
                         h.qualified_id,
                     )
                     return h
-                skip = self._policy.install_skip_reason(h.name)
+                skip = await self._policy.install_skip_reason(h.name)
                 if skip is not None:
                     # Consent skip, not a failure: the body already
                     # hydrated in step ③ still injects — only the bundle
