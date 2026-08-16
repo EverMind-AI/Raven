@@ -418,6 +418,18 @@ candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), 
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
+**SkillPolicy** (`skill_hub/policy.py`):
+The install-time safety decision both Hub install paths consult before any
+`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
+tool. `refusal_for_detail()` checks, in order: the operator blocklist
+(`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
+`min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
+score; a missing or malformed score passes), and an external home-dotdir lint over the
+skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
+candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
+Every install that passes is appended to a JSONL audit trail
+(`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
+
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
 
