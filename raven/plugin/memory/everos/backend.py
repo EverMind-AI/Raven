@@ -166,6 +166,11 @@ _SPAWNABLE_STATES = frozenset({ServiceState.UNKNOWN})
 # stop a task per turn from piling up, not to schedule anything.
 _PROBE_MIN_INTERVAL_S: float = 2.0
 
+# States where no write was ever going to land, so nothing was lost. Reporting
+# a loss here would tell an install that never configured a memory LLM that it
+# dropped turns of memory it never had.
+_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+
 
 class _HttpEverosAdapter:
     """Adapter that talks to a remote EverOS service over HTTP.
@@ -439,6 +444,10 @@ class EverosBackend:
             return ServiceState.STARTING
         return ServiceState.FAILED
 
+    def _remember_child(self, proc: Any) -> None:
+        """Hold the spawned child, even if the start it belongs to then fails."""
+        self._proc = proc
+
     def _may_spawn(self) -> bool:
         """Whether starting a server could still help.
 
@@ -599,9 +608,14 @@ class EverosBackend:
                 # server is already answering, which is the common case -- a line
                 # there would be noise on every single session, and a healthy
                 # start is meant to be silent.
+                # on_proc rather than the return value: when the child dies on
+                # startup the call raises, and an assignment from its result
+                # never happens -- leaving the handler unable to tell a dead
+                # child from one still booting.
                 self._proc = await ensure_everos_server(
                     base_url,
                     on_wait=lambda: stderr.print("[dim]Starting memory service...[/dim]"),
+                    on_proc=self._remember_child,
                 )
                 self._state = ServiceState.READY
             except EverosNotConfiguredError:
@@ -805,7 +819,11 @@ class EverosBackend:
             # Counted rather than logged and forgotten: a dropped write is a
             # turn the user will never be able to recall, and the only place
             # that fact can still be told to them is the end of the session.
-            self._dropped_writes += 1
+            # Not counted when the service was never configured or installed --
+            # there was no memory to lose, and saying otherwise tells a fresh
+            # install it lost something it never had.
+            if self._state not in _NEVER_HAD_MEMORY:
+                self._dropped_writes += 1
             self._kick_probe()
             return False
         if metadata and "is_final" in metadata:
@@ -815,6 +833,10 @@ class EverosBackend:
             self._turn_counts[session_id] = n
             is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
 
+        # A per-turn append must not hold a turn open; a final flush is the call
+        # that makes EverOS extract, which is what the six-minute budget was
+        # sized for. One number for both silently overrode the other.
+        budget = _MEMORIZE_TIMEOUT_S if is_final else _STORE_TIMEOUT_S
         try:
             await asyncio.wait_for(
                 self._adapter.memorize(
@@ -824,9 +846,19 @@ class EverosBackend:
                     app_id=metadata.get("app_id") if metadata else None,
                     project_id=metadata.get("project_id") if metadata else None,
                 ),
-                timeout=_STORE_TIMEOUT_S,
+                timeout=budget,
             )
-        except (Exception, asyncio.TimeoutError) as e:
+        except asyncio.TimeoutError:
+            # Deliberately not a demotion: an extraction that outran its budget
+            # is slow, not absent, and demoting would drop the next write too --
+            # turning one slow batch into the loss of the batch behind it.
+            self._dropped_writes += 1
+            self._logger.warning(
+                "EverosBackend.store timed out after %ss; this turn was not indexed",
+                budget,
+            )
+            return False
+        except Exception as e:
             self._demote_from_exception(e)
             self._dropped_writes += 1
             self._logger.warning(

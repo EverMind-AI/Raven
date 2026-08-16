@@ -9,6 +9,7 @@ embedding services that the test environment doesn't have).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1345,3 +1346,152 @@ class TestStoreReportsWhetherItLanded:
 
         assert await b.store("s", []) is True
         assert await b.store("s", [{"role": "system", "content": "dropped by conversion"}]) is True
+
+
+@pytest.mark.asyncio
+class TestWriteBudgetFollowsTheCaller:
+    """Ten seconds is a turn's patience, not an extraction's runtime.
+
+    A per-turn append should not hold a turn open, so it gets a short budget.
+    A final flush and an importer batch are the calls that actually make EverOS
+    extract, which is why _MEMORIZE_TIMEOUT_S was set to six minutes in the
+    first place. Capping every write at the turn's budget silently overrode
+    that, and the overrun then filed a slow extraction as a dead service.
+    """
+
+    @staticmethod
+    def _backend(adapter):
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.READY
+        return b
+
+    async def test_an_incremental_append_gets_the_short_budget(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import backend as mod
+
+        seen: list[float] = []
+
+        async def _spy(coro, timeout=None):
+            seen.append(timeout)
+            return await coro
+
+        monkeypatch.setattr(mod.asyncio, "wait_for", _spy)
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+
+        await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": False})
+
+        assert seen == [mod._STORE_TIMEOUT_S]
+
+    async def test_a_final_flush_gets_the_extraction_budget(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import backend as mod
+
+        seen: list[float] = []
+
+        async def _spy(coro, timeout=None):
+            seen.append(timeout)
+            return await coro
+
+        monkeypatch.setattr(mod.asyncio, "wait_for", _spy)
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+
+        await b.store("s", [{"role": "user", "content": "x"}], metadata={"is_final": True})
+
+        assert seen == [mod._MEMORIZE_TIMEOUT_S]
+
+    async def test_a_slow_extraction_is_not_a_dead_service(self) -> None:
+        """Demoting on a write timeout would drop the *next* write too, so one
+        slow extraction would cascade into losing the batch behind it."""
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(side_effect=asyncio.TimeoutError())
+        b = self._backend(adapter)
+
+        assert await b.store("s", [{"role": "user", "content": "x"}]) is False
+        assert b._state is ServiceState.READY
+
+
+class TestDroppedWritesCountOnlyRealLosses:
+    """A fresh install has nothing to lose, and should not be told it lost it.
+
+    The counter fires on any not-ready state, so an install that has never
+    configured a memory LLM ends every session with "N turns were not written
+    to long-term memory" -- about memory it never had.
+    """
+
+    @staticmethod
+    def _backend(state):
+        from raven.plugin.memory.everos.backend import EverosBackend
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=MagicMock())
+        b._state = state
+        return b
+
+    @pytest.mark.asyncio
+    async def test_never_configured_is_not_a_loss(self) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        for state in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY):
+            b = self._backend(state)
+            await b.store("s", [{"role": "user", "content": "x"}])
+            assert b._dropped_writes == 0, state
+
+    @pytest.mark.asyncio
+    async def test_a_service_that_should_have_been_there_is(self) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        for state in (ServiceState.FAILED, ServiceState.UNRESPONSIVE, ServiceState.STARTING):
+            b = self._backend(state)
+            await b.store("s", [{"role": "user", "content": "x"}])
+            assert b._dropped_writes == 1, state
+
+
+@pytest.mark.asyncio
+class TestADeadChildIsReportedAsFailed:
+    """FAILED was unreachable from start().
+
+    ``self._proc = await ensure_everos_server(...)`` only assigns when the call
+    returns, so the handler for the call raising saw ``_proc`` still None and
+    read a child that had already exited as one still booting -- which is the
+    one state that keeps probing instead of reporting.
+    """
+
+    async def test_a_child_that_exited_reaches_failed(self, tmp_path) -> None:
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
+
+        dead = MagicMock(**{"poll.return_value": 1, "returncode": 1})
+
+        async def _boom(*_a, **kw):
+            # The real function spawns, then raises when the child dies; the
+            # handle exists by then and has to survive the exception.
+            report = kw.get("on_proc")
+            if report is not None:
+                report(dead)
+            raise RuntimeError("EverOS server exited with code 1")
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx)
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_boom):
+            await b.start()
+
+        assert b._state is ServiceState.FAILED

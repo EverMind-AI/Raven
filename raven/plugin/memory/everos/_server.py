@@ -580,6 +580,7 @@ async def ensure_everos_server(
     *,
     timeout: float = 10.0,
     on_wait: Callable[[], None] | None = None,
+    on_proc: Callable[[subprocess.Popen], None] | None = None,
 ) -> subprocess.Popen | None:
     """Make sure a server is answering at ``base_url``, starting one if not.
 
@@ -603,6 +604,9 @@ async def ensure_everos_server(
     session of a machine's uptime. Measured cold start on a small store is
     around two seconds.
 
+    ``on_proc`` receives the spawned child the moment it exists, so a caller
+    still holds it when this function goes on to raise.
+
     ``on_wait`` fires once, only when an actual boot is about to be waited on --
     never when a server is already answering. That lets a caller narrate the
     wait without adding noise to the common case where there is nothing to wait
@@ -620,6 +624,12 @@ async def ensure_everos_server(
         on_wait()
 
     proc = await asyncio.to_thread(_start_server_if_unlocked, base_url)
+    # Handed over as soon as it exists, not only on the success return: a child
+    # that dies during boot makes this function raise, and a caller that learns
+    # of the handle only from the return value cannot then tell "already dead"
+    # from "still starting" -- which is the distinction it needs most.
+    if proc is not None and on_proc is not None:
+        on_proc(proc)
 
     elapsed = 0.0
     while elapsed < timeout:
