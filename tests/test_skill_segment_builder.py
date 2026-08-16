@@ -444,6 +444,24 @@ async def test_hub_hit_without_vetted_meta_never_installs() -> None:
     assert hub.install_calls == []
 
 
+async def test_auto_install_off_keeps_body_skips_install(tmp_path: Path) -> None:
+    """autoInstall=off skips only the bundle download: the body hydrated in
+    the pre-gate step still injects, and nothing is installed or audited."""
+    audit = tmp_path / "installs.jsonl"
+    src = _StubSource("hub", [_hit("hub/good1", "good-skill")])
+    hub = _StubHubClient({"good1": {"skill_md": "safe body", "score_safety": 0.9}})
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([src]),
+        hub_client=hub,
+        auto_install="off",
+        install_audit_path=audit,
+    )
+    seg = await builder.build(_ctx("remember this"))
+    assert "safe body" in seg.text
+    assert hub.install_calls == []
+    assert not audit.exists()
+
+
 async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
     audit = tmp_path / "installs.jsonl"
     src = _StubSource("hub", [_hit("hub/good1", "good-skill")])

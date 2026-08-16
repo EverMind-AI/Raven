@@ -270,3 +270,53 @@ class TestUseSkillSafetyPolicy:
         rec = json.loads(audit.read_text(encoding="utf-8").strip())
         assert rec["slug"] == "foo"
         assert rec["trigger"] == "use_skill"
+
+
+class _FakeStdin:
+    def __init__(self, *, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+class TestUseSkillAutoInstall:
+    """skillForge.autoInstall gates the Hub bundle download in use_skill."""
+
+    def _client(self) -> _FakeClient:
+        return _FakeClient(
+            get_result={"score_safety": 0.9, "slug": "foo", "skill_md": "ok"},
+            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
+        )
+
+    async def test_off_skips_install_with_notice(self) -> None:
+        client = self._client()
+        out = await UseSkillTool(client=client, auto_install="off").execute(
+            skill_id="hub/foo",
+        )
+        assert out.startswith("Skill install skipped")
+        assert "'off'" in out
+        assert client.install_calls == []
+
+    async def test_prompt_without_tty_skips(self, monkeypatch) -> None:
+        import sys
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
+        client = self._client()
+        out = await UseSkillTool(client=client, auto_install="prompt").execute(
+            skill_id="hub/foo",
+        )
+        assert out.startswith("Skill install skipped")
+        assert client.install_calls == []
+
+    async def test_prompt_tty_confirmation_installs(self, monkeypatch) -> None:
+        import sys
+
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+        client = self._client()
+        out = await UseSkillTool(client=client, auto_install="prompt").execute(
+            skill_id="hub/foo",
+        )
+        assert not out.startswith("Error") and not out.startswith("Skill install skipped")
+        assert client.install_calls == ["foo"]

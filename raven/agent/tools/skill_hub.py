@@ -135,11 +135,16 @@ class UseSkillTool(Tool):
         *,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(
+            min_safety=min_safety,
+            blocklist=blocklist,
+            auto_install=auto_install,
+        )
         self._install_audit_path = install_audit_path
 
     @property
@@ -221,6 +226,11 @@ class UseSkillTool(Tool):
         refusal = self._policy.refusal_for_detail(meta, native)
         if refusal is not None:
             return f"Error: refusing to install hub skill: {refusal}."
+
+        skip = self._policy.install_skip_reason(slug)
+        if skip is not None:
+            logger.info("use_skill install skipped: %s", skip)
+            return f"Skill install skipped: {skip}. Use read_skill to view the skill body."
 
         try:
             info = await self._client.install(native, prefetched_meta=meta)

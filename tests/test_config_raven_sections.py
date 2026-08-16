@@ -119,6 +119,15 @@ class TestKeyAliasing:
         assert c.hub.timeout_s == pytest.approx(5.0)
         assert c.hub.min_safety == pytest.approx(0.8)
 
+    def test_skill_forge_auto_install_tri_state(self) -> None:
+        assert SkillForgeConfig().auto_install == "auto"
+        c = SkillForgeConfig.model_validate({"autoInstall": "off"})
+        assert c.auto_install == "off"
+        c = SkillForgeConfig.model_validate({"auto_install": "prompt"})
+        assert c.auto_install == "prompt"
+        with pytest.raises(ValidationError):
+            SkillForgeConfig.model_validate({"autoInstall": "sometimes"})
+
 
 # ---------------------------------------------------------------------------
 # EXTENSION_KEYS includes the new sections

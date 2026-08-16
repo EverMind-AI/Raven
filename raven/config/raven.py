@@ -811,6 +811,15 @@ class SkillForgeConfig(_Base):
     ``use_skill``. Matched case-insensitively against the skill's name,
     slug, and native id."""
 
+    auto_install: Literal["auto", "prompt", "off"] = "auto"
+    """Consent policy for Hub bundle downloads (config key
+    ``skillForge.autoInstall``), applied on both install paths (context
+    auto-inject and ``use_skill``). ``auto`` installs silently (current
+    behavior); ``prompt`` asks for confirmation on an interactive
+    terminal and behaves like ``off`` when no TTY is attached; ``off``
+    skips the download with a one-line notice — skill bodies still
+    inject, only the on-disk bundle is withheld."""
+
     router: "SkillForgeRouterConfig" = Field(
         default_factory=lambda: SkillForgeRouterConfig(),
     )

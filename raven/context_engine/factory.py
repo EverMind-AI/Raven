@@ -135,6 +135,7 @@ def build_context_engine(
             get_tool_definitions=get_tool_definitions,
             min_safety=skill_forge_router_config.hub.min_safety,
             blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+            auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
             install_audit_path=(
                 workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
             ),

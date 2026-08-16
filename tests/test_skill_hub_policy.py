@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from raven.skill_hub.audit import record_install
 from raven.skill_hub.policy import (
@@ -100,6 +104,44 @@ class TestSkillPolicy:
         policy = SkillPolicy.create(blocklist=["native-id"])
         reason = policy.refusal_for_detail({}, "native-id")
         assert reason is not None and "blocklist" in reason
+
+
+class _FakeStdin(io.StringIO):
+    def __init__(self, *, tty: bool) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+class TestInstallSkipReason:
+    def test_auto_allows(self) -> None:
+        assert SkillPolicy.create().install_skip_reason("foo") is None
+
+    def test_unknown_mode_behaves_like_auto(self) -> None:
+        assert SkillPolicy.create(auto_install="sometimes").install_skip_reason("foo") is None
+
+    def test_off_skips(self) -> None:
+        reason = SkillPolicy.create(auto_install="off").install_skip_reason("foo")
+        assert reason is not None
+        assert "'off'" in reason and "foo" in reason
+
+    def test_prompt_without_tty_behaves_like_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
+        reason = SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        assert reason is not None and "prompt" in reason
+
+    def test_prompt_tty_accepts_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+        assert SkillPolicy.create(auto_install="prompt").install_skip_reason("foo") is None
+
+    def test_prompt_tty_declines_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+        reason = SkillPolicy.create(auto_install="prompt").install_skip_reason("foo")
+        assert reason is not None and "declined" in reason
 
 
 class TestRecordInstall:

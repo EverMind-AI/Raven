@@ -14,6 +14,9 @@ one :class:`SkillPolicy` decision before any ``SkillHubClient.install``:
 - an external-home-directory lint over the skill body: a hub skill whose
   instructions point at another product's dotdir (``~/.openclaw`` and
   friends) is refused rather than rewritten.
+- the ``skillForge.autoInstall`` consent gate over the bundle download
+  itself (``auto`` / ``prompt`` / ``off``), consulted right before an
+  install would start.
 
 Stdlib-only on purpose: this module ships with the client when the
 package is extracted for reuse outside Raven.
@@ -22,6 +25,7 @@ package is extracted for reuse outside Raven.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -83,10 +87,49 @@ class SkillPolicy:
 
     min_safety: float = 0.7
     blocklist: frozenset[str] = field(default_factory=frozenset)
+    auto_install: str = "auto"
 
     @classmethod
-    def create(cls, *, min_safety: float = 0.7, blocklist: Iterable[str] | None = None) -> "SkillPolicy":
-        return cls(min_safety=min_safety, blocklist=normalize_blocklist(blocklist))
+    def create(
+        cls,
+        *,
+        min_safety: float = 0.7,
+        blocklist: Iterable[str] | None = None,
+        auto_install: str = "auto",
+    ) -> "SkillPolicy":
+        return cls(
+            min_safety=min_safety,
+            blocklist=normalize_blocklist(blocklist),
+            auto_install=auto_install,
+        )
+
+    def install_skip_reason(self, name: str) -> str | None:
+        """Consent reason to skip a Hub bundle download, or ``None`` to
+        proceed (``skillForge.autoInstall``).
+
+        ``off`` always skips; ``prompt`` asks on an interactive stdin and
+        behaves like ``off`` when no TTY is attached or the prompt is
+        declined; any other value (``auto`` included) proceeds. Distinct
+        from :meth:`refusal_for_detail`: this is operator consent for the
+        download itself, not a safety verdict on the skill.
+        """
+        if self.auto_install == "off":
+            return f"skill {name!r}: skillForge.autoInstall is 'off'"
+        if self.auto_install == "prompt":
+            try:
+                interactive = sys.stdin is not None and sys.stdin.isatty()
+            except (AttributeError, ValueError):
+                interactive = False
+            if not interactive:
+                return (
+                    f"skill {name!r}: skillForge.autoInstall is 'prompt' "
+                    "but no interactive terminal is attached"
+                )
+            answer = input(f"Install skill {name!r} from the Skill Hub? [y/N] ")
+            if answer.strip().casefold() in ("y", "yes"):
+                return None
+            return f"skill {name!r}: install declined at the autoInstall prompt"
+        return None
 
     def refusal_for_detail(
         self,

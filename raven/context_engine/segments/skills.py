@@ -69,6 +69,7 @@ class SkillsSegmentBuilder:
         get_tool_definitions: "Any | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._router = router
@@ -81,7 +82,11 @@ class SkillsSegmentBuilder:
         self._pool_size = gate_pool_size if gate is not None else skill_top_k
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(
+            min_safety=min_safety,
+            blocklist=blocklist,
+            auto_install=auto_install,
+        )
         self._install_audit_path = install_audit_path
         self._audited_installs: set[str] = set()
 
@@ -256,6 +261,13 @@ class SkillsSegmentBuilder:
                         "skipping install for %s: no vetted detail metadata",
                         h.qualified_id,
                     )
+                    return h
+                skip = self._policy.install_skip_reason(h.name)
+                if skip is not None:
+                    # Consent skip, not a failure: the body already
+                    # hydrated in step ③ still injects — only the bundle
+                    # download is withheld.
+                    log.info("hub auto-install skipped: %s", skip)
                     return h
                 try:
                     installed = await self._hub_client.install(
