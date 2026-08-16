@@ -1224,6 +1224,7 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
             return self._a
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("none"))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
     data = json.loads(tmp_env.read_text())
     assert data["tools"]["sandbox"]["backend"] == "none"
@@ -1243,12 +1244,49 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
             return self._a
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
     monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
     # Failure submenu picks "fall back to host".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "host")
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
     data = json.loads(tmp_env.read_text())
     assert data["tools"]["sandbox"]["backend"] == "none"
+
+
+def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declining the host confirm inside the failure submenu returns to the
+    submenu directly: no second boxlite probe, no reprinted failure banner."""
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    probes: list[bool] = []
+
+    def probe():
+        probes.append(True)
+        return (False, "missing")
+
+    fc_answers = iter(["host", "skip"])
+    fc_calls: list[bool] = []
+
+    def fake_failure_choice(options, *, non_interactive):
+        fc_calls.append(True)
+        return next(fc_answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("boxlite"))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", probe)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", fake_failure_choice)
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert len(probes) == 1
+    assert len(fc_calls) == 2
 
 
 def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4519,3 +4557,150 @@ def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
             if group["kind"] != want:
                 misfiled.append(f"{entry['name']}: filed under {group['kind']!r}, credentials say {want!r}")
     assert not misfiled, "; ".join(misfiled)
+
+
+# --------------------------------------------------------------------------- first-run hints
+
+
+def test_install_sh_all_set_mentions_onboard() -> None:
+    """The install.sh closing hints must point first-time users at ``raven onboard``
+    (README already does; the installer's "All set" block must match)."""
+    text = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
+    tail = text[text.index("All set") :]
+    assert "raven onboard" in tail
+
+
+def test_pick_model_shows_default_positioning_line(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Before prompting, ``_pick_model`` explains why the prefilled default
+    model is recommended (not just its name)."""
+    import re
+    from types import SimpleNamespace
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("m1"))
+    spec = SimpleNamespace(
+        name="openai",
+        default_model="m1",
+        litellm_prefix="",
+        skip_prefixes=(),
+        keywords=("openai",),
+    )
+    chosen = onboard_commands._pick_model(
+        "openai",
+        spec,
+        current_model=None,
+        model_ids=["m1", "m2"],
+        probe_status="ok",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+    captured_out = capsys.readouterr().out
+    assert re.search(r"Default: .*—", captured_out)
+    assert chosen == "openai/m1"
+
+
+def test_memory_skip_hints_configure_later(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """The Step 4 skip/non-interactive exit must name the remediation command,
+    matching the give-up exit's 'run raven onboard again' hint."""
+    import re
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    onboard_everos._step4_memory(skip=True, non_interactive=False, main_model=None, warnings=[])
+    out = " ".join(capsys.readouterr().out.split())
+    assert re.search(r"raven onboard.*again", out)
+
+
+def test_sandbox_host_choice_warns_and_confirms(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Interactively picking host must show the prompt-injection risk warning
+    and pass through an explicit confirmation before persisting."""
+    import re
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    confirm_calls: list = []
+
+    def _confirm(*a, **kw):
+        confirm_calls.append((a, kw))
+        return _FQ(True)
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("none"))
+    monkeypatch.setattr(questionary, "confirm", _confirm)
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+    out = capsys.readouterr().out
+    confirm_called = bool(confirm_calls)
+    assert confirm_called
+    assert re.search(r"full host privileges|host access", out, re.I)
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "none"
+
+
+def test_sandbox_host_decline_returns_to_menu(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declining the host confirmation re-shows the run-location menu instead
+    of persisting; the next pick (boxlite) wins."""
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    answers = iter(["none", "boxlite"])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (True, "ok"))
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "boxlite"
+
+
+def test_sandbox_non_interactive_host_warns(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Non-interactive runs landing on host still surface the risk warning
+    (without blocking, keeping headless usable)."""
+    import re
+
+    monkeypatch.setattr(onboard_commands.console, "_width", 200)
+    onboard_commands._step2_sandbox(skip=False, non_interactive=True)
+    out = capsys.readouterr().out
+    assert re.search(r"full host privileges|host access", out, re.I)
+
+
+def test_everos_role_optionality_matches_design():
+    """Design guard: the memory llm role is mandatory (no skip affordance in
+    the wizard) while embedding/rerank/multimodal degrade gracefully and stay
+    skippable. Keeps the wizard metadata aligned with the health contract."""
+    from raven.cli.onboard_everos import _EVEROS_ROLES
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+
+    assert REQUIRED_SECTIONS == ("llm",)
+    assert set(DEGRADING_SECTIONS) == {"embedding", "rerank", "multimodal"}
+    assert "skip_note" not in _EVEROS_ROLES["llm"]
+    for role in DEGRADING_SECTIONS:
+        assert "skip_note" in _EVEROS_ROLES[role]

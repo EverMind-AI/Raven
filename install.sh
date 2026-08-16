@@ -266,7 +266,8 @@ main() {
 
   printf '\n'
   ok "All set! Open a new terminal (or source your shell profile), then run:"
-  printf '\n    \033[1mraven\033[0m            # enter the TUI\n'
+  printf '\n    \033[1mraven onboard\033[0m    # first-time setup\n'
+  printf '    \033[1mraven\033[0m            # enter the TUI\n'
   printf '    \033[1mraven agent\033[0m -m "hello"\n\n'
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
