@@ -1280,3 +1280,68 @@ class TestStoreIsDiscardedWhenTheServiceIsNotReady:
         b = self._backend(ServiceState.FAILED)
         await b.store("s1", [{"role": "user", "content": "hi"}])
         assert b._dropped_writes == 1
+
+
+@pytest.mark.asyncio
+class TestStoreReportsWhetherItLanded:
+    """A caller that can retry needs to know; a caller that cannot may ignore it.
+
+    The MemoryBackend protocol calls store fire-and-forget, and a turn really
+    is: one turn's memory lost, next turn a fresh chance. A bulk import is the
+    opposite -- its resume state marks a source done, so a write silently
+    treated as landed removes the only record that it has not been. A return
+    value serves both: ignoring it stays valid, checking it becomes possible.
+    """
+
+    @staticmethod
+    def _backend(state, adapter):
+        from raven.plugin.memory.everos.backend import EverosBackend
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = state
+        return b
+
+    async def test_true_when_the_write_lands(self) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(ServiceState.READY, adapter)
+
+        assert await b.store("s", [{"role": "user", "content": "x"}]) is True
+
+    async def test_false_when_the_service_is_not_ready(self) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(side_effect=AssertionError("must not be called"))
+        b = self._backend(ServiceState.FAILED, adapter)
+
+        assert await b.store("s", [{"role": "user", "content": "x"}]) is False
+
+    async def test_false_when_the_write_raises(self) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(side_effect=RuntimeError("everos down"))
+        b = self._backend(ServiceState.READY, adapter)
+
+        assert await b.store("s", [{"role": "user", "content": "x"}]) is False
+
+    async def test_nothing_to_write_is_not_a_failure(self) -> None:
+        """An empty slice and a dropped slice must not look the same: the
+        importer would mark a real source failed over a message list that was
+        legitimately empty after filtering."""
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        b = self._backend(ServiceState.READY, adapter)
+
+        assert await b.store("s", []) is True
+        assert await b.store("s", [{"role": "system", "content": "dropped by conversion"}]) is True

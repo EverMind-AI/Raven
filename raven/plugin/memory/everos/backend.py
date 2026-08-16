@@ -768,8 +768,13 @@ class EverosBackend:
         messages: list[dict[str, Any]],
         *,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         """Forward a turn's messages to EverOS for indexing.
+
+        Returns whether the slice landed. A caller that cannot act on the answer
+        is free to discard it -- the protocol is still fire-and-forget per call
+        -- but one whose resume state marks a source done needs to know, or a
+        dropped write erases the only record that the source is still pending.
 
         EverOS partitions internally by message sender (user-track vs
         agent-track); we don't need to specify ``owner_type`` here. We
@@ -783,23 +788,26 @@ class EverosBackend:
         skip the adapter call entirely.
         """
         if not messages:
-            return
+            return True
         payload = self._convert_messages(
             messages,
             agent_id=self._agent_id,
             user_id=self._user_id,
         )
         if not payload:
-            return
+            # Nothing to write is not a failed write: the conversion drops
+            # system messages, and a slice that is empty afterwards must not
+            # be reported as a source that needs retrying.
+            return True
         if self._adapter is None:
-            return
+            return False
         if self._state is not ServiceState.READY:
             # Counted rather than logged and forgotten: a dropped write is a
             # turn the user will never be able to recall, and the only place
             # that fact can still be told to them is the end of the session.
             self._dropped_writes += 1
             self._kick_probe()
-            return
+            return False
         if metadata and "is_final" in metadata:
             is_final = bool(metadata["is_final"])
         else:
@@ -826,6 +834,8 @@ class EverosBackend:
                 e,
                 self._state.value,
             )
+            return False
+        return True
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Deliberate no-op pending an upstream everos feedback sink.

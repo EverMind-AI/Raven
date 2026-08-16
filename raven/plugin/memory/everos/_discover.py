@@ -122,8 +122,8 @@ def discover() -> list[RootState]:
     """
     from raven.config.update_everos import (
         _recorded_slice,
-        default_everos_root,
         applicable_legacy_root,
+        default_everos_root,
         root_is_raven_owned,
     )
 
