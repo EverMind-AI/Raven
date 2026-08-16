@@ -86,17 +86,20 @@ def _resolved_model_id() -> str:
     """
     try:
         from raven.config.loader import load_config
-        from raven.providers.registry import find_gateway
+        from raven.providers.registry import find_by_name, find_gateway
         from raven.providers.wire import wire_model
 
         config = load_config()
         model = config.agents.defaults.model
+        provider_name = config.get_provider_name(model)
         gateway = find_gateway(
-            config.get_provider_name(model),
+            provider_name,
             config.get_api_key(model),
             config.get_api_base(model),
         )
-        return wire_model(model, gateway=gateway)
+        # spec mirrors the non-LiteLLM call sites (codex / azure strip their
+        # own prefix on the wire); a gateway still decides alone when set.
+        return wire_model(model, spec=find_by_name(provider_name), gateway=gateway)
     except Exception:
         return ""
 
