@@ -127,6 +127,11 @@ def load_config(config_path: Path | None = None) -> Config:
                 print(f"WARNING: {msg}", file=sys.stderr)
             logging.getLogger(__name__).debug(msg)
         else:
+            # A clean parse re-arms the warning: the dedup exists to silence
+            # repeated loads of the same broken state within one command, not
+            # to spend the one warning a long-lived process (the TUI RPC
+            # server reloads every turn) gets for a later re-breakage.
+            _warned_paths.discard(str(path))
             try:
                 config = Config.model_validate(data)
             except ValidationError as e:
