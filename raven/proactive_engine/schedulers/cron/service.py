@@ -455,7 +455,19 @@ class CronService:
 
     async def _writeback_after_run(self, job: CronJob, my_pid: int) -> None:
         """Post-run flush + clear claim, under lock so a concurrent reader
-        observes the complete updated job record."""
+        observes the complete updated job record.
+
+        Callers await this through asyncio.shield: when the outer awaiter is
+        already cancelled (stop() mid-writeback), a failure here has no one
+        left to observe it, so log before letting it propagate.
+        """
+        try:
+            self._writeback_locked(job, my_pid)
+        except Exception:
+            logger.exception("Cron: post-run writeback failed for job '{}' ({})", job.name, job.id)
+            raise
+
+    def _writeback_locked(self, job: CronJob, my_pid: int) -> None:
         with self._locked():
             # Reload + patch our job in case peer wrote intervening state.
             self._store = None

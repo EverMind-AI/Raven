@@ -28,8 +28,9 @@ def test_missing_file_uses_defaults(tmp_path: Path) -> None:
 
 def test_legacy_cron_forward_channels_stripped(tmp_path: Path) -> None:
     """Old configs may still carry ``cron.forward_channels`` (retired with
-    trigger-time delivery routing). CronConfig is extra='forbid', so the
-    loader must strip both spellings or every legacy config fails to load."""
+    trigger-time delivery routing). Nested schema models ignore extra keys,
+    so this is not a crash guard — the strip exists so stale keys don't
+    linger silently and the one-time migration is logged."""
     p = tmp_path / "config.json"
     _write(
         p,
