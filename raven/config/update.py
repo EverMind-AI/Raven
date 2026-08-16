@@ -388,5 +388,6 @@ __all__ = [
     "set_default_model",
     "set_sandbox_backend",
     "set_memory_backend",
+    "set_skill_blocked",
     "init_extension_block_defaults",
 ]
