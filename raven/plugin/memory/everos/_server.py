@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -33,16 +34,48 @@ def _extract_port(base_url: str) -> str:
     return str(parsed.port or 80)
 
 
-def _probe_health(base_url: str) -> bool:
+_PROBE_TIMEOUT_S = 1.0
+
+
+class ProbeResult(Enum):
+    """Why a health probe ended the way it did.
+
+    A bare bool collapsed two answers a caller must tell apart. ``REFUSED``
+    comes back instantly and means nothing is listening, so retrying costs
+    nothing. ``TIMEOUT`` means something *is* listening but not answering, and
+    it charges the full budget every time -- a caller that retries it on every
+    turn makes the user pay for a server that will not respond.
+    """
+
+    OK = "ok"
+    REFUSED = "refused"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+
+
+def probe_health(base_url: str, *, timeout: float = _PROBE_TIMEOUT_S) -> ProbeResult:
+    """Ask ``{base_url}/health`` whether a server is answering there."""
     import httpx
 
     try:
-        r = httpx.get(f"{base_url}/health", timeout=2.0)
-        return r.status_code == 200
+        r = httpx.get(f"{base_url}/health", timeout=timeout)
     except httpx.ConnectError:
-        return False
+        return ProbeResult.REFUSED
+    except httpx.TimeoutException:
+        return ProbeResult.TIMEOUT
     except Exception:
-        return False
+        return ProbeResult.ERROR
+    return ProbeResult.OK if r.status_code == 200 else ProbeResult.ERROR
+
+
+def _probe_health(base_url: str) -> bool:
+    """Liveness alone, for callers that have nothing to do with the reason.
+
+    A wrapper rather than a changed return type: every ``ProbeResult`` member is
+    truthy, so handing the enum to an existing ``if _probe_health(...)`` would
+    turn a refused connection into a pass.
+    """
+    return probe_health(base_url) is ProbeResult.OK
 
 
 def _lock_path() -> Path:
@@ -57,6 +90,15 @@ def server_log_path() -> Path:
     not exist.
     """
     return get_logs_dir() / "everos-server.log"
+
+
+class EverosBinaryMissingError(RuntimeError):
+    """The everos CLI is not installed where raven can reach it.
+
+    Distinct from a startup failure: no retry, probe, or wait resolves it, so a
+    caller that lumps it in with "server did not come up" keeps trying against
+    something that was never there.
+    """
 
 
 class EverosNotConfiguredError(RuntimeError):
@@ -111,7 +153,7 @@ def _everos_executable() -> str:
     found = shutil.which("everos")
     if found:
         return found
-    raise RuntimeError(
+    raise EverosBinaryMissingError(
         f"everos not found next to {Path(sys.executable).parent} or on PATH. Please install the everos CLI."
     )
 
@@ -260,6 +302,153 @@ def ome_lock_held(root: Path | str) -> bool:
         return True
 
 
+@dataclass(frozen=True)
+class LockHolder:
+    """The process serving a root's data, and where it can be reached.
+
+    ``port`` is ``None`` for a holder that takes the lock without serving HTTP
+    (``everos demo``, an embedded engine, a server still binding). That is a
+    real answer, not a missing one: it means the data is occupied and there is
+    nowhere to connect, which needs a different response from "it is over
+    there instead".
+    """
+
+    pid: int
+    cmdline: str
+    port: int | None
+
+
+def _lsof_lock_pid(lock: Path) -> int | None:
+    """The pid holding ``lock``, via ``lsof``. macOS ships it; Linux may not."""
+    lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [lsof, "-t", "--", str(lock)], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    first = out.stdout.split()
+    return int(first[0]) if first and first[0].isdigit() else None
+
+
+def _proc_locks_pid(lock: Path) -> int | None:
+    """The pid holding ``lock``, via Linux ``/proc/locks``.
+
+    Preferred over ``lsof`` on Linux because it needs no external binary --
+    minimal container images routinely omit one. Matching is by inode, which is
+    what ``/proc/locks`` records; the path never appears there.
+    """
+    locks = Path("/proc/locks")
+    if not locks.exists():
+        return None
+    try:
+        target = lock.stat().st_ino
+        lines = locks.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        fields = line.split()
+        # 1: FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> 0 EOF
+        if len(fields) < 6:
+            continue
+        try:
+            pid = int(fields[4])
+            inode = int(fields[5].rsplit(":", 1)[-1])
+        except ValueError:
+            continue
+        if inode == target:
+            return pid
+    return None
+
+
+def _cmdline_of(pid: int) -> str:
+    """The full command line of ``pid``, or an empty string."""
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [ps, "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip()
+
+
+def _listening_port(pid: int) -> int | None:
+    """The TCP port ``pid`` listens on, or ``None``.
+
+    ``-a`` is load-bearing: without it ``lsof`` ORs the ``-p`` and ``-i``
+    selectors and returns every file the process has open alongside every
+    socket on the machine.
+    """
+    lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [lsof, "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _parse_listen_port(out.stdout)
+
+
+def _parse_listen_port(lsof_output: str) -> int | None:
+    """The port out of ``lsof -iTCP -sTCP:LISTEN`` output.
+
+    Scans each row's fields from the right for the first ``host:port``. The
+    address is not the last field -- ``(LISTEN)`` is -- and it is not at a fixed
+    index either, since the COMMAND column is padded to its widest value.
+    """
+    for line in lsof_output.splitlines()[1:]:
+        for field in reversed(line.split()):
+            _, sep, port = field.rpartition(":")
+            if sep and port.isdigit():
+                return int(port)
+    return None
+
+
+def _lock_holder_pid(lock: Path, root: Path) -> int | None:
+    """Who holds ``lock``, best source first.
+
+    The OS knows the answer regardless of what raven remembers, so it is asked
+    first; the pidfile is the fallback for when it cannot be reached. The
+    pidfile is also the only source that can be wrong about the root, so its
+    recorded root is checked before its pid is trusted.
+    """
+    pid = _lsof_lock_pid(lock) or _proc_locks_pid(lock)
+    if pid is not None:
+        return pid
+    record = _read_pidfile()
+    if not record or str(record.get("root")) != str(root):
+        return None
+    recorded = record.get("pid")
+    return recorded if isinstance(recorded, int) else None
+
+
+def lock_holder(root: Path | str) -> LockHolder | None:
+    """The process serving ``root``'s data, identified from the OS.
+
+    Answers the question ``find_recorded_server`` cannot: not "did raven start
+    this", but "who has the data". Losing the pidfile, moving the config
+    directory, or upgrading from a raven that kept no pidfile all leave the
+    lock intact, and the lock is what actually blocks a second instance.
+    """
+    resolved = Path(root).expanduser()
+    lock = resolved / ".index" / "sqlite" / "ome.db.lock"
+    if not lock.exists():
+        return None
+    pid = _lock_holder_pid(lock, resolved)
+    if pid is None:
+        return None
+    cmdline = _cmdline_of(pid)
+    # Both halves matter: the command has to be an everos server, and it has to
+    # be serving *this* root. A pid can be recycled onto anything.
+    if _SERVER_CMDLINE not in cmdline or str(resolved) not in cmdline:
+        return None
+    return LockHolder(pid=pid, cmdline=cmdline, port=_listening_port(pid))
+
+
 def _last_error_line() -> str:
     """The most recent exception line from the server log, or an empty string.
 
@@ -301,6 +490,29 @@ def _child_env() -> dict[str, str]:
     return env
 
 
+def _require_written_port(root: Path, want: int) -> None:
+    """Confirm ``[api].port`` really says ``want`` before spawning against it.
+
+    Dropping ``--port`` made the toml the single authority on where a server
+    listens, and that only holds while the file says what raven believes it
+    says. Without this check a write that did not land -- a permission error
+    swallowed upstream, a merge that dropped the section -- starts a server on
+    the template's 8000 while every reader looks for the configured port. That
+    is the exact drift the command-line override used to cause, arriving by a
+    quieter route.
+    """
+    import tomllib
+
+    path = Path(root) / "everos.toml"
+    try:
+        with path.open("rb") as fh:
+            written = (tomllib.load(fh).get("api") or {}).get("port")
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise RuntimeError(f"could not read back [api] from {path}: {exc}") from exc
+    if written != want:
+        raise RuntimeError(f"[api] write to {path} did not take effect: expected port {want}, read back {written!r}")
+
+
 def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     """Try to acquire the startup lock and launch the server.
 
@@ -335,10 +547,12 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
             # are taken from the default URL rather than restated, so there is
             # one place that decides how loopback is spelled.
             _default = urlparse(DEFAULT_EVEROS_BASE_URL)
+            want_port = int(parsed.port or _default.port or 18791)
             set_everos_api(
                 host=parsed.hostname or _default.hostname or "localhost",
-                port=int(parsed.port or _default.port or 18791),
+                port=want_port,
             )
+            _require_written_port(root, want_port)
             log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:
@@ -366,7 +580,7 @@ async def ensure_everos_server(
     *,
     timeout: float = 10.0,
     on_wait: Callable[[], None] | None = None,
-) -> None:
+) -> subprocess.Popen | None:
     """Make sure a server is answering at ``base_url``, starting one if not.
 
     ``base_url`` is required on purpose. It used to default to
@@ -396,7 +610,7 @@ async def ensure_everos_server(
     """
     if await asyncio.to_thread(_probe_health, base_url):
         logger.info("everos server already running at {}", base_url)
-        return
+        return None
 
     # Only on the spawn path: a server that answers /health has already built
     # its LLM client, so its credentials are proven by the probe above.
@@ -413,7 +627,7 @@ async def ensure_everos_server(
         elapsed += _POLL_INTERVAL
         if await asyncio.to_thread(_probe_health, base_url):
             logger.info("everos server ready at {}", base_url)
-            return
+            return proc
         # A dead child will never answer, so stop waiting on it. Without this
         # the caller paid the full timeout for a process that exited in under a
         # second -- once per session, silently. ``proc`` is None only when
@@ -439,7 +653,12 @@ async def ensure_everos_server(
 
 __all__ = [
     "DEFAULT_EVEROS_BASE_URL",
+    "ProbeResult",
+    "probe_health",
+    "EverosBinaryMissingError",
     "EverosNotConfiguredError",
+    "LockHolder",
     "StopOutcome",
     "ensure_everos_server",
+    "lock_holder",
 ]

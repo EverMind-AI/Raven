@@ -648,3 +648,245 @@ class TestEnsureEverosServer:
         assert _extract_port("http://localhost:18791") == "18791"
         assert _extract_port("http://127.0.0.1:9999") == "9999"
         assert _extract_port("http://localhost") == "80"
+
+
+class TestProbeClassification:
+    """A probe answers *why* it failed, not just that it did.
+
+    Collapsing every failure into ``False`` hid the one distinction the caller
+    has to act on: a refused connection is instant and means nobody is
+    listening, while a timeout costs the full budget and means something *is*
+    listening but not answering. Retrying the first is free; retrying the second
+    charges the user again every turn.
+    """
+
+    def test_ok_on_200(self) -> None:
+        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+
+        resp = MagicMock(status_code=200)
+        with patch("httpx.get", return_value=resp):
+            assert probe_health("http://localhost:18791") is ProbeResult.OK
+
+    def test_refused_is_distinct_from_timeout(self) -> None:
+        import httpx
+
+        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+
+        with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
+            assert probe_health("http://localhost:18791") is ProbeResult.REFUSED
+
+        with patch("httpx.get", side_effect=httpx.ConnectTimeout("slow")):
+            assert probe_health("http://localhost:18791") is ProbeResult.TIMEOUT
+
+        with patch("httpx.get", side_effect=httpx.ReadTimeout("hung")):
+            assert probe_health("http://localhost:18791") is ProbeResult.TIMEOUT
+
+    def test_non_200_is_error_not_refused(self) -> None:
+        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+
+        resp = MagicMock(status_code=503)
+        with patch("httpx.get", return_value=resp):
+            assert probe_health("http://localhost:18791") is ProbeResult.ERROR
+
+    def test_unexpected_exception_is_error(self) -> None:
+        from raven.plugin.memory.everos._server import ProbeResult, probe_health
+
+        with patch("httpx.get", side_effect=ValueError("garbage")):
+            assert probe_health("http://localhost:18791") is ProbeResult.ERROR
+
+    def test_bool_wrapper_stays_truthful(self) -> None:
+        """``_probe_health`` keeps its bool contract for the callers that only
+        need liveness. Returning the enum from it directly would be a silent
+        bug: every enum member is truthy, so ``if _probe_health(...)`` would
+        pass on a refused connection."""
+        import httpx
+
+        from raven.plugin.memory.everos._server import _probe_health
+
+        resp = MagicMock(status_code=200)
+        with patch("httpx.get", return_value=resp):
+            assert _probe_health("http://localhost:18791") is True
+        with patch("httpx.get", side_effect=httpx.ConnectError("refused")):
+            assert _probe_health("http://localhost:18791") is False
+        with patch("httpx.get", side_effect=httpx.ReadTimeout("hung")):
+            assert _probe_health("http://localhost:18791") is False
+
+    def test_probe_budget_is_one_second(self) -> None:
+        """Loopback: if it does not answer in a second it is not answering.
+
+        The probe runs out of band now, but it still has to finish quickly --
+        a probe that outlives the turn it was kicked from is a leak, not a
+        check.
+        """
+        from raven.plugin.memory.everos._server import _PROBE_TIMEOUT_S
+
+        assert _PROBE_TIMEOUT_S == 1.0
+
+
+class TestLockHolderLookup:
+    """Who holds this root's data, and where is it actually listening?
+
+    The pidfile answers "did raven start it", which is a record raven keeps
+    about itself -- lose the file and a server raven did start reads as
+    foreign. The lock answers "who is serving this data" from the OS, which is
+    the question that actually blocks a start, and it stays true across a lost
+    pidfile, a moved config dir, and a rename.
+
+    Finding the holder's listening port turns the one unrecoverable state --
+    the lock is taken and the declared address is silent -- into a recoverable
+    one: connect to where it really is instead of killing it.
+    """
+
+    def test_returns_none_when_lock_file_absent(self, tmp_path) -> None:
+        from raven.plugin.memory.everos._server import lock_holder
+
+        assert lock_holder(tmp_path) is None
+
+    def test_lsof_pid_is_verified_against_the_cmdline(self, tmp_path) -> None:
+        """A pid alone is not enough: the number may have been recycled onto an
+        unrelated process, and signalling that is the accident this guards."""
+        from raven.plugin.memory.everos import _server
+
+        lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
+        lock.parent.mkdir(parents=True)
+        lock.touch()
+
+        with (
+            patch.object(_server, "_lock_holder_pid", return_value=4242),
+            patch.object(_server, "_cmdline_of", return_value="/usr/bin/vim notes.txt"),
+        ):
+            assert _server.lock_holder(tmp_path) is None
+
+    def test_reports_the_port_the_holder_actually_listens_on(self, tmp_path) -> None:
+        from raven.plugin.memory.everos import _server
+
+        lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
+        lock.parent.mkdir(parents=True)
+        lock.touch()
+        cmdline = f"/venv/bin/python /venv/bin/everos server start --root {tmp_path}"
+
+        with (
+            patch.object(_server, "_lock_holder_pid", return_value=4242),
+            patch.object(_server, "_cmdline_of", return_value=cmdline),
+            patch.object(_server, "_listening_port", return_value=39999),
+        ):
+            holder = _server.lock_holder(tmp_path)
+
+        assert holder is not None
+        assert holder.pid == 4242
+        assert holder.port == 39999
+
+    def test_a_holder_with_no_listening_port_is_still_reported(self, tmp_path) -> None:
+        """``everos demo`` and an embedded engine hold the lock without serving
+        HTTP. Reporting them with ``port=None`` is what lets the wizard say
+        "something has your data but there is nowhere to connect" instead of
+        silently deciding nobody is there."""
+        from raven.plugin.memory.everos import _server
+
+        lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
+        lock.parent.mkdir(parents=True)
+        lock.touch()
+        cmdline = f"/venv/bin/python /venv/bin/everos server start --root {tmp_path}"
+
+        with (
+            patch.object(_server, "_lock_holder_pid", return_value=4242),
+            patch.object(_server, "_cmdline_of", return_value=cmdline),
+            patch.object(_server, "_listening_port", return_value=None),
+        ):
+            holder = _server.lock_holder(tmp_path)
+
+        assert holder is not None
+        assert holder.port is None
+
+    def test_falls_back_to_the_pidfile_when_the_os_cannot_answer(self, tmp_path) -> None:
+        from raven.plugin.memory.everos import _server
+
+        lock = tmp_path / ".index" / "sqlite" / "ome.db.lock"
+        lock.parent.mkdir(parents=True)
+        lock.touch()
+        cmdline = f"/venv/bin/python /venv/bin/everos server start --root {tmp_path}"
+
+        with (
+            patch.object(_server, "_lsof_lock_pid", return_value=None),
+            patch.object(_server, "_proc_locks_pid", return_value=None),
+            patch.object(_server, "_read_pidfile", return_value={"pid": 77, "root": str(tmp_path)}),
+            patch.object(_server, "_cmdline_of", return_value=cmdline),
+            patch.object(_server, "_listening_port", return_value=18791),
+        ):
+            holder = _server.lock_holder(tmp_path)
+
+        assert holder is not None
+        assert holder.pid == 77
+
+
+class TestTheWrittenAddressIsVerified:
+    """Writing ``[api]`` and then spawning assumes the write landed.
+
+    Dropping ``--port`` made the toml the single authority on where a server
+    listens; that only holds if the file really says what raven thinks it
+    says. An unverified write turns a failed edit into a server on the wrong
+    port -- exactly the drift the change was meant to end.
+    """
+
+    def test_readback_mismatch_refuses_to_spawn(self, tmp_path, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_path / "everos"
+        root.mkdir()
+        (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
+
+        monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
+        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+        # A write that silently does not take: the readback is the only thing
+        # standing between this and a server bound to 8000 while raven probes 18791.
+        monkeypatch.setattr("raven.config.update_everos.set_everos_api", lambda **kw: None)
+
+        with pytest.raises(RuntimeError, match="did not take effect"):
+            _server._start_server_if_unlocked("http://localhost:18791")
+
+
+class TestParsingLsofListenOutput:
+    """Real ``lsof`` rows, because the shape is what the parser got wrong.
+
+    The address is neither the last field -- ``(LISTEN)`` is -- nor at a fixed
+    index, since COMMAND is padded to the widest value in the output. Taking
+    the last field silently found no port at all, so a server that was plainly
+    listening looked like a lock holder serving nothing.
+    """
+
+    def test_ipv4_row(self) -> None:
+        from raven.plugin.memory.everos._server import _parse_listen_port
+
+        out = (
+            "COMMAND     PID  USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
+            "python3.1 94107 admin   32u  IPv4 0x88b36e3af566b544      0t0  TCP 127.0.0.1:31995 (LISTEN)\n"
+        )
+        assert _parse_listen_port(out) == 31995
+
+    def test_ipv6_row(self) -> None:
+        from raven.plugin.memory.everos._server import _parse_listen_port
+
+        out = (
+            "COMMAND   PID  USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
+            "everos   4242 admin   11u  IPv6  0x1e2      0t0  TCP [::1]:18791 (LISTEN)\n"
+        )
+        assert _parse_listen_port(out) == 18791
+
+    def test_wildcard_row(self) -> None:
+        from raven.plugin.memory.everos._server import _parse_listen_port
+
+        out = (
+            "COMMAND   PID  USER   FD   TYPE DEVICE SIZE/OFF NODE NAME\n"
+            "everos   4242 admin   11u  IPv4  0x1e2      0t0  TCP *:8000 (LISTEN)\n"
+        )
+        assert _parse_listen_port(out) == 8000
+
+    def test_header_only_is_no_port(self) -> None:
+        from raven.plugin.memory.everos._server import _parse_listen_port
+
+        assert _parse_listen_port("COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\n") is None
+
+    def test_empty_output_is_no_port(self) -> None:
+        from raven.plugin.memory.everos._server import _parse_listen_port
+
+        assert _parse_listen_port("") is None
