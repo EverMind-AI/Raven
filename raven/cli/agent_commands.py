@@ -338,6 +338,9 @@ def register(app: typer.Typer) -> None:
             finally:
                 if backend is not None:
                     try:
+                        # Detached indexing writes first: stopping the backend
+                        # closes the HTTP client they still need.
+                        await agent_loop.drain_backend_stores()
                         await backend.stop()
                     except Exception:
                         logger.exception(
