@@ -106,7 +106,7 @@ class CronService:
     ):
         """``allowed_channels`` restricts which jobs this service will claim.
 
-        Set to e.g. ``{"cli"}`` in REPL mode so REPL doesn't steal Feishu /
+        Set to e.g. ``{"tui"}`` in the TUI so it doesn't steal Feishu /
         Telegram reminders that gateway should deliver. ``None`` (default)
         means any channel — use that in gateway where ChannelManager can
         route replies to any configured channel.
@@ -173,6 +173,13 @@ class CronService:
                 data = json.loads(self.store_path.read_text(encoding="utf-8"))
                 jobs = []
                 for j in data.get("jobs", []):
+                    channel = j["payload"].get("channel")
+                    if channel == "cli":
+                        # The "cli" delivery channel is retired (the REPL was
+                        # removed); the TUI is the interactive surface now.
+                        # Persisted on the next save.
+                        logger.info("migrated legacy cli-bound job {} to tui", j["id"])
+                        channel = "tui"
                     jobs.append(
                         CronJob(
                             id=j["id"],
@@ -187,7 +194,7 @@ class CronService:
                             ),
                             payload=CronPayload(
                                 message=j["payload"].get("message", ""),
-                                channel=j["payload"].get("channel"),
+                                channel=channel,
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
                             ),

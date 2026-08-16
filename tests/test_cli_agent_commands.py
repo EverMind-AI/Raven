@@ -1,8 +1,9 @@
 """CLI tests for ``raven agent``.
 
-The ``agent`` command is an interactive REPL with optional ``-m`` single-turn
-mode. Smoke-level coverage: ``--help`` works, options are surfaced, the
-``no-API-key`` path exits cleanly.
+The ``agent`` command is a one-shot ``-m`` single-turn runner (the
+interactive REPL was removed; ``raven tui`` is the interactive front-end).
+Smoke-level coverage: ``--help`` works, options are surfaced, the
+``no-API-key`` path exits cleanly, bare invocation points at the TUI.
 """
 
 from __future__ import annotations
@@ -30,13 +31,23 @@ def test_agent_help_works() -> None:
     """``raven agent --help`` lists the key options."""
     r = runner.invoke(app, ["agent", "--help"])
     assert r.exit_code == 0
-    assert "Interact with the agent" in r.stdout
+    assert "one-shot agent turn" in r.stdout
     # core options surfaced
     assert "--message" in r.stdout
     assert "--session" in r.stdout
     assert "--workspace" in r.stdout
     assert "--config" in r.stdout
     assert "--markdown" in r.stdout
+
+
+def test_agent_without_message_prints_pointer_and_exits_nonzero(tmp_config: Path) -> None:
+    """Bare ``raven agent`` no longer enters an interactive loop: it points
+    at ``raven tui`` / ``agent -m`` and exits non-zero."""
+    r = runner.invoke(app, ["agent"])
+    assert r.exit_code != 0
+    assert "REPL was removed" in r.stdout
+    assert "raven tui" in r.stdout
+    assert "-m" in r.stdout
 
 
 def test_agent_without_api_key_exits_cleanly(tmp_config: Path) -> None:
@@ -272,92 +283,37 @@ def test_agent_continue_without_prior_session_starts_fresh(
 
 
 # ============================================================================
-# --fake-now clock threading
+# No cron on the one-shot path
 # ============================================================================
 
 
-def test_agent_fake_now_threads_now_fn_into_cron(
+def test_agent_message_mode_constructs_no_cron_service(
     tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``agent --fake-now`` must thread now_fn into CronService so the
-    past-schedule guard reads the simulated clock, not wall-time. Without it,
-    an ``at`` reminder set under a back-dated --fake-now is rejected as "in the
-    past" — the agent then leaks the real date and longrun trajectories rot.
-    """
+    """``agent -m`` must not build a CronService (and hence never registers
+    CronTool): with the REPL gone this process is never a cron runner, so a
+    cli-bound job it created would have nothing to fire it."""
     import raven.proactive_engine.schedulers.cron.service as cron_mod
 
     ws = tmp_path / "ws"
     ws.mkdir()
-    captured: dict[str, object] = {}
+    constructed: list[object] = []
     orig_init = cron_mod.CronService.__init__
 
-    def _spy_init(self, *args, now_fn=None, **kwargs) -> None:
-        captured["now_fn"] = now_fn
-        orig_init(self, *args, now_fn=now_fn, **kwargs)
+    def _spy_init(self, *args, **kwargs) -> None:
+        constructed.append(self)
+        orig_init(self, *args, **kwargs)
 
     monkeypatch.setattr(cron_mod.CronService, "__init__", _spy_init)
-    _invoke_agent_capturing_session(monkeypatch, ws, ["--fake-now", "2026-05-01T08:00:00"])
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [])
 
-    now_fn = captured.get("now_fn")
-    assert now_fn is not None, "agent --fake-now did not thread now_fn into CronService"
-    assert now_fn().strftime("%Y-%m-%d") == "2026-05-01"
-
-
-def test_agent_without_fake_now_leaves_cron_on_wall_clock(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """No --fake-now → now_fn resolves to None so CronService keeps its
-    real-clock default (production must be unaffected by the fake-clock wiring)."""
-    import raven.proactive_engine.schedulers.cron.service as cron_mod
-
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    captured: dict[str, object] = {"now_fn": "unset"}
-    orig_init = cron_mod.CronService.__init__
-
-    def _spy_init(self, *args, now_fn=None, **kwargs) -> None:
-        captured["now_fn"] = now_fn
-        orig_init(self, *args, now_fn=now_fn, **kwargs)
-
-    monkeypatch.setattr(cron_mod.CronService, "__init__", _spy_init)
-    _invoke_agent_capturing_session(monkeypatch, ws, [])
-
-    assert captured["now_fn"] is None
+    assert r.exit_code == 0, r.stdout
+    assert constructed == [], "agent -m must not construct a CronService"
 
 
 # ============================================================================
-# Pure helper functions (no REPL state needed)
+# Pure helper functions
 # ============================================================================
-
-
-@pytest.mark.parametrize(
-    "command,expected",
-    [
-        ("exit", True),
-        ("quit", True),
-        ("/exit", True),
-        ("/quit", True),
-        (":q", True),
-        ("EXIT", True),  # case-insensitive
-        ("Quit", True),
-        (" exit", False),  # leading whitespace not stripped
-        ("hello", False),
-        ("", False),
-        ("exit later", False),
-    ],
-)
-def test_is_exit_command(command: str, expected: bool) -> None:
-    """``_is_exit_command`` detects the canonical exit triggers (case-insensitive)."""
-    from raven.cli.agent_commands import _is_exit_command
-
-    assert _is_exit_command(command) is expected
-
-
-def test_exit_commands_set_contents() -> None:
-    """The canonical exit triggers stay in sync with documented behavior."""
-    from raven.cli.agent_commands import EXIT_COMMANDS
-
-    assert EXIT_COMMANDS == {"exit", "quit", "/exit", "/quit", ":q"}
 
 
 def test_print_agent_response_with_markdown(capsys: pytest.CaptureFixture) -> None:
@@ -409,179 +365,3 @@ def test_agent_message_mode_mocked_provider(tmp_config: Path, monkeypatch: pytes
         assert not isinstance(r.exception, (NameError, AttributeError, ImportError)), (
             f"Crash-class exception leaked through: {r.exception!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# REPL local slash commands (raven.cli._repl_slash)
-#
-# These run in-process and must NOT reach the LLM. The handler returns True
-# when it consumed the input and False when the caller should forward it on.
-# ---------------------------------------------------------------------------
-
-
-class _RecordingConsole:
-    """Captures only what ``_repl_slash`` itself prints. Delegated CLI
-    commands print to their own module-level console (real stdout), which
-    is irrelevant to the routing assertions here."""
-
-    def __init__(self) -> None:
-        self.lines: list[str] = []
-
-    def print(self, *args: object, **_kwargs: object) -> None:
-        self.lines.append(" ".join(str(a) for a in args))
-
-    @property
-    def text(self) -> str:
-        return "\n".join(self.lines)
-
-
-@pytest.fixture
-def isolated_runtime(tmp_path: Path, monkeypatch) -> Path:
-    """Point cron/sentinel runtime dirs at a tmp config so slash commands
-    operate on throwaway state.
-
-    ``set_config_path`` covers the read paths (cron/sentinel dirs derive from
-    it). Config *writers* resolve the path via the update module's own
-    ``get_config_path`` binding, so pin that too — otherwise a leaked
-    monkeypatch from another test file could redirect our writes elsewhere.
-    """
-    cfg = tmp_path / "config.json"
-    set_config_path(cfg)
-    monkeypatch.setattr("raven.config.update.get_config_path", lambda: cfg)
-    yield tmp_path
-    set_config_path(None)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize("text", ["hello there", "/stop", "/restart", "/unknowntop"])
-def test_slash_non_commands_fall_through(text: str) -> None:
-    """Plain chat and bus-level commands (/stop, /restart) must fall through
-    to the LLM/bus path — handler returns False."""
-    from raven.cli._repl_slash import handle_repl_slash
-
-    assert handle_repl_slash(text, console=_RecordingConsole()) is False
-
-
-def test_slash_help_lists_namespaces() -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-
-    con = _RecordingConsole()
-    assert handle_repl_slash("/help", console=con) is True
-    assert "/cron" in con.text and "/sentinel" in con.text
-
-
-def test_cron_and_sentinel_help_handled() -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-
-    con = _RecordingConsole()
-    assert handle_repl_slash("/cron", console=con) is True
-    assert handle_repl_slash("/sentinel help", console=con) is True
-    assert "/cron list" in con.text
-    assert "/sentinel status" in con.text
-
-
-def test_cron_run_is_shell_only(isolated_runtime: Path) -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-
-    con = _RecordingConsole()
-    assert handle_repl_slash("/cron run abc123", console=con) is True
-    assert "shell-only" in con.text
-
-
-def test_cron_config_write_is_shell_only(isolated_runtime: Path) -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-
-    con = _RecordingConsole()
-    assert handle_repl_slash("/cron config set --forward-channels '*'", console=con) is True
-    assert "shell-only" in con.text
-
-
-def test_cron_list_runs_against_empty_store(isolated_runtime: Path) -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-
-    # Delegates to cron_list; succeeds (no exception) on an empty store.
-    assert handle_repl_slash("/cron list", console=_RecordingConsole()) is True
-
-
-def _make_cron_job():
-    from raven.config.paths import get_cron_dir
-    from raven.proactive_engine.schedulers.cron.service import CronService
-    from raven.proactive_engine.schedulers.cron.types import CronSchedule
-
-    svc = CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
-    job = svc.add_job(
-        name="testjob",
-        schedule=CronSchedule(kind="every", every_ms=60_000),
-        message="hi",
-        channel="cli",
-        to="direct",
-    )
-    return svc, job
-
-
-def test_cron_delete_requires_inline_yes(isolated_runtime: Path) -> None:
-    """Without -y, destructive ops only preview and keep the job."""
-    from raven.cli._repl_slash import handle_repl_slash
-
-    svc, job = _make_cron_job()
-    con = _RecordingConsole()
-    assert handle_repl_slash(f"/cron delete {job.id}", console=con) is True
-    assert "-y" in con.text  # asks for confirmation flag
-    assert len(svc.list_jobs(include_disabled=True)) == 1  # not deleted
-
-
-def test_cron_delete_with_yes_removes_job(isolated_runtime: Path) -> None:
-    from raven.cli._repl_slash import handle_repl_slash
-    from raven.config.paths import get_cron_dir
-    from raven.proactive_engine.schedulers.cron.service import CronService
-
-    svc, job = _make_cron_job()
-    assert handle_repl_slash(f"/cron delete {job.id} -y", console=_RecordingConsole()) is True
-    # Fresh instance: svc's cache only reloads on st_mtime change, which
-    # has 1s granularity — the delete's rewrite can be invisible to it.
-    fresh = CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
-    assert fresh.list_jobs(include_disabled=True) == []
-
-
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        "/sentinel status",
-        "/sentinel nudges -n 5",
-        "/sentinel decisions",
-        "/sentinel routines",
-        "/sentinel attention",
-        "/sentinel behaviors",
-    ],
-)
-def test_sentinel_readonly_commands_handled(isolated_runtime: Path, cmd: str) -> None:
-    """Read-only inspectors are routed and run without leaking exceptions
-    (missing state files just print a notice)."""
-    from raven.cli._repl_slash import handle_repl_slash
-
-    assert handle_repl_slash(cmd, console=_RecordingConsole()) is True
-
-
-@pytest.mark.parametrize(
-    "cmd",
-    [
-        # global-config writes — same shell-only rule as `cron config`
-        "/sentinel enable",
-        "/sentinel disable",
-        "/sentinel config set --max-nudges-per-hour 1",
-        # trigger ops — cost LLM / rebuild a separate stack
-        "/sentinel tick",
-        "/sentinel discover-now feishu",
-        "/sentinel behaviors-rebuild",
-    ],
-)
-def test_sentinel_writes_and_triggers_are_shell_only(isolated_runtime: Path, cmd: str) -> None:
-    """Config writes and trigger ops are consumed (return True) but rejected
-    with a shell-only notice — they must NOT execute or touch config.json."""
-    from raven.cli._repl_slash import handle_repl_slash
-    from raven.config.loader import get_config_path
-
-    con = _RecordingConsole()
-    assert handle_repl_slash(cmd, console=con) is True
-    assert "shell-only" in con.text
-    # No config file was written by these REPL-rejected commands.
-    assert not get_config_path().exists()

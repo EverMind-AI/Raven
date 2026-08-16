@@ -947,7 +947,7 @@ def _print_node_help(out=None) -> None:
     msg = (
         "✗ TUI 启动失败：未找到 Node.js ≥ 22。\n"
         "  安装：https://nodejs.org/  或  brew install node@22  或  nvm install 22\n"
-        "  或：临时使用行式 REPL  ->  raven agent --legacy-repl\n"
+        '  或：一次性提问  ->  raven agent -m "..."\n'
     )
     typer.echo(msg, file=out)
 

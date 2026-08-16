@@ -201,11 +201,10 @@ def register(app: typer.Typer) -> None:
         # Create cron service first (callback set after agent creation).
         #
         # Restrict to channels gateway has adapters for. This prevents the
-        # gateway from racing REPL and stealing cli-origin reminders that REPL
-        # can deliver but gateway can't (REPL stdout is owned by the REPL
-        # process, gateway has no cli channel). Without this, you'd see
-        # "Unknown channel: cli" warnings + lost REPL reminders when both
-        # processes are running.
+        # gateway from racing the TUI and stealing tui-bound reminders that
+        # the TUI can deliver but gateway can't (gateway has no tui outlet).
+        # Without this, you'd see "Unknown channel: tui" warnings + lost TUI
+        # reminders when both processes are running.
         cron_store_path = get_cron_dir() / "jobs.json"
         gateway_channels = _build_gateway_channels(config)
         cron = CronService(cron_store_path, allowed_channels=gateway_channels)
@@ -407,7 +406,7 @@ def register(app: typer.Typer) -> None:
                 cron.on_job = make_on_cron_job(
                     submit=gw_scheduler.submit,
                     readback_texts=gw_readback_texts,
-                    default_channel="cli",
+                    default_channel="tui",
                     system_events=system_events,
                     wake=wake,
                 )

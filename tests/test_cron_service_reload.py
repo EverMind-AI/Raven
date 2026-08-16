@@ -22,7 +22,7 @@ def test_reload_detects_rewrite_within_float_mtime_collision(tmp_path: Path):
         name="first",
         schedule=CronSchedule(kind="every", every_ms=60000),
         message="x",
-        channel="cli",
+        channel="tui",
         to="direct",
     )
 

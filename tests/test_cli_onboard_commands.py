@@ -1094,54 +1094,25 @@ def test_a_first_run_gets_the_wizard(tmp_env: Path, monkeypatch: pytest.MonkeyPa
 # --------------------------------------------------------------------------- entry-point gate wiring
 
 
-def test_agent_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`raven agent` (interactive, TTY, missing config) enters the wizard."""
-    from raven.cli import agent_commands
-
-    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+def test_agent_bare_exits_with_pointer_without_wizard(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`raven agent` no longer hosts an interactive session: bare invocation
+    exits non-zero with the TUI pointer before any config check, so the
+    wizard never runs for it (even on missing config)."""
     gate_called: list[bool] = []
-
-    def _gate(**_):
-        gate_called.append(True)
-        raise typer.Exit(0)  # stop before the heavy loop builds
-
-    monkeypatch.setattr(onboard_commands, "run_wizard", _gate)
-    # Config is empty (tmp_env fresh) → _is_config_populated() is False.
+    monkeypatch.setattr(
+        onboard_commands,
+        "ensure_ready_to_start",
+        lambda **_: gate_called.append(True),
+    )
     r = runner.invoke(app, ["agent"])
-    assert gate_called == [True]
-    assert r.exit_code == 0
-
-
-def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`raven agent` with complete config does NOT enter the wizard.
-
-    The gate itself is reached on every interactive start -- deciding whether this
-    config can start is its job, and asserting it was not called would only pin
-    the caller's copy of that decision.
-    """
-    from raven.cli import agent_commands
-
-    _seed_provider()
-    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
-    ran: list[bool] = []
-    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
-
-    # Stub the heavy loop so the command returns quickly after the gate check.
-    def _boom(*a, **kw):
-        raise typer.Exit(0)
-
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", _boom)
-    runner.invoke(app, ["agent"])
-
-    assert ran == []
+    assert r.exit_code != 0
+    assert "raven tui" in r.stdout
+    assert gate_called == []
 
 
 def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`raven agent -m '...'` (one-shot) must NOT enter the wizard even on a
     TTY with missing config — scripted use fails loudly later instead."""
-    from raven.cli import agent_commands
-
-    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
@@ -1149,29 +1120,10 @@ def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.Mon
         lambda **_: gate_called.append(True),
     )
     monkeypatch.setattr(
-        "raven.cli._helpers.load_runtime_config",
+        "raven.cli.agent_commands.load_runtime_config",
         lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
     )
     runner.invoke(app, ["agent", "-m", "hi"])
-    assert gate_called == []
-
-
-def test_agent_gate_skips_non_tty(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Non-TTY (piped) `raven agent` must not enter the wizard (would block)."""
-    from raven.cli import agent_commands
-
-    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: False)
-    gate_called: list[bool] = []
-    monkeypatch.setattr(
-        onboard_commands,
-        "ensure_ready_to_start",
-        lambda **_: gate_called.append(True),
-    )
-    monkeypatch.setattr(
-        "raven.cli._helpers.load_runtime_config",
-        lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
-    )
-    runner.invoke(app, ["agent"])
     assert gate_called == []
 
 
@@ -4474,7 +4426,9 @@ def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
     assert "openai-codex/gpt-5.6-sol" in capsys.readouterr().out, "fell back without saying to what"
 
 
-@pytest.mark.parametrize("entry", ["tui", "agent"])
+# "agent" dropped from the params: bare `raven agent` exits with the tui
+# pointer before any gate, so it has no wizard path to protect anymore.
+@pytest.mark.parametrize("entry", ["tui"])
 def test_a_stale_default_model_does_not_restart_the_wizard(
     entry: str,
     tmp_env: Path,
