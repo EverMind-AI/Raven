@@ -701,6 +701,34 @@ def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
     assert "--allow-from" in r.stdout
 
 
+def test_enable_partial_credentials_still_fails_missing_required(tmp_config: Path) -> None:
+    """Supplying one required flag must not bypass the check for the others:
+    ``enable feishu --app-id X`` (no --app-secret) errors first line, exits 1."""
+    import re
+
+    r = runner.invoke(app, ["channels", "enable", "feishu", "--app-id", "X", "--allow-from", "alice"])
+    assert r.exit_code != 0
+    first_line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+    assert re.search(r"missing required .*--app-secret", first_line), f"first line: {first_line!r}"
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("feishu")
+        assert section is None or section.get("enabled") is not True
+
+
+def test_enable_unrelated_flag_still_fails_missing_required(tmp_config: Path) -> None:
+    """A flag unrelated to credentials must not bypass the check either:
+    ``enable telegram --allow-from '*'`` (no --token) errors first line, exits 1."""
+    import re
+
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--allow-from", "*"])
+    assert r.exit_code != 0
+    first_line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+    assert re.search(r"missing required .*--token", first_line), f"first line: {first_line!r}"
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("telegram")
+        assert section is None or section.get("enabled") is not True
+
+
 def test_channels_login_nontty_no_traceback(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-TTY ``channels login`` exits 2 with a re-run hint instead of
     reaching the interactive adapter (bare prompt_toolkit traceback)."""
