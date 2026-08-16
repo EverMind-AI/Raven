@@ -121,10 +121,7 @@ class SkillPolicy:
             except (AttributeError, ValueError):
                 interactive = False
             if not interactive:
-                return (
-                    f"skill {name!r}: skillForge.autoInstall is 'prompt' "
-                    "but no interactive terminal is attached"
-                )
+                return f"skill {name!r}: skillForge.autoInstall is 'prompt' but no interactive terminal is attached"
             answer = input(f"Install skill {name!r} from the Skill Hub? [y/N] ")
             if answer.strip().casefold() in ("y", "yes"):
                 return None

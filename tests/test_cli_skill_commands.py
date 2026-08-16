@@ -133,9 +133,7 @@ def test_skill_get_with_body_renders_markdown(tmp_config: Path, monkeypatch: pyt
     assert "SKILL.md" in r.stdout
 
 
-def test_skill_list_shows_installed_column(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skill_list_shows_installed_column(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Skills whose dir carries .install-meta.json get an Installed cell
     of the form ``YYYY-MM-DD (source)``; others stay blank."""
     import json
@@ -146,9 +144,7 @@ def test_skill_list_shows_installed_column(
         json.dumps({"installed_at": "2026-08-16T00:00:00+00:00", "source": "hub"}),
         encoding="utf-8",
     )
-    installed = SimpleNamespace(
-        name="foo", source="workspace", description="d", path=skill_dir / "SKILL.md"
-    )
+    installed = SimpleNamespace(name="foo", source="workspace", description="d", path=skill_dir / "SKILL.md")
     fake_svc = SimpleNamespace(gather_all_skills=lambda: [installed, _make_meta("bare", desc="d")])
     monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
