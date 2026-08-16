@@ -1253,6 +1253,42 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
+def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Declining the host confirm inside the failure submenu returns to the
+    submenu directly: no second boxlite probe, no reprinted failure banner."""
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    probes: list[bool] = []
+
+    def probe():
+        probes.append(True)
+        return (False, "missing")
+
+    fc_answers = iter(["host", "skip"])
+    fc_calls: list[bool] = []
+
+    def fake_failure_choice(options, *, non_interactive):
+        fc_calls.append(True)
+        return next(fc_answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("boxlite"))
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", probe)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", fake_failure_choice)
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert len(probes) == 1
+    assert len(fc_calls) == 2
+
+
 def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An already-configured sandbox offers a 'keep current' first choice."""
     from raven.config.update import set_sandbox_backend
@@ -4623,9 +4659,7 @@ def test_sandbox_host_choice_warns_and_confirms(
     assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "none"
 
 
-def test_sandbox_host_decline_returns_to_menu(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sandbox_host_decline_returns_to_menu(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Declining the host confirmation re-shows the run-location menu instead
     of persisting; the next pick (boxlite) wins."""
     import questionary

@@ -2148,27 +2148,30 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                     "  [dim]可能本机缺少所需的虚拟化支持。可退回本机运行,或查阅 boxlite 安装文档。[/dim]",
                 )
             )
-        choice = _failure_choice(
-            [
-                (_t("Fall back to host", "退回本机运行"), "host"),
-                (_t("Retry after install", "安装后重试"), "retry"),
-                (_t("Skip", "跳过"), "skip"),
-            ],
-            non_interactive=non_interactive,
-        )
-        if choice == "retry":
-            continue
-        if choice == "host":
-            if not _confirm_host_run(questionary):
-                continue
-            _persist_sandbox_backend("none")
-            console.print(
-                _t(
-                    "  [green]✓ Running directly on the host.[/green]",
-                    "  [green]✓ 将在本机直接运行。[/green]",
-                )
+        while True:
+            choice = _failure_choice(
+                [
+                    (_t("Fall back to host", "退回本机运行"), "host"),
+                    (_t("Retry after install", "安装后重试"), "retry"),
+                    (_t("Skip", "跳过"), "skip"),
+                ],
+                non_interactive=non_interactive,
             )
-        return None
+            if choice == "retry":
+                break
+            if choice == "host":
+                # A declined confirm re-asks this submenu; only "retry" may
+                # re-probe (and reprint the failure banner).
+                if not _confirm_host_run(questionary):
+                    continue
+                _persist_sandbox_backend("none")
+                console.print(
+                    _t(
+                        "  [green]✓ Running directly on the host.[/green]",
+                        "  [green]✓ 将在本机直接运行。[/green]",
+                    )
+                )
+            return None
 
 
 # ---------------------------------------------------------------------------
