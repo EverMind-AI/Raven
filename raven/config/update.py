@@ -361,6 +361,7 @@ def set_plugin_config_fields(
     plugin_id: str,
     fields: dict[str, Any],
     *,
+    remove: tuple[str, ...] | None = None,
     config_path: Path | None = None,
 ) -> None:
     """Merge ``fields`` into ``plugins.config[plugin_id]`` on the on-disk config.
@@ -369,13 +370,26 @@ def set_plugin_config_fields(
     (which EverOS root, whether raven owns it, its cached address) written at
     different moments, and a replacing write would drop whichever the caller did
     not happen to be carrying.
+
+    ``remove`` names keys that no longer apply, for the case a merge cannot
+    express. Switching to an EverOS the user runs has to retract the recorded
+    root, not merely stop updating it: left behind, it is still exported as
+    ``EVEROS_ROOT`` and still points raven at a directory it has just promised
+    to leave alone.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
     slice_.update(fields)
+    for key in remove or ():
+        slice_.pop(key, None)
     _write_atomic(path, data)
-    logger.info("config/update: plugins.config.{} updated ({})", plugin_id, ", ".join(fields))
+    logger.info(
+        "config/update: plugins.config.{} updated ({}{})",
+        plugin_id,
+        ", ".join(fields),
+        f"; removed {', '.join(remove)}" if remove else "",
+    )
 
 
 def set_memory_backend(

@@ -5360,3 +5360,69 @@ class TestAddressComparisonIsNotStringComparison:
         from raven.cli.onboard_everos import _same_address
 
         assert not _same_address(None, "http://localhost:18791")
+
+
+class TestTheIntendedPortIsAlwaysRecorded:
+    """The target address is only a setting if something writes it.
+
+    _configured_target_url reads `port` to tell a port an old raven left behind
+    from one the user chose. Only the adopt branch ever wrote it, so on every
+    ordinary converge the field stayed absent and the target fell back to the
+    shipped constant -- which is exactly the behaviour the field exists to
+    prevent, arriving one branch further along.
+    """
+
+    def test_setting_the_address_records_the_port_with_it(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        onboard_everos._set_base_url("http://localhost:20000")
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:20000"
+        assert slice_["port"] == 20000, "address recorded without the intent behind it"
+
+    def test_the_target_then_survives_a_second_run(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        onboard_everos._set_base_url("http://localhost:20000")
+
+        assert onboard_everos._configured_target_url() == "http://localhost:20000"
+
+
+class TestSwitchingToSelfManagedClearsTheOldRoot:
+    """`owned: False` next to a stale `root` is a contradiction with teeth.
+
+    The slice is written by merge, so recording a self-managed address left any
+    previously recorded root in place. configure_everos_env exports that root
+    as EVEROS_ROOT, so raven would still be pointed at a directory it had just
+    promised to stop touching -- and the promise was documented as structural
+    precisely because no path is recorded.
+    """
+
+    def test_the_previous_root_does_not_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        tmp_env.write_text(
+            json.dumps(
+                {
+                    "memory": {"backend": "everos"},
+                    "plugins": {"config": {"everos-memory": {"root": "/previous/root", "owned": True}}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        import questionary
+
+        answers = iter(["127.0.0.1", "8000"])
+        monkeypatch.setattr(questionary, "text", lambda *a, **kw: _Answer(next(answers)))
+        monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+
+        assert onboard_everos._use_self_managed_everos() is True
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["owned"] is False
+        assert "root" not in slice_, "kept a path into a root raven promised not to touch"

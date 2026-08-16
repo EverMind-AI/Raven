@@ -1371,7 +1371,15 @@ def _use_self_managed_everos() -> bool:
         )
         return False
 
-    set_plugin_config_fields("everos-memory", {"owned": False, "base_url": base_url})
+    set_plugin_config_fields(
+        "everos-memory",
+        {"owned": False, "base_url": base_url},
+        # A merging write cannot express "this no longer applies", and a root
+        # left behind from a previous managed setup is still exported as
+        # EVEROS_ROOT -- pointing raven at a directory it just promised to stop
+        # touching. Not recording a path is what makes the promise structural.
+        remove=("root", "port"),
+    )
     _set_memory_backend("everos")
     caps = " ".join(_capability_lines(base_url))
     oc.console.print(
@@ -1702,17 +1710,11 @@ def _adopt_running_address(running_at: str | None) -> None:
 
     Both halves matter: ``base_url`` so this session connects, and ``port`` so
     the next run compares against the same intent instead of asking again.
+    :func:`_set_base_url` writes both.
     """
-    from urllib.parse import urlparse
-
-    from raven.config.update import set_plugin_config_fields
-
     if not running_at:
         return
     _set_base_url(running_at)
-    port = urlparse(running_at).port
-    if port:
-        set_plugin_config_fields("everos-memory", {"port": int(port)})
 
 
 def _stop_failure_line(outcome: Any, *, keeping: str | None) -> str:
@@ -1782,15 +1784,28 @@ def _restart_here(root: Any, target: str) -> bool:
 
 
 def _set_base_url(base_url: str) -> None:
-    """Cache the address in raven's config.
+    """Cache the address in raven's config, and record the port as the intent.
 
-    A cache, not the truth: ``<root>/everos.toml`` is what the server reads, and
-    this follows it so the runtime does not have to scan for a root on every
-    session.
+    ``base_url`` is a cache -- ``<root>/everos.toml`` is what the server reads,
+    and this follows it so the runtime does not have to scan for a root on
+    every session. ``port`` is the other half: where a managed server is
+    *meant* to listen, which is what convergence compares against.
+
+    Written together on purpose. Left to separate callers, the intent was
+    recorded by exactly one branch, so every ordinary converge produced an
+    address with no intent beside it and the comparison fell back to the
+    shipped constant -- reintroducing the behaviour the intent was added to
+    prevent.
     """
+    from urllib.parse import urlparse
+
     from raven.config.update import set_plugin_config_fields
 
-    set_plugin_config_fields("everos-memory", {"base_url": base_url})
+    fields: dict[str, Any] = {"base_url": base_url}
+    port = urlparse(base_url).port
+    if port:
+        fields["port"] = int(port)
+    set_plugin_config_fields("everos-memory", fields)
 
 
 _OWN_ROOT_INSTEAD = object()
