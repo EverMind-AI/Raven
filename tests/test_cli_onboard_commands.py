@@ -4656,3 +4656,17 @@ def test_sandbox_non_interactive_host_warns(
     onboard_commands._step2_sandbox(skip=False, non_interactive=True)
     out = capsys.readouterr().out
     assert re.search(r"full host privileges|host access", out, re.I)
+
+
+def test_everos_role_optionality_matches_design():
+    """Design guard: the memory llm role is mandatory (no skip affordance in
+    the wizard) while embedding/rerank/multimodal degrade gracefully and stay
+    skippable. Keeps the wizard metadata aligned with the health contract."""
+    from raven.cli.onboard_everos import _EVEROS_ROLES
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+
+    assert REQUIRED_SECTIONS == ("llm",)
+    assert set(DEGRADING_SECTIONS) == {"embedding", "rerank", "multimodal"}
+    assert "skip_note" not in _EVEROS_ROLES["llm"]
+    for role in DEGRADING_SECTIONS:
+        assert "skip_note" in _EVEROS_ROLES[role]
