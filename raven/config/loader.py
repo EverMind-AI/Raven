@@ -1,11 +1,11 @@
 """Configuration loading utilities."""
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 from pydantic import ValidationError
 
 from raven.config.schema import Config
@@ -33,6 +33,10 @@ EXTENSION_KEYS = (
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
+
+# Paths already warned about as malformed in this process; repeated
+# load_config calls (status/doctor load more than once) warn only once.
+_warned_paths: set[str] = set()
 
 
 def set_config_path(path: Path) -> None:
@@ -113,9 +117,21 @@ def load_config(config_path: Path | None = None) -> Config:
                 f"config at {path} is not valid JSON ({e}) -- IGNORING it and running on "
                 "DEFAULTS. Fix the file (JSON allows no comments or trailing commas) and restart."
             )
-            print(f"WARNING: {msg}", file=sys.stderr)
-            logger.warning(msg)
+            # Single user-visible channel: the stderr print (visible under any
+            # loguru sink config). The log-file trace uses stdlib logging, NOT
+            # loguru — loguru's default sink echoes DEBUG to stderr, which
+            # would re-duplicate the warning on plain CLI runs; the stdlib
+            # record reaches the file sink via the CLI's logging intercept.
+            if str(path) not in _warned_paths:
+                _warned_paths.add(str(path))
+                print(f"WARNING: {msg}", file=sys.stderr)
+            logging.getLogger(__name__).debug(msg)
         else:
+            # A clean parse re-arms the warning: the dedup exists to silence
+            # repeated loads of the same broken state within one command, not
+            # to spend the one warning a long-lived process (the TUI RPC
+            # server reloads every turn) gets for a later re-breakage.
+            _warned_paths.discard(str(path))
             try:
                 config = Config.model_validate(data)
             except ValidationError as e:

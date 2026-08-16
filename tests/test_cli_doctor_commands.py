@@ -360,3 +360,130 @@ def test_memory_section_reaches_the_json_output(healthy_config: Path, no_memory_
     payload = json.loads(r.stdout)
     assert payload["memory"]["capabilities"] == {"llm": True, "embed": False}
     assert payload["memory"]["configured"] == ["llm", "embedding"]
+
+
+# --------------------------------------------------------------------------- config visibility
+
+
+def _run_doctor_subprocess(home: Path) -> tuple[str, int]:
+    """Run ``raven doctor`` in a subprocess with a sandbox HOME.
+
+    A subprocess (not CliRunner) is required here: the loader's duplicate
+    warning went out over two channels (print + loguru), and loguru's sink
+    holds the real stderr, invisible to in-process capture.
+    """
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    r = subprocess.run(
+        [sys.executable, "-m", "raven", "doctor"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    return r.stdout + r.stderr, r.returncode
+
+
+def _write_home_config(tmp_path: Path, name: str, body: str | None) -> Path:
+    home = tmp_path / name
+    (home / ".raven").mkdir(parents=True)
+    if body is not None:
+        (home / ".raven" / "config.json").write_text(body, encoding="utf-8")
+    return home
+
+
+def test_doctor_bad_config_warns_exactly_once(tmp_path: Path) -> None:
+    home = _write_home_config(tmp_path, "bad", '{"providers": {},}')
+    out, _ = _run_doctor_subprocess(home)
+    assert out.count("not valid JSON") == 1, out
+
+
+def test_doctor_config_line_three_states(tmp_path: Path) -> None:
+    import re
+
+    home_bad = _write_home_config(tmp_path, "bad", '{"providers": {},}')
+    out_bad, _ = _run_doctor_subprocess(home_bad)
+    config_line = next(line for line in out_bad.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out_bad
+    assert re.search(r"invalid JSON", out_bad), out_bad
+
+    home_missing = _write_home_config(tmp_path, "missing", None)
+    out_missing, _ = _run_doctor_subprocess(home_missing)
+    assert re.search(r"missing|not found", out_missing), out_missing
+
+    home_good = _write_home_config(tmp_path, "good", "{}")
+    out_good, _ = _run_doctor_subprocess(home_good)
+    config_line = next(line for line in out_good.splitlines() if "Config:" in line)
+    assert "✓" in config_line, out_good
+
+
+def test_doctor_empty_config_is_invalid(tmp_path: Path) -> None:
+    """An empty config.json runs on defaults (load_config sees a JSON syntax
+    error), so doctor must not paint the Config line green."""
+    home = _write_home_config(tmp_path, "empty", "")
+    out, code = _run_doctor_subprocess(home)
+    config_line = next(line for line in out.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out
+    assert "empty" in config_line, out
+    assert code == 1, out
+
+
+def test_doctor_non_object_config_is_invalid(tmp_path: Path) -> None:
+    """A valid-JSON non-object top level (e.g. null) carries no settings, so
+    doctor must classify it invalid instead of green."""
+    home = _write_home_config(tmp_path, "nonobject", "null")
+    out, code = _run_doctor_subprocess(home)
+    config_line = next(line for line in out.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out
+    assert "not a JSON object" in config_line, out
+    assert code == 1, out
+
+
+def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> None:
+    """The Memory section must say recall is keyword-only when the embedding
+    role is not configured in the user-level everos.toml."""
+    import re
+
+    home = _write_home_config(tmp_path, "everos_nokey", json.dumps({"memory": {"backend": "everos"}}))
+    out, _ = _run_doctor_subprocess(home)
+    out = " ".join(out.split())
+    assert re.search(r"Retrieval:\s*keyword-only", out), out
+    assert "no embedding key" in out, out
+
+
+def test_doctor_everos_with_embedding_shows_semantic(tmp_path: Path) -> None:
+    import re
+
+    home = _write_home_config(tmp_path, "everos_key", json.dumps({"memory": {"backend": "everos"}}))
+    everos_dir = home / ".everos" / "raven"
+    everos_dir.mkdir(parents=True)
+    (everos_dir / "everos.toml").write_text(
+        '[embedding]\nmodel = "m"\napi_key = "sk-x"\nbase_url = "https://api.example.com/v1"\n',
+        encoding="utf-8",
+    )
+    out, _ = _run_doctor_subprocess(home)
+    out = " ".join(out.split())
+    assert re.search(r"Retrieval:\s*semantic", out), out
+
+
+def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
+    home = _write_home_config(tmp_path, "everos_json", json.dumps({"memory": {"backend": "everos"}}))
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    r = subprocess.run(
+        [sys.executable, "-m", "raven", "doctor", "--json"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    payload = json.loads(r.stdout[r.stdout.index("{") :])
+    assert payload["memory"]["retrieval"] == "keyword-only"
