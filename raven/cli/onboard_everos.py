@@ -1319,8 +1319,7 @@ def _step4_memory(
             oc._t(
                 "  [dim]Long-term memory stays off.[/dim]\n"
                 "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]",
-                "  [dim]长期记忆保持关闭。[/dim]\n"
-                "  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
+                "  [dim]长期记忆保持关闭。[/dim]\n  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
             )
         )
         return None
