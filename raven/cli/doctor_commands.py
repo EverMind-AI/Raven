@@ -33,6 +33,8 @@ console = Console()
 class PathsInfo:
     config_path: str
     config_exists: bool
+    config_valid: bool = False
+    config_invalid_reason: str = ""
     workspace_path: str = ""
     workspace_exists: bool = False
 
@@ -74,6 +76,7 @@ class MemoryInfo:
     reports_capabilities: bool = False
     configured: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    retrieval: Optional[str] = None
 
     @property
     def unbuilt(self) -> list[str]:
@@ -119,6 +122,8 @@ class DoctorReport:
     def exit_code(self) -> int:
         if self.paths is None or not self.paths.config_exists:
             return 1
+        if not self.paths.config_valid:
+            return 1
         if not self.config_loaded:
             return 1
         if self.routing is None or self.routing.provider is None:
@@ -145,6 +150,23 @@ def _gather_static_checks() -> DoctorReport:
 
     if not paths.config_exists:
         return report
+
+    # Classify config validity with load_config's eyes: a syntax error, an
+    # empty file, and a non-object top level all mean no settings were read.
+    # Inspect the file directly -- load_config swallows syntax errors into
+    # defaults, and read_raw_or_raise folds the last two cases into {} for
+    # its read-modify-write callers, so neither can classify all three.
+    try:
+        text = config_path.read_text(encoding="utf-8")
+        data = json.loads(text) if text.strip() else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        paths.config_invalid_reason = "invalid JSON"
+    else:
+        if not text.strip():
+            paths.config_invalid_reason = "empty"
+        elif not isinstance(data, dict):
+            paths.config_invalid_reason = "not a JSON object"
+    paths.config_valid = not paths.config_invalid_reason
 
     try:
         config = load_config()
@@ -210,6 +232,9 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     )
 
     info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+    # Recall quality is decided by the embedding role in the user-level
+    # everos.toml: with it recall matches meaning, without it only keywords.
+    info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
@@ -303,10 +328,13 @@ def _render_human_output(report: DoctorReport) -> None:
     paths = report.paths
     assert paths is not None  # _gather_static_checks always populates this
     console.print("[bold]Paths[/bold]")
-    if paths.config_exists:
-        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
-    else:
+    if not paths.config_exists:
         console.print(f"  Config:    {paths.config_path}  [red]✗  (not found)[/red]")
+    elif not paths.config_valid:
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"  Config:    {paths.config_path}  [yellow]⚠  {reason} (running on defaults)[/yellow]")
+    else:
+        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
     if paths.config_exists:
         mark = "[green]✓[/green]" if paths.workspace_exists else "[red]✗[/red]"
         console.print(f"  Workspace: {paths.workspace_path}  {mark}")
@@ -316,7 +344,14 @@ def _render_human_output(report: DoctorReport) -> None:
         return
 
     if not report.config_loaded:
-        console.print("\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it.")
+        if paths.config_valid:
+            console.print(
+                "\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it."
+            )
+        else:
+            reason = paths.config_invalid_reason or "invalid JSON"
+            console.print(f"\n[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
+            console.print(f"Fix [cyan]{paths.config_path}[/cyan] or run [cyan]raven onboard --reset[/cyan].")
         return
 
     routing = report.routing
@@ -356,6 +391,10 @@ def _render_human_output(report: DoctorReport) -> None:
     if memory is not None and memory.backend:
         console.print("\n[bold]Memory[/bold]")
         console.print(f"  Backend:    {memory.backend}")
+        if memory.retrieval == "semantic":
+            console.print("  Retrieval:  semantic")
+        elif memory.retrieval:
+            console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.probe is not None:
@@ -383,6 +422,10 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("Run [cyan]doctor --probe[/cyan] to send a test message and verify the LLM responds.")
         else:
             console.print("[green]✓ All checks passed.[/green]")
+    elif not paths.config_valid:
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
+        console.print(f"Fix [cyan]{paths.config_path}[/cyan] (JSON allows no comments or trailing commas).")
     elif routing and routing.provider is None:
         console.print(
             f"[red]✗ Model [bold]{routing.model}[/bold] could not be routed to any configured provider.[/red]"
