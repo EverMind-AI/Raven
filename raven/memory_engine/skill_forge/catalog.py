@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from raven.memory_engine.skill_local.local_pool import LocalPool
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.skill_hub.policy import is_blocked, normalize_blocklist
 
 log = logging.getLogger(__name__)
 
@@ -73,10 +74,23 @@ class LocalSkillCatalog:
         )
 
         self._config = config
+        self._blocklist = normalize_blocklist(getattr(config, "blocklist", None))
 
         # Local-pool BM25 retrieval over file-based skills (workspace +
-        # builtin). Always available — no model, no GPU.
-        self._local_pool = LocalPool(self._registry)
+        # builtin). Always available — no model, no GPU. Blocklisted
+        # skills are hidden from the index via a filtered registry view
+        # so they never surface through retrieval; the router pool drop
+        # in SkillsSegmentBuilder stays the backstop for other sources.
+        pool_registry: Any = self._registry
+        if self._blocklist:
+            skipped = sorted({m.name for m in self._registry.list_all() if self._is_blocked(m.name)})
+            if skipped:
+                log.info(
+                    "skill blocklist: hiding blocked skill(s) from the local pool: %s",
+                    ", ".join(skipped),
+                )
+            pool_registry = _BlocklistRegistryView(self._registry, self._blocklist)
+        self._local_pool = LocalPool(pool_registry)
 
         # Background SKILL.md watcher. Auto-started by default so the
         # common long-lived consumer (ContextBuilder) picks up hand-edits
@@ -97,6 +111,9 @@ class LocalSkillCatalog:
             self.start_file_watcher()
 
     # ── Pool/registry access (for LocalSkillSource) ──────────────────
+
+    def _is_blocked(self, name: str) -> bool:
+        return is_blocked(self._blocklist, name)
 
     @property
     def registry(self) -> SkillRegistry:
@@ -213,7 +230,9 @@ class LocalSkillCatalog:
         # within each layer by discovery order.  Sort stably by
         # (source priority, name) so truncation is predictable.
         all_always = [
-            m for m in self._registry.list_all() if m.always and self._registry.check_available(m.name, source=m.source)
+            m
+            for m in self._registry.list_all()
+            if m.always and not self._is_blocked(m.name) and self._registry.check_available(m.name, source=m.source)
         ]
         all_always.sort(key=lambda m: (m.source, m.name))
         cap = int(getattr(self._config, "always_max", 5) or 5)
@@ -263,7 +282,7 @@ class LocalSkillCatalog:
             skills = resolved
         parts: list[str] = []
         for m in skills:
-            if not m.content:
+            if not m.content or self._is_blocked(m.name):
                 continue
             body = m.content
             # db-only rows without on-disk assets get a synthetic
@@ -398,6 +417,7 @@ class LocalSkillCatalog:
                         resolved.append(meta)
                 only = resolved
             metas = list(only)
+        metas = [m for m in metas if not self._is_blocked(m.name)]
         if not metas:
             return ""
 
@@ -426,8 +446,9 @@ class LocalSkillCatalog:
         (workspace, builtin, external mirrors).
 
         Used by CLI ``skill list`` / inspection helpers — gathers
-        everything unranked. Hot-path retrieval goes through
-        :class:`SkillForgeRouter` instead.
+        everything unranked, deliberately including blocklisted skills so
+        inspection can show a blocked-but-present skill. Hot-path
+        retrieval goes through :class:`SkillForgeRouter` instead.
         """
         return self._registry.list_all()
 
@@ -438,6 +459,22 @@ class LocalSkillCatalog:
     ) -> SkillMeta | None:
         """Resolve a (name, source) to a ``SkillMeta`` via the local registry."""
         return self._registry.get(name, source=source)
+
+
+class _BlocklistRegistryView:
+    """Registry proxy handed to :class:`LocalPool` — hides blocklisted
+    skills from the BM25 index while delegating everything else to the
+    real registry, so index rebuilds keep flowing through unchanged."""
+
+    def __init__(self, registry: SkillRegistry, blocklist: frozenset[str]) -> None:
+        self._registry = registry
+        self._blocklist = blocklist
+
+    def list_all(self) -> list[SkillMeta]:
+        return [m for m in self._registry.list_all() if not is_blocked(self._blocklist, m.name)]
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._registry, item)
 
 
 # ----------------------------------------------------------------------

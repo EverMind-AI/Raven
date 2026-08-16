@@ -133,6 +133,49 @@ def test_skill_get_with_body_renders_markdown(tmp_config: Path, monkeypatch: pyt
     assert "SKILL.md" in r.stdout
 
 
+def test_skill_list_shows_installed_column(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skills whose dir carries .install-meta.json get an Installed cell
+    of the form ``YYYY-MM-DD (source)``; others stay blank."""
+    import json
+
+    skill_dir = tmp_path / "foo@v1"
+    skill_dir.mkdir()
+    (skill_dir / ".install-meta.json").write_text(
+        json.dumps({"installed_at": "2026-08-16T00:00:00+00:00", "source": "hub"}),
+        encoding="utf-8",
+    )
+    installed = SimpleNamespace(name="foo", source="workspace", description="d", path=skill_dir / "SKILL.md")
+    fake_svc = SimpleNamespace(gather_all_skills=lambda: [installed, _make_meta("bare", desc="d")])
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
+
+    r = runner.invoke(app, ["skill", "list"])
+    assert r.exit_code == 0
+    assert "Installed" in r.stdout
+    assert "2026-08-16" in r.stdout
+    assert "(hub)" in r.stdout
+
+
+def test_skill_list_marks_blocked(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Names on skillForge.blocklist get a [blocked] marker; the row still
+    renders (gather_all_skills stays unfiltered for inspection)."""
+    import json
+
+    tmp_config.write_text(
+        json.dumps({"skillForge": {"blocklist": ["Alpha"]}}),
+        encoding="utf-8",
+    )
+    fake_svc = SimpleNamespace(
+        gather_all_skills=lambda: [_make_meta("alpha", desc="d"), _make_meta("beta", desc="d")],
+    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
+
+    r = runner.invoke(app, ["skill", "list"])
+    assert r.exit_code == 0
+    lines = r.stdout.splitlines()
+    assert any("alpha" in line and "[blocked]" in line for line in lines)
+    assert not any("beta" in line and "[blocked]" in line for line in lines)
+
+
 # ============================================================================
 # skill block / unblock  (on-disk skillForge.blocklist)
 # ============================================================================

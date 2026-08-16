@@ -19,10 +19,14 @@ Lifecycle management (Hub install policy):
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
 
@@ -36,8 +40,39 @@ def _build_skill_service():
 
     config = load_config()
     workspace = config.workspace_path
-    sf_cfg = getattr(config, "skill_forge", None)
+    sf_cfg = _load_skill_forge_config() or getattr(config, "skill_forge", None)
     return LocalSkillCatalog(workspace, config=sf_cfg, start_watcher=False)
+
+
+def _load_skill_forge_config():
+    """The on-disk extension-block SkillForgeConfig, or ``None``.
+
+    The base ``Config.skill_forge`` property only ever returns defaults —
+    user-set fields like ``blocklist`` live in the extension block that
+    ``load_raven_config`` reads.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+
+        return load_raven_config().skill_forge
+    except Exception:
+        return None
+
+
+def _install_meta_cell(skill_md_path) -> str:
+    """``YYYY-MM-DD (source)`` from the skill dir's ``.install-meta.json``,
+    or an empty cell for skills without an install stamp."""
+    if not skill_md_path:
+        return ""
+    try:
+        record = json.loads(
+            (Path(str(skill_md_path)).parent / ".install-meta.json").read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError):
+        return ""
+    installed_at = str(record.get("installed_at") or "")[:10]
+    source = str(record.get("source") or "hub")
+    return f"{installed_at} ({source})" if installed_at else f"({source})"
 
 
 @skill_app.command("list")
@@ -58,13 +93,20 @@ def skill_list(
         console.print("[dim]No skills found.[/dim]")
         return
 
+    from raven.skill_hub.policy import is_blocked, normalize_blocklist
+
+    blocked = normalize_blocklist(getattr(_load_skill_forge_config(), "blocklist", None))
     table = Table(title=f"Skills ({len(metas)})")
     table.add_column("Name", style="cyan")
     table.add_column("Source", style="green")
     table.add_column("Description", overflow="fold")
+    table.add_column("Installed", style="dim")
     for m in metas:
         desc = (m.description or "")[:120]
-        table.add_row(m.name, m.source, desc)
+        name_cell = Text(m.name)
+        if is_blocked(blocked, m.name):
+            name_cell.append(" [blocked]", style="bold red")
+        table.add_row(name_cell, m.source, desc, _install_meta_cell(getattr(m, "path", None)))
     console.print(table)
 
 
