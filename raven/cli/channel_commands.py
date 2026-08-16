@@ -125,7 +125,7 @@ def _gate_open_allow_from(name: str, fields: dict) -> None:
     """
     raw = fields.get("allow_from")
     if raw is not None:
-        explicit = "*" in [item.strip() for item in str(raw).split(",")]
+        explicit = "*" in [item.strip() for item in str(raw).split(",") if item.strip()]
         open_after = explicit
     else:
         from raven.config.update_channels import get_channel_config
