@@ -213,3 +213,21 @@ def test_bad_config_warns_exactly_once(tmp_path: Path, capsys) -> None:
     load_config(p)
     captured = capsys.readouterr()
     assert (captured.out + captured.err).count("not valid JSON") == 1
+
+
+def test_bad_config_warns_again_after_recovery(tmp_path: Path, capsys) -> None:
+    """bad -> fixed -> bad again must warn on the second breakage.
+
+    The dedup exists to silence repeated loads of the same broken state
+    within one command; in a long-lived process (the TUI RPC server calls
+    load_config every turn) a permanent suppression would let a later
+    re-breakage run silently on defaults forever."""
+    p = tmp_path / "config.json"
+    p.write_text('{"providers": {},}', encoding="utf-8")
+    load_config(p)
+    p.write_text("{}", encoding="utf-8")
+    load_config(p)
+    p.write_text('{"agents": {},}', encoding="utf-8")
+    load_config(p)
+    captured = capsys.readouterr()
+    assert (captured.out + captured.err).count("not valid JSON") == 2
