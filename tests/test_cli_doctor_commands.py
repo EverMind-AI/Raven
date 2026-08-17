@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -284,6 +285,51 @@ def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memor
     assert "running" in r.stdout
 
 
+def test_doctor_answers_where_the_memories_are(healthy_config: Path, no_memory_server, tmp_path) -> None:
+    """Nothing used to answer this. The wizard printed the root once while
+    converging and no command showed it again, so a user asking "where are my
+    memories" had to read config.json by hand. Doctor is where that question
+    gets asked."""
+    from raven.config import update_everos as ue
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
+    no_memory_server.setattr(ue, "everos_owned", lambda: True)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    # Asserting the tail segment, not the whole path: rich wraps long paths and
+    # the full string is not contiguous in stdout.
+    assert "Memories:" in r.stdout
+    assert "mem-root" in r.stdout
+    assert "Address:" in r.stdout
+    assert "Managed by you" not in r.stdout
+
+
+def test_doctor_says_when_the_memories_are_not_ravens_to_touch(
+    healthy_config: Path, no_memory_server, tmp_path
+) -> None:
+    """A user-managed root is read-only, and doctor is the one place a user is
+    asking about state rather than being walked through a decision -- so it has to
+    say which of the two situations they are in."""
+    from raven.config import update_everos as ue
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "theirs")
+    no_memory_server.setattr(ue, "everos_owned", lambda: False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    out = " ".join(r.stdout.split())
+    assert "Managed by you" in out
+    assert "never writes, starts or stops it" in out
+    # And it must not name a directory: nothing records where their memories live.
+    assert str(tmp_path / "theirs") not in out
+
+
 def test_an_unbuilt_optional_role_is_reported_without_failing(healthy_config: Path, no_memory_server) -> None:
     """Without embedding the adapter searches lexically instead of semantically:
     weaker memory, not broken memory. Worth saying, not worth an exit code."""
@@ -487,3 +533,134 @@ def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     )
     payload = json.loads(r.stdout[r.stdout.index("{") :])
     assert payload["memory"]["retrieval"] == "keyword-only"
+
+
+class TestDoctorDoesNotInventASelfManagedRoot:
+    """A self-managed install records no root, so doctor must not name one.
+
+    ``everos_root()`` answers with a fallback when nothing is recorded, which
+    is right for the code that needs somewhere to write and wrong for the code
+    that reports where the memories are. Printing it labelled "Managed by you"
+    points the user at a directory that is not theirs and has nothing in it.
+
+    The roles are worse than cosmetic. They were read out of that same
+    fabricated root's toml, so an install whose server has embedding
+    configured was told its recall was keyword-only. Doctor cannot read the
+    user's toml -- that is the whole read-only promise -- so what the server
+    reports about itself is the only honest source.
+    """
+
+    @staticmethod
+    def _collect(monkeypatch, *, caps: dict, reachable: bool = True):
+        from raven.cli import doctor_commands as dc
+
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: Path("/fallback/everos"))
+        monkeypatch.setattr(
+            "raven.config.update_everos.everos_role_configured",
+            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
+        )
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            # reports_capabilities is derived from capabilities, not a field.
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=reachable, capabilities=caps),
+        )
+        return dc
+
+    def test_no_root_is_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.root is None, "named a directory for an install that records none"
+
+    def test_retrieval_follows_what_the_server_reports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.retrieval == "semantic", "told the user recall was keyword-only while the server has embedding"
+
+    def test_no_embedding_on_the_server_reads_as_keyword_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": False})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.retrieval == "keyword-only"
+
+    def test_an_unreachable_server_claims_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Down is not the same as misconfigured. With nothing to ask, doctor
+        has no basis for either answer and must not pick one."""
+        dc = self._collect(monkeypatch, caps={}, reachable=False)
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.root is None
+        assert info.retrieval is None
+
+
+class TestASelfManagedServerCanStillBeBroken:
+    """ "What the server knows about" and "what it built" must not be one list.
+
+    For a not-owned install ``configured`` was the sections the server reports
+    as available, and ``unbuilt`` the subset of those it reports as
+    unavailable. Over one capability map those conditions are mutually
+    exclusive, so ``unbuilt`` -- and with it ``broken`` and the exit code --
+    was structurally always empty. A self-managed server whose LLM failed to
+    build reported healthy, and any CI gating on ``raven doctor`` saw green.
+
+    Raven cannot read their toml to learn what they configured. It does not
+    have to: a server that reports a section as unavailable tried to build it
+    and failed, and that is the same evidence.
+    """
+
+    @staticmethod
+    def _info(monkeypatch, caps: dict):
+        from raven.cli import doctor_commands as dc
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        )
+        return dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+    def test_a_failed_required_role_is_reported_as_broken(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": False, "embed": True})
+
+        assert "llm" in info.unbuilt
+        assert info.broken == ["llm"], "a server that cannot build its LLM reported healthy"
+
+    def test_it_reaches_the_exit_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import doctor_commands as dc
+
+        info = self._info(monkeypatch, {"llm": False, "embed": True})
+        report = dc.DoctorReport()
+        # The earlier gates return first; this case is about the memory one.
+        report.paths = SimpleNamespace(config_exists=True, config_valid=True)
+        report.config_loaded = True
+        report.routing = SimpleNamespace(provider="openai")
+        report.memory = info
+
+        assert report.exit_code() == 2, "doctor exited 0 with a memory service that cannot work"
+
+    def test_a_failed_optional_role_costs_quality_not_function(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": True, "embed": False})
+
+        assert "embedding" in info.unbuilt
+        assert info.broken == [], "a missing embedding is a worse memory, not a broken one"
+
+    def test_a_working_server_is_not_accused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": True, "embed": True})
+
+        assert info.unbuilt == []
+
+    def test_a_role_the_server_says_nothing_about_is_not_claimed_either_way(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``rerank`` absent from the map is silence, not a failure."""
+        info = self._info(monkeypatch, {"llm": True, "embed": True})
+
+        assert "rerank" not in info.configured
+        assert "rerank" not in info.unbuilt

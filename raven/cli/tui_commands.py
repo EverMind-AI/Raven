@@ -772,6 +772,7 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
+                await agent_loop.drain_backend_stores()
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger

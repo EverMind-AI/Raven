@@ -246,6 +246,9 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     fake_agent_loop = MagicMock()
     fake_agent_loop.backend = spy_backend
+    # Awaited during teardown before backend.stop(); a bare MagicMock is not
+    # awaitable and would swallow the stop it is supposed to precede.
+    fake_agent_loop.drain_backend_stores = AsyncMock()
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
