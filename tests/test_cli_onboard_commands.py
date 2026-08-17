@@ -5506,16 +5506,17 @@ class TestTheManagedPortIsOfferedNotImposed:
         assert "_ask_managed_port" in inspect.getsource(onboard_everos._step4_memory)
 
 
-class TestAnUpgradeDoesNotRelocateAnExistingService:
-    """A config written before `port` existed still states where it runs.
+class TestAnUpgradeIsAskedBeforeItIsMoved:
+    """A pre-upgrade install is protected by the question, not by the target.
 
-    Falling straight through to the constant would read every pre-upgrade
-    install as sitting on a legacy port and move it -- silently, on the very
-    first run after the upgrade, and with no question asked. The recorded
-    address is the intent until the user says otherwise.
+    An earlier attempt read the recorded address as the intent so that nothing
+    would be relocated. That over-corrected: with no intent stored the two
+    addresses always matched, the "keep it or move it" screen never appeared,
+    and the upgrade ended parked on the old port with the standard one never
+    mentioned. Silence in the other direction is still silence.
     """
 
-    def test_a_recorded_address_is_the_intent_when_no_port_is_stored(self, tmp_env: Path) -> None:
+    def test_the_old_address_and_the_target_disagree_so_the_user_is_asked(self, tmp_env: Path) -> None:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(
@@ -5523,28 +5524,21 @@ class TestAnUpgradeDoesNotRelocateAnExistingService:
             encoding="utf-8",
         )
 
-        assert onboard_everos._configured_target_url() == "http://localhost:1995"
-
-    def test_an_explicit_port_still_wins_over_the_cached_address(self, tmp_env: Path) -> None:
-        """base_url follows the service; port is the decision. When they
-        disagree the decision is what convergence aims at."""
-        from raven.cli import onboard_everos
-
-        tmp_env.write_text(
-            json.dumps(
-                {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995", "port": 18791}}}}
-            ),
-            encoding="utf-8",
+        target = onboard_everos._configured_target_url()
+        assert target == "http://localhost:18791"
+        assert not onboard_everos._same_address("http://127.0.0.1:1995", target), (
+            "a pre-upgrade address must not read as already-at-target, or the question never fires"
         )
 
-        assert onboard_everos._configured_target_url() == "http://localhost:18791"
-
-    def test_nothing_recorded_falls_back_to_the_shipped_default(self, tmp_env: Path) -> None:
+    def test_answering_keep_records_the_intent_so_it_is_asked_only_once(self, tmp_env: Path) -> None:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        onboard_everos._adopt_running_address("http://127.0.0.1:1995")
 
-        assert onboard_everos._configured_target_url() == "http://localhost:18791"
+        target = onboard_everos._configured_target_url()
+        assert target == "http://localhost:1995"
+        assert onboard_everos._same_address("http://127.0.0.1:1995", target)
 
 
 class TestARefusedSelfManagedAddressEndsTheStep:
@@ -5759,3 +5753,55 @@ class TestReconfiguringRestartsOurOwnService:
 
         monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         assert onboard_everos._stop_for_reload(Path("/r")) is False
+
+
+class TestIntentAndAddressAreDifferentQuestions:
+    """Where it should be, and where it is, are answered from different fields.
+
+    Convergence compares them, so it must not read the current address as the
+    intent -- doing that makes every pre-upgrade install look like it is already
+    where it belongs, and the "keep it or move it" question never fires. The
+    upgrade path then quietly ends at the old port forever, which is the
+    outcome the question exists to put in front of the user.
+
+    Creating a root is the other question, and there a recorded address is the
+    best answer available: ignoring it was the original defect behind
+    "start the everos server at its configured address, not the default".
+    """
+
+    def test_no_recorded_intent_targets_the_default(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
+            encoding="utf-8",
+        )
+
+        assert onboard_everos._configured_target_url() == "http://localhost:18791"
+
+    def test_recorded_intent_wins(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps(
+                {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995", "port": 20000}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        assert onboard_everos._configured_target_url() == "http://localhost:20000"
+
+    def test_creating_a_root_still_honours_a_recorded_address(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The build path is where "do not ignore the configured address"
+        belongs; convergence is not."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+
+        assert onboard_everos._ask_managed_port(Path("/r")) == 1995

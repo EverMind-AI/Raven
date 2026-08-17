@@ -574,10 +574,18 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
             # one place that decides how loopback is spelled.
             _default = urlparse(DEFAULT_EVEROS_BASE_URL)
             want_port = int(parsed.port or _default.port or 18791)
-            set_everos_api(
-                host=parsed.hostname or _default.hostname or "localhost",
-                port=want_port,
-            )
+            try:
+                set_everos_api(
+                    host=parsed.hostname or _default.hostname or "localhost",
+                    port=want_port,
+                )
+            except OSError as exc:
+                # Callers guard the start path with ``except RuntimeError``,
+                # which is what "could not start" has always meant here. An
+                # unwritable root raises OSError from the atomic write and
+                # walked past all of them, ending the wizard on a traceback for
+                # something the user can simply fix and retry.
+                raise RuntimeError(f"could not write [api] to {root}/everos.toml: {exc}") from exc
             _require_written_port(root, want_port)
             log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -972,3 +972,33 @@ class TestStoppingWhatTheLockNamed:
         monkeypatch.setattr(_server.time, "sleep", lambda _s: None)
 
         assert _server.stop_pid(4242, timeout=1.0) is _server.StopOutcome.STILL_DRAINING
+
+
+class TestAnUnwritableRootFailsAsAStartFailure:
+    """A root raven cannot write to must read as "the server did not start".
+
+    The address is written into the root before the child is spawned, so a
+    directory that refuses the write raises OSError from deep inside the start
+    path. Every caller guards with ``except RuntimeError`` -- the wizard, the
+    backend -- because that is what "could not start" has always been. An
+    OSError walked past all of them and ended the wizard on a traceback, in a
+    situation the user can act on: fix the permissions and run it again.
+    """
+
+    def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_path / "everos"
+        root.mkdir()
+        (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
+        root.chmod(0o555)
+        monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
+        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: True)
+        try:
+            with pytest.raises(RuntimeError) as caught:
+                _server._start_server_if_unlocked("http://localhost:18791")
+        finally:
+            root.chmod(0o755)
+
+        assert "everos.toml" in str(caught.value) or "write" in str(caught.value).lower()

@@ -86,18 +86,16 @@ def _configured_target_url() -> str:
     """
     from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
-    slice_ = _recorded_memory_slice()
-    port = slice_.get("port")
+    port = _recorded_memory_slice().get("port")
     if isinstance(port, int) and port > 0:
         return f"http://localhost:{port}"
-    # No recorded intent, but an address recorded by a raven that predates the
-    # field still says where this install has been running. Reading it as the
-    # intent is what stops an upgrade from silently relocating a service the
-    # user never asked to move -- the constant is the answer only when there is
-    # nothing at all to go on.
-    recorded = slice_.get("base_url")
-    if isinstance(recorded, str) and urlparse(recorded).port:
-        return recorded
+    # Deliberately not falling back to the recorded address. That address is
+    # where the service *is*; convergence compares the two, so reading one as
+    # the other makes every pre-upgrade install look like it is already where
+    # it belongs and the "keep it or move it" question never fires -- leaving
+    # the upgrade quietly parked on the old port with the standard one never
+    # mentioned. No intent recorded means the default is the target, and the
+    # user gets asked.
     return DEFAULT_EVEROS_BASE_URL
 
 
@@ -1422,7 +1420,14 @@ def _ask_managed_port(root: Path | str) -> int:
     """
     from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
-    current = urlparse(_configured_target_url()).port or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
+    # Creating a root is the other question, and here a recorded address is the
+    # best answer available: ignoring it is what "start the everos server at
+    # its configured address, not the default" was about.
+    slice_ = _recorded_memory_slice()
+    recorded = slice_.get("port")
+    if not (isinstance(recorded, int) and recorded > 0):
+        recorded = urlparse(str(slice_.get("base_url") or "")).port
+    current = recorded or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
     if _port_is_free(current):
         return int(current)
     # A bind test cannot tell a stranger from our own service. When the holder
