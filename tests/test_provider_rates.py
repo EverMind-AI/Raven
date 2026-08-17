@@ -908,6 +908,8 @@ def test_the_share_no_longer_bounds_what_a_request_asks_for(monkeypatch):
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
 
     assert send_max_tokens(None, "probe/roomy") == 64_000, "the model's own ceiling, unbounded"
+
+
 # --- Hyphen/dot version spellings (OpenRouter files what vendors hyphenate) ---
 
 
