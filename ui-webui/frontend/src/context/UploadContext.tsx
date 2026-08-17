@@ -9,6 +9,7 @@ import {
 	type ReactNode,
 } from 'react';
 
+import { rememberReplacement } from './replacementStore';
 import { MAX_CONCURRENT_UPLOADS, isTerminal, type UploadTask } from './uploadTypes';
 import { knowledgeBaseApi } from '@/api';
 import type { KnowledgeDocumentStatus } from '@/api';
@@ -233,6 +234,15 @@ export function UploadProvider({ children }: UploadProviderProps) {
 				},
 			})
 			.then((response) => {
+				// The server has the new document now, so the pairing can be keyed
+				// by its id and outlive this task -- which is what a reload needs,
+				// since the task list itself does not survive one.
+				if (task.replacesDocumentId) {
+					rememberReplacement(response.document_id, {
+						knowledgeBaseId: task.knowledgeBaseId,
+						replacesDocumentId: task.replacesDocumentId,
+					});
+				}
 				dispatch({
 					type: 'UPLOAD_DONE',
 					taskId: task.taskId,
