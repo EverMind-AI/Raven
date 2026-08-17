@@ -1002,3 +1002,59 @@ class TestAnUnwritableRootFailsAsAStartFailure:
             root.chmod(0o755)
 
         assert "everos.toml" in str(caught.value) or "write" in str(caught.value).lower()
+
+
+class TestFindingTheHolderWithoutLsof:
+    """lsof is optional on Linux, and the port lookup assumed it is not.
+
+    ``_proc_locks_pid`` exists because minimal container images routinely omit
+    lsof; ``_listening_port`` then used lsof and nothing else. Without it
+    ``LockHolder.port`` is None, and None is documented as "holds the lock but
+    serves no HTTP" -- so a perfectly healthy raven-managed server is described
+    as a squatter to be stopped.
+
+    Preferring lsof for the holder lookup had a second effect: on any Linux box
+    that has lsof the /proc/locks branch never runs, including the one it was
+    validated on.
+    """
+
+    def test_the_port_comes_from_proc_net_tcp_when_lsof_is_gone(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        # /proc/net/tcp: local_address is hex ip:port; 0x4967 == 18791.
+        rows = (
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0100007F:4967 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4980767 1 ...\n"
+        )
+        monkeypatch.setattr(_server, "_lsof_listening_port", lambda _p: None)
+        monkeypatch.setattr(_server, "_proc_net_rows", lambda: rows)
+        monkeypatch.setattr(_server, "_socket_inodes_of", lambda _p: {4980767})
+
+        assert _server._listening_port(4242) == 18791
+
+    def test_lsof_is_still_used_when_present(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        monkeypatch.setattr(_server, "_lsof_listening_port", lambda _p: 31995)
+        monkeypatch.setattr(_server, "_proc_net_rows", lambda: pytest.fail("went to /proc with lsof available"))
+
+        assert _server._listening_port(4242) == 31995
+
+    def test_proc_locks_is_preferred_on_linux(self, monkeypatch) -> None:
+        """The holder/waiter distinction /proc/locks makes is worth ten lines of
+        comment; asking lsof first threw it away wherever lsof exists."""
+        from raven.plugin.memory.everos import _server
+
+        monkeypatch.setattr(_server, "_proc_locks_pid", lambda _l: 111)
+        monkeypatch.setattr(_server, "_lsof_lock_pid", lambda _l: pytest.fail("asked lsof first"))
+
+        assert _server._lock_holder_pid(Path("/x/ome.db.lock"), Path("/x")) == 111
+
+    def test_lsof_answers_when_proc_locks_cannot(self, monkeypatch, tmp_path) -> None:
+        from raven.plugin.memory.everos import _server
+
+        monkeypatch.setattr(_server, "_proc_locks_pid", lambda _l: None)
+        monkeypatch.setattr(_server, "_lsof_lock_pid", lambda _l: 222)
+        monkeypatch.setattr(_server, "_read_pidfile", lambda: None)
+
+        assert _server._lock_holder_pid(tmp_path / "ome.db.lock", tmp_path) == 222

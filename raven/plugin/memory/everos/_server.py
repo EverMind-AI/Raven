@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -399,7 +400,76 @@ def _cmdline_of(pid: int) -> str:
     return out.stdout.strip()
 
 
+def _proc_net_rows() -> str:
+    """``/proc/net/tcp`` and ``tcp6`` concatenated, or an empty string."""
+    out = []
+    for name in ("tcp", "tcp6"):
+        try:
+            out.append(Path(f"/proc/net/{name}").read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    return "".join(out)
+
+
+def _socket_inodes_of(pid: int) -> set[int]:
+    """The socket inodes open in ``pid``, from ``/proc/<pid>/fd``."""
+    inodes: set[int] = set()
+    try:
+        entries = list(Path(f"/proc/{pid}/fd").iterdir())
+    except OSError:
+        return inodes
+    for fd in entries:
+        try:
+            target = os.readlink(fd)
+        except OSError:
+            continue
+        if target.startswith("socket:["):
+            with contextlib.suppress(ValueError):
+                inodes.add(int(target[8:-1]))
+    return inodes
+
+
+def _proc_net_listening_port(pid: int) -> int | None:
+    """The port ``pid`` listens on, via ``/proc``. No external binary needed.
+
+    Exists because ``_proc_locks_pid`` is right that minimal container images
+    omit lsof, and a port lookup that needs it reports ``None`` there -- which
+    the type documents as "holds the lock but serves no HTTP", so a healthy
+    raven-managed server gets described as a squatter to be stopped.
+    """
+    rows = _proc_net_rows()
+    if not rows:
+        return None
+    mine = _socket_inodes_of(pid)
+    if not mine:
+        return None
+    for line in rows.splitlines()[1:]:
+        fields = line.split()
+        # sl local_address rem_address st ... inode
+        if len(fields) < 10:
+            continue
+        # 0A is TCP_LISTEN.
+        if fields[3] != "0A":
+            continue
+        try:
+            inode = int(fields[9])
+            port = int(fields[1].rsplit(":", 1)[-1], 16)
+        except ValueError:
+            continue
+        if inode in mine:
+            return port
+    return None
+
+
 def _listening_port(pid: int) -> int | None:
+    """The TCP port ``pid`` listens on, or ``None`` if it serves no HTTP."""
+    port = _lsof_listening_port(pid)
+    if port is not None:
+        return port
+    return _proc_net_listening_port(pid)
+
+
+def _lsof_listening_port(pid: int) -> int | None:
     """The TCP port ``pid`` listens on, or ``None``.
 
     ``-a`` is load-bearing: without it ``lsof`` ORs the ``-p`` and ``-i``
@@ -442,7 +512,12 @@ def _lock_holder_pid(lock: Path, root: Path) -> int | None:
     pidfile is also the only source that can be wrong about the root, so its
     recorded root is checked before its pid is trusted.
     """
-    pid = _lsof_lock_pid(lock) or _proc_locks_pid(lock)
+    # /proc/locks first where it exists: it is the source that distinguishes the
+    # holder from a blocked waiter, which is the distinction the caller acts on.
+    # Asking lsof first meant that branch never ran on a Linux box that has
+    # lsof -- including the one it was validated on -- and ``lsof -t`` lists
+    # holder and waiter alike, so its first pid is not reliably the holder.
+    pid = _proc_locks_pid(lock) or _lsof_lock_pid(lock)
     if pid is not None:
         return pid
     record = _read_pidfile()
