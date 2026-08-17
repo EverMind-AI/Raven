@@ -656,6 +656,14 @@ async def test_the_ceiling_is_looked_up_under_the_id_the_request_was_sent_under(
 
     Only when nothing pinned a ceiling: a pinned one is passed through and no
     lookup happens on either side.
+
+    Narrow on purpose, and worth knowing what it cannot see: the stub below
+    answers `wire_model_id` itself, which manufactures the agreement between
+    request and check that a real assembly has to earn. That the wrapper
+    providers forward it at all is
+    `test_provider_resolution_invariants.py::test_a_wrapping_provider_forwards_the_id_its_inner_will_send`;
+    that `chat_stream` sizes its own request under it is
+    `test_litellm_provider_stream.py::test_chat_stream_sizes_the_request_under_the_id_it_sends`.
     """
     chunks = [
         StreamDelta(content="partial"),
