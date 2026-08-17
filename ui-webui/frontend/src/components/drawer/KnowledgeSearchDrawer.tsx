@@ -23,6 +23,8 @@ import {
 import { Textarea } from '@/components/ui/textarea.tsx';
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
 import { useTranslation } from '@/i18n/useI18n.ts';
+import { cn } from '@/lib/utils';
+import ChevronRight from '~icons/solar/alt-arrow-right-linear';
 import Search from '~icons/solar/magnifer-bold-duotone';
 import Loader2 from '~icons/solar/refresh-linear';
 import FlaskConical from '~icons/solar/test-tube-bold-duotone';
@@ -73,7 +75,7 @@ export function KnowledgeSearchDrawer({
 
 	return (
 		<Sheet open={open} onOpenChange={onOpenChange}>
-			<SheetContent className="flex w-full sm:!max-w-[480px] flex-col gap-y-4 p-4">
+			<SheetContent className="flex w-full flex-col gap-y-4 p-4 sm:!max-w-[820px]">
 				<SheetHeader className="px-0">
 					<SheetTitle className="flex items-center gap-x-2">
 						<FlaskConical className="size-4" />
@@ -169,33 +171,64 @@ export function KnowledgeSearchDrawer({
 	);
 }
 
+/** One hit, collapsed to its rank / score / source until opened. Chunks run
+ *  long, and a wall of them buries the ranking the test is meant to show. */
 function ResultCard({ hit, index }: { hit: VectorSearchResult; index: number }) {
 	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
 	const text =
 		hit.chunk.content && typeof hit.chunk.content === 'object' && 'text' in hit.chunk.content
 			? String(hit.chunk.content.text ?? '')
 			: JSON.stringify(hit.chunk.content);
+	// Written by the structured parser; documents indexed before it, and formats
+	// with no headings to find, carry nothing here.
+	const rawPath = hit.chunk.metadata?.heading_path;
+	const headingPath = Array.isArray(rawPath)
+		? rawPath.filter((part): part is string => typeof part === 'string').join(' / ')
+		: '';
 
 	return (
-		<div className="rounded-md border bg-card p-3 flex flex-col gap-y-2">
-			<div className="flex items-center gap-x-2 text-xs text-muted-foreground">
+		<div className="bg-card flex flex-col gap-y-2 rounded-md border">
+			<button
+				type="button"
+				onClick={() => setOpen((v) => !v)}
+				aria-expanded={open}
+				className="hover:bg-muted/50 flex items-center gap-x-2 rounded-md p-3 text-left transition-colors"
+			>
+				<ChevronRight
+					className={cn('size-3.5 shrink-0 transition-transform', open && 'rotate-90')}
+				/>
 				<Badge variant="secondary" className="font-mono">
 					#{index + 1}
 				</Badge>
 				<Badge variant="outline" className="font-mono">
 					{t('knowledge.test.score')}: {hit.score.toFixed(4)}
 				</Badge>
-				<span className="ml-auto truncate" title={hit.chunk.source}>
+				{headingPath && (
+					<span className="min-w-0 truncate text-xs font-medium" title={headingPath}>
+						{headingPath}
+					</span>
+				)}
+				<span
+					className="text-muted-foreground ml-auto min-w-0 truncate text-xs"
+					title={hit.chunk.source}
+				>
 					{hit.chunk.source}
 				</span>
-			</div>
-			<p className="text-sm whitespace-pre-wrap break-words">{text}</p>
-			<div className="text-xs text-muted-foreground">
-				{t('knowledge.test.chunkPosition', {
-					index: hit.chunk.chunk_index + 1,
-					total: hit.chunk.total_chunks,
-				})}
-			</div>
+			</button>
+			{open && (
+				<div className="flex flex-col gap-y-2 px-3 pb-3">
+					<p className="max-h-[45vh] overflow-y-auto text-sm break-words whitespace-pre-wrap">
+						{text}
+					</p>
+					<div className="text-muted-foreground text-xs">
+						{t('knowledge.test.chunkPosition', {
+							index: hit.chunk.chunk_index + 1,
+							total: hit.chunk.total_chunks,
+						})}
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

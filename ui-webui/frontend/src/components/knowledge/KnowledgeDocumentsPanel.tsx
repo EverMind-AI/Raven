@@ -7,6 +7,13 @@ import type { KnowledgeDocumentStatus, KnowledgeDocumentView } from '@/api';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog.tsx';
+import {
 	Empty,
 	EmptyContent,
 	EmptyDescription,
@@ -15,7 +22,7 @@ import {
 	EmptyTitle,
 } from '@/components/ui/empty.tsx';
 import { useUploadContext } from '@/context/UploadContext';
-import { isInFlight } from '@/context/uploadTypes';
+import { isInFlight, isTerminal } from '@/context/uploadTypes';
 import type { UploadPhase, UploadTask } from '@/context/uploadTypes';
 import { useDocumentStatusPolling } from '@/hooks/useDocumentStatusPolling';
 import { useKnowledgeDocuments } from '@/hooks/useKnowledgeDocuments';
@@ -27,6 +34,7 @@ import X from '~icons/solar/close-square-linear';
 import AlertCircle from '~icons/solar/danger-circle-bold-duotone';
 import FileText from '~icons/solar/file-text-bold-duotone';
 import Loader2 from '~icons/solar/refresh-linear';
+import RefreshCw from '~icons/solar/restart-linear';
 import Trash2 from '~icons/solar/trash-bin-minimalistic-bold-duotone';
 
 interface KnowledgeDocumentsPanelProps {
@@ -102,9 +110,11 @@ interface RowViewProps {
 	onCancel: (taskId: string) => void;
 	onDismiss: (taskId: string) => void;
 	onDelete: (doc: KnowledgeDocumentView) => void;
+	onReplace: (doc: KnowledgeDocumentView) => void;
+	onPreview: (doc: KnowledgeDocumentView) => void;
 }
 
-function RowView({ row, onCancel, onDismiss, onDelete }: RowViewProps) {
+function RowView({ row, onCancel, onDismiss, onDelete, onReplace, onPreview }: RowViewProps) {
 	const { t } = useTranslation();
 
 	const filename = row.kind === 'server' ? row.doc.filename : row.task.filename;
@@ -161,8 +171,30 @@ function RowView({ row, onCancel, onDismiss, onDelete }: RowViewProps) {
 
 	const showProgress = phase !== 'ready' && phase !== 'cancelled';
 
+	// Only a document the server has accepted has bytes to show; an upload
+	// still in flight, or one that never parsed, has nothing to open.
+	const previewable = row.kind === 'server';
+
 	return (
-		<div className="border-border bg-card flex flex-col gap-y-2 rounded-lg border p-3">
+		<div
+			className={cn(
+				'border-border bg-card flex flex-col gap-y-2 rounded-lg border p-3',
+				previewable && 'hover:border-primary/40 cursor-pointer transition-colors',
+			)}
+			onClick={previewable ? () => onPreview(row.doc) : undefined}
+			role={previewable ? 'button' : undefined}
+			tabIndex={previewable ? 0 : undefined}
+			onKeyDown={
+				previewable
+					? (e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								onPreview(row.doc);
+							}
+						}
+					: undefined
+			}
+		>
 			<div className="flex items-start gap-x-3">
 				<FileText className="text-muted-foreground mt-0.5 size-4 shrink-0" />
 				<div className="flex min-w-0 flex-1 flex-col gap-y-0.5">
@@ -184,7 +216,12 @@ function RowView({ row, onCancel, onDismiss, onDelete }: RowViewProps) {
 						)}
 					</div>
 				</div>
-				<div className="flex shrink-0 items-center gap-x-1">
+				{/* The row itself opens the preview, so the buttons inside it must
+				    not also trigger one on their way up. */}
+				<div
+					className="flex shrink-0 items-center gap-x-1"
+					onClick={(e) => e.stopPropagation()}
+				>
 					{phase === 'queued' || phase === 'uploading' ? (
 						<Button
 							variant="ghost"
@@ -205,6 +242,35 @@ function RowView({ row, onCancel, onDismiss, onDelete }: RowViewProps) {
 								<X className="size-3.5" />
 							</Button>
 						) : (
+							<>
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									onClick={() => onReplace(row.doc)}
+									aria-label={t('knowledge.document.actions.replace')}
+								>
+									<RefreshCw className="size-3.5" />
+								</Button>
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									onClick={() => onDelete(row.doc)}
+									aria-label={t('knowledge.document.actions.remove')}
+								>
+									<Trash2 className="size-3.5" />
+								</Button>
+							</>
+						)
+					) : row.kind === 'server' ? (
+						<>
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								onClick={() => onReplace(row.doc)}
+								aria-label={t('knowledge.document.actions.replace')}
+							>
+								<RefreshCw className="size-3.5" />
+							</Button>
 							<Button
 								variant="ghost"
 								size="icon-xs"
@@ -213,16 +279,7 @@ function RowView({ row, onCancel, onDismiss, onDelete }: RowViewProps) {
 							>
 								<Trash2 className="size-3.5" />
 							</Button>
-						)
-					) : row.kind === 'server' ? (
-						<Button
-							variant="ghost"
-							size="icon-xs"
-							onClick={() => onDelete(row.doc)}
-							aria-label={t('knowledge.document.actions.remove')}
-						>
-							<Trash2 className="size-3.5" />
-						</Button>
+						</>
 					) : null}
 				</div>
 			</div>
@@ -248,6 +305,13 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [dragOver, setDragOver] = useState(false);
 	const [deleteTarget, setDeleteTarget] = useState<KnowledgeDocumentView | null>(null);
+	const [previewTarget, setPreviewTarget] = useState<KnowledgeDocumentView | null>(null);
+	const replaceInputRef = useRef<HTMLInputElement>(null);
+	// Document the next pick replaces, and the uploads standing in for one.
+	// There is no server-side replace, so a swap is upload-then-delete, in that
+	// order: a failed upload must not take the existing document with it.
+	const replaceTargetRef = useRef<KnowledgeDocumentView | null>(null);
+	const [pendingSwaps, setPendingSwaps] = useState<Record<string, string>>({});
 
 	const { enqueue, cancel, dismiss, tasksForKb, clearFinishedForKb } = useUploadContext();
 	const { documents, refetch } = useKnowledgeDocuments(knowledgeBaseId);
@@ -319,6 +383,24 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 		fileInputRef.current?.click();
 	}, []);
 
+	const onReplaceClick = useCallback((doc: KnowledgeDocumentView) => {
+		replaceTargetRef.current = doc;
+		replaceInputRef.current?.click();
+	}, []);
+
+	const onReplaceInputChange = useCallback(
+		(e: React.ChangeEvent<HTMLInputElement>) => {
+			const file = e.target.files?.[0];
+			const target = replaceTargetRef.current;
+			replaceTargetRef.current = null;
+			e.target.value = '';
+			if (!file || !target) return;
+			const [task] = enqueue(knowledgeBaseId, [file]);
+			if (task) setPendingSwaps((m) => ({ ...m, [task.taskId]: target.id }));
+		},
+		[enqueue, knowledgeBaseId],
+	);
+
 	const handleFiles = useCallback(
 		(files: FileList | File[]) => {
 			const arr = Array.from(files);
@@ -386,6 +468,34 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 		}
 	}, [deleteTarget, knowledgeBaseId, refetch, t]);
 
+	// Retire the replaced document only once its stand-in has indexed. A task
+	// that ends in error or was cancelled leaves the original in place, which
+	// is the point of ordering the swap this way.
+	useEffect(() => {
+		const done = tasks.filter((task) => pendingSwaps[task.taskId] && isTerminal(task.phase));
+		if (done.length === 0) return;
+		setPendingSwaps((m) => {
+			const next = { ...m };
+			for (const task of done) delete next[task.taskId];
+			return next;
+		});
+		const replaced = done.filter((task) => task.phase === 'ready');
+		if (replaced.length === 0) return;
+		void (async () => {
+			for (const task of replaced) {
+				try {
+					await knowledgeBaseApi.deleteDocument(
+						knowledgeBaseId,
+						pendingSwaps[task.taskId],
+					);
+				} catch {
+					toast.error(t('knowledge.document.replaceStaleLeft'));
+				}
+			}
+			await refetch();
+		})();
+	}, [tasks, pendingSwaps, knowledgeBaseId, refetch, t]);
+
 	const hasFinishedLocalTasks = tasks.some((t) => !isInFlight(t.phase));
 
 	const totalCount = rows.length;
@@ -412,6 +522,14 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 					</Button>
 				</div>
 			</div>
+
+			<input
+				ref={replaceInputRef}
+				type="file"
+				accept={acceptAttr || undefined}
+				className="hidden"
+				onChange={onReplaceInputChange}
+			/>
 
 			<input
 				ref={fileInputRef}
@@ -465,6 +583,8 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 								onCancel={cancel}
 								onDismiss={dismiss}
 								onDelete={setDeleteTarget}
+								onReplace={onReplaceClick}
+								onPreview={setPreviewTarget}
 							/>
 						))}
 					</div>
@@ -482,6 +602,95 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 				})}
 				onConfirm={handleDelete}
 			/>
+			<DocumentPreviewDialog
+				knowledgeBaseId={knowledgeBaseId}
+				doc={previewTarget}
+				onClose={() => setPreviewTarget(null)}
+			/>
 		</div>
+	);
+}
+
+/** Shows the stored text of one document. Fetched on open rather than with the
+ *  list: a preview is a deliberate act, and the bytes are far larger than the
+ *  metadata the panel needs to render. */
+function DocumentPreviewDialog({
+	knowledgeBaseId,
+	doc,
+	onClose,
+}: {
+	knowledgeBaseId: string;
+	doc: KnowledgeDocumentView | null;
+	onClose: () => void;
+}) {
+	const { t } = useTranslation();
+	const [state, setState] = useState<{
+		loading: boolean;
+		content: string;
+		truncated: boolean;
+		error: string | null;
+	}>({ loading: false, content: '', truncated: false, error: null });
+
+	useEffect(() => {
+		if (!doc) return;
+		let cancelled = false;
+		setState({ loading: true, content: '', truncated: false, error: null });
+		void (async () => {
+			try {
+				const r = await knowledgeBaseApi.readDocument(knowledgeBaseId, doc.id);
+				if (!cancelled)
+					setState({
+						loading: false,
+						content: r.content,
+						truncated: r.truncated,
+						error: null,
+					});
+			} catch (e) {
+				if (!cancelled)
+					setState({
+						loading: false,
+						content: '',
+						truncated: false,
+						error: e instanceof Error ? e.message : String(e),
+					});
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [doc, knowledgeBaseId]);
+
+	return (
+		<Dialog open={doc !== null} onOpenChange={(open) => !open && onClose()}>
+			<DialogContent className="max-h-[88vh] w-[92vw] sm:max-w-5xl">
+				<DialogHeader>
+					<DialogTitle className="truncate">{doc?.filename}</DialogTitle>
+					<DialogDescription>
+						{t('knowledge.document.preview.description')}
+					</DialogDescription>
+				</DialogHeader>
+				{state.loading ? (
+					<div className="text-muted-foreground flex items-center gap-2 py-8 text-sm">
+						<Loader2 className="size-4 animate-spin" />
+						{t('common.loading')}
+					</div>
+				) : state.error ? (
+					<p className="text-destructive py-6 text-sm">
+						{t('knowledge.document.preview.failed')}: {state.error}
+					</p>
+				) : (
+					<>
+						<pre className="bg-muted max-h-[70vh] min-h-[45vh] overflow-auto rounded-md p-4 font-mono text-sm leading-relaxed whitespace-pre-wrap">
+							{state.content}
+						</pre>
+						{state.truncated && (
+							<p className="text-muted-foreground text-xs">
+								{t('knowledge.document.preview.truncated')}
+							</p>
+						)}
+					</>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }

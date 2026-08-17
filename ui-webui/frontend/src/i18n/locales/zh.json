@@ -216,7 +216,8 @@
 			"placeholder": "描述知识库用途"
 		},
 		"embeddingModel": {
-			"label": "Embedding 模型"
+			"label": "Embedding 模型",
+			"sourceHint": "这里的 Embedding 模型来自 EverOS 记忆设置，如需更换请到那一页配置。"
 		},
 		"dimension": {
 			"label": "维度"
@@ -225,7 +226,7 @@
 			"lockedTitle": "维度已锁定为 {{dimension}}d",
 			"lockedDescription": "当前实例已要求所有知识库使用 {{dimension}} 维 embedding，下面仅展示兼容的模型。",
 			"noCompatibleTitle": "暂无可用 Embedding 模型",
-			"noCompatibleAny": "你的凭证中没有任何可用的 Embedding 模型，请先添加凭证。",
+			"noCompatibleAny": "尚未配置 Embedding 模型。请到「设置 → 记忆 (EverOS)」的 Embedding 角色里配置。",
 			"noCompatibleLocked": "你的凭证中没有任何模型支持 {{dimension}} 维 embedding。"
 		},
 		"errors": {
@@ -313,6 +314,12 @@
 			"deleteConfirmTitle": "删除文档",
 			"deleteConfirmDescription": "确认删除 \"{{name}}\"？该操作将一并移除文档及其全部已索引分块，且不可撤销。",
 			"deleteError": "删除文档失败。",
+			"replaceStaleLeft": "新文档已上传，但旧文档删除失败。",
+			"preview": {
+				"description": "该文档已存储的原文。",
+				"failed": "无法读取文档",
+				"truncated": "预览已截断，文件后面还有内容未显示。"
+			},
 			"dropHint": "拖拽文件到此处上传",
 			"dropHintIdle": "或拖拽文件到此处",
 			"unsupportedExtension": "\"{{name}}\" 已跳过——不支持该文件类型。",
@@ -331,6 +338,7 @@
 				"cancel": "取消",
 				"dismiss": "关闭",
 				"remove": "删除",
+				"replace": "重新上传该文档",
 				"clearFinished": "清除已完成"
 			}
 		},

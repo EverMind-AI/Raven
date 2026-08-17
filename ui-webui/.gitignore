@@ -26,9 +26,11 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
-# agent_service runtime data (per-session workspaces, uploaded blobs, launcher logs)
+# agent_service runtime data (per-session workspaces, uploaded blobs, indexed
+# vectors, launcher logs)
 service/workspaces/
 service/blobs/
+service/qdrant/
 .webapp_logs/
 
 .idea/
