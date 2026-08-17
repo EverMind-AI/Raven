@@ -953,3 +953,51 @@ def test_config_set_then_get_round_trip(runner, isolated_config):
     r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
     assert "America/New_York" in r.stdout
+
+
+def test_list_default_view_hints_hidden_auto_disabled(runner, fake_cron_dir):
+    """An auto-disabled reminder is hidden by the default view but must not
+    vanish without a trace: the default view prints a hint naming it, and
+    --all still lists the job itself."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 2
+    svc._save_store()
+    svc.record_fire(job.id)
+    assert svc.record_fire(job.id) is True  # auto-disabled at the limit
+
+    r = runner.invoke(cron_app, ["list"])
+    assert r.exit_code == 0
+    assert "auto-disabled" in r.stdout
+    assert job.id in r.stdout  # named in the hint even though hidden from the table
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert job.id in r_all.stdout
+
+
+def test_list_all_view_shows_no_auto_disabled_hint(runner, fake_cron_dir):
+    """--all already shows the job row itself; the hint is default-view-only."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 1
+    svc._save_store()
+    svc.record_fire(job.id)
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert "auto-disabled after repeated" not in r_all.stdout
