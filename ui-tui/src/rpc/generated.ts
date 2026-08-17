@@ -424,6 +424,18 @@ export interface ChannelStatusRow {
    * Every field the channel takes, so a client can render its configure form.
    */
   fields?: ChannelField[];
+  /**
+   * Whether the adapter is up, read from the live gateway. Null when no gateway answered.
+   */
+  running?: boolean;
+  /**
+   * Whether the account is paired. Only the QR-login channels report this; null means the channel does not report a pairing and must not be drawn as disconnected.
+   */
+  connected?: boolean;
+  /**
+   * Whether this channel signs in by scanning a code.
+   */
+  qr_login?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2902,6 +2914,32 @@ export interface ChannelsConfigureParams {
  */
 export interface ChannelsConfigureResult {
   applied: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsQrParams".
+ */
+export interface ChannelsQrParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsQrResult".
+ */
+export interface ChannelsQrResult {
+  /**
+   * The scan code as a PNG data URI, or null when there is none.
+   */
+  qr?: string;
+  /**
+   * The raw scan payload, sent only when the server could not rasterise it.
+   */
+  qr_text?: string;
+  /**
+   * Whether the account is paired; true ends the client's polling.
+   */
+  connected: boolean;
+  running: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

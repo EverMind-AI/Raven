@@ -862,6 +862,28 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
         gateway_running = read_status(time.time()) is not None
     except Exception:
         pass
+
+    # `enabled` is what the config asks for; these say what is actually
+    # happening. They stay absent when no gateway answered, so a client can
+    # tell "not connected" from "nobody could say" -- collapsing the second
+    # into the first is how a working channel came to read as broken.
+    live = None
+    try:
+        from raven.channels.live_probe import channel_liveness
+
+        live = await channel_liveness()
+    except Exception:
+        live = None
+    if live:
+        for item in items:
+            state = live.get(item["name"])
+            if not isinstance(state, dict):
+                continue
+            item["running"] = bool(state.get("running"))
+            if state.get("connected") is not None:
+                item["connected"] = bool(state["connected"])
+            item["qr_login"] = bool(state.get("qr_login"))
+
     return {"channels": items, "gateway_running": gateway_running}
 
 
@@ -920,6 +942,31 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     except Exception as e:
         raise ConfigValidationError(str(e)) from None
     return {"applied": True}
+
+
+async def channels_qr(params: dict) -> dict:
+    """The pending login QR for one channel, read off the live adapter.
+
+    A pass-through to the gateway, which is the only process holding the
+    adapter. Empty when no gateway answered -- the same shape as "nothing
+    pending", because to this surface the two are the same: there is no code to
+    show either way, and inventing a distinction here would only add a state the
+    dialog has to explain.
+    """
+    name = str(params.get("name") or "")
+    try:
+        from raven.channels.live_probe import channel_qr
+
+        answer = await channel_qr(name)
+    except Exception:
+        answer = None
+    answer = answer or {}
+    return {
+        "qr": answer.get("qr") or None,
+        "qr_text": answer.get("qr_text") or None,
+        "connected": bool(answer.get("connected")),
+        "running": bool(answer.get("running")),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1166,6 +1213,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
     dispatcher.register("channels.status", bind(channels_status))
     dispatcher.register("channels.configure", bind(channels_configure))
+    dispatcher.register("channels.qr", channels_qr)
     dispatcher.register("fs.list", bind(fs_list))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))

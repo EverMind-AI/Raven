@@ -3179,6 +3179,47 @@
       }
     },
     {
+      "name": "channels.qr",
+      "summary": "The pending login QR for one channel, read off the live adapter.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ChannelsQrResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "qr": {
+              "description": "The scan code as a PNG data URI, or null when there is none.",
+              "type": "string"
+            },
+            "qr_text": {
+              "description": "The raw scan payload, sent only when the server could not rasterise it.",
+              "type": "string"
+            },
+            "connected": {
+              "description": "Whether the account is paired; true ends the client's polling.",
+              "type": "boolean"
+            },
+            "running": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "connected",
+            "running"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.list",
       "summary": "List one working-directory folder.",
       "params": [
@@ -5563,6 +5604,18 @@
               "$ref": "#/components/schemas/ChannelField"
             },
             "type": "array"
+          },
+          "running": {
+            "description": "Whether the adapter is up, read from the live gateway. Null when no gateway answered.",
+            "type": "boolean"
+          },
+          "connected": {
+            "description": "Whether the account is paired. Only the QR-login channels report this; null means the channel does not report a pairing and must not be drawn as disconnected.",
+            "type": "boolean"
+          },
+          "qr_login": {
+            "description": "Whether this channel signs in by scanning a code.",
+            "type": "boolean"
           }
         },
         "required": [

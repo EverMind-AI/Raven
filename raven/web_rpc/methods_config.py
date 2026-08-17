@@ -414,6 +414,34 @@ def register_config_methods(
 
     dispatcher.register("raven.channels.qr", _channels_qr)
 
+    async def _channels_live(params: dict) -> dict:
+        """Every channel's runtime state in one round trip, for a client drawing
+        a list of them.
+
+        ``connected`` is deliberately three-valued. Only the QR adapters
+        (weixin, whatsapp) know whether an account is paired; the rest expose
+        ``is_running`` and nothing more. Reporting ``false`` for those would say
+        "not connected" about a Telegram bot that is happily serving messages --
+        the same lie as reading the config flag, wearing a different hat. Null
+        means the channel does not report a pairing, and the caller must not
+        render it as a negative.
+        """
+        out: dict[str, Any] = {}
+        for name in channel_names():
+            ch = channel_manager.get_channel(name) if channel_manager is not None else None
+            if ch is None:
+                out[name] = {"running": False, "connected": None, "qr_login": False}
+                continue
+            reports_pairing = hasattr(type(ch), "connected")
+            out[name] = {
+                "running": bool(getattr(ch, "is_running", False)),
+                "connected": bool(getattr(ch, "connected", False)) if reports_pairing else None,
+                "qr_login": hasattr(ch, "pending_qr"),
+            }
+        return {"channels": out}
+
+    dispatcher.register("raven.channels.live", _channels_live)
+
     # Skills (SkillForge). Reuses raven.config.update_skills. Config is applied at
     # gateway startup, so a change takes effect on the next gateway restart.
     from raven.config.update_skills import get_skillforge, list_skills, set_skillforge
