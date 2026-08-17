@@ -78,18 +78,25 @@ _LLM_ERROR_CONTENT_RE = re.compile(
 
 
 def _strip_json_error_body(text: str) -> str:
-    """Replace a raw JSON error body with its human-readable message."""
+    """Replace a raw JSON error body with its human-readable message.
+
+    Rewrites only when a message is actually extracted, and only within the
+    parsed object's own boundary -- trailing text after the JSON survives, and
+    a body yielding no message leaves the text unchanged rather than truncated.
+    """
     idx = text.find("{")
     if idx == -1:
         return text
-    candidate = text[idx:].strip()
+    candidate = text[idx:]
     if not candidate.startswith(('{"', "{'")):
         return text
-    message = ""
     try:
-        obj = json.loads(candidate)
+        obj, end = json.JSONDecoder().raw_decode(candidate)
     except ValueError:
-        obj = None
+        # Malformed JSON has no knowable boundary; treat the rest of the text
+        # as the body, which is the shape the swallowed litellm errors have.
+        obj, end = None, len(candidate)
+    message = ""
     if isinstance(obj, dict):
         err = obj.get("error")
         found = err.get("message") if isinstance(err, dict) else None
@@ -97,12 +104,13 @@ def _strip_json_error_body(text: str) -> str:
         if isinstance(found, str):
             message = found.strip()
     if not message:
-        m = _JSON_MESSAGE_RE.search(candidate)
+        m = _JSON_MESSAGE_RE.search(candidate[:end])
         message = m.group(1).strip() if m else ""
+    if not message:
+        return text
     head = text[:idx].rstrip()
-    if message:
-        return f"{head} {message}".strip()
-    return head if head else text
+    tail = candidate[end:].strip()
+    return " ".join(part for part in (head, message, tail) if part)
 
 
 def format_llm_error(
