@@ -411,3 +411,35 @@ async def test_upstream_length_does_not_trip_the_error_path(
     assert out[-1].finish_reason == "length"
     assert out[-1].finish_reason != "error"
     assert out[-1].error_classification is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sizes_the_request_under_the_id_it_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ceiling and the model id in one request body must come from one id.
+
+    A gateway files under its own catalogue row with its own numbers, measured:
+    openai/gpt-4o answers 16384 and openrouter/openai/gpt-4o answers 4096. Sized
+    under the stored id, a streaming request asks a gateway for four times what
+    that row allows, and the truncation check on the way back -- which resolves
+    the id -- judges it against a ceiling the request never carried.
+
+    `chat()` in this same file already resolves before sizing. This asserts on
+    the outgoing request body rather than on the helper, because a stub provider
+    that never builds one cannot tell the two orders apart.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
+    provider.generation = GenerationSettings()  # no pin: the ceiling comes from the id
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["model"] == "openrouter/openai/gpt-4o", "the gateway id is what goes out"
+    assert captured["max_tokens"] == 4096, "and the ceiling has to be that id's, not the stored one's"

@@ -521,14 +521,17 @@ class LiteLLMProvider(LLMProvider):
         gen = getattr(self, "generation", None) or GenerationSettings()
         if max_tokens is self._SENTINEL:
             max_tokens = gen.max_tokens
-        if max_tokens is None:
-            max_tokens = send_max_tokens(gen, model)
         if temperature is self._SENTINEL:
             temperature = gen.temperature
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = gen.reasoning_effort
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
+        # After the resolution above, as `chat` does: the catalogue files the
+        # gateway spelling as its own row with its own ceiling, and the id in
+        # this request body has to be the one that ceiling belongs to.
+        if max_tokens is None:
+            max_tokens = send_max_tokens(gen, model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):

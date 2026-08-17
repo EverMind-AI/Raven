@@ -901,11 +901,15 @@ class LLMProvider(ABC):
             # sending Anthropic's markers on to Gemini is what doubled a prompt.
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
+            # One id for both the bound below and the check further down, and
+            # the id this request goes out under rather than the stored one --
+            # a gateway spelling is its own catalogue row with its own ceiling.
+            wire_id = self.wire_model_id(current_model or "")
             # Bounded here rather than inside each provider: a pin is per call
             # but a ceiling is per model, so a fallback hop can change it. Left
             # as ``None`` when nobody pinned, which is the provider's cue to
             # resolve the model's own ceiling.
-            sent = None if max_tokens is None else send_max_tokens(self.generation, current_model, pinned=max_tokens)
+            sent = None if max_tokens is None else send_max_tokens(self.generation, wire_id, pinned=max_tokens)
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,
@@ -926,7 +930,7 @@ class LLMProvider(ABC):
 
                 response.max_tokens, response.truncated = flag_truncation(
                     self.generation,
-                    model=self.wire_model_id(current_model or ""),
+                    model=wire_id,
                     sent=sent,
                     finish_reason=response.finish_reason,
                     usage=response.usage,
