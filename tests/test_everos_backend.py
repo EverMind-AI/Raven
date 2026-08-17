@@ -1495,3 +1495,80 @@ class TestADeadChildIsReportedAsFailed:
             await b.start()
 
         assert b._state is ServiceState.FAILED
+
+
+@pytest.mark.asyncio
+class TestASessionPicksUpAServiceThatArrivesLate:
+    """The two halves compose: a turn with no memory leaves one that has it.
+
+    The state transition and the out-of-band kick are each covered on their
+    own, which is not the same as the property they exist for -- a session that
+    began without a memory service must start using one that comes up while it
+    is still running, with no restart. Before the state machine that was
+    impossible by construction: the first failure swapped in a no-op adapter
+    and the session was done.
+    """
+
+    @staticmethod
+    def _backend(adapter):
+        from raven.plugin.memory.everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.STARTING
+        return b
+
+    async def test_a_later_turn_recalls_once_the_server_answers(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import backend as mod
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.search = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+        # No rate limit in the way: the point is the composition, not the
+        # throttle, which has its own coverage.
+        monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
+
+        answers = iter([ProbeResult.REFUSED, ProbeResult.OK])
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server.probe_health",
+            lambda _u, **_kw: next(answers, ProbeResult.OK),
+        )
+
+        # Turn one: nothing there. Returns empty without touching the adapter,
+        # and leaves a probe behind.
+        assert await b.recall("q", user_id="u", top_k=5) == []
+        adapter.search.assert_not_awaited()
+        await b._probe_task
+
+        # The server came up between the turns.
+        assert await b.recall("q", user_id="u", top_k=5) == []
+        await b._probe_task
+        assert b._state is ServiceState.READY
+
+        # Turn three actually reaches it -- no restart, same backend object.
+        await b.recall("q", user_id="u", top_k=5)
+        adapter.search.assert_awaited()
+
+    async def test_a_terminal_state_never_recovers_this_way(self, monkeypatch) -> None:
+        """UNCONFIGURED describes the install. A server answering on that port
+        is somebody else's, and adopting it would hide a missing memory LLM."""
+        from raven.plugin.memory.everos import backend as mod
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        adapter = MagicMock()
+        adapter.search = AsyncMock(return_value=None)
+        b = self._backend(adapter)
+        b._state = ServiceState.UNCONFIGURED
+        monkeypatch.setattr(mod, "_PROBE_MIN_INTERVAL_S", 0.0)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+
+        assert await b.recall("q", user_id="u", top_k=5) == []
+        assert b._probe_task is None, "probed a state no probe can resolve"
+        assert b._state is ServiceState.UNCONFIGURED
