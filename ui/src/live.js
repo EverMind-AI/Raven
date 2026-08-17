@@ -1618,6 +1618,13 @@ async function loadChannels() {
     c.fields = s.fields || [];
     c.missing = s.missing || [];
     c._on = s.enabled;
+    /* Three separate facts, kept separate. `on` is what the config asks for;
+       `running` is whether the adapter came up; `connected` is whether the
+       account is paired, which only the QR channels report. Absent means the
+       gateway could not be asked -- not "no". */
+    c.running = s.running;
+    c.connected = s.connected;
+    c.qrLogin = !!s.qr_login;
     if (!c._live) {
       c._live = true;
       Object.defineProperty(c, 'on', {

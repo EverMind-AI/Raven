@@ -53,6 +53,12 @@ dependencies = [
     # three-hop transitive path — pinning it directly so reading an image keeps
     # working if any link in that chain drops it.
     "pillow>=10.0.0",
+    # Rasterises a QR-login channel's scan URL server-side, so the page shows an
+    # <img> instead of carrying a QR encoder. Not in the channel extras where it
+    # started: signing in to WeChat happens in the UI, and an install that cannot
+    # draw the code is one the reader has no way to diagnose. Pure Python, and
+    # its [pil] backend is pillow, already here.
+    "qrcode[pil]>=8.0",
 ]
 
 [project.optional-dependencies]
@@ -66,9 +72,7 @@ channel-slack = [
     "slackify-markdown>=0.2.0,<1.0.0",
 ]
 channel-discord = ["websockets>=16.0,<17.0"]
-channel-whatsapp = [
-    "qrcode[pil]>=8.0",
-]
+channel-whatsapp = []
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
     "mistune>=3.0.0,<4.0.0",
@@ -85,7 +89,6 @@ channel-qq = ["qq-botpy>=1.2.0,<2.0.0"]
 channel-dingtalk = ["dingtalk-stream>=0.24.0,<1.0.0"]
 channel-email = []
 channel-weixin = [
-    "qrcode[pil]>=8.0",
     "pycryptodome>=3.20.0",
 ]
 channels = [

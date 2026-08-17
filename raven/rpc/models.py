@@ -2094,6 +2094,21 @@ class ChannelStatusRow(_Strict):
         default_factory=list,
         description="Every field the channel takes, so a client can render its configure form.",
     )
+    running: bool | None = Field(
+        default=None,
+        description="Whether the adapter is up, read from the live gateway. Null when no gateway answered.",
+    )
+    connected: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the account is paired. Only the QR-login channels report this; null means the "
+            "channel does not report a pairing and must not be drawn as disconnected."
+        ),
+    )
+    qr_login: bool | None = Field(
+        default=None,
+        description="Whether this channel signs in by scanning a code.",
+    )
 
 
 class ChannelsStatusParams(_Strict):
@@ -2103,6 +2118,20 @@ class ChannelsStatusParams(_Strict):
 class ChannelsStatusResult(_Strict):
     channels: list[ChannelStatusRow]
     gateway_running: bool
+
+
+class ChannelsQrParams(_Strict):
+    name: str
+
+
+class ChannelsQrResult(_Strict):
+    qr: str | None = Field(default=None, description="The scan code as a PNG data URI, or null when there is none.")
+    qr_text: str | None = Field(
+        default=None,
+        description="The raw scan payload, sent only when the server could not rasterise it.",
+    )
+    connected: bool = Field(..., description="Whether the account is paired; true ends the client's polling.")
+    running: bool
 
 
 class ChannelsConfigureParams(_Strict):
@@ -2596,6 +2625,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
     "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
     "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
+    "channels.qr": (ChannelsQrParams, ChannelsQrResult),
     "fs.list": (FsListParams, FsListResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),

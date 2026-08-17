@@ -150,7 +150,7 @@ def register(app: typer.Typer) -> None:
             terminal_level="DEBUG" if verbose else log_cfg.console_level,
         )
 
-        from raven.cli._gateway_lock import GatewayAlreadyRunningError, acquire
+        from raven.cli._gateway_lock import GatewayAlreadyRunningError, acquire, publish_web_endpoint
 
         # Held for the whole process; closing/GC of this handle releases the lock.
         try:
@@ -430,68 +430,91 @@ def register(app: typer.Typer) -> None:
                 web_cfg = config.gateway.web
                 web_scheduler = None
                 web_hub = None
-                if web_cfg.enabled:
-                    from raven.rpc.dispatcher import Dispatcher
-                    from raven.rpc.methods.turn import clear_active
-                    from raven.rpc.subscriptions import SubscriptionEmitter
-                    from raven.web_rpc.methods import register_web_methods
-                    from raven.web_rpc.server import WebSocketRpcServer
-                    from raven.web_rpc.spine import build_web
+                # Always on now, not only when the operator turned it on. This
+                # is the only place a live adapter can be asked whether a
+                # channel is actually paired, and `raven serve` has to be able
+                # to ask -- otherwise every surface but ui-webui reports the
+                # config file's `enabled` flag as if it were a connection.
+                #
+                # Opted in (`gateway.web.enabled`) keeps the configured port and
+                # token, because ui-webui is pointed at them. Otherwise the port
+                # is probed forward from the default and the token is minted for
+                # this boot: neither is written to config, so no stale secret
+                # outlives the process. Loopback either way.
+                import secrets
 
-                    web_readback_texts: dict[str, str] = {}
-                    web_server = WebSocketRpcServer(
-                        host=web_cfg.host,
-                        port=web_cfg.port,
-                        auth_token=web_cfg.auth_token or None,
-                        deliverables=deliverables,
-                    )
-                    web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
-                    # One map, two readers: `turn.send` records a direct chat's
-                    # addressee here and the outlet reads it back to tag that
-                    # lane's events with it. Built here so both get the same
-                    # object, as raven/rpc/bootstrap.py does for the TUI.
-                    web_direct_targets: dict[str, dict[str, str]] = {}
-                    web_scheduler, web_hub, web_turn_ids, web_teardown = build_web(
-                        agent,
-                        web_emitter,
-                        on_turn_end=clear_active,
-                        readback_texts=web_readback_texts,
-                        direct_targets=web_direct_targets,
-                        user_pool=config.gateway.user_pool,
-                        system_pool=config.gateway.system_pool,
-                    )
-                    web_dispatcher = Dispatcher()
-                    register_web_methods(
-                        web_dispatcher,
-                        emitter=web_emitter,
-                        scheduler=web_scheduler,
-                        turn_ids=web_turn_ids,
-                        direct_targets=web_direct_targets,
-                        agent=agent,
-                        cron=cron,
-                        config=config,
-                        channel_manager=channels,
-                        raven_config=ec_config,
-                    )
-                    web_server.bind(web_dispatcher)
+                from raven.rpc.dispatcher import Dispatcher
+                from raven.rpc.methods.turn import clear_active
+                from raven.rpc.subscriptions import SubscriptionEmitter
+                from raven.rpc.transports.ws import pick_port
+                from raven.web_rpc.methods import register_web_methods
+                from raven.web_rpc.server import WebSocketRpcServer
+                from raven.web_rpc.spine import build_web
 
-                    # Fan run_subagent_dag progress (dag_run_started / _node_updated
-                    # / _run_completed) to the turn's conversation on the web
-                    # channel, as a "custom" wire event the service translates to
-                    # an AgentScope CustomEvent (lights up the web UI's DAG graph).
-                    async def _dag_progress_to_web(conversation: str, name: str, payload: dict) -> None:
-                        await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+                web_host = web_cfg.host if web_cfg.enabled else "127.0.0.1"
+                web_port = web_cfg.port if web_cfg.enabled else await pick_port(web_cfg.port)
+                # Never unauthenticated: the server only checks a token when
+                # one is set, and this port can drive the agent.
+                web_token = (web_cfg.auth_token or None) if web_cfg.enabled else secrets.token_urlsafe(24)
 
-                    agent.set_dag_progress_sink(_dag_progress_to_web)
+                web_readback_texts: dict[str, str] = {}
+                web_server = WebSocketRpcServer(
+                    host=web_host,
+                    port=web_port,
+                    auth_token=web_token,
+                    deliverables=deliverables,
+                )
+                web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
+                # One map, two readers: `turn.send` records a direct chat's
+                # addressee here and the outlet reads it back to tag that
+                # lane's events with it. Built here so both get the same
+                # object, as raven/rpc/bootstrap.py does for the TUI.
+                web_direct_targets: dict[str, dict[str, str]] = {}
+                web_scheduler, web_hub, web_turn_ids, web_teardown = build_web(
+                    agent,
+                    web_emitter,
+                    on_turn_end=clear_active,
+                    readback_texts=web_readback_texts,
+                    direct_targets=web_direct_targets,
+                    user_pool=config.gateway.user_pool,
+                    system_pool=config.gateway.system_pool,
+                )
+                web_dispatcher = Dispatcher()
+                register_web_methods(
+                    web_dispatcher,
+                    emitter=web_emitter,
+                    scheduler=web_scheduler,
+                    turn_ids=web_turn_ids,
+                    direct_targets=web_direct_targets,
+                    agent=agent,
+                    cron=cron,
+                    config=config,
+                    channel_manager=channels,
+                    raven_config=ec_config,
+                )
+                web_server.bind(web_dispatcher)
+                # Published beside the lock rather than in config: a client finds
+                # the gateway the same way `doctor` does, and the credential dies
+                # with the process instead of outliving it in a settings file.
+                publish_web_endpoint(web_host, web_port, web_token or "")
 
-                    # Fan per-turn SkillForge-injected skills to the web UI's
-                    # skill panel as a "skills_injected" custom event (same
-                    # translation path as DAG progress above).
-                    async def _skills_to_web(conversation: str, name: str, payload: dict) -> None:
-                        await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+                # Fan run_subagent_dag progress (dag_run_started / _node_updated
+                # / _run_completed) to the turn's conversation on the web
+                # channel, as a "custom" wire event the service translates to
+                # an AgentScope CustomEvent (lights up the web UI's DAG graph).
+                async def _dag_progress_to_web(conversation: str, name: str, payload: dict) -> None:
+                    await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
 
-                    agent.set_skills_sink(_skills_to_web)
-                    console.print(f"[green]✓[/green] Web channel: ws://{web_cfg.host}:{web_cfg.port}/ws")
+                agent.set_dag_progress_sink(_dag_progress_to_web)
+
+                # Fan per-turn SkillForge-injected skills to the web UI's
+                # skill panel as a "skills_injected" custom event (same
+                # translation path as DAG progress above).
+                async def _skills_to_web(conversation: str, name: str, payload: dict) -> None:
+                    await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+
+                agent.set_skills_sink(_skills_to_web)
+                console.print(f"[green]✓[/green] Web channel: ws://{web_cfg.host}:{web_cfg.port}/ws")
 
                 # Proactive target (cron / sentinel / heartbeat / subagent /
                 # deep_research). Single-user + web-primary (P1.2): when the web

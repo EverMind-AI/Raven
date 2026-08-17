@@ -1335,6 +1335,42 @@
       "en": "After disconnecting, you can no longer reach Raven in {name}.",
       "zh": "断开后你在{name}里无法再找到 Raven。"
     },
+    "gui.conn.hero_sub": {
+      "en": "Where Raven receives messages. Each one signs in on its own.",
+      "zh": "Raven 从这些地方收消息，每个入口各自登录。"
+    },
+    "gui.conn.qr_alt": {
+      "en": "Sign-in code",
+      "zh": "登录二维码"
+    },
+    "gui.conn.qr_done": {
+      "en": "Signed in.",
+      "zh": "已登录。"
+    },
+    "gui.conn.qr_noenc": {
+      "en": "A code is pending, but this install cannot draw it. Reinstall Raven to pick up the encoder.",
+      "zh": "有待扫的登录码，但这个安装画不出来。重装 Raven 即可带上编码器。"
+    },
+    "gui.conn.qr_scan": {
+      "en": "Scan it with the app on your phone.",
+      "zh": "用手机上的 App 扫这个码。"
+    },
+    "gui.conn.qr_wait": {
+      "en": "Waiting for a sign-in code...",
+      "zh": "正在等待登录码…"
+    },
+    "gui.conn.st_down": {
+      "en": "Turned on, but not running",
+      "zh": "已开启，但没有在运行"
+    },
+    "gui.conn.st_unknown": {
+      "en": "Cannot tell -- the gateway is not answering",
+      "zh": "状态未知 —— gateway 没有应答"
+    },
+    "gui.conn.st_unpaired": {
+      "en": "Running, waiting to be signed in",
+      "zh": "已运行，等待登录"
+    },
     "gui.conn.disconnect": {
       "en": "Disconnect",
       "zh": "断开"

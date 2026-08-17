@@ -3380,12 +3380,29 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 
 .veil { position: fixed; inset: 0; background: #0009; display: none; place-items: center; z-index: 40; }
 .veil[data-open="true"] { display: grid; }
+/* Bounded, and the fields scroll inside it. A channel's form is as long as that
+   channel has fields -- slack specs nine, three of them nested -- and an
+   unbounded sheet grew taller than the window with its own save button below
+   the fold. The title and the subtitle stay put through the scroll: they name
+   which channel is being edited, which is the one thing you cannot lose. */
 .sheet { width: min(460px, 92vw); background: var(--surface); border: 1px solid var(--line);
-  border-radius: 13px; overflow: hidden; box-shadow: var(--shadow); }
+  border-radius: 13px; overflow: hidden; box-shadow: var(--shadow);
+  max-height: min(680px, 88vh); display: flex; flex-direction: column; }
+.sheet header, .sheet .dsub, .sheet footer { flex: none; }
 .sheet header { padding: 16px 20px 0; font-weight: 600; }
-.sheet .body { padding: 12px 20px 18px; color: var(--muted); font-size: 13.5px; }
+.sheet .body { padding: 12px 20px 18px; color: var(--muted); font-size: 13.5px;
+  overflow-y: auto; min-height: 0; scrollbar-gutter: stable; }
 .sheet footer { padding: 0 20px 16px;
   display: flex; justify-content: flex-end; gap: 9px; }
+/* The scan panel in a QR channel's configure dialog. Fixed frame, so the sheet
+   does not resize under the reader each time the code rotates in. */
+.qrbox { display: grid; justify-items: center; gap: 10px; padding: 4px 0 18px;
+  border-bottom: 1px solid var(--line-soft); margin-bottom: 16px; }
+.qrshot { width: 168px; height: 168px; display: grid; place-items: center;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.qrshot img { width: 152px; height: 152px; image-rendering: pixelated; }
+.qrsay { font-size: 12.5px; color: var(--muted); text-align: center; max-width: 30ch; }
+.qrsay.ok { color: var(--moss); }
 /* job-sheet form fields */
 .ff { display: grid; gap: 6px; }
 .ff + .ff { margin-top: 16px; }
@@ -8540,14 +8557,19 @@ function connDialog(c) {
   $('#connDlgSub').textContent = sub;
   $('#connDlgSub').hidden = !sub;
   body.innerHTML = '';
-  body.appendChild(connForm(c, () => { veil.dataset.open = 'false'; }));
+  connQrStop();
+  /* Scanning is how these channels sign in, and it only exists while the
+     adapter is up and unpaired -- so it sits above the form, where the reader
+     is already looking, rather than behind a second click. */
+  if (c.qrLogin && c.on) body.appendChild(connQrPanel(c));
+  body.appendChild(connForm(c, () => { connCloseDialog(); }));
   if (c.on) {
     /* Disconnecting belongs with configuring, not on the row: the row is a
        list of twelve, and a destructive control repeated twelve times down a
        page is one mis-click waiting to happen. */
     const off = mk('button', 'mini ghost danger', T('gui.conn.disconnect'));
     off.onclick = () => {
-      veil.dataset.open = 'false';
+      connCloseDialog();
       confirmAsk(T('gui.conn.disconnect'),
         T('gui.conn.disc_body', { name: chanName(c) }), T('gui.conn.disconnect'), () => {
           connApply(c, {}, false);
@@ -8566,6 +8588,10 @@ function connDialog(c) {
 function connCloseDialog() {
   $('#connVeil').dataset.open = 'false';
   connEdit = null;
+  /* Every close path lands here -- Esc, the veil, the form's own cancel -- so
+     this is the one place the scan poll can be stopped without leaving a timer
+     running against a dialog nobody is looking at. */
+  connQrStop();
 }
 $('#connVeil').onclick = (e) => { if (e.target === $('#connVeil')) connCloseDialog(); };
 
@@ -8574,6 +8600,81 @@ $('#connVeil').onclick = (e) => { if (e.target === $('#connVeil')) connCloseDial
    row body opens its dialog either way. Two states, two controls -- a switch
    on an entry with no credentials would promise something the flip cannot
    deliver, which is the same rule the key-gated tool rows follow. */
+/* The scan panel. `channels.qr` is a live read off the adapter, so it is polled
+   while the dialog is open and stopped the moment it is not: the code rotates,
+   and a poll left running after the dialog closed would keep a socket busy for
+   a picture nobody is looking at. */
+let connQrTimer = null;
+
+function connQrStop() {
+  if (connQrTimer) { clearInterval(connQrTimer); connQrTimer = null; }
+}
+
+function connQrPanel(c) {
+  const box = mk('div', 'qrbox');
+  const shot = mk('div', 'qrshot');
+  const say = mk('div', 'qrsay', T('gui.conn.qr_wait'));
+  box.append(shot, say);
+  if (typeof rpc === 'undefined' || (typeof rpcHas === 'function' && !rpcHas('channels'))) return box;
+
+  const paint = async () => {
+    let r = null;
+    try {
+      r = await rpc.call('channels.qr', { name: c.id });
+    } catch {
+      return;  /* the connection banner already covers an unreachable gateway */
+    }
+    if (!r) return;
+    if (r.connected) {
+      connQrStop();
+      shot.innerHTML = '';
+      say.textContent = T('gui.conn.qr_done');
+      say.className = 'qrsay ok';
+      loadChannels().then(drawConn).catch(() => {});
+      return;
+    }
+    if (r.qr) {
+      const img = mk('img');
+      img.src = r.qr;
+      img.alt = T('gui.conn.qr_alt');
+      shot.innerHTML = '';
+      shot.appendChild(img);
+      say.textContent = T('gui.conn.qr_scan');
+      return;
+    }
+    /* A payload with no picture: the server could not rasterise it. Say which
+       install is missing rather than showing an empty frame -- the reader
+       cannot scan a URL, and has no way to guess why the box is blank. */
+    shot.innerHTML = '';
+    say.textContent = r.qr_text ? T('gui.conn.qr_noenc') : T('gui.conn.qr_wait');
+  };
+  paint();
+  connQrTimer = setInterval(paint, 3000);
+  return box;
+}
+
+/* What this row may honestly claim. The config flag alone used to drive the
+   dot, so a channel whose adapter never came up still read as connected -- the
+   flag says what was asked for, not what happened. `running` and `connected`
+   come from the live gateway, and `undefined` means nobody could be asked,
+   which is its own answer and not a negative one. */
+function connState(c) {
+  if (!c.on) return 'off';
+  if (c.running === undefined || c.running === null) return 'unknown';
+  if (!c.running) return 'down';
+  /* Null for every channel that does not report a pairing: running is all it
+     claims and all this may draw. */
+  if (c.connected === false) return 'unpaired';
+  return 'live';
+}
+
+function connStateText(state) {
+  if (state === 'down') return T('gui.conn.st_down');
+  if (state === 'unpaired') return T('gui.conn.st_unpaired');
+  if (state === 'unknown') return T('gui.conn.st_unknown');
+  return '';
+}
+
 function connRow(c) {
   /* Configured means the schema's required fields are all set. Entries whose
      schema declares no required fields count as configured out of the box. */
@@ -8586,13 +8687,18 @@ function connRow(c) {
   r.appendChild(mk('span', 'pmtile th' + (th % 8), cn[0]));
   const mid = mk('div', 'bd');
   const nm = mk('div', 'nm');
-  if (c.on && configured) nm.appendChild(mk('span', 'led'));
+  const live = connState(c);
+  if (live !== 'off') nm.appendChild(mk('span', 'led' + (live === 'live' ? '' : live === 'unknown' ? ' bad' : ' warn')));
   nm.appendChild(mk('span', 'tt', cn));
   mid.appendChild(nm);
   /* The sub line answers one question -- can this receive messages, and as
      whom -- or stays empty. It no longer introduces the channel to its user. */
-  const sub = !configured ? T('gui.conn.unset') : (c.on && c.who ? T('gui.conn.as_you', { who: c.who }) : '');
-  if (sub) mid.appendChild(mk('div', 'sub' + (configured ? '' : ' warn'), sub));
+  const sub = !configured
+    ? T('gui.conn.unset')
+    : live === 'live' && c.who
+      ? T('gui.conn.as_you', { who: c.who })
+      : connStateText(live);
+  if (sub) mid.appendChild(mk('div', 'sub' + (configured && live !== 'unknown' ? '' : ' warn'), sub));
   r.appendChild(mid);
   const open = () => { connEdit = c.id; connDialog(c); };
   if (configured) {
@@ -8630,6 +8736,12 @@ function connRow(c) {
    a count to say what each row's own switch already says. */
 function drawConn() {
   const box = $('#connBody'); box.innerHTML = '';
+  /* The strip at the top of every page hides its own h2 (the hero below says it
+     bigger), and this was the one page with no hero to say it -- so it opened
+     with a bare list and no name on it. */
+  const hero = mk('div', 'pmhero');
+  hero.append(mk('h3', null, T('gui.page.conn')), mk('p', null, T('gui.conn.hero_sub')));
+  box.appendChild(hero);
   const list = mk('div', 'clist');
   CHANNELS.forEach((c) => list.appendChild(connRow(c)));
   box.appendChild(list);

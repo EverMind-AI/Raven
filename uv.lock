@@ -3053,6 +3053,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
+    { name = "qrcode", extra = ["pil"] },
     { name = "questionary" },
     { name = "rich" },
     { name = "tiktoken" },
@@ -3101,10 +3102,6 @@ channel-wecom = [
 ]
 channel-weixin = [
     { name = "pycryptodome" },
-    { name = "qrcode", extra = ["pil"] },
-]
-channel-whatsapp = [
-    { name = "qrcode", extra = ["pil"] },
 ]
 channels = [
     { name = "dingtalk-stream" },
@@ -3118,7 +3115,6 @@ channels = [
     { name = "python-socks", marker = "sys_platform != 'win32'" },
     { name = "python-telegram-bot", extra = ["socks"] },
     { name = "qq-botpy" },
-    { name = "qrcode", extra = ["pil"] },
     { name = "slack-sdk" },
     { name = "slackify-markdown" },
     { name = "socksio" },
@@ -3190,8 +3186,7 @@ requires-dist = [
     { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'channel-telegram'", specifier = ">=22.6,<23.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "qq-botpy", marker = "extra == 'channel-qq'", specifier = ">=1.2.0,<2.0.0" },
-    { name = "qrcode", extras = ["pil"], marker = "extra == 'channel-weixin'", specifier = ">=8.0" },
-    { name = "qrcode", extras = ["pil"], marker = "extra == 'channel-whatsapp'", specifier = ">=8.0" },
+    { name = "qrcode", extras = ["pil"], specifier = ">=8.0" },
     { name = "questionary", specifier = ">=2.0.0,<3.0.0" },
     { name = "raven", extras = ["channel-dingtalk"], marker = "extra == 'channels'" },
     { name = "raven", extras = ["channel-discord"], marker = "extra == 'channels'" },
