@@ -1,0 +1,13 @@
+{
+  "name": "Raven-Research",
+  "kind": "cli",
+  "description": "Answers hard research questions by searching and reading the live web, then commits a sourced answer. Give it a self-contained question and expect prose back: the reply leads with the answer, then the findings that decide it with their source URLs, then what could not be established. Say what shape you want (length, whether you need sources listed). It has web_search and web_fetch plus read-only and write access to this host's filesystem (list_dir, read_file, grep, find, write_file, edit_file), so a question may point at local files by absolute path; it has no shell and cannot run code. Stateful: spawn again with the same 'instance' handle to continue - it keeps the conversation and a record of the sources it already opened, so a follow-up can say 'expand the third point' or 'what did that second source actually claim' without restating the question. A follow-up it can answer from what the conversation already established comes back quickly; one that needs new evidence searches again and takes several minutes, as the first question does. A new instance starts with no memory of any other, so its first question must carry everything it needs. Distinct from 'Researcher', which is a different agent over an HTTP endpoint.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "idSource": "provisioned",
+  "readsLocalFiles": true,
+  "transcriptFormat": "text",
+  "maxOutputChars": 30000,
+  "timeout": null
+}

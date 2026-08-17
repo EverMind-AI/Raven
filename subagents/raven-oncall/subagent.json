@@ -1,0 +1,13 @@
+{
+  "name": "Raven-Oncall",
+  "kind": "cli",
+  "description": "Hands one long-running remote job - a fine-tune, a sweep, a hyperparameter search, anything of the shape 'run this on that machine and watch it' - to a watch agent that submits it, schedules its own next look, and comes back on its own to decide: keep waiting, submit a different config, kill it, or finish with a report. Use it when the work outlives the conversation. IMPORTANT: a spawn returns after the FIRST turn, not when the job finishes - the reply says what was submitted and when it will look next, and the watch then continues in a resident process on this host. Spawn again with the same 'instance' handle to get the current state: it keeps its conversation and its reply carries what the campaign's own trail says (rounds run, whether a report was filed, whether it asked you something). The prompt must carry the campaign's identity and its remote, because no tool can list existing campaigns and an omitted name silently starts a different one: give a campaign name, its ledger path, and the host. The campaign's meta.json must already exist under $ONCALL_STATE_ROOT/ops/<campaign>/ (default ~/.raven/workspace/subagent_sessions/raven-oncall/ops/<campaign>/) - it holds the backend, ssh port and key, remote dir, command template, compute budget and the baseline to beat, and every one of those missing is a silent default rather than an error, so a misconfigured campaign still burns its whole allowance. State the budget, the value that counts as beating the baseline, and how much authority it has (may it kill a bad run, may it change the config). ops_ask_owner records a question on the campaign trail rather than reaching a person live, so say what it should do when it cannot decide alone. In-research capability, not a finished feature: on its own branch's measurements it keeps time and reports numbers that survive checking, but has not yet been observed to intervene on a run that is going badly. Runs claude-opus-5 on the feat/ops_round3_device build.",
+  "enabled": true,
+  "command": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
+  "idSource": "provisioned",
+  "readsLocalFiles": true,
+  "maxOutputChars": 60000,
+  "timeout": null,
+  "transcriptFormat": "text"
+}

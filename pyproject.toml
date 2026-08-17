@@ -195,6 +195,11 @@ extend-exclude = [
     "benchmarks/**/data",
     "benchmarks/**/results",
     "benchmarks/**/output",
+    # The vendored sub-agent builds. Not adopted the way agentscope below was:
+    # each is a separate upstream project replaced wholesale on the next zip,
+    # so a lint fix made here cannot survive and reports nobody can act on are
+    # the only thing linting them would produce.
+    "subagents/**",
 ]
 
 [tool.ruff.lint]
