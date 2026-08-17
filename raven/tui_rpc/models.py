@@ -233,6 +233,22 @@ class CronDeliveredEvent(_Strict):
     payload: CronDeliveredPayload
 
 
+class CronMissedItem(_Strict):
+    name: str
+    scheduled_at: str
+    message: str
+
+
+class CronMissedPayload(_Strict):
+    count: int
+    items: list[CronMissedItem]
+
+
+class CronMissedEvent(_Strict):
+    type: Literal["cron.missed"]
+    payload: CronMissedPayload
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -245,6 +261,7 @@ TurnEvent = Annotated[
         MessageCompleteEvent,
         ErrorEvent,
         CronDeliveredEvent,
+        CronMissedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -985,6 +1002,9 @@ __all__ = [
     "ErrorEvent",
     "CronDeliveredEvent",
     "CronDeliveredPayload",
+    "CronMissedEvent",
+    "CronMissedItem",
+    "CronMissedPayload",
     # registry
     "METHOD_MODELS",
 ]

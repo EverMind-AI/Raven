@@ -410,3 +410,43 @@ describe('createChatStream — cancel preserves streamed content', () => {
     expect(sysCalls).toContain('interrupted')
   })
 })
+
+describe('createChatStream — cron.missed startup notice', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+
+  it('renders one compact summary block via sys with per-item name and scheduled HH:MM', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+
+    fake.__pushEvent({
+      type: 'cron.missed',
+      payload: {
+        count: 2,
+        items: [
+          { message: '记得喝水', name: 'hydrate', scheduled_at: '2025-06-04T10:03:00+00:00' },
+          { message: '起来活动一下', name: 'stretch', scheduled_at: '2025-06-04T10:40:00+00:00' }
+        ]
+      }
+    })
+
+    expect(sysCalls).toHaveLength(1)
+    const block = sysCalls[0]
+    expect(block).toContain('错过 2 条提醒')
+    expect(block).toContain('hydrate — 原定')
+    expect(block).toContain('stretch — 原定')
+    // scheduled_at renders as local HH:MM, so assert the shape, not the value.
+    expect(block).toMatch(/原定 \d{2}:\d{2}/)
+    // A missed notice is a transcript block, not a turn — the UI must stay idle.
+    expect(stream.isTurnActive()).toBe(false)
+  })
+})

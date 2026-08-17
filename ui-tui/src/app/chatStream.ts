@@ -100,6 +100,16 @@ interface InternalState {
   turnId: string | null
 }
 
+// Render an ISO timestamp as local HH:MM for the cron.missed summary block;
+// falls back to the raw string when unparseable.
+const formatScheduledAt = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) {
+    return iso
+  }
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 const dispatch = (
   state: InternalState,
   event: TurnEvent,
@@ -143,6 +153,14 @@ const dispatch = (
         const { name, text, fired_at } = event.payload
         const tag = fired_at ? `${name} @ ${fired_at}` : name
         sys(`─── ⏰ ${tag} ───\n${text}\n${'─'.repeat(40)}`)
+      }
+      return
+    }
+    case 'cron.missed': {
+      if (sys) {
+        const { count, items } = event.payload
+        const lines = items.map(item => `${item.name} — 原定 ${formatScheduledAt(item.scheduled_at)}`)
+        sys(`─── ⏰ 错过 ${count} 条提醒 ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
       }
       return
     }
