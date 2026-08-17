@@ -317,6 +317,10 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
 }
 
 function Main {
+    # Read before installing so the closing hint can tell a first run from an
+    # upgrade; the install itself never writes config.json (the wizard does).
+    $hadConfig = Test-Path (Join-Path $RavenHome "config.json")
+
     $uv = Ensure-Uv
     $node = Ensure-Node
     Install-Raven $uv $node
@@ -325,11 +329,19 @@ function Main {
     Add-ProcessPath $toolBin
 
     Write-Host ""
-    Write-Ok "All set. Open a new PowerShell window, or continue in this one, then run:"
-    Write-Host ""
-    Write-Host "    raven            # enter the TUI"
-    Write-Host "    raven agent -m `"hello`""
-    Write-Host ""
+    if ($hadConfig) {
+        Write-Ok "Raven updated. Your config in $RavenHome is unchanged."
+        Write-Host ""
+        Write-Host "    raven    # continue where you left off"
+        Write-Host ""
+        Write-Host "  tip: next time you can upgrade in place with 'raven upgrade'"
+        Write-Host ""
+    } else {
+        Write-Ok "All set. Open a new PowerShell window, or continue in this one, then run:"
+        Write-Host ""
+        Write-Host "    raven    # sets you up on first run, then opens the TUI"
+        Write-Host ""
+    }
     if (($env:PATH -split ';') -notcontains $toolBin) {
         Write-Warn "Current PATH does not include $toolBin. Restart PowerShell if 'raven' is not found."
     }
