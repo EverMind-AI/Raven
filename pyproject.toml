@@ -270,6 +270,37 @@ markers = [
     "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
 ]
 
+[tool.coverage.run]
+branch = true
+source = ["raven"]
+omit = [
+    "raven/__main__.py",
+    "raven/evolver/__main__.py",
+    "raven/utils/win_fcntl_shim.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+omit = [
+    "raven/__main__.py",
+    "raven/evolver/__main__.py",
+    "raven/utils/win_fcntl_shim.py",
+]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.coverage.json]
+output = "coverage.json"
+
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
