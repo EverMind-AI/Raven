@@ -14,8 +14,11 @@ from loguru import logger
 
 # Workspace sync runs before the CLI decides logger.enable/disable("raven"),
 # so an unscoped debug in this module would spam stderr through loguru's
-# default sink on every first run. logger.enable("raven") lifts this for
-# processes that configure logging.
+# default sink on every first run. A later logger.enable("raven") still
+# lifts this rule (loguru drops descendant rules whenever a parent rule is
+# set), but the CLI flips logging only after its startup sync -- so the
+# per-file detail below reaches callers that enable logging before syncing
+# (tests, embedders), not the first sync of a `--logs` run.
 logger.disable(__name__)
 
 

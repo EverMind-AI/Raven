@@ -577,6 +577,25 @@ def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.Cap
     assert (second.out + second.err).strip() == ""
 
 
+def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) -> None:
+    """The module-level logger.disable in helpers yields to a later
+    logger.enable('raven'): loguru drops descendant rules whenever a parent
+    rule is set, so callers that enable logging before syncing get the
+    per-file detail. Freezes the behavior the helpers comment relies on."""
+    from loguru import logger
+
+    from raven.utils.helpers import sync_workspace_templates
+
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")
+    try:
+        logger.enable("raven")
+        sync_workspace_templates(tmp_path / "ws", silent=True)
+    finally:
+        logger.remove(sink_id)
+    assert any("workspace sync: created" in m for m in records)
+
+
 def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
     """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
     the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
