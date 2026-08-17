@@ -140,6 +140,13 @@ def _build_error_detail(exc: RpcError) -> str | None:
     ``message`` is only the code name (``internal_error``), so without this the
     TUI shows a turn failing for no stated reason. ``log_path`` rides along
     because an init crash is usually only fully diagnosable from the log.
+
+    It rides in *front* of the cause, not behind it: the TUI renders the first
+    line of this string and nothing else (``chatStream.ts``), and the crash this
+    exists for -- a config the running build cannot parse -- raises a
+    ``ValidationError`` whose ``str()`` is always multi-line (7 lines for two bad
+    fields). Appended, the pointer landed on the last line and never reached
+    anyone; the one case that needs the log was the one case that lost it.
     """
     data = error_data(exc) or {}
     detail = data.get("detail") or data.get("exception_message")
@@ -147,7 +154,7 @@ def _build_error_detail(exc: RpcError) -> str | None:
         return None
     log_path = data.get("log_path")
     if isinstance(log_path, str) and log_path.strip():
-        return f"{detail.strip()} (details in {log_path.strip()})"
+        return f"(details in {log_path.strip()}) {detail.strip()}"
     return detail.strip()
 
 
