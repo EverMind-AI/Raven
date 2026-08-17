@@ -169,6 +169,14 @@ class _HtmlBlocks(HTMLParser):
         self._title: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
+        # `</head>` is optional in HTML and `html.parser` never closes it for us,
+        # so a document that omits it left the counter stuck above zero for the
+        # rest of the file: every `handle_data` returned early, every body came
+        # out empty, and `parse` fell back to one whole-file Section carrying the
+        # raw markup -- the exact input this module exists to avoid. `head` can
+        # only precede `body`, so `body` starting means any unclosed one ended.
+        if tag == "body":
+            self._dropped = 0
         if tag in _DROPPED_TAGS:
             self._dropped += 1
             return

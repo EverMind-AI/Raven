@@ -149,17 +149,24 @@ async def _picker_payload(storage: Any, user_id: str) -> dict:
 def install_kb_embedding_override(app: Any, storage: Any) -> None:
     """Serve ``/knowledge_bases/embedding_models`` from Raven's config.
 
-    Done as middleware, which is not the cheapest shape available. ``create_app``
-    includes its routers synchronously in its own body, so by the time this is
-    called the route is already in ``app.routes`` and could be replaced there
-    instead -- that would drop two costs this carries: the original handler runs
-    on every request and its answer is discarded, and because middleware sits
-    outside ``CORSMiddleware`` the access-control headers have to be copied off
-    that discarded response by hand.
+    Done as middleware because replacing the route is not available here, which is
+    worth writing down precisely: this comment has already been wrong twice, in
+    both directions.
 
-    Left as it is because replacing a route entry changes how the request is
-    matched and dispatched, which wants its own verification pass rather than a
-    ride-along on a fix for something else.
+    ``create_app`` does include its routers synchronously in its own body, so
+    "they are registered later, during lifespan startup" -- the first version of
+    this note -- was false. But the route still cannot be found and swapped.
+    FastAPI 0.139 keeps each included router as an opaque ``_IncludedRouter``
+    entry and never flattens it, so scanning ``app.router.routes`` for the path
+    matches nothing; the only public way through is
+    ``_IncludedRouter.original_router``, which is the module-level
+    ``knowledge_base_router`` singleton. Editing that mutates a shared object
+    every app including it would see, which is worse than what this avoids.
+
+    So the two costs here are deliberate, not deferred: the original handler runs
+    on every request and its answer is discarded, and because middleware sits
+    outside ``CORSMiddleware`` the access-control headers are copied off that
+    discarded response by hand.
     """
     target = "/knowledge_bases/embedding_models"
 

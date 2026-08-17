@@ -25,6 +25,18 @@ export interface UploadTask {
 	/** Human-readable failure reason; non-null only when `phase === 'error'`. */
 	error: string | null;
 	createdAt: number;
+	/**
+	 * Document this task is replacing, to be retired once the task reaches
+	 * `ready`; `null` for an ordinary upload.
+	 *
+	 * Carried on the task rather than by whoever started it, because the task
+	 * outlives that component: the pairing used to live in the documents panel's
+	 * own state, so leaving the knowledge page or reloading the tab while a
+	 * replacement was still indexing dropped it, the upload finished normally,
+	 * and the original was never retired -- leaving both versions in the base
+	 * with search returning stale chunks alongside the new ones, silently.
+	 */
+	replacesDocumentId: string | null;
 }
 
 export function isTerminal(phase: UploadPhase): boolean {

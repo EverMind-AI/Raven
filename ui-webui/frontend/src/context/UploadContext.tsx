@@ -20,7 +20,12 @@ import type { KnowledgeDocumentStatus } from '@/api';
 interface UploadContextValue {
 	tasks: UploadTask[];
 	/** Enqueue one or more files against a knowledge base. */
-	enqueue: (knowledgeBaseId: string, files: File[]) => UploadTask[];
+	enqueue: (
+		knowledgeBaseId: string,
+		files: File[],
+		/** Document this upload replaces; retired once the task is `ready`. */
+		replacesDocumentId?: string | null,
+	) => UploadTask[];
 	/**
 	 * Abort an upload task. Effects depend on the current phase:
 	 *
@@ -268,7 +273,8 @@ export function UploadProvider({ children }: UploadProviderProps) {
 		}
 	}, [tasks, startUpload]);
 
-	const enqueue = useCallback((knowledgeBaseId: string, files: File[]): UploadTask[] => {
+	const enqueue = useCallback(
+		(knowledgeBaseId: string, files: File[], replacesDocumentId: string | null = null): UploadTask[] => {
 		const refs = refsRef.current!;
 		const now = Date.now();
 		const newTasks = files.map((file): UploadTask => {
@@ -284,11 +290,14 @@ export function UploadProvider({ children }: UploadProviderProps) {
 				loaded: 0,
 				error: null,
 				createdAt: now,
+				replacesDocumentId,
 			};
 		});
 		dispatch({ type: 'ADD', tasks: newTasks });
 		return newTasks;
-	}, []);
+	},
+		[],
+	);
 
 	const cancel = useCallback(
 		(taskId: string) => {
