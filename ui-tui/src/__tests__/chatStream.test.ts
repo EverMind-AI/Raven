@@ -441,11 +441,11 @@ describe('createChatStream — cron.missed startup notice', () => {
 
     expect(sysCalls).toHaveLength(1)
     const block = sysCalls[0]
-    expect(block).toContain('错过 2 条提醒')
-    expect(block).toContain('hydrate — 原定')
-    expect(block).toContain('stretch — 原定')
+    expect(block).toContain('missed 2 reminders')
+    expect(block).toContain('hydrate — scheduled')
+    expect(block).toContain('stretch — scheduled')
     // scheduled_at renders as local HH:MM, so assert the shape, not the value.
-    expect(block).toMatch(/原定 \d{2}:\d{2}/)
+    expect(block).toMatch(/scheduled \d{2}:\d{2}/)
     // A missed notice is a transcript block, not a turn — the UI must stay idle.
     expect(stream.isTurnActive()).toBe(false)
   })

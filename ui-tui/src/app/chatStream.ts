@@ -159,8 +159,9 @@ const dispatch = (
     case 'cron.missed': {
       if (sys) {
         const { count, items } = event.payload
-        const lines = items.map(item => `${item.name} — 原定 ${formatScheduledAt(item.scheduled_at)}`)
-        sys(`─── ⏰ 错过 ${count} 条提醒 ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
+        const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}`)
+        const noun = count === 1 ? 'reminder' : 'reminders'
+        sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
       }
       return
     }
