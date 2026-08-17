@@ -702,7 +702,13 @@ class AgentLoop:
             return
         try:
             self.set_session_binding(session_key, pool.bind(model, provider_name))
-        except (SystemExit, RuntimeError, ValueError) as exc:
+        except Exception as exc:
+            # Broad on purpose. Building a provider imports a vendor module and
+            # checks credentials, so the failures reachable here are open-ended
+            # -- ``MissingCredentialsError`` is one that did not exist when this
+            # guard was first written, and it escaped a tuple of three. A resume
+            # that lands on the default is a worse session; a resume that raises
+            # is no session at all.
             logger.warning("session {!r} cannot resume on {!r} ({}); using the default", session_key, model, exc)
 
     def set_session_binding(self, session_key: str, binding: ModelBinding) -> None:

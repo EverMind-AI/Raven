@@ -256,7 +256,6 @@ def _build_rewriter_and_gate(
     if bool(getattr(skill_forge_config, "rewrite_enabled", False)):
         rewriter = QueryRewriter(
             provider,
-            model=model,
             max_tokens=int(getattr(skill_forge_config, "rewrite_max_tokens", 8192) or 8192),
         )
 

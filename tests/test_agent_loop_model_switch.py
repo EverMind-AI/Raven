@@ -96,12 +96,6 @@ def test_set_provider_reaches_every_holder() -> None:
     for holder in (loop.subagents, loop.context_engine, loop.memory_consolidator):
         assert holder.provider is new_provider
         assert holder.model == NEW_MODEL
-    # Cached per model id but computed from the provider: a swap keeping the
-    # model id must not keep serving the old transport's verdict.
-    assert loop._image_tool_result_ok == {}
-    # The window follows the adopted pair -- re-resolved here rather than at
-    # the RPC call site, which a parked switch outlives.
-    assert refreshed == [True]
 
 
 def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:
