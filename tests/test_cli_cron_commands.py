@@ -108,6 +108,20 @@ def test_list_all_includes_disabled(runner, populated_cron):
         assert j.id in result.stdout
 
 
+def test_list_shows_silent_column(runner, populated_cron):
+    """The Silent column surfaces the anti-runaway counter; counts >= 5
+    carry a warning marker so runaway recurring jobs stand out."""
+    jobs = populated_cron.list_jobs()
+    hot = next(j for j in jobs if j.schedule.kind == "every")
+    for _ in range(7):
+        populated_cron.record_fire(hot.id)
+
+    result = runner.invoke(cron_app, ["list"])
+    assert result.exit_code == 0
+    assert "Silent" in result.stdout
+    assert "7 ⚠" in result.stdout
+
+
 # ── get ──────────────────────────────────────────────────────────────
 
 
@@ -161,6 +175,21 @@ def test_get_shows_topic_tag_dash_when_absent(runner, populated_cron):
     )
     assert topic_line is not None
     assert "-" in topic_line
+
+
+def test_get_shows_silent_fire_fields(runner, populated_cron):
+    """``cron get`` renders the anti-runaway counter and its limit so an
+    operator can see how close a recurring job is to auto-disable."""
+    job = next(j for j in populated_cron.list_jobs() if j.schedule.kind == "every")
+    for _ in range(3):
+        populated_cron.record_fire(job.id)
+
+    result = runner.invoke(cron_app, ["get", job.id])
+    assert result.exit_code == 0
+    assert "silent_fire_count" in result.stdout.replace("\n", "")
+    assert "silent_fire_limit" in result.stdout.replace("\n", "")
+    assert "3" in result.stdout
+    assert "12" in result.stdout
 
 
 def test_get_prefix_match(runner, populated_cron):

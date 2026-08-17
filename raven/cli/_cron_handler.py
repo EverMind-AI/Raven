@@ -10,16 +10,19 @@ re-routing.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
 if TYPE_CHECKING:
+    from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.proactive_engine.schedulers.cron.types import CronJob
     from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
     from raven.proactive_engine.system_events import SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
     from raven.spine import TurnHandle, TurnRequest
+
+_RECURRING_KINDS = ("every", "cron")
 
 
 def _ms_to_local_str(ms: int | None) -> str | None:
@@ -104,6 +107,7 @@ def make_on_cron_job(
     sentinel_runner: "SentinelRunner | None" = None,
     system_events: "SystemEventQueue | None" = None,
     wake: "WakeScheduler | None" = None,
+    cron_service: "CronService | None" = None,
 ) -> Callable[["CronJob"], Awaitable[str | None]]:
     """Build the CronService.on_job callback. Every cron turn runs through the
     spine ``submit`` as a CRON-origin turn.
@@ -142,6 +146,15 @@ def make_on_cron_job(
     follow-ups.
     Only effective for jobs executed in this process — a CLI test-fire
     runs in its own process and cannot reach the gateway's queue.
+
+    ``cron_service`` is optional. When wired, each successful recurring
+    fire ('every'/'cron' kinds; one-shots can't run away) is counted via
+    ``record_fire`` — the anti-runaway guard that auto-disables a job
+    after ``silent_fire_limit`` consecutive fires with no user activity
+    on its (channel, to). Failed turns are not counted: a job that never
+    delivers is a different problem than one that spams. On auto-disable
+    the in-memory job is flipped too, so the service's post-run writeback
+    persists the disable instead of recomputing a next run.
     """
 
     async def on_cron_job(job: "CronJob") -> str | None:
@@ -185,6 +198,25 @@ def make_on_cron_job(
         # capture, stored before result() resolved, and pop it so the
         # long-running map does not accumulate.
         response: str | None = readback_texts.pop(f"cron:{job.id}", None) if readback_texts is not None else None
+
+        # Anti-runaway: count this successful recurring fire. Best-effort —
+        # a store I/O failure must not turn a delivered reminder into an
+        # error status.
+        if cron_service is not None and job.schedule.kind in _RECURRING_KINDS:
+            try:
+                if cron_service.record_fire(job.id):
+                    # Flip the in-flight job too: _writeback_after_run patches
+                    # enabled/next_run from this object and would otherwise
+                    # clobber the disable record_fire just persisted.
+                    job.enabled = False
+                    job.state.next_run_at_ms = None
+            except Exception as exc:  # noqa: BLE001 — fire accounting is best-effort
+                logger.warning(
+                    "cron record_fire failed for {}: {}: {}",
+                    job.id,
+                    type(exc).__name__,
+                    exc,
+                )
 
         # F-G: tell the L3 Sentinel this surface just nudged the user (topic_fired_at
         # + record_dispatched), so its next tick on the same topic skips via
@@ -261,4 +293,91 @@ def _record_cron_dispatch_to_ledger(
         )
 
 
-__all__ = ["make_on_cron_job"]
+def make_on_missed_foreign(
+    system_events: "SystemEventQueue",
+    wake: "WakeScheduler",
+) -> Callable[[list["CronJob"]], None]:
+    """Build the ``CronService.on_missed_foreign`` observer for the gateway.
+
+    Each missed foreign one-shot (a tui / cli reminder whose session closed
+    before it fired) is surfaced ONCE as a system event with context_key
+    ``cron:<job_id>:missed`` plus a heartbeat wake request — the heartbeat's
+    existing target selection delivers the notice; there is no new delivery
+    path, and the foreign job itself is never touched.
+
+    Dedup is two-layer: while queued, the SystemEventQueue replaces events
+    sharing a context_key (same semantics _emit_cron_event relies on); after
+    the heartbeat consumed one, the in-process ``notified`` set stops any
+    re-enqueue on later wake passes. The set is process-local by design —
+    after a gateway restart a still-missed job may notify once more
+    (accepted v1 trade-off; persisting would mean mutating a foreign job
+    or growing a side store).
+    """
+    notified: set[str] = set()
+
+    def on_missed_foreign(jobs: "list[CronJob]") -> None:
+        from raven.proactive_engine.system_events import SystemEvent
+
+        for job in jobs:
+            if job.id in notified:
+                continue
+            fire_at = _ms_to_local_str(job.schedule.at_ms) or "?"
+            channel = job.payload.channel or "?"
+            context_key = f"cron:{job.id}:missed"
+            text = f"Reminder '{job.name}' (scheduled {fire_at} on {channel}) was missed - its session was closed."
+            try:
+                system_events.enqueue(SystemEvent(text=text, source="cron", context_key=context_key))
+                wake.request_wake_now(context_key)
+            except Exception as exc:  # noqa: BLE001 — per-job, retried next pass
+                logger.warning(
+                    "missed-reminder event emit failed for {}: {}: {}",
+                    job.id,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
+            # Marked only after a successful enqueue so a transient emit
+            # failure is retried on the next wake pass.
+            notified.add(job.id)
+            logger.info("Cron: missed-reminder event enqueued for '{}' ({})", job.name, job.id)
+
+    return on_missed_foreign
+
+
+def chain_cron_activity_reset(
+    cron_service: "CronService",
+    inner: "Callable[[TurnRequest], Any] | None" = None,
+) -> "Callable[[TurnRequest], Any]":
+    """Compose an AgentLoop ``on_user_inbound`` callback that resets the
+    anti-runaway silent-fire counters on genuine user activity, chained
+    after ``inner`` (the Sentinel engagement hook — preserved, not
+    replaced).
+
+    Only ``Origin.USER`` turns reset: the user-inbound hook chain also
+    runs for CRON / HEARTBEAT origin turns (only SENTINEL / SUBAGENT are
+    skipped at the AgentLoop gate), and a cron fire resetting its own
+    counter would defeat the guard entirely.
+
+    Returns ``inner``'s result so an async inner is still awaited by the
+    OnUserInboundAdapter; the reset itself is synchronous and best-effort.
+    """
+
+    def on_user_inbound(req: "TurnRequest") -> Any:
+        result = inner(req) if inner is not None else None
+        try:
+            from raven.spine import Origin
+
+            if req.origin is Origin.USER and req.source is not None:
+                cron_service.notify_user_active(req.source.channel, req.source.chat_id)
+        except Exception as exc:  # noqa: BLE001 — reset is best-effort
+            logger.warning(
+                "cron notify_user_active failed: {}: {}",
+                type(exc).__name__,
+                exc,
+            )
+        return result
+
+    return on_user_inbound
+
+
+__all__ = ["make_on_cron_job", "make_on_missed_foreign", "chain_cron_activity_reset"]
