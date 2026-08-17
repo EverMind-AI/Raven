@@ -442,11 +442,37 @@ describe('createChatStream — cron.missed startup notice', () => {
     expect(sysCalls).toHaveLength(1)
     const block = sysCalls[0]
     expect(block).toContain('missed 2 reminders')
-    expect(block).toContain('hydrate — scheduled')
-    expect(block).toContain('stretch — scheduled')
-    // scheduled_at renders as local HH:MM, so assert the shape, not the value.
-    expect(block).toMatch(/scheduled \d{2}:\d{2}/)
+    // Fixed 2025 timestamps are never "today": the dated form must render.
+    expect(block).toMatch(/hydrate — scheduled 06-04 \d{2}:\d{2}: 记得喝水/)
+    expect(block).toMatch(/stretch — scheduled 06-04 \d{2}:\d{2}: 起来活动一下/)
+    // Non-today timestamps render the dated local form: MM-DD HH:MM.
+    expect(block).toMatch(/scheduled 06-04 \d{2}:\d{2}/)
     // A missed notice is a transcript block, not a turn — the UI must stay idle.
     expect(stream.isTurnActive()).toBe(false)
+  })
+
+  it('renders a bare HH:MM when the missed reminder was scheduled today', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+
+    const today = new Date()
+    today.setHours(9, 30, 0, 0)
+    fake.__pushEvent({
+      type: 'cron.missed',
+      payload: {
+        count: 1,
+        items: [{ message: 'drink water', name: 'hydrate', scheduled_at: today.toISOString() }]
+      }
+    })
+
+    expect(sysCalls).toHaveLength(1)
+    expect(sysCalls[0]).toContain('hydrate — scheduled 09:30: drink water')
+    expect(sysCalls[0]).not.toMatch(/scheduled \d{2}-\d{2} /)
   })
 })
