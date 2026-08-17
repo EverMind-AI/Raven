@@ -203,6 +203,10 @@ class LiteLLMProvider(LLMProvider):
         """The id this request is sent under. See ``providers.wire``."""
         return wire_model(model, gateway=self._gateway)
 
+    def wire_model_id(self, model: str) -> str:
+        """See ``LLMProvider.wire_model_id``."""
+        return self._resolve_model(model)
+
     def can_serve(self, model: str) -> bool:
         """See ``LLMProvider.can_serve``.
 

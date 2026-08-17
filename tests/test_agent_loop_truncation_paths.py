@@ -742,3 +742,45 @@ async def test_a_subagent_does_not_dispatch_a_truncated_call(tmp_path, monkeypat
     tool_replies = [m for m in provider.seen[1] if m.get("role") == "tool"]
     assert tool_replies, "the second turn should have seen the tool result"
     assert "[truncated]" in str(tool_replies[-1].get("content", ""))
+
+
+class _BehindAGateway(LLMProvider):
+    """Sends under a gateway-prefixed id, as `wire_model` produces."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generation = GenerationSettings()
+
+    def wire_model_id(self, model: str) -> str:
+        return f"openrouter/{model}"
+
+    async def chat(self, messages, tools=None, model=None, max_tokens=None, **kwargs) -> LLMResponse:
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "a.py"})],
+            # The shape signal 2 exists for: a clean stop on a cut-off turn.
+            finish_reason="tool_calls",
+            usage={"completion_tokens": 4096},
+        )
+
+    def get_default_model(self) -> str:
+        return "openai/gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_the_non_streaming_ceiling_uses_the_id_the_request_was_sent_under() -> None:
+    """Each provider rewrites the model id before sending it, differently:
+    LiteLLM through its gateway, azure into a deployment name, codex by
+    dropping its own prefix. The catalogue files those spellings as separate
+    rows -- measured, openai/gpt-4o answers 16384 and openrouter/openai/gpt-4o
+    answers 4096 -- so the stored id is the wrong thing to size a sent request
+    against, and wrong in the direction that hides a cut rather than inventing
+    one.
+    """
+    provider = _BehindAGateway()
+
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
+
+    assert response.max_tokens == 4096, "the ceiling of the id that was actually sent"
+    assert response.truncated is True
+    assert response.tool_calls[0].run_meta.truncation.at_tokens == 4096

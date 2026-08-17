@@ -643,3 +643,31 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     )
 
     assert response.tool_calls[0].run_meta is not None
+
+
+async def test_the_ceiling_is_looked_up_under_the_id_the_request_was_sent_under() -> None:
+    """A gateway rewrites the model id, and the two ids are different rows.
+
+    `wire_model` puts the gateway's prefix in front of a stored vendor id, and
+    LiteLLM files the two spellings separately -- measured, openai/gpt-4o
+    answers 16384 while openrouter/openai/gpt-4o answers 4096. The request goes
+    out under the rewritten one, so a check that looks up the stored one
+    compares usage against a ceiling four times too large and never fires.
+
+    Only when nothing pinned a ceiling: a pinned one is passed through and no
+    lookup happens on either side.
+    """
+    chunks = [
+        StreamDelta(content="partial"),
+        StreamDelta(content=None, usage={"completion_tokens": 4096}, finish_reason="stop"),
+    ]
+    provider = _FakeProvider(chunks)
+    provider.generation = SimpleNamespace(max_tokens=None)
+    provider.wire_model_id = lambda model: f"openrouter/{model}"
+
+    response = await _bind_helper(provider)(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    assert response.max_tokens == 4096, "the ceiling of the id that was actually sent"
+    assert response.truncated is True

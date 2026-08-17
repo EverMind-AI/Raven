@@ -35,6 +35,10 @@ class OpenAICodexProvider(LLMProvider):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
 
+    def wire_model_id(self, model: str) -> str:
+        """See ``LLMProvider.wire_model_id``."""
+        return _strip_model_prefix(model)
+
     async def chat(
         self,
         messages: list[dict[str, Any]],

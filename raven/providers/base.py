@@ -822,6 +822,20 @@ class LLMProvider(ABC):
         """
         return True
 
+    def wire_model_id(self, model: str) -> str:
+        """The id this provider will actually send. See ``providers.wire``.
+
+        Anyone sizing a *request* has to ask under this rather than under the
+        stored name. The catalogue files a gateway spelling as its own row with
+        its own numbers -- ``openai/gpt-4o`` answers 16384 where
+        ``openrouter/openai/gpt-4o`` answers 4096 -- so the two are different
+        questions, and only this one is about the request that went out.
+
+        Default identity: a provider that sends the stored id unchanged has
+        nothing to translate.
+        """
+        return model
+
     def emits_unparsed_reasoning(self) -> bool:
         """Whether this provider's backend may leak bare think tags into content.
 
@@ -912,7 +926,7 @@ class LLMProvider(ABC):
 
                 response.max_tokens, response.truncated = flag_truncation(
                     self.generation,
-                    model=current_model,
+                    model=self.wire_model_id(current_model or ""),
                     sent=sent,
                     finish_reason=response.finish_reason,
                     usage=response.usage,

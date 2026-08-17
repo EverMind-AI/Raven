@@ -60,20 +60,24 @@ class AzureOpenAIProvider(LLMProvider):
             api_base += "/"
         self.api_base = api_base
 
-    def _build_chat_url(self, deployment_name: str) -> str:
-        """Build the Azure OpenAI chat completions URL.
+    def wire_model_id(self, model: str) -> str:
+        """See ``LLMProvider.wire_model_id``.
 
         A configured ``deployment`` decides; otherwise the model id names it, as
         it did before the field existed. Falling back rather than requiring the
-        field keeps working configs working -- and it is why the id may still not
-        carry a prefix in that case: whatever is here goes into the URL path.
+        field keeps working configs working -- and it is why the id may still
+        not carry a prefix in that case: whatever is here goes into the URL path.
         """
-        # Azure OpenAI URL format:
-        # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
         from raven.providers.registry import find_by_name
         from raven.providers.wire import wire_model
 
-        deployment_name = self.deployment or wire_model(deployment_name, spec=find_by_name("azure_openai"))
+        return self.deployment or wire_model(model, spec=find_by_name("azure_openai"))
+
+    def _build_chat_url(self, deployment_name: str) -> str:
+        """Build the Azure OpenAI chat completions URL."""
+        # Azure OpenAI URL format:
+        # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
+        deployment_name = self.wire_model_id(deployment_name)
 
         base_url = self.api_base
         if not base_url.endswith("/"):
