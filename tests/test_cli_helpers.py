@@ -467,3 +467,39 @@ def test_make_provider_rejects_endpoints_on_providers_that_cannot_rotate(
 
     with pytest.raises(MissingCredentialsError, match="endpoints"):
         _helpers.make_provider(config)
+
+
+# ---------------------------------------------------------------------------
+# check_provider_credentials — onboard guidance
+# ---------------------------------------------------------------------------
+
+
+def test_no_api_key_error_mentions_onboard(tmp_path: Path) -> None:
+    """Zero-provider config: the credentials gate every LLM-needing command
+    runs through must point at ``raven onboard`` alongside the provider set
+    command. Carried on the exception so the single outlet renders it."""
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    p = tmp_path / "config.json"
+    p.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.check_provider_credentials(load_config(p))
+
+    assert "raven onboard" in f"{excinfo.value.summary} {excinfo.value.remedy}"
+
+
+def test_azure_missing_key_same_onboard_guidance(tmp_path: Path) -> None:
+    """The azure branch flows through the same gate and must carry the same
+    ``raven onboard`` guidance as the generic no-key branch, not its own
+    hand-edit-config wording."""
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    cfg = _config_for(tmp_path, "azure_openai", "my-deployment", {"apiBase": "https://example.openai.azure.com"})
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.check_provider_credentials(load_config(cfg))
+
+    assert "raven onboard" in f"{excinfo.value.summary} {excinfo.value.remedy}"

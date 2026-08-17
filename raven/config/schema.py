@@ -319,6 +319,13 @@ class CronConfig(Base):
     default_timezone: str = "Asia/Shanghai"
     """Default IANA timezone for cron expressions without explicit ``--tz``."""
 
+    notify_missed: bool = True
+    """When True, the gateway observes one-shot reminders bound to other
+    partitions (tui / cli sessions) that went past due unfired — their
+    session was closed — and surfaces each once as a system event through
+    the heartbeat wake path. Read-only observation: the foreign job itself
+    is never mutated."""
+
 
 class ModelOverlay(Base):
     """A name for a model no catalogue carries.
@@ -824,10 +831,18 @@ class ToolsConfig(Base):
     (e.g. ``read_file``, ``web_search``, or ``mcp_bcp-search_search``)."""
 
 
+class CliConfig(Base):
+    """CLI surface configuration."""
+
+    turn_summary: bool = True
+    """Render a one-line tokens/cost summary after each successful CLI turn."""
+
+
 class Config(BaseSettings):
     """Root configuration for raven."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    cli: CliConfig = Field(default_factory=CliConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)

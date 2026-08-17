@@ -35,14 +35,67 @@ from raven.utils.helpers import sync_workspace_templates
 console = Console()
 
 
+# One-shot ``-m`` exit code: set by the error renderer, checked after the
+# turn. Module-level because the render callback runs inside the delivery
+# hub's worker task, where raising typer.Exit would be swallowed.
+_ONE_SHOT_EXIT = {"code": 0}
+
+
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
+    if _print_llm_error(content):
+        return
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} Raven[/cyan]")
     console.print(body)
     console.print()
+
+
+# Category-apt hints for non-auth provider errors. Credential guidance would
+# mislead here: a rate limit or a network drop is not fixed by re-checking the
+# key. Categories absent from this map (invalid_request, unknown, ...) render
+# the error line alone.
+_NON_AUTH_HINTS = {
+    "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
+    "network": "Hint: network problem; check connectivity and retry.",
+    "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
+    "server": "Hint: provider-side error; retry later or switch models.",
+    "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
+    "billing": "Hint: billing or quota issue; check your provider account.",
+}
+
+
+def _print_llm_error(content: str) -> bool:
+    """Render a provider error as a diagnosis + fix hint instead of a fake
+    agent reply. Returns True when handled; marks the one-shot path to exit
+    non-zero."""
+    from rich.markup import escape
+
+    from raven.providers.base import parse_llm_error
+
+    parsed = parse_llm_error(content)
+    if parsed is None:
+        return False
+    category, provider, detail = parsed
+    console.print()
+    if category == "auth":
+        # No status code here: the auth bucket also fires on 403, on
+        # PermissionDeniedError and on substring matches, so naming one would
+        # be a guess. The detail carries the provider's own reason instead.
+        where = f" ({escape(provider)})" if provider else ""
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
+        target = provider or "<name>"
+        console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
+    else:
+        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
+        hint = _NON_AUTH_HINTS.get(category)
+        if hint:
+            console.print(hint)
+    console.print()
+    _ONE_SHOT_EXIT["code"] = 1
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -72,36 +125,6 @@ def register(app: typer.Typer) -> None:
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
-        wait_skill_extract: bool = typer.Option(
-            False,
-            "--wait-skill-extract/--no-wait-skill-extract",
-            help=(
-                "Block exit until in-flight everos extraction tasks finish. "
-                "Off by default — extraction is fire-and-forget, so the CLI "
-                "returns as soon as the agent responds and any in-flight "
-                "boundary-detection / case-extraction LLM call may be "
-                "cancelled by interpreter shutdown. When on (without "
-                "--flush-skill-buffer), the per-session pending-turn buffer "
-                "is left intact for the next CLI invocation, which is the "
-                "mode you want for scripted multi-turn boundary-detection "
-                "testing (multiple ``-m`` calls sharing the same ``-s``)."
-            ),
-        ),
-        flush_skill_buffer: bool = typer.Option(
-            False,
-            "--flush-skill-buffer/--no-flush-skill-buffer",
-            help=(
-                "Send a ``session_end`` signal for this session before exit, "
-                "draining whatever turns are sitting in the everos "
-                "boundary-detection buffer through case + skill extraction. "
-                "Pair with --wait-skill-extract to actually block on the "
-                "resulting LLM calls (a flush without --wait-skill-extract "
-                "schedules the drain but won't survive interpreter "
-                "shutdown). Use on the final ``-m`` of a scripted "
-                "multi-turn session, or to force extraction after a single "
-                "``-m`` turn (a lone turn never trips a boundary on its own)."
-            ),
-        ),
         fake_now: str | None = typer.Option(
             None,
             "--fake-now",
@@ -320,20 +343,6 @@ def register(app: typer.Typer) -> None:
                     await handle.result()
                 await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
                 await teardown()
-                if wait_skill_extract or flush_skill_buffer:
-                    # ``flush_skill_buffer`` sends session_end so any
-                    # buffered turns drain through extraction (a single
-                    # -m turn never trips a boundary on its own).
-                    # ``wait_skill_extract`` blocks on the in-flight
-                    # tasks; without it the flush schedules work that
-                    # interpreter shutdown will cancel. The two flags
-                    # are orthogonal — scripted multi-turn testing uses
-                    # --wait-skill-extract alone so the buffer survives
-                    # for the next CLI run.
-                    await agent_loop.await_pending_extractions(
-                        flush_session_id=session_id if flush_skill_buffer else None,
-                        wait=wait_skill_extract,
-                    )
                 await agent_loop.close_mcp()
             finally:
                 if backend is not None:
@@ -347,11 +356,14 @@ def register(app: typer.Typer) -> None:
                             "memory backend stop failed; continuing shutdown",
                         )
 
+        _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
         # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
         # thread, torch) segfault during interpreter finalization. The exit
         # chokepoint in raven.cli.commands.run hard-exits past finalization
         # when that hazard is live, so this path just returns normally.
+        if _ONE_SHOT_EXIT["code"]:
+            raise typer.Exit(_ONE_SHOT_EXIT["code"])
 
 
 __all__ = ["register"]

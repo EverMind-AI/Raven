@@ -33,12 +33,20 @@ def _make_job(
     channel: str | None = "tui",
     to: str | None = "direct",
     name: str = "test_job",
+    kind: str = "at",
 ) -> CronJob:
+    schedule = (
+        CronSchedule(kind="at", at_ms=1000)
+        if kind == "at"
+        else CronSchedule(kind="every", every_ms=60_000)
+        if kind == "every"
+        else CronSchedule(kind="cron", expr="0 9 * * *")
+    )
     return CronJob(
         id=f"job_{name}",
         name=name,
         enabled=True,
-        schedule=CronSchedule(kind="at", at_ms=1000),
+        schedule=schedule,
         payload=CronPayload(
             message="reminder body source",
             channel=channel,
@@ -204,6 +212,158 @@ async def test_turn_failure_emits_failed_event_and_reraises():
     event = system_events.enqueue.call_args.args[0]
     assert "failed" in event.text
     assert event.context_key.endswith(":fail")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Anti-runaway count point: record_fire after a successful recurring turn
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def test_record_fire_called_on_successful_recurring_turn(spine):
+    cron_service = MagicMock()
+    cron_service.record_fire.return_value = False
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, cron_service=cron_service)
+
+    job = _make_job(name="r1", kind="every")
+    await handler(job)
+
+    cron_service.record_fire.assert_called_once_with("job_r1")
+    assert job.enabled is True
+
+
+async def test_record_fire_not_called_on_turn_failure():
+    cron_service = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            raise RuntimeError("provider down")
+
+    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={}, cron_service=cron_service)
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        await handler(_make_job(name="r2", kind="every"))
+
+    cron_service.record_fire.assert_not_called()
+
+
+async def test_record_fire_not_called_for_oneshot_at_job(spine):
+    cron_service = MagicMock()
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, cron_service=cron_service)
+
+    await handler(_make_job(name="r3", kind="at"))
+
+    cron_service.record_fire.assert_not_called()
+
+
+async def test_auto_disable_flips_the_inflight_job(spine):
+    """record_fire returning True (limit hit) must flip the in-memory job:
+    the service's post-run writeback patches enabled/next_run from it and
+    would otherwise clobber the persisted disable."""
+    cron_service = MagicMock()
+    cron_service.record_fire.return_value = True
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, cron_service=cron_service)
+
+    job = _make_job(name="r4", kind="cron")
+    job.state.next_run_at_ms = 999_999
+    await handler(job)
+
+    assert job.enabled is False
+    assert job.state.next_run_at_ms is None
+
+
+async def test_record_fire_error_does_not_fail_the_turn(spine):
+    cron_service = MagicMock()
+    cron_service.record_fire.side_effect = OSError("store locked")
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, cron_service=cron_service)
+
+    response = await handler(_make_job(name="r5", kind="every"))
+
+    assert response == "resolved body"
+
+
+async def test_without_cron_service_no_counting(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
+    job = _make_job(name="r6", kind="every")
+
+    assert await handler(job) == "resolved body"
+    assert job.enabled is True
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Anti-runaway reset point: chain_cron_activity_reset
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _user_req(*, origin=None, channel: str = "telegram", chat_id: str = "chat9"):
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    return TurnRequest(
+        origin=origin or Origin.USER,
+        source=Source(
+            channel=channel,
+            chat_id=chat_id,
+            sender_id="u1",
+            chat_type=ChatType.DM,
+        ),
+        text="hello",
+    )
+
+
+def test_chain_resets_on_user_origin():
+    from raven.cli._cron_handler import chain_cron_activity_reset
+
+    cron_service = MagicMock()
+    hook = chain_cron_activity_reset(cron_service)
+
+    hook(_user_req(channel="telegram", chat_id="chat9"))
+
+    cron_service.notify_user_active.assert_called_once_with("telegram", "chat9")
+
+
+def test_chain_ignores_non_user_origins():
+    """CRON / HEARTBEAT turns run the user-inbound hook chain too (only
+    SENTINEL / SUBAGENT are skipped at the AgentLoop gate) — a cron fire
+    resetting its own counter would defeat the guard."""
+    from raven.cli._cron_handler import chain_cron_activity_reset
+    from raven.spine import Origin
+
+    cron_service = MagicMock()
+    hook = chain_cron_activity_reset(cron_service)
+
+    hook(_user_req(origin=Origin.CRON))
+    hook(_user_req(origin=Origin.HEARTBEAT))
+
+    cron_service.notify_user_active.assert_not_called()
+
+
+def test_chain_calls_inner_first_and_returns_its_result():
+    from raven.cli._cron_handler import chain_cron_activity_reset
+
+    calls: list[str] = []
+    cron_service = MagicMock()
+    cron_service.notify_user_active.side_effect = lambda *a: calls.append("reset")
+    sentinel_result = object()
+
+    def inner(req):
+        calls.append("sentinel")
+        return sentinel_result
+
+    hook = chain_cron_activity_reset(cron_service, inner=inner)
+
+    assert hook(_user_req()) is sentinel_result
+    assert calls == ["sentinel", "reset"]
+
+
+def test_chain_reset_error_is_swallowed():
+    from raven.cli._cron_handler import chain_cron_activity_reset
+
+    cron_service = MagicMock()
+    cron_service.notify_user_active.side_effect = OSError("store locked")
+    inner = MagicMock(return_value=None)
+    hook = chain_cron_activity_reset(cron_service, inner=inner)
+
+    assert hook(_user_req()) is None
+    inner.assert_called_once()
 
 
 # ─────────────────────────────────────────────────────────────────────

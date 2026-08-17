@@ -133,3 +133,46 @@ def test_jitter_within_ten_percent():
 
 def test_jitter_zero_stays_zero():
     assert LLMProvider._jittered(0) == 0.0
+
+
+# --- format_llm_error / parse_llm_error / _strip_json_error_body ------------- #
+
+
+def test_format_llm_error_collapses_prefixes_and_json_body():
+    from raven.providers.base import format_llm_error, parse_llm_error
+
+    exc = _StatusError(
+        "litellm.AuthenticationError: AuthenticationError: OpenrouterException - "
+        '{"error":{"message":"User not found.","code":401}}',
+        status_code=401,
+    )
+    content = format_llm_error(exc, LLMProvider.classify_error(exc), provider="openrouter")
+
+    assert content == (
+        "Error calling LLM (auth@openrouter): AuthenticationError: OpenrouterException - User not found."
+    )
+    assert parse_llm_error(content) == (
+        "auth",
+        "openrouter",
+        "AuthenticationError: OpenrouterException - User not found.",
+    )
+
+
+def test_parse_llm_error_rejects_ordinary_content():
+    from raven.providers.base import parse_llm_error
+
+    assert parse_llm_error("a normal reply that mentions Error calling LLM") is None
+    assert parse_llm_error(None) is None
+
+
+def test_strip_json_error_body_keeps_trailing_text():
+    from raven.providers.base import _strip_json_error_body
+
+    assert _strip_json_error_body('X - {"error":{"message":"boom"}} (request id: abc)') == "X - boom (request id: abc)"
+
+
+def test_strip_json_error_body_without_a_message_leaves_text_alone():
+    from raven.providers.base import _strip_json_error_body
+
+    text = 'Config invalid: {"foo": "bar"} retry with a valid key'
+    assert _strip_json_error_body(text) == text

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
@@ -66,6 +67,88 @@ class ErrorClassification:
     #: whether ``str()`` carried that body is a property of the client that
     #: raised it. Deciding while the exception is alive makes it one answer.
     refuses_prompt_cache: bool = False
+
+
+_EXC_NAME_PREFIX_RE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception))\s*:\s*")
+_JSON_MESSAGE_RE = re.compile(r'"message"\s*:\s*"([^"]*)"')
+_LLM_ERROR_CONTENT_RE = re.compile(
+    r"^Error calling LLM \((?P<category>[a-z_]+)(?:@(?P<provider>[A-Za-z0-9._-]+))?\):\s*(?P<detail>.*)$",
+    re.DOTALL,
+)
+
+
+def _strip_json_error_body(text: str) -> str:
+    """Replace a raw JSON error body with its human-readable message.
+
+    Rewrites only when a message is actually extracted, and only within the
+    parsed object's own boundary -- trailing text after the JSON survives, and
+    a body yielding no message leaves the text unchanged rather than truncated.
+    """
+    idx = text.find("{")
+    if idx == -1:
+        return text
+    candidate = text[idx:]
+    if not candidate.startswith(('{"', "{'")):
+        return text
+    try:
+        obj, end = json.JSONDecoder().raw_decode(candidate)
+    except ValueError:
+        # Malformed JSON has no knowable boundary; treat the rest of the text
+        # as the body, which is the shape the swallowed litellm errors have.
+        obj, end = None, len(candidate)
+    message = ""
+    if isinstance(obj, dict):
+        err = obj.get("error")
+        found = err.get("message") if isinstance(err, dict) else None
+        found = found or obj.get("message")
+        if isinstance(found, str):
+            message = found.strip()
+    if not message:
+        m = _JSON_MESSAGE_RE.search(candidate[:end])
+        message = m.group(1).strip() if m else ""
+    if not message:
+        return text
+    head = text[:idx].rstrip()
+    tail = candidate[end:].strip()
+    return " ".join(part for part in (head, message, tail) if part)
+
+
+def format_llm_error(
+    exc: BaseException,
+    classification: ErrorClassification,
+    provider: str | None = None,
+) -> str:
+    """Build the canonical content for a failed LLM call.
+
+    Shape: ``Error calling LLM (<category>[@<provider>]): <detail>``. The head
+    is machine-parseable (see ``parse_llm_error``) so rendering surfaces can
+    show a diagnosis + fix hint instead of the raw exception; the detail drops
+    duplicated exception-name prefixes and raw JSON error bodies.
+    """
+    detail = str(exc).strip()
+    names: list[str] = []
+    while True:
+        m = _EXC_NAME_PREFIX_RE.match(detail)
+        if not m:
+            break
+        name = m.group(1).rsplit(".", 1)[-1]
+        if name not in names:
+            names.append(name)
+        detail = detail[m.end() :]
+    detail = _strip_json_error_body(detail).strip()
+    prefix = "".join(f"{n}: " for n in names)
+    detail = f"{prefix}{detail}".strip().rstrip(":-").strip() or type(exc).__name__
+    head = f"{classification.category}@{provider}" if provider else classification.category
+    return f"Error calling LLM ({head}): {detail}"
+
+
+def parse_llm_error(content: str | None) -> tuple[str, str | None, str] | None:
+    """Parse content built by ``format_llm_error`` back into
+    ``(category, provider, detail)``; ``None`` when the text is not one."""
+    m = _LLM_ERROR_CONTENT_RE.match((content or "").strip())
+    if not m:
+        return None
+    return m.group("category"), m.group("provider"), m.group("detail").strip()
 
 
 class ProviderHTTPError(RuntimeError):
@@ -569,15 +652,17 @@ class LLMProvider(ABC):
                 raise
             except Exception as e:
                 exc = e
-                response = LLMResponse(content=f"Error calling LLM: {e}", finish_reason="error")
+                response = LLMResponse(content=None, finish_reason="error")
 
             if response.finish_reason != "error":
                 return response
 
             # Prefer a provider-attached classification (it had the live
             # exception); else classify the exception we caught, else the string.
-            classification = response.error_classification or self.classify_error(exc, response.content)
+            classification = response.error_classification or self.classify_error(exc, response.content or None)
             response.error_classification = classification
+            if exc is not None and not response.content:
+                response.content = format_llm_error(exc, classification, provider=getattr(self, "provider_name", None))
             last_response = response
 
             # Why an upstream can refuse this at all: see

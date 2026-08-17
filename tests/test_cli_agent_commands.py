@@ -8,6 +8,7 @@ Smoke-level coverage: ``--help`` works, options are surfaced, the
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,16 @@ def test_agent_help_works() -> None:
     assert "--workspace" in r.stdout
     assert "--config" in r.stdout
     assert "--markdown" in r.stdout
+
+
+def test_agent_help_omits_removed_skill_extract_flags() -> None:
+    """The inert skill-extraction flags stay removed: the mechanism their
+    help text described was replaced by the MemoryBackend plugin, so the
+    flags never had any effect."""
+    r = runner.invoke(app, ["agent", "--help"])
+    assert r.exit_code == 0
+    assert "--wait-skill-extract" not in r.stdout
+    assert "--flush-skill-buffer" not in r.stdout
 
 
 def test_agent_without_message_prints_pointer_and_exits_nonzero(tmp_config: Path) -> None:
@@ -365,3 +376,305 @@ def test_agent_message_mode_mocked_provider(tmp_config: Path, monkeypatch: pytes
         assert not isinstance(r.exception, (NameError, AttributeError, ImportError)), (
             f"Crash-class exception leaked through: {r.exception!r}"
         )
+
+
+# ============================================================================
+# Provider error rendering
+# ============================================================================
+
+
+def test_agent_auth_error_exit_nonzero_with_guidance(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 401 from the provider must exit non-zero, show a fix hint, and must
+    not dump the duplicated exception name or the raw JSON error body.
+
+    The provider is a real ``LiteLLMProvider`` whose ``acompletion`` is stubbed
+    to raise the same exception shape litellm raises on an OpenRouter 401 —
+    no network involved.
+    """
+    import os as _os
+
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+    from raven.spine import Text, TurnOutcome, Usage
+
+    cfg = Config()
+    cfg.providers.openrouter.api_key = "sk-or-v1-stub-invalid"
+    save_config(cfg)
+
+    class AuthenticationError(Exception):
+        status_code = 401
+
+    async def _raise_401(**_kwargs):
+        raise AuthenticationError(
+            "litellm.AuthenticationError: AuthenticationError: OpenrouterException - "
+            '{"error":{"message":"User not found.","code":401}}'
+        )
+
+    # Pre-register the env var with monkeypatch so the provider's _setup_env
+    # write is rolled back with the test instead of leaking a fake key.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-stub-invalid")
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", _raise_401)
+
+    class _StubSubagents:
+        def set_submit(self, _submit) -> None:
+            pass
+
+    class _AuthFailAgentLoop:
+        def __init__(self, **kwargs):
+            self.channels_config = kwargs.get("channels_config")
+            self.subagents = _StubSubagents()
+
+        def configure_personalization(self, *_args) -> None:
+            pass
+
+        async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
+            from raven.providers.litellm_provider import LiteLLMProvider
+
+            provider = LiteLLMProvider(
+                api_key="sk-or-v1-stub-invalid",
+                default_model="anthropic/claude-opus-4-5",
+                provider_name="openrouter",
+            )
+            resp = await provider.chat_with_retry(messages=[{"role": "user", "content": req.text}])
+            await emit(Text(content=resp.content or "", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+        async def await_pending_extractions(self, **_kw) -> None:
+            pass
+
+        async def close_mcp(self) -> None:
+            pass
+
+    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    result = runner.invoke(app, ["agent", "-m", "hi", "-w", str(ws)])
+
+    assert result.exit_code != 0
+    assert result.output.count("AuthenticationError") <= 1
+    assert "raven provider" in result.output
+    assert '{"error"' not in result.output
+
+
+def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.CaptureFixture) -> None:
+    """``_print_llm_error`` turns the canonical error content into a
+    diagnosis + fix hint and marks the one-shot exit code; ordinary reply
+    content is left for the normal renderer."""
+    from raven.cli import agent_commands
+    from raven.providers.base import LLMProvider, format_llm_error
+
+    class _AuthError(Exception):
+        status_code = 401
+
+    exc = _AuthError(
+        "litellm.AuthenticationError: AuthenticationError: OpenrouterException - "
+        '{"error":{"message":"User not found.","code":401}}'
+    )
+    content = format_llm_error(exc, LLMProvider.classify_error(exc), provider="openrouter")
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        assert agent_commands._print_llm_error(content) is True
+        out = capsys.readouterr().out
+        assert "provider rejected the credentials" in out
+        assert "openrouter" in out
+        assert "User not found." in out
+        assert "raven provider test openrouter" in out
+        assert '{"error"' not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        assert agent_commands._print_llm_error("just a normal reply") is False
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 0
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+def test_print_llm_error_auth_does_not_fabricate_a_status_code(capsys: pytest.CaptureFixture) -> None:
+    """The auth bucket also fires on 403 / PermissionDeniedError, so the
+    rendered line must not claim 401; the provider's own reason is what the
+    user needs to tell an invalid key from a key without access."""
+    from raven.cli import agent_commands
+    from raven.providers.base import LLMProvider, format_llm_error
+
+    class _PermissionDeniedError(Exception):
+        status_code = 403
+
+    exc = _PermissionDeniedError("permission denied: your key has no access to anthropic/claude-opus-4-5")
+    classification = LLMProvider.classify_error(exc)
+    assert classification.category == "auth"
+    content = format_llm_error(exc, classification, provider="openrouter")
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        assert agent_commands._print_llm_error(content) is True
+        out = capsys.readouterr().out
+        assert "401" not in out
+        assert "provider rejected the credentials (openrouter)" in out
+        assert "no access to anthropic/claude-opus-4-5" in out
+        assert "raven provider test openrouter" in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Non-auth categories must not print the credential fix line: a rate
+    limit or a network drop is not fixed by re-checking the key. Each gets a
+    category-apt hint instead; categories with no apt one-liner render the
+    error line alone."""
+    from raven.cli import agent_commands
+
+    cases = {
+        "rate_limit": "retry",
+        "network": "connectivity",
+        "context_overflow": "shorten",
+        "server": "retry",
+        "model_unavailable": "provider use",
+        "billing": "account",
+    }
+    try:
+        for category, expected in cases.items():
+            agent_commands._ONE_SHOT_EXIT["code"] = 0
+            content = f"Error calling LLM ({category}@openrouter): something went wrong"
+            assert agent_commands._print_llm_error(content) is True, category
+            out = capsys.readouterr().out
+            assert "raven provider test" not in out, category
+            assert "raven onboard" not in out, category
+            assert expected in out, f"{category}: missing apt hint in {out!r}"
+            assert agent_commands._ONE_SHOT_EXIT["code"] == 1, category
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        assert agent_commands._print_llm_error("Error calling LLM (unknown): boom") is True
+        out = capsys.readouterr().out
+        assert "raven provider test" not in out
+        assert "Fix:" not in out
+        assert "Hint:" not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+# ---------------------------------------------------------------------------
+# Workspace template sync prints one summary line, not one per file, and
+# the one-shot path renders a per-turn tokens/cost summary line.
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    from raven.utils.helpers import sync_workspace_templates
+
+    ws = tmp_path / "workspace"
+    added = sync_workspace_templates(ws)
+    first = capsys.readouterr()
+    first_text = first.out + first.err
+    assert added
+    assert "Initialized workspace" in first_text
+    assert first_text.count("Created") == 0
+
+    added_again = sync_workspace_templates(ws)
+    second = capsys.readouterr()
+    assert added_again == []
+    assert (second.out + second.err).strip() == ""
+
+    (ws / added[0]).unlink()
+    re_added = sync_workspace_templates(ws)
+    third = capsys.readouterr()
+    assert len(re_added) == 1
+    assert "(1 file)" in (third.out + third.err)
+
+
+def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) -> None:
+    """The module-level logger.disable in helpers yields to a later
+    logger.enable('raven'): loguru drops descendant rules whenever a parent
+    rule is set, so callers that enable logging before syncing get the
+    per-file detail. Freezes the behavior the helpers comment relies on."""
+    from loguru import logger
+
+    from raven.utils.helpers import sync_workspace_templates
+
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")
+    try:
+        logger.enable("raven")
+        sync_workspace_templates(tmp_path / "ws", silent=True)
+    finally:
+        logger.remove(sink_id)
+    assert any("workspace sync: created" in m for m in records)
+
+
+def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
+    """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
+    the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
+    import os as _os
+
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+    from raven.spine import Text, TurnOutcome, Usage
+    from raven.token_wise.base import UsageSnapshot
+    from raven.token_wise.registry import StrategyRegistry
+
+    cfg = Config()
+    cfg.providers.openrouter.api_key = "stub-test-key"
+    if turn_summary_off:
+        cfg.cli.turn_summary = False
+    save_config(cfg)
+
+    class _StubSubagents:
+        def set_submit(self, _submit) -> None:
+            pass
+
+    class _StubAgentLoop:
+        def __init__(self, **kwargs):
+            self.channels_config = kwargs.get("channels_config")
+            self.subagents = _StubSubagents()
+            self.strategies = StrategyRegistry([])
+
+        def configure_personalization(self, *_args) -> None:
+            pass
+
+        async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
+            await self.strategies.after_llm_call(
+                {"content": "stub"},
+                UsageSnapshot(
+                    model="stub-model",
+                    input_tokens=1200,
+                    output_tokens=340,
+                    estimated_cost_usd=0.004,
+                    session_key=req.conversation,
+                ),
+            )
+            await emit(Text(content="stub-response", source=req.source))
+            return TurnOutcome(usage=Usage(1200, 340, 1540), explicit_reply=True)
+
+        async def await_pending_extractions(self, **_kw) -> None:
+            pass
+
+        async def close_mcp(self) -> None:
+            pass
+
+    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])
+
+
+def test_turn_summary_line_present(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    r = _invoke_agent_with_usage(monkeypatch, tmp_path)
+    assert re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
+
+
+def test_turn_summary_respects_config_off(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    r = _invoke_agent_with_usage(monkeypatch, tmp_path, turn_summary_off=True)
+    assert not re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
