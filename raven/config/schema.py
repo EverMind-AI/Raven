@@ -824,10 +824,18 @@ class ToolsConfig(Base):
     (e.g. ``read_file``, ``web_search``, or ``mcp_bcp-search_search``)."""
 
 
+class CliConfig(Base):
+    """CLI surface configuration."""
+
+    turn_summary: bool = True
+    """Render a one-line tokens/cost summary after each successful CLI turn."""
+
+
 class Config(BaseSettings):
     """Root configuration for raven."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    cli: CliConfig = Field(default_factory=CliConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)

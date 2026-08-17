@@ -3,6 +3,8 @@ import asyncio
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.cli._repl_spine import (
     CliOutlet,
+    TurnUsageSummary,
+    _render_summary_line,
     build_repl,
     make_hub_sink,
 )
@@ -236,3 +238,51 @@ async def test_build_repl_teardown_leaves_no_pending_tasks():
     assert any(not t.done() for t in spawned)  # live spine tasks exist before teardown
     await teardown()  # the same teardown production runs in its finally
     assert all(t.done() for t in spawned)  # teardown stopped every one
+
+
+class _FakeUsageTracker:
+    """snapshot()-only stand-in; each set() swaps in a new lifetime total."""
+
+    def __init__(self) -> None:
+        from raven.token_wise.base import UsageSnapshot
+
+        self._snap = UsageSnapshot(model="stub")
+
+    def snapshot(self):
+        return self._snap
+
+    def set(self, **totals) -> None:
+        from raven.token_wise.base import UsageSnapshot
+
+        self._snap = UsageSnapshot(model="stub", **totals)
+
+
+def test_turn_summary_tiny_cost_shows_floor_not_free():
+    # 4 decimal places round a sub-cent cost like 0.00004 down to "$0",
+    # which reads as a free call; the line must show a floor instead.
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(tracker)
+    summary.turn_started()
+    tracker.set(input_tokens=100, output_tokens=10, estimated_cost_usd=0.00004)
+    line = summary.take_line()
+    assert line is not None
+    assert "<$0.0001" in line
+    assert " $0 " not in f" {line} "
+
+
+def test_turn_summary_normal_cost_still_renders_exact():
+    tracker = _FakeUsageTracker()
+    summary = TurnUsageSummary(tracker)
+    summary.turn_started()
+    tracker.set(input_tokens=200, output_tokens=20, estimated_cost_usd=0.0042)
+    line = summary.take_line()
+    assert line is not None
+    assert "$0.0042" in line
+
+
+def test_summary_line_indented_like_progress_notices(capsys):
+    # agent_commands renders progress notices as '  [dim]. ...' (two-space
+    # indent); the summary line sits in the same visual column.
+    _render_summary_line("1.2k in / 340 out tokens")
+    out = capsys.readouterr().out
+    assert out.startswith("  ↳")

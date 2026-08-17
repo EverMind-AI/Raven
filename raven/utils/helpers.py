@@ -10,6 +10,16 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import tiktoken
+from loguru import logger
+
+# Workspace sync runs before the CLI decides logger.enable/disable("raven"),
+# so an unscoped debug in this module would spam stderr through loguru's
+# default sink on every first run. A later logger.enable("raven") still
+# lifts this rule (loguru drops descendant rules whenever a parent rule is
+# set), but the CLI flips logging only after its startup sync -- so the
+# per-file detail below reaches callers that enable logging before syncing
+# (tests, embedders), not the first sync of a `--logs` run.
+logger.disable(__name__)
 
 
 def detect_image_mime(data: bytes) -> str | None:
@@ -373,9 +383,12 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         return []
 
     added: list[str] = []
+    existed = 0
 
     def _write(src, dest: Path):
+        nonlocal existed
         if dest.exists():
+            existed += 1
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
@@ -429,10 +442,13 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     _write(tpl / "HEARTBEAT.md", workspace / "HEARTBEAT.md")
     (workspace / "skills").mkdir(exist_ok=True)
 
+    if added:
+        for name in added:
+            logger.debug("workspace sync: created {}", name)
     if added and not silent:
         from rich.console import Console
 
         _c = Console(stderr=True)
-        for name in added:
-            _c.print(f"  [dim]Created {name}[/dim]")
+        label = "Initialized workspace" if existed == 0 else "Updated workspace templates"
+        _c.print(f"  [dim]{label} ({len(added)} file{'s' if len(added) != 1 else ''})[/dim]")
     return added
