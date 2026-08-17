@@ -7,12 +7,12 @@ configs, plus the default-config fallback path.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from raven.config.loader import drain_migration_notices, load_config
-from raven.config.schema import CURRENT_CONFIG_VERSION
+from raven.config.loader import CURRENT_CONFIG_VERSION, _stamp_path, drain_migration_notices, load_config
 
 
 def _write(path: Path, body: dict) -> None:
@@ -278,9 +278,12 @@ def test_legacy_context_window_pin_is_dropped_and_stamped(tmp_path: Path) -> Non
     assert cfg.agents.defaults.context_window_tokens is None
     on_disk = json.loads(p.read_text(encoding="utf-8"))
     assert "contextWindowTokens" not in on_disk["agents"]["defaults"]
-    assert on_disk["configVersion"] == CURRENT_CONFIG_VERSION
     # Untouched neighbours: the write is surgical, not a re-dump of the model.
     assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-5"
+    # And no key of ours lands in the user's file -- Config is extra='forbid',
+    # so a stamp in there is a hard boot failure for any build without it.
+    assert set(on_disk) == {"agents"}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
 def test_legacy_context_window_pin_dropped_in_snake_case_too(tmp_path: Path) -> None:
@@ -296,7 +299,8 @@ def test_context_window_pin_survives_once_stamped(tmp_path: Path) -> None:
     """The user's own 65536 is theirs. Same value, same file -- but the stamp
     says this config already had its one pass, so the pin stands."""
     p = tmp_path / "config.json"
-    _write(p, {"configVersion": CURRENT_CONFIG_VERSION, "agents": {"defaults": {"contextWindowTokens": 65536}}})
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
 
     assert load_config(p).agents.defaults.context_window_tokens == 65536
     assert _defaults(p)["contextWindowTokens"] == 65536
@@ -400,3 +404,80 @@ def test_config_without_the_fossil_is_left_byte_identical(tmp_path: Path) -> Non
     load_config(p)
 
     assert p.read_bytes() == before
+
+
+def test_the_stamp_never_lands_in_the_user_config(tmp_path: Path) -> None:
+    """``Config`` is ``extra='forbid'`` and ``load_config`` raises rather than
+    falling back, so a key this build knows and an older one does not is a hard
+    boot failure for the older build -- a reverted release, a pinned version, or
+    a second checkout sharing the same ~/.raven. The watermark is ours to keep in
+    a sidecar, not the user's file."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+
+    load_config(p)
+
+    assert "configVersion" not in json.loads(p.read_text(encoding="utf-8"))
+    assert _stamp_path(p).exists()
+
+
+def test_a_clean_config_is_stamped_without_being_touched(tmp_path: Path) -> None:
+    """Nothing to remove still stamps: the sidecar is ours, so writing it costs
+    the user nothing and closes the hole where a 65536 they set by hand later
+    would be mistaken for the fossil."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"model": "x/y"}}})
+    before = p.read_bytes()
+
+    load_config(p)
+
+    assert p.read_bytes() == before
+    assert _stamp_path(p).exists()
+
+    # Their own 65536, set after the stamp, is theirs.
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+    assert load_config(p).agents.defaults.context_window_tokens == 65536
+
+
+def test_migration_preserves_the_config_file_mode(tmp_path: Path) -> None:
+    """``os.replace`` swaps the inode, so a replacing writer owns the mode of
+    what it puts there. config.json holds providers.*.apiKey -- a user who
+    tightened it to owner-only must not have it widened behind their back."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"contextWindowTokens": 65536}},
+            "providers": {"anthropic": {"apiKey": "sk-secret"}},
+        },
+    )
+    p.chmod(0o600)
+
+    load_config(p)
+
+    assert p.stat().st_mode & 0o777 == 0o600
+
+
+def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
+    """Two processes migrating at once must not share one temp path: the
+    second's truncating write would be visible as an empty config.json to
+    anyone loading between it and the replace."""
+    from raven.config import loader
+
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+    seen: list[str] = []
+    original = Path.write_text
+
+    def _spy(self: Path, *args: object, **kwargs: object) -> int:
+        seen.append(self.name)
+
+        return original(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    loader.Path.write_text = _spy  # type: ignore[method-assign]
+    try:
+        load_config(p)
+    finally:
+        loader.Path.write_text = original  # type: ignore[method-assign]
+
+    assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)

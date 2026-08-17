@@ -122,7 +122,7 @@ export interface SessionCreateResponse {
 }
 
 export interface SessionResumeResponse {
-  info?: SessionInfo
+  info?: SessionInfo & { config_notices?: string[] }
   message_count?: number
   messages: GatewayTranscriptMessage[]
   resumed?: string

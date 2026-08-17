@@ -172,6 +172,15 @@ def run() -> None:
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
         raise SystemExit(1) from exc
+    finally:
+        # Every command loads the config, so any of them can be the one that
+        # migrates it -- `status`, `provider list`, `cron list`. Only `agent` and
+        # `gateway` say so up front, and an unsaid notice is lost rather than
+        # deferred: the watermark leaves the next load with nothing to report.
+        # So this is the catch-all for every other command.
+        from raven.cli._helpers import print_config_migration_notices
+
+        print_config_migration_notices()
 
 
 if __name__ == "__main__":

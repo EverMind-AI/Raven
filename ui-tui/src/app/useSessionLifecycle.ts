@@ -269,6 +269,14 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               const resumed = toTranscriptMessages(r.messages)
 
               setHistoryItems(r.info ? [introMsg(r.info), ...resumed] : resumed)
+
+              // session.resume drains the backend's migration notices exactly
+              // like session.create does, so resuming first (the picker, or
+              // --resume) would otherwise consume them and show nothing.
+              for (const notice of r.info?.config_notices ?? []) {
+                sys(notice)
+              }
+
               writeActiveSessionFile(r.resumed ?? r.session_id)
               patchUiState({
                 info: r.info ?? null,

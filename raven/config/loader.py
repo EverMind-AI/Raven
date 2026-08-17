@@ -9,7 +9,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from raven.config.schema import CURRENT_CONFIG_VERSION, Config
+from raven.config.schema import Config
+
+# Generation counter for the run-once config migrations below. Bump it, and add
+# the matching rule, when a migration must run exactly once per config rather
+# than on every load -- the watermark is what lets a user re-set by hand
+# whatever a migration cleared. Kept out of the schema on purpose: see
+# ``_stamp_path``.
+CURRENT_CONFIG_VERSION = 1
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -118,41 +125,64 @@ def drain_migration_notices() -> list[str]:
     return notices
 
 
-def _config_version(data: dict[str, Any]) -> int:
-    """The migration generation stamped on a raw config mapping.
+def _stamp_path(config_path: Path) -> Path:
+    """Where the migration watermark for ``config_path`` lives.
 
-    Absent / unparseable means generation 0, i.e. a file written before the
-    stamp existed -- every migration still owes it a pass.
+    Deliberately NOT inside the config: ``Config`` is ``extra='forbid'`` and
+    ``load_config`` raises on a validation error, so a key this build knows and
+    an older one does not turns every older build into a hard boot failure --
+    a reverted release, a pinned older version, or just a second checkout
+    sharing the same ~/.raven. A sidecar is ours to write and invisible to any
+    build that has never heard of it, which also keeps a revert of this change
+    clean.
+
+    Sibling of the config so a ``--config`` path or a second instance gets its
+    own watermark rather than borrowing the default one's.
     """
-    raw = data.get("configVersion", data.get("config_version"))
+    return config_path.with_name(config_path.stem + ".migrations.json")
+
+
+def _migration_version(config_path: Path) -> int:
+    """Which generation of stamped migrations ``config_path`` has been through.
+
+    Absent / unreadable / malformed all mean generation 0: the migrations are
+    written to be safe to re-run, so erring towards running them beats trusting
+    a file we could not parse.
+    """
     try:
-        return int(raw)
-    except (TypeError, ValueError):
+        data = json.loads(_stamp_path(config_path).read_text(encoding="utf-8"))
+        return int(data["version"])
+    except (OSError, ValueError, KeyError, TypeError):
         return 0
+
+
+def _write_migration_version(config_path: Path) -> None:
+    """Record that this config has been through the current migrations.
+
+    Written even when nothing needed changing -- this is our file, not the
+    user's, so stamping it costs the user nothing and buys the guarantee that
+    matters: from here on, a ``contextWindowTokens`` the user sets by hand is
+    never second-guessed, whatever its value.
+    """
+    stamp = _stamp_path(config_path)
+    try:
+        stamp.write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}) + "\n", encoding="utf-8")
+    except OSError as exc:
+        logging.getLogger(__name__).debug("Could not write the migration stamp %s: %s", stamp, exc)
 
 
 def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Clear the retired 65536 context-window pin. True when ``data`` changed.
 
-    Gated on the stamp, and stamps in turn, because the value carries no
-    provenance: 65536 written by the old bootstrap and 65536 chosen by a user
-    are the same three bytes. Running once means we clear what we planted; from
-    then on the number is the user's, and the ladder in
+    Callers gate this on the watermark (see ``_migration_version``) because the
+    value carries no provenance: 65536 written by the old bootstrap and 65536
+    chosen by a user are the same three bytes. Running it once means we clear
+    what we planted; from then on the number is the user's, and the ladder in
     ``providers.rates.effective_context_window`` honours it like any other pin.
 
     ``notify`` is for the caller that has a user to tell -- the persist pass
     re-runs this on the raw file and must not double-announce.
-
-    Nothing found means nothing written: the stamp lands only on a file we
-    actually edited, so a config that never carried the fossil is left byte for
-    byte alone. The cost is a narrow hole -- someone who hand-sets 65536 on a
-    still-unstamped config has it cleared once, with the notice explaining why,
-    and their second attempt sticks (that first clear stamps the file). Paid
-    knowingly: touching every config on earth to close it is the worse trade.
     """
-    if _config_version(data) >= CURRENT_CONFIG_VERSION:
-        return False
-
     agents = data.get("agents")
     defaults = agents.get("defaults") if isinstance(agents, dict) else None
     if not isinstance(defaults, dict):
@@ -182,12 +212,11 @@ def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False
     # printed.
     if notify and notice not in _migration_notices:
         _migration_notices.append(notice)
-    data["configVersion"] = CURRENT_CONFIG_VERSION
     return True
 
 
-def _persist_migrated_config(path: Path) -> None:
-    """Apply the stamped migrations to the file itself. Best effort, once.
+def _persist_migrations(path: Path) -> None:
+    """Apply the stamped migrations to the file itself, then stamp. Best effort.
 
     Re-reads the raw file instead of reusing the mapping ``load_config`` already
     migrated: that one has the extension blocks popped (see
@@ -196,25 +225,42 @@ def _persist_migrated_config(path: Path) -> None:
     dumps every default (~8 KB), re-planting the very kind of fossil this
     migration exists to pull out. So: surgical edit, atomic replace.
 
-    Silent on failure (read-only home, a lost race with another process): the
-    in-memory migration already made this process correct, and the write only
-    serves to keep the file from disagreeing with it. Two processes racing here
-    write byte-identical content.
+    A config that needed no edit is left byte for byte alone; only the sidecar
+    stamp is written. Commands like ``provider use`` promise not to touch a
+    config they decided against changing, and that promise is theirs to keep,
+    not ours to spend.
+
+    Silent on failure (read-only home): the in-memory migration already made
+    this process correct, and the write only serves to keep the file from
+    disagreeing with it.
     """
     try:
         raw = read_raw_or_raise(path)
     except ConfigReadError:
         return
-    if not raw or not _migrate_legacy_context_window(raw):
-        return
 
-    tmp = path.with_name(path.name + ".migrating")
-    try:
-        tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
-    except OSError as exc:
-        logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
-        tmp.unlink(missing_ok=True)
+    if raw and _migrate_legacy_context_window(raw):
+        # PID in the name: two processes migrating at once would otherwise share
+        # one temp path, and the second's truncating write could be read as an
+        # empty config.json by anyone loading between it and the replace.
+        tmp = path.with_name(f"{path.name}.migrating.{os.getpid()}")
+        try:
+            tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+            # os.replace swaps the inode, so the original's mode is not carried
+            # over by anything: a config the user tightened to owner-only (it
+            # holds providers.*.apiKey) would come back world-readable. See
+            # config.paths.restrict_to_owner on why a replacing writer owns this.
+            try:
+                os.chmod(tmp, path.stat().st_mode & 0o7777)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+        except OSError as exc:
+            logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
+            tmp.unlink(missing_ok=True)
+            return
+
+    _write_migration_version(path)
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -234,13 +280,11 @@ def load_config(config_path: Path | None = None) -> Config:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            # The stamp before and after: a migration only stamps a file it
-            # actually changed, so this pair is also the "did anything happen"
-            # signal -- and the reason an untouched config costs no extra file
-            # read per load (the TUI RPC server reloads every turn).
-            unstamped = _config_version(data) < CURRENT_CONFIG_VERSION
-            data = _migrate_config(data)
-            migrated = unstamped and _config_version(data) >= CURRENT_CONFIG_VERSION
+            # Read the watermark before the migrations run, and let it gate
+            # them: once stamped, this costs one small sidecar read per load
+            # (the TUI RPC server reloads every turn) and nothing else.
+            unstamped = _migration_version(path) < CURRENT_CONFIG_VERSION
+            data = _migrate_config(data, run_stamped=unstamped)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
@@ -277,8 +321,8 @@ def load_config(config_path: Path | None = None) -> Config:
                 ) from e
             # Only once the migrated data is known to validate: a file we
             # cannot load is a file we have no business rewriting.
-            if migrated:
-                _persist_migrated_config(path)
+            if unstamped:
+                _persist_migrations(path)
 
     if config is None:
         config = Config()
@@ -303,22 +347,25 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
+def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped: bool = False) -> dict:
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),
     strip extension block keys so the base ``Config(extra='forbid')``
     doesn't reject them. Set to False when the caller needs to read
     extension blocks from the migrated data (``load_raven_config``).
+
+    ``run_stamped``: also run the migrations that are meant to happen once per
+    config rather than on every load. Off by default so only the caller holding
+    the config path -- the one that can read the watermark and write it back --
+    opts in; the shims below are idempotent and always run.
     """
     import logging as _logging
 
     _log = _logging.getLogger(__name__)
 
-    # Stamped, run-once migrations first: they are the ones allowed to reach
-    # back out to disk (see _persist_migrated_config), and the stamp they set
-    # must not be confused by anything the shims below do.
-    _migrate_legacy_context_window(data, notify=True)
+    if run_stamped:
+        _migrate_legacy_context_window(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

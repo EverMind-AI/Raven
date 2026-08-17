@@ -9,12 +9,6 @@ from pydantic_settings import BaseSettings
 
 from raven.sandbox.config import SandboxConfig
 
-# Generation counter for the one-shot config migrations in
-# ``loader._migrate_config``. Bump it, and add the matching rule there, when a
-# migration must run exactly once per install rather than on every load -- the
-# stamp is what lets a user re-set by hand whatever a migration cleared.
-CURRENT_CONFIG_VERSION = 1
-
 
 class Base(BaseModel):
     """Base model that accepts both camelCase and snake_case keys."""
@@ -847,12 +841,6 @@ class CliConfig(Base):
 class Config(BaseSettings):
     """Root configuration for raven."""
 
-    # Which generation of one-shot config migrations this file already went
-    # through (see loader._migrate_config). Detection reads the RAW file, where
-    # an absent key means "generation 0", so this default is free to name the
-    # current generation -- and must, so a config written fresh today is never
-    # taken for a pre-migration one.
-    config_version: int = Field(default=CURRENT_CONFIG_VERSION, alias="configVersion")
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     cli: CliConfig = Field(default_factory=CliConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
@@ -1013,9 +1001,4 @@ class Config(BaseSettings):
         env_prefix="NANOBOT_",
         env_nested_delimiter="__",
         extra="forbid",
-        # This class is a BaseSettings, so it has no to_camel alias generator
-        # (unlike ``Base``): its fields carry explicit aliases instead, and
-        # snake_case has to stay accepted for callers constructing a Config in
-        # Python.
-        populate_by_name=True,
     )
