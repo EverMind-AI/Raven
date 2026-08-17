@@ -1,15 +1,17 @@
 """How much of the context window a turn holds back for the answer.
 
-The reservation used to be a configured constant (8192) and became the model's
-whole resolved output ceiling when that setting was retired. For a model whose
-ceiling equals its window -- which the catalogue reports for more rows than
-not -- that leaves nothing for history at all, and even an honest 131000
-ceiling on a 202800 window spends two thirds of it on an answer the turn
-probably will not produce.
+Requests do not name an output ceiling, so the one that applies is the model's
+own -- whatever the vendor, or LiteLLM's transformation, fills in. The prompt
+and that reply have to fit the window together, which fixes the reservation at
+the ceiling itself: hand out more and the sum is refused at request time, and
+the recovery from that refusal only elides tool bodies, so a history grown on
+conversation dies there.
 
-So the reservation is bounded by a share of the window as well as by the
-ceiling. The share is LiteLLM's own: `trim_messages` gives a prompt 75% of the
-window and never consults an output ceiling.
+A share of the window would be enough only if the request carried that share as
+its ceiling. It did, briefly, and stopping the request from naming one is what
+put this back. What the catalogue's implausible rows used to make of this --
+a ceiling equal to the window, leaving nothing for history -- is handled
+upstream now, where such a row is distrusted (see `providers.rates`).
 """
 
 from __future__ import annotations
@@ -56,10 +58,10 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     reports a 200000 ceiling on a 200000 window, so `available_history` was
     exactly 0 -- no history fits in the budget, on every turn.
     """
-    budget = _loop(workspace, window=200_000, ceiling=200_000, monkeypatch=monkeypatch)._make_token_budget()
+    budget = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
 
-    assert budget.reserved_output == 50_000
-    assert budget.available_history > 100_000
+    assert budget.reserved_output == 64_000, "what the reply may actually use"
+    assert budget.available_history > 130_000
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:
@@ -71,8 +73,8 @@ def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypa
     """
     budget = _loop(workspace, window=202_800, ceiling=131_000, monkeypatch=monkeypatch)._make_token_budget()
 
-    assert budget.reserved_output == 50_700
-    assert budget.available_history > 140_000
+    assert budget.reserved_output == 131_000, "the model really can emit this much"
+    assert budget.available_history > 65_000
 
 
 def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -> None:
@@ -85,17 +87,11 @@ def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -
     assert budget.reserved_output == 16_384
 
 
-def test_the_share_is_named_rather_than_spelled_at_the_call_site(workspace, monkeypatch) -> None:
-    """It is an inherited judgement, not a derived quantity -- the next reader
-    has to be able to find where it came from and what it trades off.
-
-    It lives beside the catalogue constants rather than here, because the
-    request carries the same bound: `send_max_tokens` applies it, and this
-    reservation has to be the number the request will actually use.
+def test_a_configured_window_smaller_than_the_model_s_still_leaves_a_budget(workspace, monkeypatch) -> None:
+    """A user who pins a small context window must not end up with a negative
+    one: the ceiling is the model's, and it can exceed a window chosen by hand.
     """
-    assert 0 < agent_main.OUTPUT_SHARE_OF_WINDOW < 1
+    budget = _loop(workspace, window=32_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
 
-    monkeypatch.setattr(agent_main, "OUTPUT_SHARE_OF_WINDOW", 0.5)
-    budget = _loop(workspace, window=200_000, ceiling=200_000, monkeypatch=monkeypatch)._make_token_budget()
-
-    assert budget.reserved_output == 100_000
+    assert budget.reserved_output == 32_000, "never more than the window it is carved from"
+    assert budget.available_history == 0

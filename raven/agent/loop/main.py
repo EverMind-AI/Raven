@@ -58,7 +58,7 @@ from raven.providers.base import (
     send_max_tokens,
 )
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import OUTPUT_SHARE_OF_WINDOW, effective_context_window, resolve_context_window
+from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
@@ -1038,12 +1038,18 @@ class AgentLoop:
             getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
             allow_fetch=False,
         )
-        # `send_max_tokens` has already applied the share against the model's
-        # own window, so this is the same number the request will carry -- which
-        # is the point: the prompt grows into what this leaves. The second bound
-        # is for a configured window smaller than the model's real one, where a
-        # share of the larger could exceed the smaller outright.
-        reserved_output = min(ceiling, int(self.context_window_tokens * OUTPUT_SHARE_OF_WINDOW))
+        # The whole ceiling, not a share of it. Requests no longer name a
+        # ceiling, so the one that applies is the model's own -- whatever the
+        # vendor or LiteLLM's transformation fills in. Reserving less than that
+        # hands out a prompt the reply cannot coexist with: measured on this
+        # repo's default model, a share leaves the prompt 150000 of a 200000
+        # window against a reply allowed 64000, and the sum is refused at
+        # request time. `_emergency_shrink` only elides tool bodies, so a
+        # history grown on conversation gets no retry from that refusal.
+        #
+        # A share would be right again only if the request carried one, which
+        # is the trade the previous shape made and this one does not.
+        reserved_output = min(ceiling, self.context_window_tokens)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])

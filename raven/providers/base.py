@@ -336,11 +336,10 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     they get whatever is already loaded, then the fixed fallback. A caller
     about to build a request wants the default.
 
-    The model's own ceiling is the answer, unbounded by anything else. Holding
-    a share of the window back for the reply is the budget's business (see
-    ``OUTPUT_SHARE_OF_WINDOW``), and it stopped being this function's the
-    moment requests stopped volunteering a ceiling: there is no longer a sum
-    that has to fit, only a margin.
+    The model's own ceiling is the answer, unbounded by anything else. How much
+    of the window a turn holds back for its reply is the budget's business, and
+    it reserves exactly this number: requests no longer name a ceiling, so the
+    one that applies is the model's own, and the prompt has to fit beside it.
     """
     from raven.providers.rates import resolve_max_output_tokens
 

@@ -44,16 +44,6 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 # which clamp an over-large value rather than rejecting it.
 DEFAULT_MAX_OUTPUT_TOKENS = 16384
 
-# Share of the context window a turn holds back for its answer, so a prompt is
-# not sized to fill the window a reply still has to fit into.
-#
-# A margin, not a guarantee. Requests never name a ceiling unless a caller
-# pinned one, so nothing bounds what a reply may actually use, and a reply that outgrows this gets a context-overflow the
-# retry ladder compresses and repeats. That is the posture every surveyed agent
-# takes: LiteLLM's ``trim_messages`` gives a prompt 75% of the window, OpenClaw
-# compacts at 70%, and neither consults an output ceiling at all.
-OUTPUT_SHARE_OF_WINDOW = 0.25
-
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
