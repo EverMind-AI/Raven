@@ -472,8 +472,9 @@ def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.Capture
     try:
         assert agent_commands._print_llm_error(content) is True
         out = capsys.readouterr().out
-        assert "API key invalid" in out
-        assert "openrouter 401" in out
+        assert "provider rejected the credentials" in out
+        assert "openrouter" in out
+        assert "User not found." in out
         assert "raven provider test openrouter" in out
         assert '{"error"' not in out
         assert agent_commands._ONE_SHOT_EXIT["code"] == 1
@@ -481,6 +482,34 @@ def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.Capture
         agent_commands._ONE_SHOT_EXIT["code"] = 0
         assert agent_commands._print_llm_error("just a normal reply") is False
         assert agent_commands._ONE_SHOT_EXIT["code"] == 0
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+def test_print_llm_error_auth_does_not_fabricate_a_status_code(capsys: pytest.CaptureFixture) -> None:
+    """The auth bucket also fires on 403 / PermissionDeniedError, so the
+    rendered line must not claim 401; the provider's own reason is what the
+    user needs to tell an invalid key from a key without access."""
+    from raven.cli import agent_commands
+    from raven.providers.base import LLMProvider, format_llm_error
+
+    class _PermissionDeniedError(Exception):
+        status_code = 403
+
+    exc = _PermissionDeniedError("permission denied: your key has no access to anthropic/claude-opus-4-5")
+    classification = LLMProvider.classify_error(exc)
+    assert classification.category == "auth"
+    content = format_llm_error(exc, classification, provider="openrouter")
+
+    agent_commands._ONE_SHOT_EXIT["code"] = 0
+    try:
+        assert agent_commands._print_llm_error(content) is True
+        out = capsys.readouterr().out
+        assert "401" not in out
+        assert "provider rejected the credentials (openrouter)" in out
+        assert "no access to anthropic/claude-opus-4-5" in out
+        assert "raven provider test openrouter" in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
     finally:
         agent_commands._ONE_SHOT_EXIT["code"] = 0
 

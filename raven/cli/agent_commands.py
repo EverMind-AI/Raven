@@ -81,8 +81,11 @@ def _print_llm_error(content: str) -> bool:
     category, provider, detail = parsed
     console.print()
     if category == "auth":
-        where = f"{provider} 401" if provider else "401"
-        console.print(f"[red]Error: API key invalid ({escape(where)}).[/red]")
+        # No status code here: the auth bucket also fires on 403, on
+        # PermissionDeniedError and on substring matches, so naming one would
+        # be a guess. The detail carries the provider's own reason instead.
+        where = f" ({escape(provider)})" if provider else ""
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
         target = provider or "<name>"
         console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
     else:
