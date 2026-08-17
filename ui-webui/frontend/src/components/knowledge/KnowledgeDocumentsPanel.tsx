@@ -21,6 +21,7 @@ import {
 	EmptyMedia,
 	EmptyTitle,
 } from '@/components/ui/empty.tsx';
+import { forgetReplacement, pendingReplacements } from '@/context/replacementStore';
 import { useUploadContext } from '@/context/UploadContext';
 import { isInFlight } from '@/context/uploadTypes';
 import type { UploadPhase, UploadTask } from '@/context/uploadTypes';
@@ -313,13 +314,12 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 	const replaceTargetRef = useRef<KnowledgeDocumentView | null>(null);
 
 	const { enqueue, cancel, dismiss, tasksForKb, clearFinishedForKb } = useUploadContext();
-	// Tasks the retire-the-original pass has already handled. The pairing lives on
-	// the task now, so it stays `ready` and keeps matching on every later render;
-	// without this the delete would be re-issued each time. A ref rather than
-	// state because it must not itself trigger the effect.
-	const retiredRef = useRef<Set<string>>(new Set());
 
 	const { documents, refetch } = useKnowledgeDocuments(knowledgeBaseId);
+
+	// Replacements this mount has already tried to retire. Durability lives in
+	// the store; this only stops one page life from retrying in a loop.
+	const attemptedRef = useRef<Set<string>>(new Set());
 	const tasks = tasksForKb(knowledgeBaseId);
 	const { statuses } = useDocumentStatusPolling({
 		knowledgeBaseId,
@@ -472,35 +472,59 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 		}
 	}, [deleteTarget, knowledgeBaseId, refetch, t]);
 
-	// Retire the replaced document only once its stand-in has indexed. A task
-	// that ends in error or was cancelled leaves the original in place, which
-	// is the point of ordering the swap this way.
+	// Retire the replaced document once its stand-in has indexed, reading the
+	// pairing from the store rather than from the upload task. The task is gone
+	// after a reload while the replacement carries on server-side, so this works
+	// from the document list instead -- which is also the only thing that says
+	// whether the stand-in reached `ready`.
+	//
+	// A stand-in that ends in `error` drops its pairing and leaves the original
+	// in place. That ordering is the point: a failed re-index must never cost the
+	// copy that worked.
 	useEffect(() => {
-		const replaced = tasks.filter(
-			(task) =>
-				task.replacesDocumentId &&
-				task.phase === 'ready' &&
-				!retiredRef.current.has(task.taskId),
-		);
-		if (replaced.length === 0) return;
-		for (const task of replaced) retiredRef.current.add(task.taskId);
+		const pending = pendingReplacements(knowledgeBaseId);
+		if (Object.keys(pending).length === 0) return;
+		const byId = new Map(documents.map((doc) => [doc.id, doc]));
+		const retire: Array<[string, string]> = [];
+		for (const [newId, entry] of Object.entries(pending)) {
+			const standIn = byId.get(newId);
+			// Absent is not the same as gone: this fetch may predate the upload
+			// that produced it. Only give up once the document it was meant to
+			// replace has itself left the list, which means someone dealt with it.
+			if (!standIn) {
+				if (!byId.has(entry.replacesDocumentId)) forgetReplacement(newId);
+				continue;
+			}
+			if (standIn.status === 'error') {
+				forgetReplacement(newId);
+				continue;
+			}
+			// One attempt per mount. The entry is kept in the store on failure so
+			// a reload or a later visit retries, but the store cannot throttle
+			// within one page life: this effect is keyed on `documents`, the
+			// trailing refetch hands it a fresh array on every pass, and a
+			// stand-in stuck at `ready` matches every time -- so a server-side
+			// delete failure would issue DELETE + GET + toast without bound.
+			if (standIn.status === 'ready' && !attemptedRef.current.has(newId)) {
+				attemptedRef.current.add(newId);
+				retire.push([newId, entry.replacesDocumentId]);
+			}
+		}
+		if (retire.length === 0) return;
 		void (async () => {
-			for (const task of replaced) {
+			for (const [newId, oldId] of retire) {
 				try {
-					await knowledgeBaseApi.deleteDocument(
-						knowledgeBaseId,
-						task.replacesDocumentId!,
-					);
+					await knowledgeBaseApi.deleteDocument(knowledgeBaseId, oldId);
+					// Only once the delete landed: an entry dropped before that
+					// would strand the stale copy with nothing left to retry from.
+					forgetReplacement(newId);
 				} catch {
-					// Let it be retried on the next pass rather than stranding the
-					// stale copy for good.
-					retiredRef.current.delete(task.taskId);
 					toast.error(t('knowledge.document.replaceStaleLeft'));
 				}
 			}
 			await refetch();
 		})();
-	}, [tasks, knowledgeBaseId, refetch, t]);
+	}, [documents, knowledgeBaseId, refetch, t]);
 
 	const hasFinishedLocalTasks = tasks.some((t) => !isInFlight(t.phase));
 

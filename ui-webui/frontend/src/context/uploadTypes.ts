@@ -26,15 +26,15 @@ export interface UploadTask {
 	error: string | null;
 	createdAt: number;
 	/**
-	 * Document this task is replacing, to be retired once the task reaches
-	 * `ready`; `null` for an ordinary upload.
+	 * Document this task is replacing; `null` for an ordinary upload.
 	 *
-	 * Carried on the task rather than by whoever started it, because the task
-	 * outlives that component: the pairing used to live in the documents panel's
-	 * own state, so leaving the knowledge page or reloading the tab while a
-	 * replacement was still indexing dropped it, the upload finished normally,
-	 * and the original was never retired -- leaving both versions in the base
-	 * with search returning stale chunks alongside the new ones, silently.
+	 * Carried here only until the upload returns, at which point the pairing is
+	 * written to `replacementStore` keyed by the new document's id and this copy
+	 * stops being the one that matters. It has to move, because a task cannot be
+	 * the durable home for it: the provider holds tasks in a plain reducer with
+	 * no persistence, so a reload starts from an empty list while the replacement
+	 * carries on server-side. What this field alone covers is leaving the
+	 * knowledge page, since the provider sits above the router.
 	 */
 	replacesDocumentId: string | null;
 }
