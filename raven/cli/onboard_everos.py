@@ -1409,7 +1409,7 @@ def _retry_or_skip_address() -> str:
         choices=[
             questionary.Choice(oc._t("Enter a different address", "重新填写地址"), value="retry"),
             questionary.Choice(
-                oc._t("Skip (start it later and re-run `raven onboard`)", "跳过（稍后启动它，再重跑 raven onboard）"),
+                oc._t("Skip", "跳过"),
                 value="skip",
             ),
         ],
@@ -2017,13 +2017,10 @@ def _step4_memory(
             # line printed a moment earlier told them to start their server and
             # re-run. A refused address is a server not started or a port
             # mistyped, not a change of mind.
+            # Nothing printed here: the user picked "skip" one line ago and the
+            # option said what that means. Restating it is noise on a screen the
+            # step is already leaving.
             _set_memory_backend(None)
-            oc.console.print(
-                oc._t(
-                    "  [dim]Long-term memory stays off until that server is reachable.[/dim]",
-                    "  [dim]在那个服务可达之前，长期记忆保持关闭。[/dim]",
-                )
-            )
             return None
 
     if _memory_enabled():

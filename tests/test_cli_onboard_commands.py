@@ -5670,3 +5670,33 @@ class TestARefusedAddressCanBeRetyped:
         monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
 
         assert onboard_everos._use_self_managed_everos() is True
+
+
+class TestSkippingIsQuiet:
+    """The step is leaving; saying so again is noise.
+
+    "Skip" was followed by a line restating what skip means, on a screen the
+    wizard is already walking off. The user chose the option one line earlier.
+    """
+
+    def test_nothing_is_printed_after_the_choice(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
+        capsys.readouterr()
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        after = capsys.readouterr().out
+        assert "长期记忆保持关闭" not in after
+        assert "stays off until" not in after
+        assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
