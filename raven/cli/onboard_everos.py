@@ -1314,31 +1314,6 @@ def _config_everos_role(
         return
 
 
-_LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
-
-
-def _same_address(a: str | None, b: str | None) -> bool:
-    """Whether two URLs name the same socket, allowing for spelling.
-
-    The declared address is copied out of the root's toml and the target is
-    built from a recorded port, so the same endpoint routinely arrives as
-    ``127.0.0.1`` on one side and ``localhost`` on the other. Comparing the
-    strings makes a service already on its configured port look like drift, and
-    the wizard then offers to move it onto itself.
-    """
-    from urllib.parse import urlparse
-
-    if not a or not b:
-        return False
-    pa, pb = urlparse(a), urlparse(b)
-    if pa.port != pb.port:
-        return False
-    ha, hb = (pa.hostname or "").lower(), (pb.hostname or "").lower()
-    if ha == hb:
-        return True
-    return ha in _LOOPBACK_NAMES and hb in _LOOPBACK_NAMES
-
-
 def _lock_holder(root: Path | str):
     """The process serving ``root``, or None. Indirected so callers can stub it."""
     from raven.plugin.memory.everos._server import lock_holder
@@ -1486,69 +1461,6 @@ def _retry_or_skip_address() -> str:
     return str(choice)
 
 
-_SWITCH_TO_MANAGED = object()
-
-
-def _enabled_unowned_menu() -> object:
-    """Keep the server you run, move it, or hand the job to raven."""
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
-
-    slice_ = _recorded_memory_slice()
-    where = slice_.get("base_url") or "?"
-    oc.console.print()
-    oc.console.print(
-        oc._t(
-            f"  [green]v Long-term memory uses the EverOS you run at {where}.[/green]",
-            f"  [green]✓ 长期记忆正在使用你自己运行的 EverOS：{where}。[/green]",
-        ),
-        highlight=False,
-    )
-    action = questionary.select(
-        oc._t("What would you like to do?", "想做什么？"),
-        choices=[
-            questionary.Choice(oc._t("Keep it", "保持不变"), value="keep"),
-            questionary.Choice(oc._t("Point Raven at a different address", "改成别的地址"), value="address"),
-            # The way out. Without it this menu is a one-way door: the managed
-            # path is unreachable and the only exit is editing config.json by
-            # hand. Offered as its own answer rather than as a side effect of
-            # "reconfigure", which is how ownership used to flip unasked.
-            questionary.Choice(
-                oc._t("Let Raven run its own EverOS instead", "改用 Raven 自己运行的 EverOS"),
-                value="managed",
-            ),
-        ],
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
-    ).ask()
-    if action is None:
-        raise typer.Exit(1)
-    if action == "managed":
-        # Say what it costs before taking it: their server keeps its data and
-        # keeps running, but raven stops reading it, so the memories behind that
-        # address stop being the ones it recalls.
-        oc.console.print(
-            oc._t(
-                f"  [yellow]! Raven will build its own memory and stop using {where}.[/yellow]\n"
-                "  [dim]That server and its data are untouched -- Raven simply stops reading them.[/dim]",
-                f"  [yellow]⚠ Raven 将建立自己的记忆，不再使用 {where}。[/yellow]\n"
-                "  [dim]那台服务器和它的数据不受影响，只是 Raven 不再读它。[/dim]",
-            ),
-            highlight=False,
-        )
-        return _SWITCH_TO_MANAGED
-    if action == "address" and not _use_self_managed_everos():
-        # A refused address leaves the working one in place rather than
-        # discarding a setup that was fine a moment ago.
-        oc.console.print(
-            oc._t(
-                f"  [dim]Keeping {where}.[/dim]",
-                f"  [dim]继续使用 {where}。[/dim]",
-            )
-        )
-    return None
-
-
 def _use_self_managed_everos() -> bool:
     """Point raven at an EverOS the user runs. Returns False if it is unreachable.
 
@@ -1621,41 +1533,6 @@ def _use_self_managed_everos() -> bool:
     return True
 
 
-def _record_root(root: Any, owned: bool) -> None:
-    """Record which EverOS root is in use and whether raven may write to it.
-
-    Both are decisions rather than derivable facts, and every later reader --
-    the wizard, the runtime, doctor -- consults the record instead of guessing
-    again. Recording ``owned`` is what makes read-only reuse enforceable.
-    """
-    from raven.config.update import set_plugin_config_fields
-
-    set_plugin_config_fields("everos-memory", {"root": str(root), "owned": owned})
-
-
-def _adopt_own_root() -> None:
-    """Move to raven's own root, retracting an address that was not raven's.
-
-    A merging write cannot say "this address no longer applies", and the address
-    recorded for a server the user runs is exactly what ``_ask_managed_port``
-    falls back to when no port is recorded -- so leaving it behind parks raven's
-    own service on the user's port, one screen after promising to stop using it.
-
-    Only retracted when the record says the address is theirs. A managed port
-    the user deliberately moved to is also reachable here, and dropping that one
-    would quietly offer the shipped default again on the next run.
-    """
-    from raven.config.update import set_plugin_config_fields
-    from raven.config.update_everos import default_everos_root
-
-    theirs = _recorded_memory_slice().get("owned") is False
-    set_plugin_config_fields(
-        "everos-memory",
-        {"root": str(default_everos_root()), "owned": True},
-        remove=("base_url", "port") if theirs else (),
-    )
-
-
 def _capability_lines(base_url: str) -> list[str]:
     """One line per capability the running server actually built.
 
@@ -1679,313 +1556,6 @@ def _capability_lines(base_url: str) -> list[str]:
         mark = "[green]✓[/green]" if state is True else "[red]✗[/red]" if state is False else "[dim]?[/dim]"
         lines.append(f"{mark} {section}")
     return lines
-
-
-def _reuse_unowned_root(state: Any) -> object:
-    """Screens for an EverOS the user manages: reuse it, or leave it alone.
-
-    Read-only throughout. raven records the address and reports what the server
-    can do; it does not write the config (those are the user's keys and models to
-    set) and does not start it (starting takes the OME jobstore lock
-    exclusively, which is theirs to grant).
-    """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
-
-    where = state.declared_url or "?"
-    oc.console.print()
-    oc.console.print(
-        oc._t(
-            "  [dim]No EverOS service managed by Raven was found.[/dim]",
-            "  [dim]未找到 Raven 管理的 EverOS 服务。[/dim]",
-        )
-    )
-
-    while True:
-        if state.serving:
-            caps = " ".join(_capability_lines(where))
-            oc.console.print(
-                oc._t(
-                    f"  [green]✓ Found another EverOS service, running[/green]\n"
-                    f"      memory dir  {state.root}   [dim]<- you manage this; "
-                    f"Raven will not modify it, nor start or stop it[/dim]\n"
-                    f"      address     {where}\n"
-                    f"      capability  {caps}",
-                    f"  [green]✓ 发现另一个 EverOS 服务，正在运行[/green]\n"
-                    f"      记忆目录   {state.root}   [dim]<- 由你管理，Raven 不会修改它，也不启停它[/dim]\n"
-                    f"      地址       {where}\n"
-                    f"      能力       {caps}",
-                ),
-                highlight=False,
-            )
-            choice = questionary.select(
-                oc._t("Reuse it for Raven's memory?", "要让 Raven 复用它吗？"),
-                choices=[
-                    questionary.Choice(
-                        oc._t(
-                            "Reuse (memory and media parsing both use this config)",
-                            "复用（记忆和多模态解析都走这一份配置）",
-                        ),
-                        value="reuse",
-                    ),
-                    questionary.Choice(
-                        oc._t("No, give Raven its own memory", "不用，让 Raven 建一份独立的记忆"),
-                        value="own",
-                    ),
-                ],
-                style=RAVEN_STYLE,
-                qmark=oc._QMARK,
-            ).ask()
-            if choice is None:
-                raise typer.Exit(1)
-            if choice == "own":
-                return _OWN_ROOT_INSTEAD
-            _record_root(state.root, owned=False)
-            _set_base_url(where)
-            _set_memory_backend("everos")
-            oc.console.print(
-                oc._t(
-                    f"  [green]✓ Recorded: Raven will store and recall memories via {where}.[/green]\n"
-                    "  [dim]You manage this EverOS. To change its models, edit its everos.toml\n"
-                    "  and restart it -- Raven follows along.[/dim]",
-                    f"  [green]✓ 已记录：Raven 将通过 {where} 存取记忆。[/green]\n"
-                    "  [dim]这份 EverOS 由你管理。要调整模型，编辑它的 everos.toml 后重启即可，\n"
-                    "  Raven 会自动跟随。[/dim]",
-                ),
-                highlight=False,
-            )
-            return None
-
-        oc.console.print(
-            oc._t(
-                f"  [yellow]! Found another EverOS config, but its service is not running[/yellow]\n"
-                f"      memory dir  {state.root}   [dim]<- you manage this; "
-                f"Raven will not start it[/dim]\n"
-                f"      address     {where} [dim](declared in its config, not answering)[/dim]",
-                f"  [yellow]⚠ 发现另一份 EverOS 配置，但服务未启动[/yellow]\n"
-                f"      记忆目录   {state.root}   [dim]<- 由你管理，Raven 不会替你启动[/dim]\n"
-                f"      地址       {where} [dim]（配置中声明，当前无响应）[/dim]",
-            ),
-            highlight=False,
-        )
-        choice = questionary.select(
-            oc._t("Reuse it?", "要复用它吗？"),
-            choices=[
-                questionary.Choice(
-                    oc._t("I will start it, then probe again", "我去启动它，然后重新探测"),
-                    value="retry",
-                ),
-                questionary.Choice(
-                    oc._t("No, give Raven its own memory", "不用，让 Raven 建一份独立的记忆"),
-                    value="own",
-                ),
-            ],
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
-        ).ask()
-        if choice is None:
-            raise typer.Exit(1)
-        if choice == "own":
-            return _OWN_ROOT_INSTEAD
-        oc.console.print(
-            oc._t(
-                f"  [dim]Start it in another terminal, for example:[/dim]\n"
-                f"      everos server start --root {state.root}",
-                f"  [dim]请在另一个终端启动它，例如：[/dim]\n      everos server start --root {state.root}",
-            ),
-            highlight=False,
-        )
-        from raven.plugin.memory.everos import _discover
-
-        state = _discover._describe(state.root, owned=False)
-
-
-def _converge_owned_root(state: Any) -> bool:
-    """Bring a root raven owns onto the standard address.
-
-    Returns False when the step should stop (the data is held by something raven
-    cannot identify). Nothing is asked here: the process is raven's own, EverOS
-    replays interrupted strategy runs through crash recovery, and SIGTERM drains
-    what is in flight before releasing the lock -- so there is no decision for
-    the user to make, only work to report.
-    """
-    from raven.plugin.memory.everos._server import (
-        StopOutcome,
-        find_recorded_server,
-        lock_holder,
-        stop_recorded_server,
-    )
-
-    target = _configured_target_url()
-
-    if state.serving and _same_address(state.declared_url, target):
-        _set_base_url(target)
-        return True
-
-    if state.serving and not _same_address(state.declared_url, target):
-        # Stopping a healthy service is the one destructive act in this step, so
-        # it is the user's call. Adopting is the default because it is the
-        # reversible one: the address is recorded, nothing is signalled, and a
-        # later run can still move it.
-        if _adopt_or_move(state.declared_url, target) == "adopt":
-            _adopt_running_address(state.declared_url)
-            return True
-        outcome = stop_recorded_server(state.root)
-        if outcome is not StopOutcome.STOPPED:
-            oc.console.print(_stop_failure_line(outcome, keeping=state.declared_url), highlight=False)
-            _set_base_url(state.declared_url or target)
-            return True
-        return _restart_here(state.root, target)
-
-    if state.busy_elsewhere:
-        oc.console.print()
-        oc.console.print(
-            oc._t(
-                f"  [yellow]! Something is already serving {state.root}, but not at "
-                f"{state.declared_url or 'any declared address'}.[/yellow]\n"
-                "  [dim]One memory directory admits one EverOS instance; this is not about "
-                "the port.[/dim]",
-                f"  [yellow]⚠ 已有进程在使用 {state.root}，但不在它声明的地址 "
-                f"{state.declared_url or '（未声明）'} 上。[/yellow]\n"
-                "  [dim]一份记忆数据同时只能由一个 EverOS 实例服务，这与端口无关。[/dim]",
-            ),
-            highlight=False,
-        )
-        # Ask the OS who has the data before deciding anything. The lock names a
-        # holder whatever raven remembers, and the holder usually names a port
-        # -- which turns the one state that used to be a dead end into "it is
-        # over there", recoverable without signalling anything.
-        holder = lock_holder(state.root)
-        if holder is not None and holder.port:
-            found_at = f"http://localhost:{holder.port}"
-            oc.console.print(
-                oc._t(
-                    f"  [dim]It is answering at {found_at} (pid {holder.pid}).[/dim]",
-                    f"  [dim]它正在 {found_at} 上提供服务（pid {holder.pid}）。[/dim]",
-                ),
-                highlight=False,
-            )
-            if _adopt_or_move(found_at, target) == "adopt":
-                _adopt_running_address(found_at)
-                return True
-        elif holder is not None:
-            oc.console.print(
-                oc._t(
-                    f"  [yellow]! pid {holder.pid} holds it but is not serving HTTP:[/yellow]\n"
-                    f"  [dim]{holder.cmdline}[/dim]\n"
-                    "  [dim]Stop it and re-run `raven onboard`.[/dim]",
-                    f"  [yellow]⚠ pid {holder.pid} 占着它，但没有在提供 HTTP 服务：[/yellow]\n"
-                    f"  [dim]{holder.cmdline}[/dim]\n"
-                    "  [dim]请先停掉它，然后重跑 raven onboard。[/dim]",
-                ),
-                highlight=False,
-            )
-            return False
-        if find_recorded_server(state.root) is None:
-            oc.console.print(
-                oc._t(
-                    "  [red]x Cannot take over: Raven cannot confirm it started that process.[/red]\n"
-                    "  [dim]Stop it and re-run `raven onboard`.[/dim]",
-                    "  [red]✗ 无法接管：无法确认占用它的进程是不是 Raven 启动的。[/red]\n"
-                    "  [dim]请先停掉它，然后重跑 raven onboard。[/dim]",
-                ),
-                highlight=False,
-            )
-            return False
-        outcome = stop_recorded_server(state.root)
-        if outcome is not StopOutcome.STOPPED:
-            # The lock is still held. Walking on to spawn would put a second
-            # instance straight into it -- the failure this whole step exists to
-            # prevent -- so stop here rather than discard the outcome.
-            oc.console.print(_stop_failure_line(outcome, keeping=state.declared_url))
-            return False
-        return _restart_here(state.root, target)
-
-    # Owned, configured, and simply not running: still converge, or the legacy
-    # address survives every future run. ``ensure_everos_server`` would otherwise
-    # start a server at the old address and write it straight back into [api].
-    return _restart_here(state.root, target)
-
-
-def _adopt_or_move(running_at: str | None, target: str) -> str:
-    """Ask whether to keep the running address or move the service to the target.
-
-    Presented as a question rather than done silently because the two cases the
-    wizard cannot tell apart -- a port an old raven left behind, and a port the
-    user deliberately set -- want opposite answers, and only the user knows
-    which one this is.
-    """
-    questionary = oc._require_questionary()
-    from raven.cli._styles import RAVEN_STYLE
-
-    oc.console.print()
-    oc.console.print(
-        oc._t(
-            f"  [green]v Found Raven's EverOS service, running at {running_at}[/green]\n"
-            f"  [dim]The configured address is {target}.[/dim]",
-            f"  [green]✓ 找到 Raven 管理的 EverOS 服务，正在运行于 {running_at}[/green]\n"
-            f"  [dim]配置中的地址是 {target}。[/dim]",
-        ),
-        highlight=False,
-    )
-    choice = questionary.select(
-        oc._t("Which address should Raven use?", "Raven 该用哪个地址？"),
-        choices=[
-            questionary.Choice(
-                oc._t(
-                    f"Keep {running_at} (update the setting, nothing restarts)",
-                    f"就用 {running_at}（更新配置，不重启）",
-                ),
-                value="adopt",
-            ),
-            questionary.Choice(
-                oc._t(f"Move it to {target} (restarts the service)", f"迁移到 {target}（会重启服务）"),
-                value="move",
-            ),
-        ],
-        style=RAVEN_STYLE,
-        qmark=oc._QMARK,
-    ).ask()
-    if choice is None:
-        raise typer.Exit(1)
-    return str(choice)
-
-
-def _adopt_running_address(running_at: str | None) -> None:
-    """Record the address the service is already on as the intended one.
-
-    Both halves matter: ``base_url`` so this session connects, and ``port`` so
-    the next run compares against the same intent instead of asking again.
-    :func:`_set_base_url` writes both.
-    """
-    if not running_at:
-        return
-    _set_base_url(running_at)
-
-
-def _stop_failure_line(outcome: Any, *, keeping: str | None) -> str:
-    """One sentence per stop outcome. Saying the wrong one sends the user
-    looking for the wrong thing -- a server draining memory work is not a
-    foreign process."""
-    from raven.plugin.memory.everos._server import StopOutcome
-
-    reason = {
-        StopOutcome.NOT_OURS: oc._t(
-            "Raven cannot confirm it started this process.",
-            "无法确认这个进程是不是 Raven 启动的。",
-        ),
-        StopOutcome.SIGNAL_FAILED: oc._t("the stop signal could not be delivered.", "停止信号发送失败（权限不足？）。"),
-        StopOutcome.STILL_DRAINING: oc._t(
-            "it is shutting down but still finishing memory work.",
-            "它正在收尾，可能有记忆任务还在跑。",
-        ),
-    }[outcome]
-    tail = oc._t(f"Keeping {keeping}. ", f"继续使用 {keeping}。") if keeping else oc._t("", "")
-    return oc._t(
-        f"  [yellow]! Could not move it: {reason}[/yellow]\n"
-        f"  [dim]{tail}Re-run `raven onboard` once it has stopped.[/dim]",
-        f"  [yellow]⚠ 无法迁移：{reason}[/yellow]\n  [dim]{tail}等它停下后重跑 raven onboard 即可。[/dim]",
-    )
 
 
 def _restart_here(root: Any, target: str) -> bool:
@@ -2054,24 +1624,182 @@ def _set_base_url(base_url: str) -> None:
     set_plugin_config_fields("everos-memory", fields)
 
 
-_OWN_ROOT_INSTEAD = object()
+def _adopt_root(root: Any) -> None:
+    """Record ``root`` as raven's own, retracting an address that was not raven's.
+
+    Ownership is the lane the user picked, not something discovery can observe:
+    asking raven to run everos makes the directory raven's whatever an earlier
+    run recorded there.
+
+    The retraction is the other half. A merging write cannot say "this address
+    no longer applies", and the address recorded for a server the user runs is
+    exactly what :func:`_ask_managed_port` falls back to -- so leaving it behind
+    parks raven's own service on the user's port, one screen after taking the
+    job over. A managed port the user deliberately moved to is kept.
+    """
+    from raven.config.update import set_plugin_config_fields
+
+    theirs = _recorded_memory_slice().get("owned") is False
+    set_plugin_config_fields(
+        "everos-memory",
+        {"root": str(root), "owned": True},
+        remove=("base_url", "port") if theirs else (),
+    )
+
+
+def _memory_source_menu() -> str:
+    """The one question this step asks: who runs EverOS.
+
+    Everything else follows from the answer -- ownership above all, which is why
+    no later screen has to infer it from a directory that happens to exist.
+    Skipping is an answer here rather than something reachable only by walking
+    into a lane and backing out of it.
+    """
+    questionary = oc._require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    choice = questionary.select(
+        oc._t("Where should long-term memory come from?", "长期记忆从哪来？"),
+        choices=[
+            questionary.Choice(oc._t("Let Raven run EverOS for me", "让 Raven 替我运行 EverOS"), value="managed"),
+            questionary.Choice(
+                oc._t("I run my own EverOS -- connect to it", "我自己运行 EverOS —— 连过去"),
+                value="self",
+            ),
+            questionary.Choice(oc._t("Skip for now", "暂时跳过"), value="skip"),
+        ],
+        style=RAVEN_STYLE,
+        qmark=oc._QMARK,
+    ).ask()
+    if choice is None:
+        raise typer.Exit(1)
+    return str(choice)
+
+
+def _found_root_menu(state: Any) -> str:
+    """Take the found root as it is, reconfigure it, or go back.
+
+    Asked before anything is written or signalled. The wizard used to converge
+    the address first and ask afterwards, so a user who only wanted to confirm
+    an existing setup had the service stopped and restarted on a different port
+    before the question appeared.
+    """
+    questionary = oc._require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    where = state.declared_url or oc._t("(no address declared)", "（未声明地址）")
+    if state.serving:
+        status = oc._t(f"running at {where}", f"正在 {where} 上运行")
+    elif state.busy_elsewhere:
+        status = oc._t("its data is in use, but not at that address", "数据正被占用，但不在该地址上")
+    else:
+        status = oc._t(f"not running ({where} declared)", f"未在运行（配置声明 {where}）")
+    oc.console.print()
+    oc.console.print(
+        oc._t(
+            f"  [green]v Found a memory directory Raven can take over[/green]\n"
+            f"      memory dir  {state.root}\n"
+            f"      state       {status}",
+            f"  [green]✓ 找到一份 Raven 可以接管的记忆目录[/green]\n"
+            f"      记忆目录   {state.root}\n"
+            f"      状态       {status}",
+        ),
+        highlight=False,
+    )
+    choice = questionary.select(
+        oc._t("What would you like to do?", "想做什么？"),
+        choices=[
+            questionary.Choice(oc._t("Use it as it is", "直接用它"), value="reuse"),
+            questionary.Choice(
+                oc._t("Reconfigure it (port and models)", "重新配置（端口和模型）"),
+                value="redo",
+            ),
+            questionary.Choice(oc._t("Back", "返回上一层"), value="back"),
+        ],
+        style=RAVEN_STYLE,
+        qmark=oc._QMARK,
+    ).ask()
+    if choice is None:
+        raise typer.Exit(1)
+    return str(choice)
+
+
+def _use_found_root(state: Any) -> None:
+    """Serve memory from ``state.root`` at whatever address it is already on.
+
+    Nothing is stopped, moved or reconfigured: the user asked to use this
+    directory as it is, and the address its own server answers on is the answer.
+
+    One memory directory admits one engine, so a root whose data is held by
+    something raven cannot reach over HTTP has no way forward here. That one is
+    reported -- with the pid and the command line -- instead of being worked
+    around by starting a second instance that could only fail on the lock.
+    """
+    if state.serving:
+        _set_base_url(str(state.declared_url))
+        _set_memory_backend("everos")
+        _report_everos_capabilities()
+        return
+
+    if state.busy_elsewhere:
+        holder = _lock_holder(state.root)
+        if holder is not None and holder.port:
+            found_at = f"http://localhost:{holder.port}"
+            oc.console.print(
+                oc._t(
+                    f"  [dim]It is answering at {found_at} (pid {holder.pid}).[/dim]",
+                    f"  [dim]它正在 {found_at} 上提供服务（pid {holder.pid}）。[/dim]",
+                ),
+                highlight=False,
+            )
+            _set_base_url(found_at)
+            _set_memory_backend("everos")
+            _report_everos_capabilities()
+            return
+        detail = f"  [dim]{holder.cmdline}[/dim]\n" if holder is not None else ""
+        pid_line = (
+            oc._t(f"pid {holder.pid} holds", "pid {} 占用着".format(holder.pid))
+            if holder is not None
+            else oc._t("something holds", "有进程占用着")
+        )
+        oc.console.print(
+            oc._t(
+                f"  [yellow]! {pid_line} {state.root} but serves no HTTP.[/yellow]\n"
+                f"{detail}"
+                "  [dim]Stop it and re-run `raven onboard`.[/dim]",
+                f"  [yellow]⚠ {pid_line} {state.root}，但没有提供 HTTP 服务。[/yellow]\n"
+                f"{detail}"
+                "  [dim]请先停掉它，然后重跑 raven onboard。[/dim]",
+            ),
+            highlight=False,
+        )
+        return
+
+    if _restart_here(state.root, state.declared_url or _configured_target_url()):
+        _set_memory_backend("everos")
+        _report_everos_capabilities()
 
 
 def _step4_memory(
     *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
 ) -> object:
-    """Step 4 -- EverOS long-term memory (model sub-screens).
+    """Step 4 -- EverOS long-term memory.
 
-    The bootstrap seeds ``memory.backend="everos"`` (schema default) and everos
-    is the only memory backend, so this step does not ask whether to enable it:
-    it either confirms the seed by configuring the llm role, or resolves it back
-    to ``None`` on skip / non-interactive / give-up. ``None`` means no long-term
-    memory at all, not a fallback to something simpler.
+    Three lanes, asked once: raven runs everos, the user runs it, or neither
+    happens today. Which lane decides ownership, so no later screen has to read
+    it back off a directory that happens to exist -- the mistake behind a managed
+    reconfigure overwriting an address raven had promised not to touch.
 
-    ``_memory_enabled`` gates on the llm role alone, so a fresh modelless seed
-    reads as "not configured yet" and the keep/reconfigure menu only appears once
-    that model is actually on disk. embedding and rerank are offered here but
-    never gate: skipping them costs recall quality, not memory itself.
+    The managed lane is the one that must always land somewhere usable: it takes
+    over whatever memory directory it finds, or builds its own. The self-managed
+    lane writes only after a probe answers, and a refused address returns to the
+    lane question with nothing written. Skipping leaves the config as it is.
+
+    ``None`` means no long-term memory this session, not a fallback to something
+    simpler. ``_memory_enabled`` gates on the llm role alone, so a seeded but
+    modelless config reads as "not configured yet"; embedding and rerank are
+    offered but never gate, since skipping them costs recall quality rather than
+    memory itself.
     """
     oc._step_header(4, oc._t("EverOS long-term memory", "EverOS 长期记忆"))
 
@@ -2111,112 +1839,57 @@ def _step4_memory(
     from raven.cli._styles import RAVEN_STYLE
     from raven.plugin.memory.everos import _discover
 
-    oc.console.print(
-        oc._t("  [dim]Looking for an existing memory service...[/dim]", "  [dim]正在查找已有的记忆服务...[/dim]")
-    )
-    if _memory_enabled() and _recorded_memory_slice().get("owned") is False:
-        # A server the user runs, and this is settled before discovery is even
-        # consulted. Two reasons, both of which used to bite.
-        #
-        # Configuring models is not an action that exists here -- that is raven
-        # writing into a root it owns, which by definition it does not. Sharing
-        # the managed menu made "Reconfigure" the only plausible button for
-        # changing the address, and it answered by recording raven's own root,
-        # flipping ownership and overwriting the address, none of it confirmed.
-        #
-        # And discovery adds raven's own roots with owned=True unconditionally,
-        # so an abandoned managed root -- the normal leftover after switching --
-        # would be picked and adopted before any menu appeared. A recorded
-        # ownership decision outranks a directory that happens to still exist.
-        if _enabled_unowned_menu() is not _SWITCH_TO_MANAGED:
-            return None
-        # An explicit handover. Recorded here rather than left to the branch that
-        # builds the root, because everything downstream -- _memory_enabled(),
-        # owned_everos_root(), _ask_managed_port() -- has to see the new answer
-        # first.
-        _adopt_own_root()
+    while True:
+        source = _memory_source_menu()
 
-    found = _discover.pick(_discover.discover())
-
-    if found is not None and not found.owned:
-        # A root the user manages. Read-only from here: record where it is and
-        # report what it can do, never configure it and never start or stop it.
-        outcome = _reuse_unowned_root(found)
-        if outcome is not _OWN_ROOT_INSTEAD:
-            return outcome
-        # Record the decision here rather than leaving it to the branch that
-        # builds the root. Everything downstream -- _memory_enabled(), which
-        # reads the recorded root and would still find the user's configured
-        # llm, and everos_root() itself -- has to see the new answer, and
-        # _memory_enabled() returns from this function before the building
-        # branch is ever reached.
-        _adopt_own_root()
-        found = None
-
-    if found is not None and found.owned:
-        _record_root(found.root, owned=True)
-        if not _converge_owned_root(found):
+        if source == "skip":
+            # Same rule as ``--skip-memory``: a configured setup is left exactly
+            # as it is, and a seeded-but-modelless one resolves to off so the
+            # runtime does not activate everos with no models behind it.
+            if not _memory_enabled():
+                _set_memory_backend(None)
+            oc.console.print(
+                oc._t(
+                    "  [dim]Long-term memory left as it is.[/dim]\n"
+                    "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]",
+                    "  [dim]长期记忆保持原样。[/dim]\n  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
+                )
+            )
             return None
 
-    if found is None and not _memory_enabled():
-        # Nothing of raven's to use, so the two ways forward are genuinely
-        # different setups rather than two spellings of one. Asked once, here,
-        # instead of inferred later from whatever happened to be on disk.
-        source = questionary.select(
-            oc._t("Where should long-term memory come from?", "长期记忆从哪来？"),
-            choices=[
-                questionary.Choice(
-                    oc._t("Let Raven run EverOS for me", "让 Raven 替我运行 EverOS"),
-                    value="managed",
-                ),
-                questionary.Choice(
-                    oc._t("I run my own EverOS -- connect to it", "我自己运行 EverOS —— 连过去"),
-                    value="self",
-                ),
-            ],
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
-        ).ask()
-        if source is None:
-            raise typer.Exit(1)
         if source == "self":
             if _use_self_managed_everos():
                 return None
-            # The step ends here. Falling through to the managed path would
-            # have walked someone who just said "I run my own EverOS" through
-            # configuring four model roles and a key for a setup they did not
-            # ask for, and left a root on disk they will not use -- while the
-            # line printed a moment earlier told them to start their server and
-            # re-run. A refused address is a server not started or a port
-            # mistyped, not a change of mind.
-            # Nothing printed here: the user picked "skip" one line ago and the
-            # option said what that means. Restating it is noise on a screen the
-            # step is already leaving.
-            _set_memory_backend(None)
-            return None
+            # A refused address is a server not started or a port mistyped, not
+            # a change of mind: back to the one question this step asks. Nothing
+            # was written, so the setup that was working a moment ago still is.
+            continue
 
-    if _memory_enabled():
-        action = questionary.select(
+        oc.console.print(
             oc._t(
-                "EverOS long-term memory is already enabled. What would you like to do?",
-                "EverOS 长期记忆已启用。想做什么?",
-            ),
-            choices=[
-                questionary.Choice(oc._t("Keep it enabled", "保持启用"), value="keep"),
-                questionary.Choice(oc._t("Reconfigure", "重新配置"), value="redo"),
-            ],
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
-        ).ask()
-        if action is None:
-            raise typer.Exit(1)
-        if action == "keep":
-            return None  # backend already "everos" + models on disk; leave as-is
-    else:
-        # No enable/decline question: everos is the only memory backend, so the
-        # step goes straight into configuring it. Leaving is still possible --
-        # backing out of the required roles reaches the give-up prompt, which
-        # spells out what is lost.
+                "  [dim]Looking for a memory directory Raven can take over...[/dim]",
+                "  [dim]正在查找 Raven 可以接管的记忆目录...[/dim]",
+            )
+        )
+        found = _discover.pick(_discover.discover())
+        if found is None:
+            break
+
+        action = _found_root_menu(found)
+        if action == "back":
+            # Nothing is recorded until an answer other than "back", so this
+            # leaves the config untouched.
+            continue
+        _adopt_root(found.root)
+        if action == "reuse":
+            _use_found_root(found)
+            return None
+        break
+
+    if not _everos_role_configured("llm"):
+        # embedding and rerank are both skippable, so what each one buys has to
+        # be on screen before the first prompt -- otherwise the roles read as
+        # three questions of equal weight.
         # Wrapped by hand: rich re-wraps at the terminal width and drops the
         # two-space indent on continuation lines, which reads as a stray
         # left-flush sentence under an indented block.
@@ -2244,7 +1917,7 @@ def _step4_memory(
     # owned_everos_root, not everos_root: after a user declined to share theirs,
     # the recorded root is still theirs, and building there would adopt it.
     root = owned_everos_root()
-    _record_root(root, owned=True)
+    _adopt_root(root)
     configure_everos_env(root)
     ensure_everos_home(root)
 

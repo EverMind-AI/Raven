@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -971,6 +970,16 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / ".everos"
     monkeypatch.setattr(ue, "everos_root", lambda: root)
     monkeypatch.setattr(ue, "everos_owned", lambda: True)
+    # The managed lane asks for a port only when the intended one is taken, and
+    # a bind test reads the real machine: on a developer box already running
+    # everos on 18791 these tests met an unscripted prompt and died on EOF.
+    # Tests that are about that question patch this themselves, afterwards.
+    monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+    # Discovery scans the real ``~/.everos`` and ``~/.raven`` paths, so without
+    # this a developer box with an everos of its own decides which branch these
+    # tests take -- and probes its /health while doing it. Tests about a found
+    # root install their own candidate, afterwards.
+    monkeypatch.setattr(_discover_mod, "discover", list)
     return root / "everos.toml"
 
 
@@ -1667,7 +1676,6 @@ def _root_state(root: Path, **kw: Any) -> Any:
 
     defaults = {
         "root": root,
-        "owned": True,
         "configured": True,
         "declared_url": "http://127.0.0.1:18791",
         "alive": True,
@@ -1683,85 +1691,80 @@ def _found(monkeypatch: pytest.MonkeyPatch, state: Any) -> None:
     monkeypatch.setattr(_discover, "discover", lambda: [state])
 
 
-class TestReusingAnEverosTheUserManages:
-    """Read-only reuse: record the address, touch nothing else.
+class TestTakingOverAFoundRoot:
+    """The managed lane owns whatever memory directory it finds.
 
-    Writing its config would overwrite the user's own models and keys; starting it
-    would take the OME jobstore lock exclusively, which is theirs to grant.
+    Ownership is the lane, not a property of the directory: a root an earlier run
+    recorded as the user's is taken over here, because that is what asking raven
+    to run everos means. What the answer decides is whether the service is
+    touched -- "use it as it is" must not stop, move or reconfigure anything,
+    which is why the question comes before the work rather than after it.
     """
 
     @pytest.fixture(autouse=True)
-    def _no_writes(self, monkeypatch: pytest.MonkeyPatch):
-        from raven.config import update_everos as ue
-
-        self.writes: list[str] = []
-        self.signals: list[int] = []
-        monkeypatch.setattr(ue, "set_everos_section", lambda s, _f: self.writes.append(s))
-        monkeypatch.setattr(ue, "clear_everos_section", lambda s: self.writes.append(s))
-        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: self.writes.append("template"))
-        monkeypatch.setattr(os, "kill", lambda *_a: self.signals.append(1))
-        monkeypatch.setattr(onboard_everos, "_capability_lines", lambda _u: ["ok"])
+    def _stubs(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
         return monkeypatch
 
-    def test_reuse_records_the_address_and_writes_nothing(
-        self, tmp_env: Path, everos_isolated: Path, _no_writes
-    ) -> None:
+    @staticmethod
+    def _answers(monkeypatch: pytest.MonkeyPatch, answers: list[str]) -> None:
         import questionary
 
-        theirs = tmp_env.parent / "theirs"
-        _found(_no_writes, _root_state(theirs, owned=False, declared_url="http://localhost:8000"))
-        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("reuse"))
+        it = iter(answers)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(it)))
+
+    def test_using_it_as_it_is_leaves_the_service_where_it_is(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """The address it answers on is the answer: nothing stopped, nothing moved.
+
+        Convergence used to run before the question, so a user who only wanted to
+        confirm an existing setup had the service stopped and restarted on the
+        configured port before any menu appeared.
+        """
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
+        touched: list[str] = []
+        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
+        _stubs.setattr(_server, "stop_pid", lambda *_a, **_kw: touched.append("stop"))
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            touched.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("reconfigured on reuse"))
+        self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
+        assert touched == [], "touched a service the user asked to leave as it is"
         data = json.loads(tmp_env.read_text())
         slice_ = data["plugins"]["config"]["everos-memory"]
-        assert slice_["root"] == str(theirs)
-        assert slice_["owned"] is False
-        assert slice_["base_url"] == "http://localhost:8000"
+        assert slice_["base_url"] == "http://localhost:1995"
+        assert slice_["owned"] is True
+        assert Path(slice_["root"]) == root
         assert data["memory"]["backend"] == "everos"
-        assert self.writes == [], "wrote into a root the user manages"
-        assert self.signals == [], "signalled a process raven does not own"
 
-    def test_declining_falls_through_to_ravens_own_root(self, tmp_env: Path, _no_writes) -> None:
-        """Saying no must leave raven building its OWN memory, not adopting theirs.
+    def test_a_root_recorded_as_the_users_is_taken_over_all_the_same(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
+    ) -> None:
+        """``owned: false`` from an earlier run does not survive this lane.
 
-        Deliberately without the ``everos_isolated`` fixture: that pins ownership
-        to true, which is the condition under test. Ownership has to resolve for
-        real from the recorded config here, or the root assertion below cannot
-        fail -- which is how the first version of this test passed while raven was
-        taking over the user's root.
+        Discovery no longer carries ownership, so there is no read-only branch to
+        fall into and nothing to keep in sync: who runs everos was answered one
+        screen ago.
         """
-        import questionary
-
-        from raven.config import update_everos as ue
-
-        theirs = tmp_env.parent / "theirs"
-        mine = tmp_env.parent / "mine"
-        _no_writes.setattr(ue, "default_everos_root", lambda: mine)
-        _no_writes.setattr(ue, "legacy_everos_root", lambda: tmp_env.parent / "legacy")
-        # The state a previous session's reuse leaves behind.
-        # Their root has to hold a real configured llm, and memory.backend has to
-        # be on: _memory_enabled() reads both, and if either is missing it is
-        # false, the keep/reconfigure branch is skipped, and the branch that used
-        # to discard the decision -- the one this test exists for -- is never
-        # entered. The first two attempts at this test passed for exactly that
-        # reason.
-        theirs.mkdir(parents=True, exist_ok=True)
-        (theirs / "everos.toml").write_text('[llm]\nmodel = "m"\napi_key = "k"\n', encoding="utf-8")
+        root = tmp_env.parent / "theirs"
         tmp_env.write_text(
             json.dumps(
                 {
                     "memory": {"backend": "everos"},
-                    # base_url alongside root: an unowned slice is "configured"
-                    # by its address, since raven never reads their toml. A
-                    # recorded unowned *root* only reaches this code from a
-                    # config written before self-managed setups stopped
-                    # recording one.
                     "plugins": {
                         "config": {
                             "everos-memory": {
-                                "root": str(theirs),
+                                "root": str(root),
                                 "owned": False,
                                 "base_url": "http://localhost:8000",
                             }
@@ -1771,169 +1774,52 @@ class TestReusingAnEverosTheUserManages:
             ),
             encoding="utf-8",
         )
-        # Assert the branch is reachable before asserting what it does. Without
-        # this the test can pass because it never got there -- which is how two
-        # earlier versions of it passed while the decision was being discarded.
-        assert onboard_everos._memory_enabled() is True
-
-        _found(_no_writes, _root_state(theirs, owned=False, declared_url="http://localhost:8000"))
-        # Two screens: decline the reuse, then answer the keep/reconfigure menu
-        # the way an existing install would. A single stubbed answer let "own"
-        # stand in for both and slipped past the branch under test.
-        # Reaching the managed path from a recorded self-managed install is now
-        # an answer of its own ("managed"), not a side effect of reconfiguring.
-        answers = iter(["managed", "own", "keep"])
-        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
-        reached: list[int] = []
-        _no_writes.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
-        _no_writes.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
-        # Which root gets built is the subject; which port it lands on is not.
-        # Left real, the managed default decides the outcome by whether this
-        # host happens to be running an everos of its own.
-        _no_writes.setattr(onboard_everos, "_port_is_free", lambda _p: True)
-
-        async def _ok(*_a: object, **_kw: object) -> None:
-            return None
-
-        _no_writes.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ok)
+        _found(_stubs, _root_state(root, declared_url="http://localhost:8000"))
+        self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        assert len(reached) == 4, "did not reach the four role screens"
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is True
-        # The point of declining: raven builds its OWN root. Asserting only that
-        # ownership flipped to true was the hole -- it passes just as well when
-        # raven has adopted the user's root and is about to overwrite it.
-        assert Path(slice_["root"]) != theirs, "adopted the root the user declined to share"
-        assert Path(slice_["root"]) == mine
-        # And its address is raven's, not the one carried in from theirs.
-        assert slice_["base_url"] == "http://localhost:18791"
-        assert slice_["port"] == 18791
+        assert slice_["base_url"] == "http://localhost:8000"
 
-    def test_a_stopped_one_is_probed_again_rather_than_started(
-        self, tmp_env: Path, everos_isolated: Path, _no_writes, capsys: pytest.CaptureFixture
+    def test_reconfiguring_walks_the_roles_and_lands_on_the_configured_port(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
     ) -> None:
-        import questionary
-
-        from raven.plugin.memory.everos import _discover
-
-        theirs = tmp_env.parent / "theirs"
-        _found(_no_writes, _root_state(theirs, owned=False, alive=False, declared_url="http://localhost:8000"))
-        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("retry"))
-        # The user starts it; the re-probe then sees it up.
-        _no_writes.setattr(
-            _discover,
-            "_describe",
-            lambda root, owned: _root_state(root, owned=owned, alive=True, declared_url="http://localhost:8000"),
-        )
-
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
-
-        out = " ".join(capsys.readouterr().out.split())
-        assert "everos server start --root" in out, "did not tell the user how to start it"
-        assert self.writes == []
-        assert self.signals == []
-        assert json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]["owned"] is False
-
-
-class TestConvergingRavensOwnPort:
-    @pytest.fixture(autouse=True)
-    def _stubs(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
-        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
-        return monkeypatch
-
-    def test_a_legacy_port_is_moved_to_the_standard_one(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
-        """An install seeded with an older default keeps working, on one address."""
-        import questionary
-
+        """Moving the port is what reconfiguring is for, and only that."""
         from raven.plugin.memory.everos import _server
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
-        stopped: list[Path] = []
+        reached: list[str] = []
         started: list[str] = []
-        _stubs.setattr(
-            _server,
-            "stop_recorded_server",
-            lambda r, **_kw: (stopped.append(r), _server.StopOutcome.STOPPED)[1],
-        )
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **kw: reached.append(kw["section"]))
+        _stubs.setattr(onboard_everos, "_stop_for_reload", lambda *_a, **_kw: True)
 
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
         _stubs.setattr(_server, "ensure_everos_server", _ensure)
-        # "Keep it enabled" is the first option, and the answer an existing
-        # install gives -- the path that used to exit with the service stopped.
-        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+        self._answers(_stubs, ["managed", "redo"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        assert stopped == [root]
-        # Asserting only "it stopped" and "the config moved" is what let the
-        # service stay down: convergence is stop -> write -> start, and the last
-        # step has to be part of the same claim.
-        assert started == ["http://localhost:18791"], "stopped the service and never started it again"
+        assert reached == ["llm", "embedding", "rerank", "multimodal"]
+        assert started == ["http://localhost:18791"]
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["base_url"] == "http://localhost:18791"
+        assert slice_["port"] == 18791
 
-    def test_a_process_raven_did_not_start_is_left_alone(
-        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
-    ) -> None:
-        """Its address stays in use rather than being taken over blindly."""
-        import questionary
-
-        from raven.plugin.memory.everos import _server
-
-        root = tmp_env.parent / "everos"
-        _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
-        _stubs.setattr(_server, "stop_recorded_server", lambda _r, **_kw: _server.StopOutcome.NOT_OURS)
-        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
-
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
-
-        out = " ".join(capsys.readouterr().out.split())
-        # Worded as an inability to confirm rather than a claim of fact: a lost
-        # pidfile looks exactly like a foreign process, and asserting the latter
-        # sends the user hunting for something that does not exist.
-        assert "cannot confirm it started this process" in out or "无法确认这个进程是不是 Raven 启动的" in out
-        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
-        assert slice_["base_url"] == "http://localhost:1995"
-
-    def test_a_root_already_on_the_standard_address_is_left_alone(
+    def test_a_root_that_is_down_is_started_where_it_declares(
         self, tmp_env: Path, everos_isolated: Path, _stubs
     ) -> None:
-        """The steady state after a convergence: nothing to stop, nothing to start."""
-        import questionary
+        """Reuse starts it at its own address rather than relocating it.
 
-        from raven.plugin.memory.everos import _server
-
-        root = tmp_env.parent / "everos"
-        _found(_stubs, _root_state(root, declared_url="http://localhost:18791"))
-        touched: list[str] = []
-        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: touched.append("stop"))
-
-        async def _ensure(url: str, **_kw: object) -> None:
-            touched.append(url)
-
-        _stubs.setattr(_server, "ensure_everos_server", _ensure)
-        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
-
-        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
-
-        assert touched == [], "restarted a service that was already where it belongs"
-        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
-        assert slice_["base_url"] == "http://localhost:18791"
-
-    def test_an_owned_root_that_is_simply_down_still_converges(
-        self, tmp_env: Path, everos_isolated: Path, _stubs
-    ) -> None:
-        """Otherwise the legacy address survives every future run: the service
-        would be started at the old port and set_everos_api would write it
-        straight back into the toml."""
-        import questionary
-
+        The pre-upgrade port therefore survives a reuse, which is the deliberate
+        trade: an install that wants the standard port answers "reconfigure",
+        and one that just wants its memory back is not asked to accept a move it
+        did not request.
+        """
         from raven.plugin.memory.everos import _server
 
         root = tmp_env.parent / "everos"
@@ -1944,42 +1830,86 @@ class TestConvergingRavensOwnPort:
             started.append(url)
 
         _stubs.setattr(_server, "ensure_everos_server", _ensure)
-        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+        self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        assert started == ["http://localhost:18791"]
+        assert started == ["http://localhost:1995"]
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
-        assert slice_["base_url"] == "http://localhost:18791"
+        assert slice_["base_url"] == "http://localhost:1995"
 
-    def test_a_lock_that_could_not_be_freed_stops_the_step(
-        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    def test_the_lock_holders_port_is_used_when_it_can_be_found(
+        self, tmp_env: Path, everos_isolated: Path, _stubs
     ) -> None:
-        """Spawning into a lock that is still held is the failure this whole step
-        exists to prevent, so a stop that did not stop must not fall through."""
+        """Data served on a port nobody recorded is still raven's to use.
+
+        One memory directory admits one engine, so the only way forward is to
+        talk to the instance that already has it -- which the lock names, and
+        whose port ``lock_holder`` can usually find.
+        """
+        from types import SimpleNamespace
+
         from raven.plugin.memory.everos import _server
 
         root = tmp_env.parent / "everos"
-        _found(_stubs, _root_state(root, alive=False, lock_held=True))
-        _stubs.setattr(_server, "find_recorded_server", lambda _r: {"pid": 1, "root": str(root)})
-        _stubs.setattr(_server, "stop_recorded_server", lambda *_a, **_kw: _server.StopOutcome.STILL_DRAINING)
+        _found(_stubs, _root_state(root, alive=False, lock_held=True, declared_url="http://localhost:1995"))
+        _stubs.setattr(
+            onboard_everos,
+            "_lock_holder",
+            lambda _r: SimpleNamespace(pid=4242, port=20001, cmdline="everos server start"),
+        )
         started: list[str] = []
 
         async def _ensure(url: str, **_kw: object) -> None:
             started.append(url)
 
         _stubs.setattr(_server, "ensure_everos_server", _ensure)
-        reached: list[int] = []
-        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+        self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        assert started == [], "spawned into a jobstore lock that is still held"
-        assert reached == []
-        out = " ".join(capsys.readouterr().out.split())
-        assert "still finishing memory work" in out or "还在跑" in out
+        assert started == [], "started a second instance against a directory already in use"
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:20001"
 
-    def test_a_restart_that_fails_is_reported_and_stops_the_step(
+    def test_data_held_with_no_http_to_reach_is_reported(
+        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The one case with no way forward: say who has it and stop.
+
+        An ``everos demo`` or an embedded engine holds the jobstore lock without
+        serving HTTP. Spawning into that lock is the failure this whole step
+        exists to prevent, so the pid and its command line are the deliverable.
+        """
+        from types import SimpleNamespace
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=True, declared_url="http://localhost:1995"))
+        _stubs.setattr(
+            onboard_everos,
+            "_lock_holder",
+            lambda _r: SimpleNamespace(pid=4242, port=None, cmdline="everos demo --root x"),
+        )
+        started: list[str] = []
+
+        async def _ensure(url: str, **_kw: object) -> None:
+            started.append(url)
+
+        _stubs.setattr(_server, "ensure_everos_server", _ensure)
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
+        self._answers(_stubs, ["managed", "reuse"])
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "4242" in out
+        assert "everos demo --root x" in out, "did not say what is holding the directory"
+        assert started == [], "spawned into a jobstore lock that is still held"
+        assert "base_url" not in json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+
+    def test_a_start_that_fails_is_reported_with_its_reason(
         self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
     ) -> None:
         from raven.plugin.memory.everos import _server
@@ -1988,35 +1918,30 @@ class TestConvergingRavensOwnPort:
         _found(_stubs, _root_state(root, alive=False, lock_held=False, declared_url="http://localhost:1995"))
 
         async def _boom(_url: str, **_kw: object) -> None:
-            raise RuntimeError("port 18791 is occupied")
+            raise RuntimeError("port 1995 is occupied")
 
         _stubs.setattr(_server, "ensure_everos_server", _boom)
-        reached: list[int] = []
-        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("walked the roles anyway"))
+        self._answers(_stubs, ["managed", "reuse"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         out = " ".join(capsys.readouterr().out.split())
-        assert "port 18791 is occupied" in out, "swallowed the reason the restart failed"
-        assert reached == []
+        assert "port 1995 is occupied" in out, "swallowed the reason the start failed"
 
-    def test_data_held_by_an_unidentifiable_process_stops_the_step(
-        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
-    ) -> None:
-        """One memory directory admits one instance, so there is nothing to start."""
-        from raven.plugin.memory.everos import _server
-
+    def test_going_back_writes_nothing(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
+        """Back has to be a real exit from the lane, not a spelling of reuse."""
         root = tmp_env.parent / "everos"
-        _found(_stubs, _root_state(root, alive=False, lock_held=True))
-        _stubs.setattr(_server, "find_recorded_server", lambda _r: None)
-        reached: list[int] = []
-        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+        tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
+        _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: pytest.fail("configured after Back"))
+        self._answers(_stubs, ["managed", "back", "skip"])
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        out = " ".join(capsys.readouterr().out.split())
-        assert "Cannot take over" in out or "无法接管" in out
-        assert reached == [], "walked into role configuration on data it cannot serve"
+        slice_ = (json.loads(tmp_env.read_text()).get("plugins") or {}).get("config", {}).get("everos-memory", {})
+        assert "root" not in slice_, "recorded a root the user backed out of"
+        assert "owned" not in slice_
 
 
 class _Answer:
@@ -5414,38 +5339,6 @@ class TestPointingRavenAtAnEverosYouRun:
         assert "18791" not in src
 
 
-class TestAddressComparisonIsNotStringComparison:
-    """``127.0.0.1`` and ``localhost`` are one endpoint spelled two ways.
-
-    The declared address is whatever is in the root's toml and the target is
-    built from a recorded port, so the two arrive spelled differently even when
-    they name the same socket. Comparing the strings made a service already on
-    its configured port look like drift, and offered to move it onto itself.
-    """
-
-    def test_loopback_spellings_are_the_same_address(self) -> None:
-        from raven.cli.onboard_everos import _same_address
-
-        assert _same_address("http://127.0.0.1:20000", "http://localhost:20000")
-        assert _same_address("http://localhost:20000", "http://127.0.0.1:20000")
-        assert _same_address("http://[::1]:20000", "http://localhost:20000")
-
-    def test_a_different_port_is_a_different_address(self) -> None:
-        from raven.cli.onboard_everos import _same_address
-
-        assert not _same_address("http://127.0.0.1:20000", "http://localhost:18791")
-
-    def test_a_non_loopback_host_is_not_loopback(self) -> None:
-        from raven.cli.onboard_everos import _same_address
-
-        assert not _same_address("http://10.0.0.5:20000", "http://localhost:20000")
-
-    def test_a_missing_address_never_matches(self) -> None:
-        from raven.cli.onboard_everos import _same_address
-
-        assert not _same_address(None, "http://localhost:18791")
-
-
 class TestTheIntendedPortIsAlwaysRecorded:
     """The target address is only a setting if something writes it.
 
@@ -5584,50 +5477,14 @@ class TestTheManagedPortIsOfferedNotImposed:
         assert "_ask_managed_port" in inspect.getsource(onboard_everos._step4_memory)
 
 
-class TestAnUpgradeIsAskedBeforeItIsMoved:
-    """A pre-upgrade install is protected by the question, not by the target.
-
-    An earlier attempt read the recorded address as the intent so that nothing
-    would be relocated. That over-corrected: with no intent stored the two
-    addresses always matched, the "keep it or move it" screen never appeared,
-    and the upgrade ended parked on the old port with the standard one never
-    mentioned. Silence in the other direction is still silence.
-    """
-
-    def test_the_old_address_and_the_target_disagree_so_the_user_is_asked(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
-
-        tmp_env.write_text(
-            json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
-            encoding="utf-8",
-        )
-
-        target = onboard_everos._configured_target_url()
-        assert target == "http://localhost:18791"
-        assert not onboard_everos._same_address("http://127.0.0.1:1995", target), (
-            "a pre-upgrade address must not read as already-at-target, or the question never fires"
-        )
-
-    def test_answering_keep_records_the_intent_so_it_is_asked_only_once(self, tmp_env: Path) -> None:
-        from raven.cli import onboard_everos
-
-        tmp_env.write_text(json.dumps({}), encoding="utf-8")
-        onboard_everos._adopt_running_address("http://127.0.0.1:1995")
-
-        target = onboard_everos._configured_target_url()
-        assert target == "http://localhost:1995"
-        assert onboard_everos._same_address("http://127.0.0.1:1995", target)
-
-
-class TestARefusedSelfManagedAddressEndsTheStep:
+class TestARefusedSelfManagedAddressReturnsToTheLaneQuestion:
     """Choosing self-managed and mistyping the port is not a change of mind.
 
     The step used to fall through to the managed path, so a user who had just
-    said "I run my own EverOS" was walked through configuring four model roles
-    and an API key for a setup they had not asked for -- and left with a root
-    built on disk that they would not use. The message printed one line earlier
-    already says what to do: start it and re-run. Doing the opposite of that in
-    the same breath is the contradiction worth removing.
+    said "I run my own EverOS" was walked through four model roles and an API key
+    for a setup they had not asked for. Ending the step outright was the other
+    over-correction: the address was refused because the server is not up yet or
+    a digit is wrong, and both are fixed where the user already is.
     """
 
     @staticmethod
@@ -5649,15 +5506,21 @@ class TestARefusedSelfManagedAddressEndsTheStep:
             "_config_everos_role",
             lambda **_kw: pytest.fail("configured a managed model after the user chose self-managed"),
         )
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
         monkeypatch.setattr(_discover_mod, "discover", list)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
+        answers = iter(["self", "skip"])
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-    def test_memory_is_left_off_rather_than_half_built(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Leaving the backend on would have the runtime spawn a managed server
-        against a root the user never agreed to."""
+        assert next(answers, None) is None, "the lane question was not asked again"
+
+    def test_the_refusal_itself_changes_nothing(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The setup that was working a moment ago still is.
+
+        Only the answer given on the second pass decides -- here "skip", which
+        resolves a modelless seed to off rather than leaving the runtime to
+        activate everos with nothing behind it.
+        """
         import questionary
 
         from raven.cli import onboard_everos
@@ -5665,13 +5528,15 @@ class TestARefusedSelfManagedAddressEndsTheStep:
         self._seed(tmp_env)
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
         monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
         monkeypatch.setattr(_discover_mod, "discover", list)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
+        answers = iter(["self", "skip"])
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
+        data = json.loads(tmp_env.read_text())
+        assert data["memory"]["backend"] is None
+        assert "everos-memory" not in (data.get("plugins") or {}).get("config", {})
 
 
 class TestARefusedAddressCanBeRetyped:
@@ -5747,14 +5612,15 @@ class TestARefusedAddressCanBeRetyped:
         assert onboard_everos._use_self_managed_everos() is True
 
 
-class TestSkippingIsQuiet:
-    """The step is leaving; saying so again is noise.
+class TestARefusalDoesNotAnnounceAnythingItDidNotDo:
+    """Between the refused address and the next question, nothing is claimed.
 
-    "Skip" was followed by a line restating what skip means, on a screen the
-    wizard is already walking off. The user chose the option one line earlier.
+    The old step turned memory off here and said so. It now returns to the lane
+    question with the config untouched, so a line about memory being off would be
+    describing something that has not happened.
     """
 
-    def test_nothing_is_printed_after_the_choice(
+    def test_nothing_between_the_two_questions_says_memory_is_off(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:
         import questionary
@@ -5764,17 +5630,25 @@ class TestSkippingIsQuiet:
         tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
         monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
         monkeypatch.setattr(_discover_mod, "discover", list)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
-        capsys.readouterr()
+        answers = iter(["self", "skip"])
+        # One snapshot per question, so what follows the refusal can be read on
+        # its own instead of being mixed with the closing lines of the step.
+        between: list[str] = []
+
+        def _select(*_a: object, **_kw: object) -> object:
+            between.append(capsys.readouterr().out)
+            return _Answer(next(answers))
+
+        monkeypatch.setattr(questionary, "select", _select)
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        after = capsys.readouterr().out
-        assert "长期记忆保持关闭" not in after
-        assert "stays off until" not in after
-        assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
+        assert len(between) == 2, "the lane question was not asked again"
+        after_refusal = " ".join(between[1].split())
+        assert "长期记忆保持关闭" not in after_refusal
+        assert "stays off" not in after_refusal
+        assert "left as it is" not in after_refusal
 
 
 class TestReconfiguringRestartsOurOwnService:
@@ -5885,18 +5759,14 @@ class TestIntentAndAddressAreDifferentQuestions:
         assert onboard_everos._ask_managed_port(Path("/r")) == 1995
 
 
-class TestAnEnabledInstallBranchesOnOwnership:
-    """The two paths stay two paths after they are configured.
+class TestTheLaneDecidesOwnership:
+    """Who runs everos is answered once, and nothing infers it again.
 
-    The enabled menu did not look at ``owned``, so a self-managed install got
-    the managed one: Keep or Reconfigure, and Reconfigure is the only plausible
-    button for "change the address of my own server". It walked the four model
-    roles -- raven writing into a root it owns, which by definition it does not
-    here -- and ended with raven's own root recorded, ``owned`` flipped to true
-    and the user's address replaced, none of it confirmed.
-
-    Configuring models is not an action that exists for a server the user runs.
-    The only one that does is changing where it is.
+    The enabled menu used to be shared, so a self-managed install got Keep or
+    Reconfigure -- and Reconfigure, the only plausible button for "change the
+    address of my own server", walked the four model roles, recorded raven's own
+    root, flipped ``owned`` to true and replaced the address, none of it
+    confirmed. There is now one question, before any of that.
     """
 
     @staticmethod
@@ -5911,15 +5781,18 @@ class TestAnEnabledInstallBranchesOnOwnership:
             encoding="utf-8",
         )
 
-    def test_reconfigure_never_reaches_the_model_roles(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_self_managed_lane_never_reaches_the_model_roles(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Configuring models is not an action that exists for a server the user
+        runs: those are their keys and their toml."""
         import questionary
 
         from raven.cli import onboard_everos
 
         self._self_managed(tmp_env)
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
         monkeypatch.setattr(_discover_mod, "discover", list)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("redo"))
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
         monkeypatch.setattr(
             onboard_everos,
             "_config_everos_role",
@@ -5929,38 +5802,40 @@ class TestAnEnabledInstallBranchesOnOwnership:
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-    def test_ownership_and_address_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Nothing may flip owned or record a root behind this menu."""
+    def test_skipping_leaves_a_self_managed_setup_untouched(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing may flip owned, record a root, or move the address behind a skip."""
         import questionary
 
         from raven.cli import onboard_everos
 
         self._self_managed(tmp_env)
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
         monkeypatch.setattr(_discover_mod, "discover", list)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
-        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        data = json.loads(tmp_env.read_text())
+        slice_ = data["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is False
         assert slice_["base_url"] == "http://127.0.0.1:8000"
         assert "root" not in slice_
+        assert data["memory"]["backend"] == "everos", "turned off a working self-managed setup"
 
     @pytest.mark.parametrize("recorded_port", [None, 8000])
-    def test_the_handover_does_not_inherit_their_address(
+    def test_the_managed_lane_does_not_inherit_their_address(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch, recorded_port: int | None
     ) -> None:
         """Raven's own service must not be configured on the user's port.
 
-        The screen above the handover promises raven stops using their address.
-        A merging write kept it, and ``_ask_managed_port`` reads exactly that as
-        the port raven is meant to listen on -- silently when their server is
-        stopped (the natural order: shut it down, then re-run onboard), and with
-        "already in use by something else" pointing at their own EverOS when it
-        is not. Both cases are parametrized: a reuse recorded through
-        ``_set_base_url`` leaves an explicit ``port`` behind as well as the
-        address, and the address alone is what a self-managed setup records.
+        A merging write keeps the old address, and ``_ask_managed_port`` reads
+        exactly that as the port raven is meant to listen on -- silently when
+        their server is stopped (the natural order: shut it down, then re-run
+        onboard), and with "already in use by something else" pointing at their
+        own EverOS when it is not. Both shapes are parametrized: a reuse recorded
+        through ``_set_base_url`` leaves an explicit ``port`` behind as well as
+        the address, and the address alone is what a self-managed setup records.
         """
         import questionary
 
@@ -5980,11 +5855,7 @@ class TestAnEnabledInstallBranchesOnOwnership:
         assert onboard_everos._memory_enabled() is True
 
         monkeypatch.setattr(_discover_mod, "discover", list)
-        # Two screens: the ownership menu, then the source question the handover
-        # falls through into. Both answered "managed" -- the second one is the
-        # known double-ask, not the subject here.
-        answers = iter(["managed", "managed"])
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("managed"))
         monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_kw: None)
         monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
         monkeypatch.setattr(onboard_everos, "_stop_for_reload", lambda *_a, **_kw: None)
@@ -6010,16 +5881,14 @@ class TestAnEnabledInstallBranchesOnOwnership:
     ) -> None:
         """Retracting the address is about theirs, not about raven's own.
 
-        Declining to share a discovered root also reaches here, and there the
-        recorded address can be raven's own on a port the user deliberately
-        moved to. Dropping that offers 18791 again on the next run, which is the
-        silent undo ``_ask_managed_port`` exists to prevent.
+        Taking over a found root also reaches here, and there the recorded
+        address can be raven's own on a port the user deliberately moved to.
+        Dropping that offers 18791 again on the next run, which is the silent
+        undo ``_ask_managed_port`` exists to prevent.
         """
         from raven.cli import onboard_everos
-        from raven.config import update_everos as ue
 
         mine = tmp_env.parent / "mine"
-        monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
         tmp_env.write_text(
             json.dumps(
                 {
@@ -6038,43 +5907,29 @@ class TestAnEnabledInstallBranchesOnOwnership:
             encoding="utf-8",
         )
 
-        onboard_everos._adopt_own_root()
+        onboard_everos._adopt_root(mine)
 
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert Path(slice_["root"]) == mine
         assert slice_["port"] == 20000
         assert slice_["base_url"] == "http://localhost:20000"
 
-    def test_a_managed_install_still_gets_the_model_roles(
-        self, tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The managed menu is unchanged; only the unowned one is new."""
-        import inspect
 
-        from raven.cli import onboard_everos
+class TestALeftoverRootIsOnlyTakenOverOnPurpose:
+    """A directory on disk cannot start a takeover by itself.
 
-        src = inspect.getsource(onboard_everos._step4_memory)
-        assert "_enabled_unowned_menu" in src, "the enabled branch does not consult ownership"
-
-
-class TestDiscoveryCannotOverrideRecordedOwnership:
-    """A recorded `owned: false` is a decision; a root on disk is not.
-
-    discover() adds raven's own roots with owned=True unconditionally, so a
-    self-managed install that still has an abandoned raven root lying around --
-    the normal shape after switching -- had pick() return that root, and the
-    owned branch recorded it and flipped ownership before any menu was shown.
-    The user is silently moved off their own server by a directory they stopped
-    using.
+    An abandoned raven root -- the normal shape after switching to a server of
+    one's own -- was picked by discovery, recorded as owned and converged before
+    any menu appeared, silently moving the user off their own server. Taking it
+    over is now something the managed lane does, after being chosen.
     """
 
-    def test_a_leftover_raven_root_does_not_reclaim_a_self_managed_install(
+    def test_a_leftover_root_is_untouched_when_the_lane_is_not_chosen(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import questionary
 
         from raven.cli import onboard_everos
-        from raven.plugin.memory.everos import _discover
 
         tmp_env.write_text(
             json.dumps(
@@ -6085,23 +5940,13 @@ class TestDiscoveryCannotOverrideRecordedOwnership:
             ),
             encoding="utf-8",
         )
-        # An abandoned managed root, configured and therefore pickable.
-        leftover = _discover.RootState(
-            root=Path("/leftover/everos"),
-            # As discovery marks raven's own roots: unconditionally owned.
-            owned=True,
-            configured=True,
-            declared_url="http://localhost:18791",
-            alive=False,
-            lock_held=False,
-        )
+        leftover = _root_state(Path("/leftover/everos"), alive=False, lock_held=False)
         monkeypatch.setattr(_discover_mod, "discover", lambda: [leftover])
-        monkeypatch.setattr(_discover_mod, "pick", lambda _s: leftover)
-        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
         monkeypatch.setattr(
             onboard_everos,
-            "_converge_owned_root",
-            lambda _s: pytest.fail("converged a root a self-managed install does not use"),
+            "_found_root_menu",
+            lambda _s: pytest.fail("offered a takeover the user did not ask for"),
         )
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
