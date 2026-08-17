@@ -35,14 +35,67 @@ from raven.utils.helpers import sync_workspace_templates
 console = Console()
 
 
+# One-shot ``-m`` exit code: set by the error renderer, checked after the
+# turn. Module-level because the render callback runs inside the delivery
+# hub's worker task, where raising typer.Exit would be swallowed.
+_ONE_SHOT_EXIT = {"code": 0}
+
+
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
+    if _print_llm_error(content):
+        return
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} Raven[/cyan]")
     console.print(body)
     console.print()
+
+
+# Category-apt hints for non-auth provider errors. Credential guidance would
+# mislead here: a rate limit or a network drop is not fixed by re-checking the
+# key. Categories absent from this map (invalid_request, unknown, ...) render
+# the error line alone.
+_NON_AUTH_HINTS = {
+    "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
+    "network": "Hint: network problem; check connectivity and retry.",
+    "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
+    "server": "Hint: provider-side error; retry later or switch models.",
+    "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
+    "billing": "Hint: billing or quota issue; check your provider account.",
+}
+
+
+def _print_llm_error(content: str) -> bool:
+    """Render a provider error as a diagnosis + fix hint instead of a fake
+    agent reply. Returns True when handled; marks the one-shot path to exit
+    non-zero."""
+    from rich.markup import escape
+
+    from raven.providers.base import parse_llm_error
+
+    parsed = parse_llm_error(content)
+    if parsed is None:
+        return False
+    category, provider, detail = parsed
+    console.print()
+    if category == "auth":
+        # No status code here: the auth bucket also fires on 403, on
+        # PermissionDeniedError and on substring matches, so naming one would
+        # be a guess. The detail carries the provider's own reason instead.
+        where = f" ({escape(provider)})" if provider else ""
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
+        target = provider or "<name>"
+        console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
+    else:
+        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
+        hint = _NON_AUTH_HINTS.get(category)
+        if hint:
+            console.print(hint)
+    console.print()
+    _ONE_SHOT_EXIT["code"] = 1
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -344,11 +397,14 @@ def register(app: typer.Typer) -> None:
                             "memory backend stop failed; continuing shutdown",
                         )
 
+        _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
         # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
         # thread, torch) segfault during interpreter finalization. The exit
         # chokepoint in raven.cli.commands.run hard-exits past finalization
         # when that hazard is live, so this path just returns normally.
+        if _ONE_SHOT_EXIT["code"]:
+            raise typer.Exit(_ONE_SHOT_EXIT["code"])
 
 
 __all__ = ["register"]
