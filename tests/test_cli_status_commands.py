@@ -75,8 +75,9 @@ def test_status_marks_oauth_providers_distinctly(tmp_config: Path, isolated_oaut
 
 
 # ---------------------------------------------------------------------------
-# RAV-009: fold unconfigured providers into one line
-# FIX-13 (status side): Config line must not show a checkmark on invalid JSON
+# Unconfigured providers fold into one summary line, and the Config line
+# resolves three states (ok / invalid / missing) instead of a checkmark
+# whenever the file merely exists.
 # ---------------------------------------------------------------------------
 
 

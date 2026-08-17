@@ -555,8 +555,8 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
 
 
 # ---------------------------------------------------------------------------
-# RAV-011: workspace template sync prints one summary line, not one per file
-# RAV-012: per-turn tokens/cost summary line on the one-shot path
+# Workspace template sync prints one summary line, not one per file, and
+# the one-shot path renders a per-turn tokens/cost summary line.
 # ---------------------------------------------------------------------------
 
 
