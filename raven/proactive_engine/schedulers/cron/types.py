@@ -65,6 +65,15 @@ class CronJob:
 
 
 @dataclass
+class CronStartupDrop:
+    """A past-due one-shot reminder dropped by the startup recompute."""
+
+    name: str
+    message: str
+    at_ms: int
+
+
+@dataclass
 class CronStore:
     """Persistent store for cron jobs."""
 

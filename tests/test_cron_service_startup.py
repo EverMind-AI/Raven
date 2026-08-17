@@ -122,3 +122,39 @@ async def test_startup_leaves_own_disabled_job_untouched(tmp_path: Path) -> None
 
     data = json.loads(store_path.read_text(encoding="utf-8"))
     assert [j["id"] for j in data["jobs"]] == ["tui1"], "disabled jobs are never dropped by startup recompute"
+
+
+async def test_startup_drop_records_structured_info(tmp_path: Path) -> None:
+    """Each startup drop SHALL be recorded on ``last_startup_drops`` with the
+    job's name, payload message, and scheduled at_ms, so the embedding process
+    can surface a missed-reminders notice."""
+    from raven.proactive_engine.schedulers.cron.types import CronStartupDrop
+
+    store_path = tmp_path / "jobs.json"
+    now_ms = int(time.time() * 1000)
+    _write_store(store_path, [_past_due_tui_at_job(now_ms)])
+
+    svc = CronService(store_path, allowed_channels={"tui"})
+    assert svc.last_startup_drops == [], "readable before start()"
+    await svc.start()
+    svc.stop()
+
+    assert svc.last_startup_drops == [
+        CronStartupDrop(name="tui reminder", message="stretch", at_ms=now_ms - 60_000),
+    ]
+
+
+async def test_startup_drop_records_empty_for_foreign_or_clean_start(tmp_path: Path) -> None:
+    store_path = tmp_path / "jobs.json"
+    now_ms = int(time.time() * 1000)
+    _write_store(store_path, [_past_due_tui_at_job(now_ms)])
+
+    svc = CronService(store_path, allowed_channels={"weixin"})
+    await svc.start()
+    svc.stop()
+    assert svc.last_startup_drops == [], "foreign past-due job must not be recorded as this runner's drop"
+
+    svc2 = CronService(tmp_path / "empty.json", allowed_channels={"tui"})
+    await svc2.start()
+    svc2.stop()
+    assert svc2.last_startup_drops == []

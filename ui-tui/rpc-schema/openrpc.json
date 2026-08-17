@@ -1847,6 +1847,35 @@
           }
         }
       },
+      "CronMissedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "cron.missed" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["count", "items"],
+            "properties": {
+              "count": { "type": "integer" },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "scheduled_at", "message"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "scheduled_at": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "TurnEvent": {
         "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
         "oneOf": [
@@ -1859,7 +1888,8 @@
           { "$ref": "#/components/schemas/ToolCompleteEvent" },
           { "$ref": "#/components/schemas/MessageCompleteEvent" },
           { "$ref": "#/components/schemas/ErrorEvent" },
-          { "$ref": "#/components/schemas/CronDeliveredEvent" }
+          { "$ref": "#/components/schemas/CronDeliveredEvent" },
+          { "$ref": "#/components/schemas/CronMissedEvent" }
         ],
         "discriminator": {
           "propertyName": "type",
@@ -1873,7 +1903,8 @@
             "tool.complete": "#/components/schemas/ToolCompleteEvent",
             "message.complete": "#/components/schemas/MessageCompleteEvent",
             "error": "#/components/schemas/ErrorEvent",
-            "cron.delivered": "#/components/schemas/CronDeliveredEvent"
+            "cron.delivered": "#/components/schemas/CronDeliveredEvent",
+            "cron.missed": "#/components/schemas/CronMissedEvent"
           }
         }
       }

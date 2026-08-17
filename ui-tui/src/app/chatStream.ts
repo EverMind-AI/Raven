@@ -100,6 +100,26 @@ interface InternalState {
   turnId: string | null
 }
 
+// Render an ISO timestamp for the cron.missed summary block: local HH:MM
+// when the reminder was scheduled today, MM-DD HH:MM otherwise - a missed
+// notice's whole point is how long ago, and a bare "09:00" after a weekend
+// away reads like this morning. Falls back to the raw string when
+// unparseable.
+const formatScheduledAt = (iso: string): string => {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) {
+    return iso
+  }
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  if (sameDay) {
+    return hhmm
+  }
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm}`
+}
+
 const dispatch = (
   state: InternalState,
   event: TurnEvent,
@@ -143,6 +163,15 @@ const dispatch = (
         const { name, text, fired_at } = event.payload
         const tag = fired_at ? `${name} @ ${fired_at}` : name
         sys(`─── ⏰ ${tag} ───\n${text}\n${'─'.repeat(40)}`)
+      }
+      return
+    }
+    case 'cron.missed': {
+      if (sys) {
+        const { count, items } = event.payload
+        const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`)
+        const noun = count === 1 ? 'reminder' : 'reminders'
+        sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
       }
       return
     }

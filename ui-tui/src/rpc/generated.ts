@@ -33,7 +33,8 @@ export type TurnEvent =
   | ToolCompleteEvent
   | MessageCompleteEvent
   | ErrorEvent
-  | CronDeliveredEvent;
+  | CronDeliveredEvent
+  | CronMissedEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -418,6 +419,21 @@ export interface CronDeliveredEvent {
     name: string;
     text: string;
     fired_at: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CronMissedEvent".
+ */
+export interface CronMissedEvent {
+  type: 'cron.missed';
+  payload: {
+    count: number;
+    items: {
+      name: string;
+      scheduled_at: string;
+      message: string;
+    }[];
   };
 }
 /**

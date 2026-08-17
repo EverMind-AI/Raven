@@ -353,6 +353,35 @@ async def _fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> No
         await emitter.emit(session_key, {"type": "cron.delivered", "payload": payload})
 
 
+async def _fanout_cron_missed(emitter, *, drops) -> None:
+    """Fan a ``cron.missed`` event out to every active TUI session.
+
+    Fired once, right after ``cron_service.start()`` dropped past-due one-shot
+    reminders. At that point the client has not called ``turn.subscribe`` yet
+    (server bring-up precedes the handshake), so with no active session the
+    event is queued on the emitter and flushed to the first subscription that
+    registers — unlike ``cron.delivered``, whose no-subscriber case is a
+    silent no-op because a job fire always happens after the client attached.
+    """
+    from datetime import datetime, timezone
+
+    items = [
+        {
+            "name": d.name,
+            "scheduled_at": datetime.fromtimestamp(d.at_ms / 1000, tz=timezone.utc).isoformat(),
+            "message": d.message,
+        }
+        for d in drops
+    ]
+    event = {"type": "cron.missed", "payload": {"count": len(items), "items": items}}
+    sessions = list(emitter._by_session.keys())
+    if not sessions:
+        emitter.queue_startup_event(event)
+        return
+    for session_key in sessions:
+        await emitter.emit(session_key, event)
+
+
 def _build_cron_callback_spine(base_on_cron, emitter):
     """Wrap the spine cron callback so a job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
@@ -648,6 +677,10 @@ async def _run_rpc_server_until_done(
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
+            # start() dropped past-due one-shot reminders on this runner's
+            # partition; surface them as one cron.missed startup notice.
+            if agent_loop.cron_service.last_startup_drops:
+                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
 
     # Wrap system.hello to latch the handshake event; the umbrella below
     # registers everything else (cli.dispatch + setup.status + reload.mcp +
