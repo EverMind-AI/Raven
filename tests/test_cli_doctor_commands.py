@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -324,7 +325,9 @@ def test_doctor_says_when_the_memories_are_not_ravens_to_touch(
 
     out = " ".join(r.stdout.split())
     assert "Managed by you" in out
-    assert "never writes or restarts it" in out
+    assert "never writes, starts or stops it" in out
+    # And it must not name a directory: nothing records where their memories live.
+    assert str(tmp_path / "theirs") not in out
 
 
 def test_an_unbuilt_optional_role_is_reported_without_failing(healthy_config: Path, no_memory_server) -> None:
@@ -530,3 +533,66 @@ def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     )
     payload = json.loads(r.stdout[r.stdout.index("{") :])
     assert payload["memory"]["retrieval"] == "keyword-only"
+
+
+class TestDoctorDoesNotInventASelfManagedRoot:
+    """A self-managed install records no root, so doctor must not name one.
+
+    ``everos_root()`` answers with a fallback when nothing is recorded, which
+    is right for the code that needs somewhere to write and wrong for the code
+    that reports where the memories are. Printing it labelled "Managed by you"
+    points the user at a directory that is not theirs and has nothing in it.
+
+    The roles are worse than cosmetic. They were read out of that same
+    fabricated root's toml, so an install whose server has embedding
+    configured was told its recall was keyword-only. Doctor cannot read the
+    user's toml -- that is the whole read-only promise -- so what the server
+    reports about itself is the only honest source.
+    """
+
+    @staticmethod
+    def _collect(monkeypatch, *, caps: dict, reachable: bool = True):
+        from raven.cli import doctor_commands as dc
+
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: Path("/fallback/everos"))
+        monkeypatch.setattr(
+            "raven.config.update_everos.everos_role_configured",
+            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
+        )
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            # reports_capabilities is derived from capabilities, not a field.
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=reachable, capabilities=caps),
+        )
+        return dc
+
+    def test_no_root_is_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.root is None, "named a directory for an install that records none"
+
+    def test_retrieval_follows_what_the_server_reports(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.retrieval == "semantic", "told the user recall was keyword-only while the server has embedding"
+
+    def test_no_embedding_on_the_server_reads_as_keyword_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        dc = self._collect(monkeypatch, caps={"llm": True, "embed": False})
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.retrieval == "keyword-only"
+
+    def test_an_unreachable_server_claims_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Down is not the same as misconfigured. With nothing to ask, doctor
+        has no basis for either answer and must not pick one."""
+        dc = self._collect(monkeypatch, caps={}, reachable=False)
+        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+        assert info.root is None
+        assert info.retrieval is None

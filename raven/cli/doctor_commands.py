@@ -238,18 +238,33 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     # the wizard printed the path once while converging and nothing showed it
     # again, so "where are my memories" had no answer short of reading
     # config.json by hand. This is the place that question gets asked.
-    info.root = str(everos_root())
     info.owned = everos_owned()
     info.address = configured_base_url(config)
-
-    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
-    # Recall quality is decided by the embedding role in the user-level
-    # everos.toml: with it recall matches meaning, without it only keywords.
-    info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
     info.capabilities = dict(report.capabilities)
+
+    if info.owned:
+        info.root = str(everos_root())
+        info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+        # Recall quality is decided by the embedding role in the user-level
+        # everos.toml: with it recall matches meaning, without it only keywords.
+        info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
+        return info
+
+    # A root the user runs. Nothing here may come from the local filesystem:
+    # no root is recorded for it, so ``everos_root()`` would answer with the
+    # fallback -- a directory that is not theirs and holds none of their
+    # memories -- and the roles read out of that directory's toml would
+    # describe an install nobody is using. Reading their toml is not an option
+    # either; not touching it is the promise. What the server says about itself
+    # is the only honest source, and when it is down there is no source at all.
+    info.root = None
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is True]
+    info.retrieval = None
+    if report.reports_capabilities:
+        info.retrieval = "semantic" if report.available("embedding") is True else "keyword-only"
     return info
 
 
@@ -272,9 +287,13 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
 
     if memory.backend != "everos":
         return
-    console.print(f"  Memories:   {memory.root}")
+    if memory.root:
+        console.print(f"  Memories:   {memory.root}")
     if not memory.owned:
-        console.print("  [dim]Managed by you -- Raven reads this one and never writes or restarts it.[/dim]")
+        console.print(
+            "  [dim]Managed by you -- Raven reads it at the address below and never writes,\n"
+            "  starts or stops it, so it does not track where on disk it keeps them.[/dim]"
+        )
     console.print(f"  Address:    {memory.address}")
     if not memory.server_running:
         console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
@@ -410,6 +429,8 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("  Retrieval:  semantic")
         elif memory.retrieval:
             console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
+        elif not memory.owned:
+            console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.probe is not None:
