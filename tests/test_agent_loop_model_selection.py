@@ -27,7 +27,7 @@ class _ModelRecordingProvider:
 def _stub_edges(loop: AgentLoop) -> None:
     """No-op the sandbox/MCP bring-up so a text-only turn runs without a VM."""
 
-    async def _noop() -> None:
+    async def _noop(**_kw) -> None:
         return None
 
     loop._start_executor = _noop

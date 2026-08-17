@@ -189,7 +189,7 @@ def _req(text: str, *, media=(), origin: Origin = Origin.USER) -> TurnRequest:
 def _stub_edges(loop: AgentLoop) -> None:
     """No-op the sandbox/MCP bring-up so a text-only turn runs without a VM."""
 
-    async def _noop() -> None:
+    async def _noop(**_kw) -> None:
         return None
 
     loop._start_executor = _noop
@@ -1117,3 +1117,25 @@ async def test_a_working_display_call_still_labels_the_row(tmp_path):
 
     start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
     assert start.display == "the label"
+
+
+async def test_run_turn_bounds_how_long_it_waits_for_mcp(tmp_path):
+    """The call site, not just the bound: a turn has to pass one.
+
+    Without it, a server parked at the browser-authorization step held the
+    message behind it for the OAuth flow's whole timeout.
+    """
+    from raven.agent.loop.main import _MCP_TURN_WAIT_S
+
+    seen: list[dict] = []
+    loop = AgentLoop(provider=_FakeStreamProvider([StreamDelta(content="hi")]), workspace=tmp_path)
+    _stub_edges(loop)
+
+    async def _record(**kw) -> None:
+        seen.append(kw)
+
+    loop._connect_mcp = _record
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert seen == [{"wait": _MCP_TURN_WAIT_S}]
