@@ -85,6 +85,7 @@ def _build_engine(
     memory_config: MemoryConfig | None = None,
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
+    rrf_k: int | None = None,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
@@ -99,6 +100,7 @@ def _build_engine(
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
             hub=HubSourceConfig(endpoint=hub_endpoint),
+            **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
         skill_forge_config=skill_forge_config,
     )
@@ -189,6 +191,16 @@ class TestSkillForgeRouterAssembly:
     def test_hub_source_present_when_endpoint_set(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
         assert HubSkillSource in types
+
+    def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._router._rrf_k == 25
+
+    def test_rrf_k_defaults_to_config_default(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend())
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._router._rrf_k == SkillForgeRouterConfig().rrf_k
 
     def test_track_ids_from_memory_config(self, tmp_path: Path) -> None:
         engine = _build_engine(
