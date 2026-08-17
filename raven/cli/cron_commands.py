@@ -67,7 +67,7 @@ def _open_service() -> CronService:
     return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
 
 
-_INTERACTIVE_CHANNELS = ("tui", "cli")
+_INTERACTIVE_CHANNELS = ("tui",)
 
 
 def _resolve_delivery_binding(channel: str, to: str | None) -> tuple[str, str]:
@@ -110,7 +110,7 @@ def _print_runner_status(service: CronService) -> None:
     gateway = read_gateway_status(now=time.time())
     console.print(
         f"[dim]Runners: {f'gateway (pid {gateway.pid})' if gateway else 'none'} — "
-        "tui/cli jobs fire in their own session while it is open[/dim]"
+        "tui jobs fire in their own session while it is open[/dim]"
     )
 
     enabled_jobs = [j for j in service.list_jobs(include_disabled=True) if j.enabled]
@@ -648,23 +648,21 @@ def cron_add(
     channel: str = typer.Option(
         ...,
         "--channel",
-        help=(
-            "Delivery channel the job is bound to (required): 'tui', 'cli', or an enabled IM channel (e.g. 'telegram')"
-        ),
+        help=("Delivery channel the job is bound to (required): 'tui' or an enabled IM channel (e.g. 'telegram')"),
     ),
     to: str = typer.Option(
         None,
         "--to",
         help=(
             "Recipient chat_id. IM channels: defaults to the most recent "
-            "session on that channel; tui/cli: defaults to 'direct'"
+            "session on that channel; tui: defaults to 'direct'"
         ),
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
 ):
     """Create a cron job from explicit flags (advanced / scripting path).
 
-    For interactive use, prefer ``raven agent`` — the LLM understands
+    For interactive use, prefer ``raven tui`` — the LLM understands
     natural language ("remind me to take my meds at 9 every day") and routes through the same
     CronService backend. Use this CLI ``add`` when:
 
@@ -682,7 +680,7 @@ def cron_add(
 
     The stored (channel, to) IS the delivery target — the runner that owns
     that channel fires the job (fire-at-origin, no trigger-time
-    re-routing), so a tui/cli-bound job only fires while its session is
+    re-routing), so a tui-bound job only fires while its session is
     open. That is why ``--channel`` is required: an implicit default would
     silently create a job the user expects to fire elsewhere.
     """

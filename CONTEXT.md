@@ -148,11 +148,13 @@ _Avoid_: conflating with Sentinel
 **Fire-at-origin**:
 The cron ownership rule: a job is claimed and delivered only by the runner that
 owns its creation-time channel binding (`payload.channel/to`) — the gateway for
-enabled IM channels, an interactive session (`tui`/`cli`) for its own channel.
+enabled IM channels, an open TUI session for `tui`.
 A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
 dropped at that runner's next startup); there is no trigger-time re-routing.
 _Avoid_: reintroducing fire-time channel selection (the retired
-`cron.forward_channels`) — bind the target at creation instead.
+`cron.forward_channels`) — bind the target at creation instead. The `cli`
+channel value is retired with the REPL; stored `cli`-bound jobs migrate to
+`tui` at load time.
 
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
