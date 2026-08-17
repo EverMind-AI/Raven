@@ -40,6 +40,10 @@ _MAX_WAKE_INTERVAL_S = 30.0
 # Backoff after a failed tick so a persistent error cannot spin the loop.
 _ERROR_BACKOFF_S = 5.0
 
+# Grace before a past-due foreign one-shot counts as "missed" — its owning
+# session may just be slow (a long agent turn) rather than closed.
+_MISSED_GRACE_MS = 5 * 60 * 1000
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -127,6 +131,10 @@ class CronService:
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
         self.on_job = on_job
         self.allowed_channels = allowed_channels
+        # Missed-reminder observer (gateway wires this): called with the
+        # past-due foreign one-shots on start and once per wake-loop pass.
+        # Read-only towards the store — the callback must not mutate jobs.
+        self.on_missed_foreign: Callable[[list[CronJob]], None] | None = None
         self._store: CronStore | None = None
         # Nanosecond precision: float st_mtime collapses writes ~238ns apart
         # into one value, serving a stale cache after an external rewrite.
@@ -216,10 +224,12 @@ class CronService:
                                 last_error=j.get("state", {}).get("lastError"),
                                 claimed_by_pid=j.get("state", {}).get("claimedByPid"),
                                 claimed_at_ms=j.get("state", {}).get("claimedAtMs"),
+                                silent_fire_count=j.get("state", {}).get("silentFireCount", 0),
                             ),
                             created_at_ms=j.get("createdAtMs", 0),
                             updated_at_ms=j.get("updatedAtMs", 0),
                             delete_after_run=j.get("deleteAfterRun", False),
+                            silent_fire_limit=j.get("silentFireLimit", 12),
                         )
                     )
                 self._store = CronStore(jobs=jobs)
@@ -265,10 +275,12 @@ class CronService:
                         "lastError": j.state.last_error,
                         "claimedByPid": j.state.claimed_by_pid,
                         "claimedAtMs": j.state.claimed_at_ms,
+                        "silentFireCount": j.state.silent_fire_count,
                     },
                     "createdAtMs": j.created_at_ms,
                     "updatedAtMs": j.updated_at_ms,
                     "deleteAfterRun": j.delete_after_run,
+                    "silentFireLimit": j.silent_fire_limit,
                 }
                 for j in self._store.jobs
             ],
@@ -294,6 +306,7 @@ class CronService:
             self._load_store()
             self._recompute_next_runs()
             self._save_store()
+        self._check_missed_foreign()
         self._loop_task = asyncio.create_task(self._run_loop())
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
@@ -394,6 +407,7 @@ class CronService:
             except Exception:
                 logger.exception("Cron: wake tick failed; continuing in {}s", _ERROR_BACKOFF_S)
                 await asyncio.sleep(_ERROR_BACKOFF_S)
+            self._check_missed_foreign()
             delay = self._compute_wake_delay()
             try:
                 await asyncio.wait_for(self._wake_event.wait(), timeout=delay)
@@ -507,8 +521,11 @@ class CronService:
                     j.state.last_run_at_ms = job.state.last_run_at_ms
                     j.state.last_status = job.state.last_status
                     j.state.last_error = job.state.last_error
-                    j.state.next_run_at_ms = job.state.next_run_at_ms
-                    j.enabled = job.enabled
+                    # A store-side disable is sticky: record_fire's auto-disable
+                    # (or a user disabling mid-run) lands between claim and this
+                    # writeback, and the in-memory copy must not resurrect it.
+                    j.enabled = j.enabled and job.enabled
+                    j.state.next_run_at_ms = job.state.next_run_at_ms if j.enabled else None
                     j.updated_at_ms = job.updated_at_ms
                     break
             # Handle "at"-kind delete_after_run (_execute_job removed from
@@ -556,11 +573,116 @@ class CronService:
 
     # ========== Public API ==========
 
+    def record_fire(self, job_id: str) -> bool:
+        """Increment silent_fire_count for a recurring job; auto-disable when
+        it crosses silent_fire_limit. Called by the delivery handler
+        (make_on_cron_job) right after a successful cron fire. Returns True
+        if the job was auto-disabled this call.
+
+        One-shot 'at' jobs are ignored (they cannot run away). The store
+        write persists the count, but the caller executing the job must
+        also flip its in-memory job.enabled on a True return —
+        _writeback_after_run patches enabled/next_run from the in-memory
+        job and would otherwise clobber the disable written here.
+        """
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            for j in store.jobs:
+                if j.id != job_id:
+                    continue
+                if j.schedule.kind not in ("every", "cron"):
+                    return False
+                j.state.silent_fire_count += 1
+                limit = j.silent_fire_limit
+                disabled = False
+                if limit is not None and limit > 0 and j.state.silent_fire_count >= limit:
+                    j.enabled = False
+                    j.state.next_run_at_ms = None
+                    disabled = True
+                    logger.warning(
+                        "Cron: auto-disabled job '{}' ({}) — {} silent fires without user activity (limit={})",
+                        j.name,
+                        j.id,
+                        j.state.silent_fire_count,
+                        limit,
+                    )
+                self._save_store()
+                return disabled
+            return False
+
+    def notify_user_active(self, channel: str | None = None, to: str | None = None) -> int:
+        """Reset silent_fire_count for jobs matching (channel, to) — call
+        whenever a genuine user-originated message arrives so recently-
+        firing crons don't decay toward auto-disable. ``None`` on the call
+        side matches every job; a falsy channel/to on the JOB side is a
+        wildcard too — legacy pre-attribution jobs are claimable by any
+        runner, so symmetrically any user activity resets them (otherwise
+        their counter could only ever climb and unfairly auto-disable).
+        Returns count of jobs whose state was reset."""
+        reset = 0
+        with self._locked():
+            self._store = None
+            store = self._load_store()
+            for j in store.jobs:
+                if not j.enabled or j.state.silent_fire_count == 0:
+                    continue
+                if channel is not None and j.payload.channel and j.payload.channel != channel:
+                    continue
+                if to is not None and j.payload.to and j.payload.to != to:
+                    continue
+                j.state.silent_fire_count = 0
+                reset += 1
+            if reset > 0:
+                self._save_store()
+        return reset
+
     def list_jobs(self, include_disabled: bool = False) -> list[CronJob]:
         """List all jobs."""
         store = self._load_store()
         jobs = store.jobs if include_disabled else [j for j in store.jobs if j.enabled]
         return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
+
+    def list_missed_foreign_oneshots(self, grace_ms: int = _MISSED_GRACE_MS) -> list[CronJob]:
+        """Read-only: one-shot 'at' jobs owned by another partition whose
+        fire time is more than ``grace_ms`` in the past — their owning
+        session (tui / cli) was closed before they could fire.
+
+        Foreign jobs are exactly the ones this runner may never claim or
+        clean up (partition rules), so observing is the only way the
+        gateway can tell the user a reminder was stranded. A job with a
+        fresh peer claim is excluded: the owning process is delivering it
+        right now. Falsy channels (legacy, pre-attribution) are never
+        foreign.
+        """
+        store = self._load_store()
+        now = self._now_ms()
+        missed: list[CronJob] = []
+        for j in store.jobs:
+            if j.schedule.kind != "at" or not j.enabled:
+                continue
+            if self._owns_channel(j.payload.channel):
+                continue
+            at_ms = j.schedule.at_ms
+            if at_ms is None or now - at_ms < grace_ms:
+                continue
+            cb, ca = j.state.claimed_by_pid, j.state.claimed_at_ms
+            if cb is not None and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+                continue
+            missed.append(j)
+        return missed
+
+    def _check_missed_foreign(self) -> None:
+        """Feed past-due foreign one-shots to the observer, best-effort.
+        A callback failure must never break start() or the wake loop."""
+        if self.on_missed_foreign is None:
+            return
+        try:
+            missed = self.list_missed_foreign_oneshots()
+            if missed:
+                self.on_missed_foreign(missed)
+        except Exception:
+            logger.exception("Cron: missed-foreign observer failed; continuing")
 
     def add_job(
         self,
@@ -796,6 +918,10 @@ class CronService:
                     job.updated_at_ms = self._now_ms()
                     if enabled:
                         job.state.next_run_at_ms = _compute_next_run(job.schedule, self._now_ms())
+                        # Re-enabling is deliberate user engagement with this
+                        # job: without a counter reset, one auto-disabled at
+                        # the limit would re-disable on its very next fire.
+                        job.state.silent_fire_count = 0
                     else:
                         job.state.next_run_at_ms = None
                     self._save_store()

@@ -197,6 +197,47 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "stopped +=" in stop_branch
 
 
+def test_cron_config_notify_missed_defaults_on() -> None:
+    from raven.config.schema import CronConfig
+
+    assert CronConfig().notify_missed is True
+    assert CronConfig.model_validate({"notify_missed": False}).notify_missed is False
+
+
+def test_gateway_wires_anti_runaway_count_and_reset() -> None:
+    """The anti-runaway guard must be WIRED, not just defined: the cron
+    handler gets the service to count fires on (``cron_service=cron``) and
+    the AgentLoop's user-inbound hook chains the counter reset after the
+    Sentinel hook. Like the /stop test above, these live in closures inside
+    the serve command with no import seam, so pin the command source.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "cron_service=cron," in src
+    assert "chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)" in src
+    assert "on_user_inbound=on_user_inbound," in src
+
+
+def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
+    """The missed-reminder observer must be wired onto the gateway's cron
+    service, gated on the event-wake plumbing existing AND
+    ``cron.notify_missed`` — with either off there is no sink, so the
+    observer must stay unset."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    gate = src.split("cron.on_missed_foreign", 1)[0].rsplit("if ", 1)[1]
+    assert "system_events is not None" in gate
+    assert "wake is not None" in gate
+    assert "config.cron.notify_missed" in gate
+    assert "cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)" in src
+
+
 # ---------------------------------------------------------------------------
 # build_model_routing — routing backend selection
 # ---------------------------------------------------------------------------

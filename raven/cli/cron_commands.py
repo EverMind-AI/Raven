@@ -152,6 +152,15 @@ def _format_next_run(j: CronJob) -> str:
     return ts.strftime("%Y-%m-%d %H:%M")
 
 
+def _format_silent(j: CronJob) -> str:
+    n = j.state.silent_fire_count
+    if n == 0:
+        return "0"
+    if n >= 5:
+        return f"[yellow]{n} ⚠[/yellow]"
+    return str(n)
+
+
 def _resolve_id(service: CronService, prefix: str, *, include_disabled: bool = True) -> CronJob:
     """Find a job by full id or unique prefix. Exits with friendly
     error on no-match or ambiguous-prefix."""
@@ -238,6 +247,7 @@ def cron_list(
 
     Helps answer:
     - "What reminders does the user currently have?"
+    - "Which jobs are firing too often (silent-fire ≥ 5)?"
     - "When's the next wake-up?"
 
     Default hides disabled jobs; pass ``--all`` to include them.
@@ -272,6 +282,22 @@ def cron_list(
     )
     _print_runner_status(service)
 
+    if not all_:
+        # An auto-disabled reminder (counter at its limit) would otherwise
+        # vanish from the default view without a trace.
+        auto_disabled = [
+            j
+            for j in service.list_jobs(include_disabled=True)
+            if not j.enabled and j.silent_fire_limit and j.state.silent_fire_count >= j.silent_fire_limit
+        ]
+        if auto_disabled:
+            names = ", ".join(f"'{j.name}' ({j.id})" for j in auto_disabled[:3])
+            more = "..." if len(auto_disabled) > 3 else ""
+            console.print(
+                f"[yellow]⚠[/yellow] {len(auto_disabled)} reminder(s) auto-disabled after repeated "
+                f"fires with no reply: {names}{more} — re-enable with `raven cron enable <id>`"
+            )
+
     if not jobs:
         console.print("[dim]  (no jobs to list — pass --all to include disabled)[/dim]")
         return
@@ -281,6 +307,7 @@ def cron_list(
     table.add_column("Schedule")
     table.add_column("Next Run")
     table.add_column("Last", style="dim")
+    table.add_column("Silent", justify="right")
     table.add_column("Channel")
     table.add_column("Name")
     for j in jobs:
@@ -298,6 +325,7 @@ def cron_list(
             _format_schedule(j.schedule),
             _format_next_run(j),
             last_styled,
+            _format_silent(j),
             j.payload.channel or "-",
             (j.name or "-")[:36],
         )
@@ -312,7 +340,7 @@ def cron_get(
     id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
 ):
     """Show full detail of one cron job (schedule, payload, state,
-    claim status).
+    silent-fire counter, claim status).
 
     Helps answer:
     - "Why is this job firing weird?"
@@ -331,6 +359,7 @@ def cron_get(
     table.add_row("Enabled", "[green]True[/green]" if job.enabled else "[red]False[/red]")
     table.add_row("Schedule", _format_schedule(job.schedule))
     table.add_row("delete_after_run", str(job.delete_after_run))
+    table.add_row("silent_fire_limit", str(job.silent_fire_limit) if job.silent_fire_limit else "-")
 
     # Payload
     table.add_row("─ Payload ─", "")
@@ -354,6 +383,7 @@ def cron_get(
     table.add_row("last_status", job.state.last_status or "-")
     if job.state.last_error:
         table.add_row("last_error", f"[red]{job.state.last_error[:200]}[/red]")
+    table.add_row("silent_fire_count", _format_silent(job))
     if job.state.claimed_by_pid:
         table.add_row("claimed_by_pid", str(job.state.claimed_by_pid))
         if job.state.claimed_at_ms:

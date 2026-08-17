@@ -230,6 +230,13 @@ def register(app: typer.Typer) -> None:
             now_fn=parse_fake_now(fake_now),
         )
 
+        # Anti-runaway reset: genuine user activity on a (channel, chat_id)
+        # zeroes the silent-fire counters of the jobs bound to it. Chained
+        # after the Sentinel engagement hook, not replacing it.
+        from raven.cli._cron_handler import chain_cron_activity_reset
+
+        on_user_inbound = chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)
+
         # Gateway-side memory-backend wiring. Mirrors the REPL
         # bootstrap (cli/agent_commands.py). Returns ``None`` when no
         # plugin contributes the configured backend — AgentLoop falls
@@ -270,7 +277,7 @@ def register(app: typer.Typer) -> None:
             # gets a key and can receive a recovery block on its next call).
             interactive=True,
             response_modifier=sentinel_response_modifier,
-            on_user_inbound=sentinel_on_user_inbound,
+            on_user_inbound=on_user_inbound,
             backend=backend,
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
@@ -409,7 +416,19 @@ def register(app: typer.Typer) -> None:
                     default_channel="tui",
                     system_events=system_events,
                     wake=wake,
+                    cron_service=cron,
                 )
+                # Missed-reminder observer: past-due tui/cli one-shots whose
+                # session closed before firing surface once through the same
+                # system-event -> heartbeat wake path as cron completions.
+                # Needs the event-wake plumbing; without it there is no sink,
+                # so the observer stays off (as it does with notify_missed
+                # false). Wired before cron.start() — the start-time check is
+                # the first observation pass.
+                if system_events is not None and wake is not None and config.cron.notify_missed:
+                    from raven.cli._cron_handler import make_on_missed_foreign
+
+                    cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)
 
                 from raven.spine import ChatType, Origin, Source, TurnRequest
 

@@ -432,6 +432,7 @@ def _build_tui_agent_loop():
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.cli._cron_handler import chain_cron_activity_reset
         from raven.cli._helpers import load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
@@ -495,6 +496,11 @@ def _build_tui_agent_loop():
             plugin_tools=plugin_tools,
             # TUI is always a multi-turn interactive session.
             interactive=True,
+            # Anti-runaway reset: user turns arrive as (tui, default), the
+            # same pair CronTool.set_context binds into new jobs, so genuine
+            # TUI activity zeroes the silent-fire counters counted by this
+            # process's on_cron_job (no Sentinel hook in the TUI to chain).
+            on_user_inbound=chain_cron_activity_reset(cron),
         )
         agent_loop.configure_personalization(
             config.agents.defaults.enable_personalization,
@@ -674,6 +680,7 @@ async def _run_rpc_server_until_done(
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
                 default_channel="tui",
+                cron_service=agent_loop.cron_service,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()

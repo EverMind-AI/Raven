@@ -108,6 +108,20 @@ def test_list_all_includes_disabled(runner, populated_cron):
         assert j.id in result.stdout
 
 
+def test_list_shows_silent_column(runner, populated_cron):
+    """The Silent column surfaces the anti-runaway counter; counts >= 5
+    carry a warning marker so runaway recurring jobs stand out."""
+    jobs = populated_cron.list_jobs()
+    hot = next(j for j in jobs if j.schedule.kind == "every")
+    for _ in range(7):
+        populated_cron.record_fire(hot.id)
+
+    result = runner.invoke(cron_app, ["list"])
+    assert result.exit_code == 0
+    assert "Silent" in result.stdout
+    assert "7 ⚠" in result.stdout
+
+
 # ── get ──────────────────────────────────────────────────────────────
 
 
@@ -161,6 +175,21 @@ def test_get_shows_topic_tag_dash_when_absent(runner, populated_cron):
     )
     assert topic_line is not None
     assert "-" in topic_line
+
+
+def test_get_shows_silent_fire_fields(runner, populated_cron):
+    """``cron get`` renders the anti-runaway counter and its limit so an
+    operator can see how close a recurring job is to auto-disable."""
+    job = next(j for j in populated_cron.list_jobs() if j.schedule.kind == "every")
+    for _ in range(3):
+        populated_cron.record_fire(job.id)
+
+    result = runner.invoke(cron_app, ["get", job.id])
+    assert result.exit_code == 0
+    assert "silent_fire_count" in result.stdout.replace("\n", "")
+    assert "silent_fire_limit" in result.stdout.replace("\n", "")
+    assert "3" in result.stdout
+    assert "12" in result.stdout
 
 
 def test_get_prefix_match(runner, populated_cron):
@@ -924,3 +953,51 @@ def test_config_set_then_get_round_trip(runner, isolated_config):
     r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
     assert "America/New_York" in r.stdout
+
+
+def test_list_default_view_hints_hidden_auto_disabled(runner, fake_cron_dir):
+    """An auto-disabled reminder is hidden by the default view but must not
+    vanish without a trace: the default view prints a hint naming it, and
+    --all still lists the job itself."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 2
+    svc._save_store()
+    svc.record_fire(job.id)
+    assert svc.record_fire(job.id) is True  # auto-disabled at the limit
+
+    r = runner.invoke(cron_app, ["list"])
+    assert r.exit_code == 0
+    assert "auto-disabled" in r.stdout
+    assert job.id in r.stdout  # named in the hint even though hidden from the table
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert job.id in r_all.stdout
+
+
+def test_list_all_view_shows_no_auto_disabled_hint(runner, fake_cron_dir):
+    """--all already shows the job row itself; the hint is default-view-only."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 1
+    svc._save_store()
+    svc.record_fire(job.id)
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert "auto-disabled after repeated" not in r_all.stdout

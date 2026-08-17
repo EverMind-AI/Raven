@@ -491,3 +491,144 @@ async def test_cron_without_wake_wiring_unchanged():
     on_job = make_on_cron_job(submit=submit, readback_texts=readback)
     result = await on_job(_make_job())
     assert result == "resolved body"
+
+
+# ---------------------------------------------------------------------------
+# Producer wiring — make_on_missed_foreign (missed-reminder sink)
+# ---------------------------------------------------------------------------
+
+
+def _make_missed_job(job_id: str = "job_missed", *, minutes_late: int = 6):
+    import time as _time
+
+    from raven.proactive_engine.schedulers.cron.types import (
+        CronJob,
+        CronJobState,
+        CronPayload,
+        CronSchedule,
+    )
+
+    at_ms = int(_time.time() * 1000) - minutes_late * 60 * 1000
+    return CronJob(
+        id=job_id,
+        name="stretch break",
+        enabled=True,
+        schedule=CronSchedule(kind="at", at_ms=at_ms),
+        payload=CronPayload(message="stretch", channel="tui", to="default"),
+        state=CronJobState(next_run_at_ms=at_ms),
+    )
+
+
+async def test_missed_foreign_enqueues_one_event_and_wakes():
+    from raven.cli._cron_handler import make_on_missed_foreign
+
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    observer = make_on_missed_foreign(queue, wake)
+    job = _make_missed_job()
+
+    # The service re-reports the still-missed job on every wake pass; the
+    # observer must surface exactly one event.
+    observer([job])
+    observer([job])
+    observer([job])
+
+    events = queue.peek_all()
+    assert len(events) == 1
+    assert events[0].source == "cron"
+    assert events[0].context_key == "cron:job_missed:missed"
+    assert "stretch break" in events[0].text
+    assert "was missed" in events[0].text
+    assert "tui" in events[0].text
+
+    await asyncio.sleep(0.05)
+    assert wake.wake_event.is_set()
+    assert wake.consume_reasons() == ["cron:job_missed:missed"]
+
+
+async def test_missed_foreign_not_reenqueued_after_heartbeat_consumed():
+    """After the heartbeat acks the event, later wake passes must not
+    re-notify (in-process notified set — the second dedup layer, past the
+    queue's context_key replacement)."""
+    from raven.cli._cron_handler import make_on_missed_foreign
+
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    observer = make_on_missed_foreign(queue, wake)
+    job = _make_missed_job()
+
+    observer([job])
+    queue.ack(queue.peek_all())  # heartbeat tick consumed it
+    observer([job])
+
+    assert queue.peek_all() == []
+
+
+async def test_missed_foreign_emit_failure_retried_next_pass():
+    from raven.cli._cron_handler import make_on_missed_foreign
+
+    queue = MagicMock()
+    queue.enqueue.side_effect = [ValueError("queue broken"), None]
+    wake = WakeScheduler(coalesce_s=0.01)
+    observer = make_on_missed_foreign(queue, wake)
+    job = _make_missed_job()
+
+    observer([job])  # first pass: enqueue blew up — must not mark notified
+    observer([job])  # second pass: retried and succeeds
+    observer([job])  # third pass: now deduped
+
+    assert queue.enqueue.call_count == 2
+
+
+async def test_missed_foreign_end_to_end_service_start(tmp_path: Path):
+    """Full wiring: a gateway-partitioned CronService with a stranded tui
+    one-shot notifies the heartbeat sink exactly once across start plus
+    wake-loop passes."""
+    import json
+    import time as _time
+
+    from raven.cli._cron_handler import make_on_missed_foreign
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    store_path = tmp_path / "jobs.json"
+    at_ms = int(_time.time() * 1000) - 6 * 60 * 1000
+    store_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "jobs": [
+                    {
+                        "id": "tuiX",
+                        "name": "call mom",
+                        "enabled": True,
+                        "schedule": {"kind": "at", "atMs": at_ms},
+                        "payload": {"message": "call mom", "channel": "tui", "to": "default"},
+                        "state": {"nextRunAtMs": at_ms},
+                        "createdAtMs": at_ms - 60_000,
+                        "updatedAtMs": at_ms - 60_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    svc = CronService(store_path, allowed_channels={"weixin"})
+    svc.on_missed_foreign = make_on_missed_foreign(queue, wake)
+
+    await svc.start()
+    try:
+        await asyncio.sleep(0.05)  # let the first wake-loop pass re-observe
+    finally:
+        svc.stop()
+
+    events = queue.peek_all()
+    assert len(events) == 1, "start + loop passes must surface exactly one event"
+    assert events[0].context_key == "cron:tuiX:missed"
+    assert "call mom" in events[0].text
+    # The foreign job itself is untouched (read-only observation).
+    data = json.loads(store_path.read_text(encoding="utf-8"))
+    assert [j["id"] for j in data["jobs"]] == ["tuiX"]
+    assert data["jobs"][0]["enabled"] is True
