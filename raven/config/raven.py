@@ -1191,7 +1191,7 @@ class SkillForgeRouterConfig(_Base):
 
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "local": 1.0,
+            "local": 0.96,
             "everos": 0.9,
             "hub": 0.85,
         },
@@ -1199,7 +1199,18 @@ class SkillForgeRouterConfig(_Base):
     """Per-source RRF weight. Higher = more rank mass when the same skill
     surfaces from multiple sources. Local highest (hand-curated); Hub
     (the remote marketplace, replaces the retired Mass source) lowest as
-    imported/unvalidated; Everos in between (task-specific, auto-evolved)."""
+    imported/unvalidated; Everos in between (task-specific, auto-evolved).
+
+    Only the ratios matter -- scaling all three leaves the order unchanged.
+    Read them together with ``rrf_k``: the spread has to stay well inside
+    the rank ladder that ``rrf_k`` produces, or weight silently overrides
+    rank and each source becomes a strict tier."""
+
+    rrf_k: int = Field(default=10, ge=1)
+    """RRF damping constant, mirroring ``skill_forge.fusion.RRF_K``.
+    Lower = source-internal rank carries more weight relative to
+    ``weights``; higher = flatter, so cross-source agreement and source
+    identity dominate."""
 
     over_fetch_factor: int = 2
     """Each source is asked for ``top_k * factor`` hits before fusion
