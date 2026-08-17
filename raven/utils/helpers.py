@@ -450,5 +450,5 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
 
         _c = Console(stderr=True)
         label = "Initialized workspace" if existed == 0 else "Updated workspace templates"
-        _c.print(f"  [dim]{label} ({len(added)} files)[/dim]")
+        _c.print(f"  [dim]{label} ({len(added)} file{'s' if len(added) != 1 else ''})[/dim]")
     return added
