@@ -192,6 +192,22 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
+# Ceiling on how much of the context window a turn holds back for its answer.
+# The model's own output ceiling is the other bound, and the smaller wins.
+#
+# Needed because that ceiling stopped being a small configured number and became
+# whatever the catalogue reports: on a row where it equals the window, reserving
+# it leaves nothing for history at all, and an honest 131000 on a 202800 window
+# still spends two thirds of the window on an answer the turn probably will not
+# produce. An absolute number cannot serve both a 4k model and a 1M one, so the
+# bound is a share.
+#
+# 0.25 is LiteLLM's: `trim_messages` gives a prompt 75% of the window and never
+# consults an output ceiling at all. Inherited rather than derived -- a turn
+# that really does spend its whole ceiling on one answer is the case this
+# under-reserves for, and compaction is what absorbs that.
+_OUTPUT_RESERVATION_SHARE = 0.25
+
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
@@ -1031,13 +1047,16 @@ class AgentLoop:
         # __init__): this runs per turn on the loop's own thread, and it only
         # needs a number to reserve -- not the one a request will carry. The
         # fallback under-reserves at worst; the importing tier costs seconds.
-        reserved_output = send_max_tokens(
+        ceiling = send_max_tokens(
             getattr(self.provider, "generation", None),
             # The id a request will go out under, so the reservation matches the
             # ceiling that request will carry rather than the stored name's.
             getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
             allow_fetch=False,
         )
+        # See _OUTPUT_RESERVATION_SHARE: a cap, not a target, so a model whose
+        # ceiling is already below the share reserves only what it can use.
+        reserved_output = min(ceiling, int(self.context_window_tokens * _OUTPUT_RESERVATION_SHARE))
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
