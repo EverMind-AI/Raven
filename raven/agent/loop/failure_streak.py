@@ -77,9 +77,23 @@ def is_hard_tool_failure(result: object) -> bool:
     return s.lstrip().startswith("Error") or "error:" in low[:80]
 
 
-def loop_break_nudge(tool: str, n: int) -> str:
+def loop_break_nudge(tool: str, n: int, failure: str = "other") -> str:
     """Injected when the same tool fails deterministically N times running, so
-    the model stops repeating a dead approach instead of adapting."""
+    the model stops repeating a dead approach instead of adapting.
+
+    Keyed on the failure class as well as the tool, because "change approach"
+    is not always somewhere to go. A repeated truncation is a payload that
+    keeps outrunning the output limit, and the tool that produced it -- the one
+    that writes files -- has no counterpart to switch to; the same turn's
+    ``truncation_hint`` has already told the model to call it again in pieces.
+    Sending it elsewhere contradicts that. Sending it back with less does not.
+    """
+    if failure == "truncated":
+        return (
+            f"[loop] `{tool}` has been cut off at the output limit {n} times in a row. "
+            "Splitting it further is the way through, but the pieces are still too big -- "
+            "make the next one substantially smaller rather than resending this one."
+        )
     return (
         f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
         "Stop repeating it. The error text above names the actual cause -- read it "

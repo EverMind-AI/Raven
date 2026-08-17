@@ -2226,7 +2226,7 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak)
+                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak, loop_fail_key[1])
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be

@@ -75,3 +75,33 @@ def test_a_malformed_arguments_failure_has_its_own_class() -> None:
 
     assert malformed == "invalid_arguments"
     assert len({malformed, schema, other}) == 3
+
+
+def test_a_truncation_streak_is_not_told_to_switch_tools() -> None:
+    """The generic nudge asks for "a different tool, command, or strategy".
+
+    A model splitting a long write into ceiling-sized chunks is doing what
+    `write_file.truncation_hint` just told it to, and `write_file` has no
+    different tool to switch to -- so the generic text contradicts the advice
+    the same turn carries.
+
+    The streak itself stays: the incident this work comes from is forty turns
+    of one unchanged oversized call, which is a real dead loop. What changes is
+    what breaking it asks for -- a smaller payload rather than another tool.
+    """
+    text = loop_break_nudge("write_file", 2, "truncated")
+
+    assert "write_file" in text
+    assert "2 times" in text
+    assert "different tool" not in text
+    assert "smaller" in text
+
+
+def test_other_failure_classes_keep_the_change_approach_nudge() -> None:
+    """Only the truncation class has somewhere else to be sent.
+
+    A tool failing on a bad path or a missing binary genuinely may need another
+    tool, so the default text has to survive the split.
+    """
+    assert "different tool" in loop_break_nudge("read_file", 2, "not_found")
+    assert "different tool" in loop_break_nudge("exec", 3, "other")

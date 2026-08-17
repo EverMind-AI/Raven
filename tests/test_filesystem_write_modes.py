@@ -116,3 +116,22 @@ def test_the_truncation_hint_carries_what_only_that_caller_needs() -> None:
 
     assert "discarded whole" in hint
     assert "mode=append" in hint
+
+
+def test_the_truncation_hint_does_not_assume_the_file_is_empty() -> None:
+    """One static string reaches a first attempt and a fourth one alike.
+
+    A model that landed chunks 1 and 2 and had chunk 3 cut reads the same
+    sentence as one that has written nothing. Told unconditionally to open with
+    mode=overwrite, it discards what did land -- the loss the pre-dispatch
+    refusal exists to prevent, suggested here rather than caused.
+
+    Which of the two it is in cannot be decided from this side. It is decidable
+    from the model's own earlier calls, so the hint names both modes and says
+    what tells them apart, instead of picking one.
+    """
+    hint = WriteFileTool(".").truncation_hint or ""
+
+    assert "the first with mode=overwrite" not in hint, "an unconditional restart"
+    assert "mode=overwrite" in hint, "the fresh-file case is still named"
+    assert "earlier calls" in hint, "and where the model can tell which case it is in"
