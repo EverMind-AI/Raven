@@ -596,3 +596,71 @@ class TestDoctorDoesNotInventASelfManagedRoot:
 
         assert info.root is None
         assert info.retrieval is None
+
+
+class TestASelfManagedServerCanStillBeBroken:
+    """ "What the server knows about" and "what it built" must not be one list.
+
+    For a not-owned install ``configured`` was the sections the server reports
+    as available, and ``unbuilt`` the subset of those it reports as
+    unavailable. Over one capability map those conditions are mutually
+    exclusive, so ``unbuilt`` -- and with it ``broken`` and the exit code --
+    was structurally always empty. A self-managed server whose LLM failed to
+    build reported healthy, and any CI gating on ``raven doctor`` saw green.
+
+    Raven cannot read their toml to learn what they configured. It does not
+    have to: a server that reports a section as unavailable tried to build it
+    and failed, and that is the same evidence.
+    """
+
+    @staticmethod
+    def _info(monkeypatch, caps: dict):
+        from raven.cli import doctor_commands as dc
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        )
+        return dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+
+    def test_a_failed_required_role_is_reported_as_broken(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": False, "embed": True})
+
+        assert "llm" in info.unbuilt
+        assert info.broken == ["llm"], "a server that cannot build its LLM reported healthy"
+
+    def test_it_reaches_the_exit_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import doctor_commands as dc
+
+        info = self._info(monkeypatch, {"llm": False, "embed": True})
+        report = dc.DoctorReport()
+        # The earlier gates return first; this case is about the memory one.
+        report.paths = SimpleNamespace(config_exists=True, config_valid=True)
+        report.config_loaded = True
+        report.routing = SimpleNamespace(provider="openai")
+        report.memory = info
+
+        assert report.exit_code() == 2, "doctor exited 0 with a memory service that cannot work"
+
+    def test_a_failed_optional_role_costs_quality_not_function(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": True, "embed": False})
+
+        assert "embedding" in info.unbuilt
+        assert info.broken == [], "a missing embedding is a worse memory, not a broken one"
+
+    def test_a_working_server_is_not_accused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        info = self._info(monkeypatch, {"llm": True, "embed": True})
+
+        assert info.unbuilt == []
+
+    def test_a_role_the_server_says_nothing_about_is_not_claimed_either_way(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``rerank`` absent from the map is silence, not a failure."""
+        info = self._info(monkeypatch, {"llm": True, "embed": True})
+
+        assert "rerank" not in info.configured
+        assert "rerank" not in info.unbuilt

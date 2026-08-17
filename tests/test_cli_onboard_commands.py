@@ -1540,6 +1540,11 @@ def test_memory_step_starts_the_configured_address_not_the_default(
     import raven.plugin.memory.everos._server as everos_server
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure)
+    # The port question is asked only when the intended port is taken, and this
+    # case is about which address is used, not about occupancy. Left to a real
+    # bind test it would depend on whether 1995 happens to be free on the
+    # machine running the suite.
+    monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
     monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
     monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)

@@ -1572,3 +1572,73 @@ class TestASessionPicksUpAServiceThatArrivesLate:
         assert await b.recall("q", user_id="u", top_k=5) == []
         assert b._probe_task is None, "probed a state no probe can resolve"
         assert b._state is ServiceState.UNCONFIGURED
+
+
+@pytest.mark.asyncio
+class TestTheDegradationWarningOnASelfManagedServer:
+    """The one place raven can only talk, it was silent.
+
+    The warning gated on the local toml's embedding role. A self-managed
+    install records no root, so that read lands on the fallback root -- the
+    fabricated one doctor was fixed to stop trusting. It usually does not
+    exist, the gate reads False, and the warning never fires on exactly the
+    path whose comment argues the case for it is strongest: raven cannot repair
+    somebody else's embedding config, so saying so is the only move it has.
+
+    When a stale raven-managed root does exist the gate passes instead, and the
+    advice points at a log raven never wrote for that server.
+    """
+
+    @staticmethod
+    def _ctx():
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        return ctx
+
+    async def _start_unowned(self, monkeypatch, *, caps: dict):
+        from raven.plugin.memory.everos import _health
+        from raven.plugin.memory.everos._server import ProbeResult
+        from raven.plugin.memory.everos.backend import EverosBackend
+
+        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr(
+            "raven.config.update_everos.everos_role_configured",
+            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
+        )
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        )
+        b = EverosBackend(self._ctx())
+        await b.start()
+        return b
+
+    async def test_it_speaks_when_the_server_says_embedding_is_down(
+        self, monkeypatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        await self._start_unowned(monkeypatch, caps={"llm": True, "embed": False})
+
+        err = " ".join(capsys.readouterr().err.split())
+        assert "embedding is unavailable" in err
+        # Their server, their log. Pointing at raven's is a dead end.
+        assert "everos-server.log" not in err
+
+    async def test_it_stays_quiet_when_the_server_says_embedding_is_fine(
+        self, monkeypatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        await self._start_unowned(monkeypatch, caps={"llm": True, "embed": True})
+
+        assert "embedding is unavailable" not in capsys.readouterr().err
+
+    async def test_a_server_too_old_to_report_is_not_condemned(
+        self, monkeypatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """An empty capability map is silence, not a negative."""
+        await self._start_unowned(monkeypatch, caps={})
+
+        assert "embedding is unavailable" not in capsys.readouterr().err

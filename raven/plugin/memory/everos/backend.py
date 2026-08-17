@@ -660,6 +660,26 @@ class EverosBackend:
             await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
 
     @staticmethod
+    def _warn_unowned_recall(base_url: str, report: Any) -> None:
+        """Say what a server the user runs cannot do, on its own authority.
+
+        No log path in the message: the log raven knows about is the one it
+        writes for servers it starts, and this is not one of those. Silence
+        from a server too old to report capabilities stays silence rather than
+        becoming a verdict.
+        """
+        if not report.reports_capabilities or report.available("embedding") is not False:
+            return
+        from rich.console import Console
+
+        Console(stderr=True).print(
+            "[yellow]The EverOS you run is up but embedding is unavailable: recall falls back "
+            "to keyword matching.[/yellow]\n"
+            "[dim]Memories are still stored. Fix the embedding provider in that server's own\n"
+            "config and restart it -- Raven follows along.[/dim]"
+        )
+
+    @staticmethod
     def _warn_if_recall_cannot_work(base_url: str) -> None:
         """Say out loud when the server is up but recall is not what it should be.
 
@@ -674,9 +694,18 @@ class EverosBackend:
         the user never configured is a choice they already know about, and
         repeating it every start would be noise.
         """
+        from raven.config.update_everos import everos_owned
         from raven.plugin.memory.everos._health import probe_capabilities
 
         report = probe_capabilities(base_url)
+        if not everos_owned():
+            # Their server, so the local toml is not evidence about it: no root
+            # is recorded, and everos_role_configured would read the fallback
+            # one -- the fabricated root doctor was fixed to stop trusting. It
+            # usually does not exist, so the gate read False and this warning,
+            # the only move raven has left on this path, never fired at all.
+            EverosBackend._warn_unowned_recall(base_url, report)
+            return
         from raven.config.update_everos import everos_role_configured
 
         if not (everos_role_configured("embedding") and report.available("embedding") is False):

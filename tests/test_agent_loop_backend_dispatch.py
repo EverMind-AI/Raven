@@ -246,3 +246,40 @@ class TestTheTurnDoesNotWaitOnIndexing:
         release.set()
         await agent.drain_backend_stores()
         assert b.finished
+
+
+class TestBackpressureCannotStallATurn:
+    """The queue may stop growing; the turn may not stop.
+
+    The backpressure wait had no timeout, so its real bound was the slowest
+    outstanding write's own budget. With ``flush_every_turns`` defaulting to 1
+    every interactive turn is a final flush, which carries the six-minute
+    extraction budget -- so once the in-flight cap was reached, a turn waited
+    minutes on a wedged extraction. That is the stall this whole change exists
+    to remove, reintroduced one layer down.
+    """
+
+    async def test_no_dispatch_exceeds_the_turn_budget(self, tmp_path: Path, monkeypatch) -> None:
+        import asyncio
+        import time
+
+        from raven.agent.loop import main as loop_main
+
+        class _Slow:
+            async def store(self, session_id, messages, **kw):
+                await asyncio.sleep(30)
+
+        agent = _make_loop(tmp_path, backend=_Slow())
+        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.2)
+
+        elapsed = []
+        for _ in range(loop_main._STORE_MAX_INFLIGHT + 2):
+            t0 = time.monotonic()
+            await agent._dispatch_backend_store("s", [{"role": "user", "content": "hi"}])
+            elapsed.append(time.monotonic() - t0)
+
+        for task in agent._store_inflight:
+            task.cancel()
+
+        worst = max(elapsed)
+        assert worst < 2.0, f"a turn waited {worst:.1f}s on indexing; per-dispatch: {[round(e, 2) for e in elapsed]}"

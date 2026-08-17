@@ -261,7 +261,13 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     # either; not touching it is the promise. What the server says about itself
     # is the only honest source, and when it is down there is no source at all.
     info.root = None
-    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is True]
+    # Every section the server has an opinion about -- built or failed. Taking
+    # only the built ones made ``unbuilt`` (the failed subset of this list)
+    # structurally empty, so ``broken`` and the exit code could never fire and
+    # a server that could not build its LLM reported healthy. Raven cannot read
+    # their toml to learn what they configured, and does not need to: a section
+    # the server reports as unavailable is one it tried to build and could not.
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is not None]
     info.retrieval = None
     if report.reports_capabilities:
         info.retrieval = "semantic" if report.available("embedding") is True else "keyword-only"
