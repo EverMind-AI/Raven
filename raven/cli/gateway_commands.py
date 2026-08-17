@@ -611,6 +611,7 @@ def register(app: typer.Typer) -> None:
                 # spawned during AgentLoop teardown can complete.
                 if backend is not None:
                     try:
+                        await agent.drain_backend_stores()
                         await backend.stop()
                     except Exception:
                         _logger.exception(

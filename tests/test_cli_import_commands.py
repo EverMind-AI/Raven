@@ -974,3 +974,51 @@ class TestStatusCancelled:
             result = runner.invoke(import_app, ["status"])
         assert result.exit_code == 0
         assert "Cancelled" in result.output or "cancelled" in result.output
+
+
+class TestImportRefusesToRunWithoutMemory:
+    """An import against an unavailable memory service must not start.
+
+    The guard here caught an exception from ``backend.start()``. Once start
+    stopped raising -- it degrades and keeps probing, which is right for a
+    session -- the guard became unreachable, and an import would walk the whole
+    source list writing into nothing. An import is not a session: it is one
+    deliberate batch whose entire value is that the writes land.
+    """
+
+    def test_a_backend_that_is_not_ready_stops_the_run(self) -> None:
+        import typer
+
+        from raven.cli.import_commands import _require_memory_service_ready
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        class _NotReady:
+            _state = ServiceState.FAILED
+
+        with pytest.raises(typer.Exit):
+            _require_memory_service_ready(_NotReady())
+
+    def test_a_ready_backend_passes(self) -> None:
+        from raven.cli.import_commands import _require_memory_service_ready
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        class _Ready:
+            _state = ServiceState.READY
+
+        _require_memory_service_ready(_Ready())
+
+    def test_a_backend_with_no_state_is_allowed(self) -> None:
+        """Only the everos backend reports a state. A third-party backend that
+        does not must not be locked out of importing."""
+        from raven.cli.import_commands import _require_memory_service_ready
+
+        _require_memory_service_ready(object())
+
+    def test_the_run_path_consults_the_guard(self) -> None:
+        """Pins the wiring: the guard is worthless if _build_and_run never
+        calls it, and that is exactly how the previous check died."""
+        import inspect
+
+        from raven.cli import import_commands
+
+        assert "_require_memory_service_ready" in inspect.getsource(import_commands._build_and_run)

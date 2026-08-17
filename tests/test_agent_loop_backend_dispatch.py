@@ -171,3 +171,115 @@ class TestLegacyCompat:
         assert isinstance(agent.memory_consolidator, MemoryConsolidator)
         assert agent.context.skills is not None
         assert agent.backend is None
+
+
+class TestTheTurnDoesNotWaitOnIndexing:
+    """Indexing a turn must not hold the turn open.
+
+    ``backend.store`` was awaited inline in the after-turn pipeline with a 60s
+    HTTP budget, so a memory service that hung stalled the end of every turn --
+    and on the no-model delivery path the await sat *before* ``emit``, so it
+    stalled the user seeing the reply at all. The write still gets its own
+    budget; what changed is that the turn stops paying for it.
+    """
+
+    async def test_a_slow_write_releases_the_turn(self, tmp_path: Path, monkeypatch) -> None:
+        import asyncio
+
+        from raven.agent.loop import main as loop_main
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class _SlowBackend:
+            def __init__(self) -> None:
+                self.finished = False
+
+            async def store(self, session_id, messages, **kw):
+                started.set()
+                await release.wait()
+                self.finished = True
+
+        b = _SlowBackend()
+        agent = _make_loop(tmp_path, backend=b)
+        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.05)
+
+        await agent._dispatch_backend_store("s", [{"role": "user", "content": "hi"}])
+
+        assert started.is_set(), "the write should have been launched"
+        assert not b.finished, "the turn returned before the write finished"
+
+        release.set()
+        await asyncio.gather(*agent._store_inflight)
+        assert b.finished
+
+    async def test_a_fast_write_still_completes_within_the_turn(self, tmp_path: Path) -> None:
+        """The budget is an upper bound, not a delay: a healthy write finishes
+        inside the turn exactly as it did before."""
+        b = _FakeBackend()
+        agent = _make_loop(tmp_path, backend=b)
+        await agent._dispatch_backend_store("s", [{"role": "user", "content": "hi"}])
+        assert len(b.store_calls) == 1
+
+    async def test_outstanding_writes_are_drained_on_teardown(self, tmp_path: Path, monkeypatch) -> None:
+        """A detached write that outlives the turn must not outlive the process:
+        without a drain, exiting right after a slow turn silently loses it."""
+        import asyncio
+
+        from raven.agent.loop import main as loop_main
+
+        release = asyncio.Event()
+
+        class _SlowBackend:
+            def __init__(self) -> None:
+                self.finished = False
+
+            async def store(self, session_id, messages, **kw):
+                await release.wait()
+                self.finished = True
+
+        b = _SlowBackend()
+        agent = _make_loop(tmp_path, backend=b)
+        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.05)
+        await agent._dispatch_backend_store("s", [{"role": "user", "content": "hi"}])
+
+        release.set()
+        await agent.drain_backend_stores()
+        assert b.finished
+
+
+class TestBackpressureCannotStallATurn:
+    """The queue may stop growing; the turn may not stop.
+
+    The backpressure wait had no timeout, so its real bound was the slowest
+    outstanding write's own budget. With ``flush_every_turns`` defaulting to 1
+    every interactive turn is a final flush, which carries the six-minute
+    extraction budget -- so once the in-flight cap was reached, a turn waited
+    minutes on a wedged extraction. That is the stall this whole change exists
+    to remove, reintroduced one layer down.
+    """
+
+    async def test_no_dispatch_exceeds_the_turn_budget(self, tmp_path: Path, monkeypatch) -> None:
+        import asyncio
+        import time
+
+        from raven.agent.loop import main as loop_main
+
+        class _Slow:
+            async def store(self, session_id, messages, **kw):
+                await asyncio.sleep(30)
+
+        agent = _make_loop(tmp_path, backend=_Slow())
+        monkeypatch.setattr(loop_main, "_STORE_TURN_BUDGET_S", 0.2)
+
+        elapsed = []
+        for _ in range(loop_main._STORE_MAX_INFLIGHT + 2):
+            t0 = time.monotonic()
+            await agent._dispatch_backend_store("s", [{"role": "user", "content": "hi"}])
+            elapsed.append(time.monotonic() - t0)
+
+        for task in agent._store_inflight:
+            task.cancel()
+
+        worst = max(elapsed)
+        assert worst < 2.0, f"a turn waited {worst:.1f}s on indexing; per-dispatch: {[round(e, 2) for e in elapsed]}"
