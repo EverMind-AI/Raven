@@ -1091,6 +1091,36 @@ def test_a_first_run_gets_the_wizard(tmp_env: Path, monkeypatch: pytest.MonkeyPa
     assert ran == [True]
 
 
+def test_the_gate_starts_the_wizard_without_its_outro(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On the gate path the TUI takes the terminal as soon as the wizard
+    returns, so the closing list of commands to try next is answered before it
+    can be read. Pinned on the call itself: a stub that swallows kwargs left
+    this wiring free to regress silently."""
+    calls: list[dict] = []
+    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **kw: calls.append(kw))
+
+    onboard_commands.ensure_ready_to_start()
+
+    assert [c.get("show_next_steps") for c in calls] == [False]
+
+
+def test_the_outro_flag_swaps_the_panel_for_one_line(
+    tmp_env: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The suppressed outro still confirms the setup finished -- it drops only
+    the command table, which is what the TUI is about to replace."""
+    onboard_commands._print_next_steps(warnings=[], show_next_steps=False)
+    suppressed = capsys.readouterr().out
+    assert "Get started" not in suppressed
+    assert "starting the TUI" in suppressed
+
+    onboard_commands._print_next_steps(warnings=[], show_next_steps=True)
+    full = capsys.readouterr().out
+    assert "Get started" in full
+    assert "starting the TUI" not in full
+
+
 # --------------------------------------------------------------------------- entry-point gate wiring
 
 
