@@ -576,6 +576,12 @@ def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.Cap
     assert added_again == []
     assert (second.out + second.err).strip() == ""
 
+    (ws / added[0]).unlink()
+    re_added = sync_workspace_templates(ws)
+    third = capsys.readouterr()
+    assert len(re_added) == 1
+    assert "(1 file)" in (third.out + third.err)
+
 
 def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) -> None:
     """The module-level logger.disable in helpers yields to a later
