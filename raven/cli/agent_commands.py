@@ -531,11 +531,7 @@ def register(app: typer.Typer) -> None:
                 # legacy bus path). readback_texts/system_events stay unset: the
                 # REPL has no heartbeat, so the handler no-ops them.
                 cron.on_job = make_on_cron_job(
-                    agent_loop,
-                    hub,
                     submit=scheduler.submit,
-                    channel_manager=cli_shim,
-                    session_manager=session_manager,
                     default_channel="cli",
                 )
                 # Sentinel nudges now ride the spine hub -> CliOutlet (replacing

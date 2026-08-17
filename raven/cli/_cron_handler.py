@@ -1,9 +1,10 @@
-"""Shared ``on_cron_job`` factory used by both ``gateway`` and ``agent``.
+"""Shared ``on_cron_job`` factory used by ``gateway``, ``agent`` and ``tui``.
 
-Extracted from commands.gateway() so both entry points run cron jobs with
-identical semantics: a scheduled reminder fires as a CRON-origin spine turn
-bound to the ``cron:<job_id>`` session, and the reply is delivered by the hub
-(single target) or broadcast to the resolved targets.
+A scheduled reminder fires as a CRON-origin spine turn bound to the
+``cron:<job_id>`` session. Delivery is direct: the turn's source is the
+job's creation-time binding ``(payload.channel, payload.to)``, so the hub
+routes the reply to that one outlet — fire-at-origin, no trigger-time
+re-routing.
 """
 
 from __future__ import annotations
@@ -14,15 +15,11 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 from loguru import logger
 
 if TYPE_CHECKING:
-    from raven.agent.loop import AgentLoop
-    from raven.channels.manager import ChannelManager
     from raven.proactive_engine.schedulers.cron.types import CronJob
     from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
     from raven.proactive_engine.system_events import SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
-    from raven.session.manager import SessionManager
     from raven.spine import TurnHandle, TurnRequest
-    from raven.spine.delivery import DeliveryHub
 
 
 def _ms_to_local_str(ms: int | None) -> str | None:
@@ -100,13 +97,9 @@ def _format_schedule_origin(job: "CronJob") -> str:
 
 
 def make_on_cron_job(
-    agent: "AgentLoop",
-    hub: "DeliveryHub",
     *,
     submit: "Callable[[TurnRequest], TurnHandle]",
     readback_texts: "dict[str, str] | None" = None,
-    channel_manager: "ChannelManager | None" = None,
-    session_manager: "SessionManager | None" = None,
     default_channel: str = "cli",
     sentinel_runner: "SentinelRunner | None" = None,
     system_events: "SystemEventQueue | None" = None,
@@ -116,12 +109,10 @@ def make_on_cron_job(
     spine ``submit`` as a CRON-origin turn.
 
     ``submit`` (required) is the spine entry (build_gateway / build_repl /
-    build_tui scheduler). A single-target delivering job (deliver=True, the
-    user-facing reminder the cron tool creates) rides the hub to its one outlet.
-    A broadcast (more than one resolved target) or a silent job (deliver=False)
-    submits with the job's own (ephemeral) channel as the source so the hub drops
-    the reply; a broadcast is then delivered explicitly to every target, a silent
-    job delivers nothing.
+    build_tui scheduler). The turn's source is the job's creation-time
+    binding ``(payload.channel, payload.to)`` — the single delivery target.
+    The hub routes the reply to that channel's outlet; there is no
+    trigger-time resolution, forwarding, or broadcast.
 
     ``readback_texts`` is build_gateway's per-conversation reply-text map, the
     spine read-back channel for the system event: a CRON turn submits, then this
@@ -131,16 +122,9 @@ def make_on_cron_job(
     submitter — so the gateway's capturing runner bridges it. Required whenever
     ``submit`` is wired; without it the system event sees no reply text.
 
-    ``default_channel`` is used when the job payload doesn't specify one —
-    REPL passes "cli" so the reminder renders inline in the terminal; the
-    gateway lets the payload's own channel decide.
-
-    ``channel_manager`` / ``session_manager`` drive delivery resolution
-    (``resolve_cron_delivery``). Without ``channel_manager`` the enabled
-    set is empty — meaning every channel is considered ephemeral, and
-    delivery falls back to forward_channels broadcast. REPL paths that
-    have no real channels (agent-only mode) pass ``None`` for both and
-    accept that ephemeral reminders are dropped with a warning.
+    ``default_channel`` is used when the job payload doesn't specify one
+    (legacy pre-attribution jobs) — REPL passes "cli" so the reminder
+    renders inline in the terminal; the TUI passes "tui".
 
     ``sentinel_runner`` is optional. When present, F-G makes cron fires
     write to the shared NudgePolicy ledger (topic_fired_at +
@@ -160,12 +144,7 @@ def make_on_cron_job(
     """
 
     async def on_cron_job(job: "CronJob") -> str | None:
-        from raven.config.loader import load_config
-        from raven.proactive_engine.schedulers.cron.tool import (
-            is_ephemeral_channel,
-            resolve_cron_delivery,
-        )
-        from raven.spine import ChatType, Origin, Source, Text, TurnRequest
+        from raven.spine import ChatType, Origin, Source, TurnRequest
 
         # Include the originally-scheduled time so the reminder text can
         # echo "set at 17:05" back to the user — otherwise the agent only
@@ -180,51 +159,18 @@ def make_on_cron_job(
             "context."
         )
 
-        # Resolve delivery targets at TRIGGER time (reading cron config now lets
-        # ``cron config set`` take effect on the next fire) — response-independent,
-        # so it can run before the turn; len(targets) decides the path.
-        cron_cfg = load_config().cron
-        enabled_channels = set(channel_manager.enabled_channels) if channel_manager is not None else set()
-        targets, warnings = resolve_cron_delivery(
-            channel=job.payload.channel or default_channel,
-            chat_id=job.payload.to or "direct",
-            forward_channels=cron_cfg.forward_channels,
-            enabled_channels=enabled_channels,
-            session_manager=session_manager,
-        )
-        for w in warnings:
-            logger.warning("Cron job '{}' ({}): {}", job.name, job.id, w)
-
-        # Every cron turn runs through the spine. Delivery is explicit per branch:
-        # a single-target delivering job rides the hub to its one outlet; every
-        # other case (no forward, a broadcast, or a silent job) submits with the
-        # job's own channel as the source — ephemeral for the realistic cases, so
-        # it has no gateway outlet and the hub drops the reply. A broadcast then
-        # delivers explicitly below; a silent job delivers nothing. run_turn sets
-        # the cron-context guard itself (in the lane task), keyed on origin=CRON.
-        deliver_via_hub = job.payload.deliver and len(targets) == 1
-        if deliver_via_hub:
-            src_channel, src_chat = targets[0].channel, targets[0].chat_id
-        else:
-            src_channel = job.payload.channel or default_channel
-            src_chat = job.payload.to or "direct"
-            # A silent job (deliver=False) stays silent because its ephemeral
-            # source has no gateway outlet (the hub drops the reply). A silent job
-            # on a non-ephemeral channel — only reachable by hand-editing jobs.json,
-            # since every creation path sets deliver=True — WOULD be delivered by
-            # the hub; warn so this edge is visible rather than a silent change.
-            if not job.payload.deliver and not is_ephemeral_channel(src_channel, enabled_channels):
-                logger.warning(
-                    "Cron job '{}' ({}): silent job on non-ephemeral channel '{}' "
-                    "is delivered under the spine (no outlet-less suppression for "
-                    "real channels)",
-                    job.name,
-                    job.id,
-                    src_channel,
-                )
+        # The creation-time binding is the one delivery target: submitting
+        # with it as the source lets the hub deliver the turn reply to that
+        # channel's outlet. run_turn sets the cron-context guard itself (in
+        # the lane task), keyed on origin=CRON.
         req = TurnRequest(
             origin=Origin.CRON,
-            source=Source(channel=src_channel, chat_id=src_chat, sender_id="cron", chat_type=ChatType.DM),
+            source=Source(
+                channel=job.payload.channel or default_channel,
+                chat_id=job.payload.to or "direct",
+                sender_id="cron",
+                chat_type=ChatType.DM,
+            ),
             text=reminder_note,
             conversation=f"cron:{job.id}",
         )
@@ -234,9 +180,9 @@ def make_on_cron_job(
             if system_events is not None and wake is not None:
                 _emit_cron_event(system_events, wake, job, f"{type(exc).__name__}: {exc}", failed=True)
             raise
-        # Read the reply back (for the system event and any broadcast) from the
-        # gateway runner's capture, stored before result() resolved, and pop it so
-        # the long-running map does not accumulate.
+        # Read the reply back (for the system event) from the gateway runner's
+        # capture, stored before result() resolved, and pop it so the
+        # long-running map does not accumulate.
         response: str | None = readback_texts.pop(f"cron:{job.id}", None) if readback_texts is not None else None
 
         # F-G: tell the L3 Sentinel this surface just nudged the user (topic_fired_at
@@ -251,26 +197,6 @@ def make_on_cron_job(
         if system_events is not None and wake is not None:
             _emit_cron_event(system_events, wake, job, (response or "(no response)").strip(), failed=False)
 
-        # Broadcast a multi-target delivering job to every resolved target: the hub
-        # dropped the reply (no outlet for the ephemeral source), so this is the
-        # only delivery. It does NOT skip on a message-tool self-send — a self-send
-        # to an ephemeral source never reaches the user under the daemon, so
-        # broadcasting the reply to all targets is both simpler and strictly better
-        # than the legacy self-send guard, which suppressed the broadcast and left
-        # the other targets with nothing.
-        if job.payload.deliver and len(targets) > 1 and response:
-            for t in targets:
-                await hub.post(
-                    Text(
-                        content=response,
-                        source=Source(
-                            channel=t.channel,
-                            chat_id=t.chat_id,
-                            sender_id="cron",
-                            chat_type=ChatType.DM,
-                        ),
-                    )
-                )
         return response
 
     return on_cron_job

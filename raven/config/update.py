@@ -70,9 +70,9 @@ def update_cron_config(
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
-    Schema defaults (``forward_channels=["*"]`` / ``default_timezone="Asia/Shanghai"``)
-    take effect on next load. Stays consistent with the file's "never bake
-    defaults to disk" principle.
+    Schema defaults (``default_timezone="Asia/Shanghai"``) take effect on
+    next load. Stays consistent with the file's "never bake defaults to
+    disk" principle.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)

@@ -28,9 +28,9 @@ DEFAULT_PROBE_MESSAGE = "Hi! Say hello in one sentence."
 
 
 def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
-    """At REPL exit, list cron jobs pinned to channel="cli" that won't fire
-    while the REPL is down. Hint at the config knob that forwards them to
-    a durable channel at trigger time."""
+    """At REPL exit, list cron jobs pinned to channel="cli". Fire-at-origin:
+    they only fire inside an interactive session, so tell the user plainly
+    that nothing fires until the next one."""
     from datetime import datetime
 
     try:
@@ -52,13 +52,11 @@ def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
         mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
         console.print(f"   - '{j.name}' at {fire} (in {mins} min)")
 
-    if config.cron.forward_channels == []:
-        console.print(
-            "[dim]   Tip: cron.forward_channels is empty — these reminders will "
-            "be dropped silently when they fire. Run "
-            "`raven cron config set forward_channels '*'` to broadcast to "
-            "all enabled channels.[/dim]"
-        )
+    console.print(
+        "[dim]   These fire only while an interactive session is open. "
+        "For reminders that reach you anywhere, create them from a chat "
+        "channel (or `raven cron add --channel <im-channel>`).[/dim]"
+    )
 
 
 def check_provider_credentials(config: Config) -> None:

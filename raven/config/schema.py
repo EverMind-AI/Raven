@@ -241,6 +241,12 @@ class ChannelsConfig(Base):
     wecom: WecomConfig = Field(default_factory=WecomConfig)
     weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
+    def enabled_channel_names(self) -> set[str]:
+        """Names of every enabled IM channel. Field-driven, so a channel
+        added to this model is covered without touching consumers (the
+        gateway cron partition, cron add's target validation)."""
+        return {name for name in type(self).model_fields if getattr(getattr(self, name, None), "enabled", False)}
+
 
 class AgentDefaults(Base):
     """Default agent configuration."""
@@ -305,17 +311,10 @@ class AgentsConfig(Base):
 class CronConfig(Base):
     """Cron scheduler configuration.
 
-    Only consulted at cron job TRIGGER time, never at creation. Ephemeral
-    channels (cli / tui — anything not in ChannelManager.enabled_channels)
-    cannot deliver to themselves after the host process exits, so the
-    forward_channels list resolves which real channels receive the reminder.
+    Delivery is bound at job creation (fire-at-origin) — there is no
+    trigger-time routing config anymore. The retired ``forward_channels``
+    key is stripped by the config loader for backwards compatibility.
     """
-
-    forward_channels: list[str] = Field(default_factory=lambda: ["*"])
-    """Channels to deliver ephemeral-origin reminders to. ``["*"]`` broadcasts
-    to every enabled channel. Specific names (``["telegram", "feishu"]``)
-    restrict to those. Non-ephemeral channels (telegram / feishu / weixin
-    etc.) ignore this list — they always pass-through to the per-job channel."""
 
     default_timezone: str = "Asia/Shanghai"
     """Default IANA timezone for cron expressions without explicit ``--tz``."""

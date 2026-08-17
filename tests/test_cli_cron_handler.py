@@ -1,28 +1,20 @@
 """Trigger-path tests for ``make_on_cron_job`` (raven/cli/_cron_handler.py).
 
-Distinct scope from:
-  - ``test_cron_delivery.py`` — unit-tests the ``resolve_cron_delivery``
-    helper in isolation.
-  - ``test_cron_handler_ledger.py`` — covers the sentinel ledger write
-    side-effect.
+Distinct scope from ``test_cron_handler_ledger.py``, which covers the
+sentinel ledger write side-effect.
 
-This file targets the factory closure itself: trigger-time dynamic
-config read, outbound expansion, ephemeral vs pass-through routing.
-Heavily mock-based so it stays a pure unit test (no real channels,
-no real agent loop, no real session disk I/O).
-
-Every cron turn now runs through the spine ``submit``. A single-target
-delivering job rides the hub (the test asserts the submitted request's
-source, since the outlets are wired only in the assembly tests); a
-broadcast (len > 1) submits with an ephemeral source the hub drops and is
-delivered explicitly via ``hub.post`` (one spine Text per target); a silent
-job delivers nothing.
+Fire-at-origin contract: every cron turn runs through the spine ``submit``
+with the job's creation-time binding ``(payload.channel, payload.to)`` as
+the request source — the hub routes the reply to that one outlet. There is
+no trigger-time resolution, forwarding, or broadcast to test anymore; what
+matters is the source binding, the read-back into the system event, and the
+failure path.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -33,14 +25,13 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronPayload,
     CronSchedule,
 )
-from raven.spine import Origin, Text
+from raven.spine import Origin
 
 
 def _make_job(
     *,
-    channel: str = "cli",
-    to: str = "direct",
-    deliver: bool = True,
+    channel: str | None = "cli",
+    to: str | None = "direct",
     name: str = "test_job",
 ) -> CronJob:
     return CronJob(
@@ -49,27 +40,12 @@ def _make_job(
         enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1000),
         payload=CronPayload(
-            kind="agent_turn",
             message="reminder body source",
-            deliver=deliver,
             channel=channel,
             to=to,
         ),
         state=CronJobState(),
     )
-
-
-@pytest.fixture
-def fake_agent() -> MagicMock:
-    """AgentLoop mock. Unused on the spine path (kept for the factory signature)."""
-    return MagicMock()
-
-
-@pytest.fixture
-def fake_hub() -> MagicMock:
-    hub = MagicMock()
-    hub.post = AsyncMock()
-    return hub
 
 
 @pytest.fixture
@@ -92,291 +68,61 @@ def spine() -> SimpleNamespace:
     return SimpleNamespace(submit=_submit, readback=readback, captured=captured)
 
 
-@pytest.fixture
-def fake_session_mgr() -> MagicMock:
-    """SessionManager mock — find_most_recent_chat_id returns fixed ids."""
-    mgr = MagicMock()
-    mgr.find_most_recent_chat_id.side_effect = lambda ch: {
-        "telegram": "tg_user_1",
-        "feishu": "ou_user_1",
-    }.get(ch)
-    return mgr
-
-
-@pytest.fixture
-def patch_cron_config(monkeypatch):
-    """Patch ``load_config()`` to return a stub with controllable
-    ``cron.forward_channels``. Returns a setter the test calls."""
-
-    def _patch(forward_channels: list[str]):
-        config = MagicMock()
-        config.cron = SimpleNamespace(forward_channels=forward_channels)
-        monkeypatch.setattr(
-            "raven.config.loader.load_config",
-            lambda: config,
-        )
-
-    return _patch
-
-
 # ─────────────────────────────────────────────────────────────────────
-# Ephemeral broadcast (cli → forward_channels, more than one target)
+# Source binding: the stored (channel, to) IS the delivery target
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_trigger_ephemeral_broadcasts_to_all_enabled(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """forward_channels=['*'] + cli job → broadcast to every enabled channel.
+async def test_source_binding_is_the_delivery_target(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
 
-    More than one target → the turn submits with the ephemeral source (hub
-    drops the reply) and the resolved text is posted to each target.
-    """
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    await handler(_make_job(channel="cli"))
-
-    assert len(spine.captured) == 1 and spine.captured[0].origin is Origin.CRON
-    assert fake_hub.post.await_count == 2
-    sent = [call.args[0] for call in fake_hub.post.await_args_list]
-    assert all(isinstance(out, Text) for out in sent)
-    by_channel = {out.source.channel: out.source.chat_id for out in sent}
-    assert by_channel == {"telegram": "tg_user_1", "feishu": "ou_user_1"}
-    assert all(out.content == "resolved body" for out in sent)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Single-target delivering job rides the hub (no explicit broadcast post)
-# ─────────────────────────────────────────────────────────────────────
-
-
-async def test_trigger_ephemeral_restricted_to_single_target_rides_hub(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """forward_channels=['telegram'] resolves to one target → the turn submits
-    with that target as the source (hub delivers); no explicit broadcast post."""
-    patch_cron_config(["telegram"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    await handler(_make_job(channel="cli"))
+    response = await handler(_make_job(channel="telegram", to="tg_user_1", name="b1"))
 
     assert len(spine.captured) == 1
-    assert spine.captured[0].source.channel == "telegram"
-    assert spine.captured[0].source.chat_id == "tg_user_1"
-    fake_hub.post.assert_not_awaited()
+    req = spine.captured[0]
+    assert req.origin is Origin.CRON
+    assert req.source.channel == "telegram"
+    assert req.source.chat_id == "tg_user_1"
+    assert req.conversation == "cron:job_b1"
+    assert response == "resolved body"
 
 
-async def test_trigger_tui_treated_same_as_cli(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """channel='tui' is also ephemeral and gets forwarded (single target → hub)."""
-    patch_cron_config(["feishu"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
+async def test_tui_binding_passes_through_unchanged(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="tui")
 
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
+    await handler(_make_job(channel="tui", to="default", name="b2"))
 
-    await handler(_make_job(channel="tui", to="default"))
-
-    assert spine.captured[0].source.channel == "feishu"
-    fake_hub.post.assert_not_awaited()
+    req = spine.captured[0]
+    assert req.source.channel == "tui"
+    assert req.source.chat_id == "default"
 
 
-async def test_trigger_real_channel_passthrough(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """telegram job ignores forward_channels — delivered to its own (channel, to)
-    via the hub (single pass-through target).
+async def test_legacy_job_without_channel_uses_default(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="cli")
 
-    Guards against the regression where someone wires forward_channels
-    into every path; per-job binding for real channels must stay sacred.
-    """
-    patch_cron_config(["feishu"])  # would re-route an ephemeral job; should NOT touch telegram
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
+    await handler(_make_job(channel=None, to=None, name="b3"))
 
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
+    req = spine.captured[0]
+    assert req.source.channel == "cli"
+    assert req.source.chat_id == "direct"
 
-    await handler(_make_job(channel="telegram", to="explicit_chat_999"))
 
-    assert spine.captured[0].source.channel == "telegram"
-    assert spine.captured[0].source.chat_id == "explicit_chat_999"
-    fake_hub.post.assert_not_awaited()
+async def test_reminder_note_carries_schedule_origin(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
+
+    await handler(_make_job(name="b4"))
+
+    text = spine.captured[0].text
+    assert "Scheduled instruction: reminder body source" in text
+    assert "set at" in text
 
 
 # ─────────────────────────────────────────────────────────────────────
-# No-delivery edge cases (turn still runs for side-effects)
+# Read-back into the system event
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_trigger_no_overlap_emits_no_outbound(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """forward_channels=['xyz'] but enabled={'telegram'} → 0 targets.
-
-    The turn still submits (for side-effects); the ephemeral source has no
-    outlet so the hub drops it and there is no broadcast.
-    """
-    patch_cron_config(["xyz"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    await handler(_make_job(channel="cli"))
-
-    assert len(spine.captured) == 1
-    fake_hub.post.assert_not_awaited()
-
-
-async def test_trigger_deliver_false_emits_no_outbound(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """A job with deliver=False is run for side-effects only — the turn submits
-    but nothing is delivered (no hub outlet for the ephemeral source, no
-    broadcast)."""
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    await handler(_make_job(channel="cli", deliver=False))
-
-    assert len(spine.captured) == 1
-    fake_hub.post.assert_not_awaited()
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Dynamic config binding (cron config set takes effect on next trigger)
-# ─────────────────────────────────────────────────────────────────────
-
-
-async def test_trigger_dynamic_config_reload(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    monkeypatch,
-):
-    """``cron config set forward_channels`` must take effect on the next
-    trigger WITHOUT recreating the handler — the closure reads config
-    fresh each fire. Each resolves to a single target → rides the hub."""
-    state = {"forward_channels": ["telegram"]}
-
-    def _make_config():
-        config = MagicMock()
-        config.cron = SimpleNamespace(forward_channels=state["forward_channels"])
-        return config
-
-    monkeypatch.setattr("raven.config.loader.load_config", _make_config)
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    # First fire — telegram only
-    await handler(_make_job(channel="cli", name="t1"))
-    assert spine.captured[-1].source.channel == "telegram"
-
-    # User runs `cron config set forward_channels feishu` between fires
-    state["forward_channels"] = ["feishu"]
-
-    # Second fire — feishu only (NEW config, same handler instance)
-    await handler(_make_job(channel="cli", name="t2"))
-    assert spine.captured[-1].source.channel == "feishu"
-    fake_hub.post.assert_not_awaited()
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Spine read-back: a delivering single-target job runs as a CRON turn; the
-# reply is read back from readback_texts for the system event (the submitter
-# cannot pass run_turn's text_sink — the gateway's capturing runner stores it
-# before result() resolves).
-# ─────────────────────────────────────────────────────────────────────
-
-
-async def test_spine_path_reads_back_reply_into_system_event(
-    fake_agent,
-    fake_hub,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
+async def test_spine_path_reads_back_reply_into_system_event():
     system_events = MagicMock()
     wake = MagicMock()
     readback_texts: dict[str, str] = {}
@@ -393,51 +139,34 @@ async def test_spine_path_reads_back_reply_into_system_event(
         return _Handle()
 
     handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
         submit=_submit,
         readback_texts=readback_texts,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
         system_events=system_events,
         wake=wake,
     )
 
     await handler(_make_job(channel="telegram", to="c1", name="t1"))
 
-    # Single target → rides the hub; no explicit broadcast post.
-    fake_hub.post.assert_not_awaited()
     assert captured["req"].origin is Origin.CRON
     assert captured["req"].conversation == "cron:job_t1"
     # Read back into the system event, then popped (no leak in the long-running map).
     system_events.enqueue.assert_called_once()
     assert "reminder done at 17:05" in system_events.enqueue.call_args.args[0].text
     assert "cron:job_t1" not in readback_texts
+    wake.request_wake_now.assert_called_once()
 
 
-async def test_spine_path_no_reply_falls_back_to_no_response(
-    fake_agent,
-    fake_hub,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
+async def test_spine_path_no_reply_falls_back_to_no_response():
     system_events = MagicMock()
     wake = MagicMock()
-    readback_texts: dict[str, str] = {}  # runner stored nothing (empty reply)
 
     class _Handle:
         async def result(self):
             return None
 
     handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
         submit=lambda req: _Handle(),
-        readback_texts=readback_texts,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
+        readback_texts={},
         system_events=system_events,
         wake=wake,
     )
@@ -448,54 +177,45 @@ async def test_spine_path_no_reply_falls_back_to_no_response(
     assert "(no response)" in system_events.enqueue.call_args.args[0].text
 
 
-async def test_silent_job_on_non_ephemeral_channel_warns(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """gap2 edge: a silent job (deliver=False) on a non-ephemeral channel is only
-    reachable by hand-editing jobs.json (every creation path sets deliver=True).
-    Under the spine its reply IS delivered (no outlet-less suppression for real
-    channels) — the handler warns so the edge is visible."""
-    from loguru import logger
+# ─────────────────────────────────────────────────────────────────────
+# Failure path
+# ─────────────────────────────────────────────────────────────────────
 
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
+
+async def test_turn_failure_emits_failed_event_and_reraises():
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            raise RuntimeError("provider down")
 
     handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
     )
 
-    warnings: list[str] = []
-    sink_id = logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-    try:
-        await handler(_make_job(channel="telegram", to="c1", deliver=False, name="silent_im"))
-    finally:
-        logger.remove(sink_id)
+    with pytest.raises(RuntimeError, match="provider down"):
+        await handler(_make_job(name="f1"))
 
-    assert len(spine.captured) == 1
-    assert any("non-ephemeral" in m for m in warnings)
+    system_events.enqueue.assert_called_once()
+    event = system_events.enqueue.call_args.args[0]
+    assert "failed" in event.text
+    assert event.context_key.endswith(":fail")
 
 
 # ─────────────────────────────────────────────────────────────────────
 # REPL assembly: cron wired with submit=build_repl's scheduler.
-# A delivering cli job renders once via the CliOutlet and never broadcasts
-# explicitly — single target rides the hub through the turn reply.
+# A cli-bound job renders once via the CliOutlet — the source binding is
+# the outlet, nothing else fires.
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(fake_hub, patch_cron_config):
+async def test_repl_assembly_cron_renders_once_via_clioutlet(fake_hub_unused=None):
     from raven.cli._repl_spine import build_repl
     from raven.spine import Text, TurnOutcome, Usage
-
-    patch_cron_config(["*"])
 
     class _CronEchoLoop:
         async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
@@ -504,14 +224,8 @@ async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(fake_
 
     rendered: list[str] = []
     scheduler, hub, teardown = build_repl(_CronEchoLoop(), "cli", rendered.append)
-    # cli_shim makes "cli" non-ephemeral -> resolve_cron_delivery passes through
-    # to a single "cli" target -> rides the hub. agent is unused on the spine path.
     handler = make_on_cron_job(
-        MagicMock(),
-        hub,
         submit=scheduler.submit,
-        channel_manager=SimpleNamespace(enabled_channels=["cli"]),
-        session_manager=None,
         default_channel="cli",
     )
 
@@ -521,71 +235,4 @@ async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(fake_
     finally:
         await teardown()
 
-    # Rendered exactly once via the CliOutlet (the single-target turn reply);
-    # the broadcast path never fired (single target rides the hub).
     assert rendered == ["cron-reply<cron:job_repl1>"]
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Broadcast delivery edge cases
-# ─────────────────────────────────────────────────────────────────────
-
-
-async def test_fan_out_tui_offline_no_im_configured_drops_with_warning(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """When gateway claims a stale TUI cron job but the user has no IM channel
-    enabled, ``resolve_cron_delivery`` SHALL return zero targets and the
-    handler SHALL emit no outbound (reminder is dropped). Verifies the
-    gateway-fallback degraded path: TUI offline + no IM channel configured.
-    """
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=[])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-    await handler(_make_job(channel="tui", name="hydrate_no_im"))
-
-    assert len(spine.captured) == 1
-    fake_hub.post.assert_not_awaited()
-
-
-async def test_fan_out_posts_text_per_target(
-    fake_agent,
-    fake_hub,
-    spine,
-    fake_session_mgr,
-    patch_cron_config,
-):
-    """A broadcast (more than one target) posts one spine Text per target,
-    carrying the resolved reply content and a cron-stamped source."""
-    patch_cron_config(["*"])
-    channel_manager = SimpleNamespace(enabled_channels=["telegram", "feishu"])
-
-    handler = make_on_cron_job(
-        fake_agent,
-        fake_hub,
-        submit=spine.submit,
-        readback_texts=spine.readback,
-        channel_manager=channel_manager,
-        session_manager=fake_session_mgr,
-    )
-
-    await handler(_make_job(channel="cli", name="hydrate"))
-
-    assert fake_hub.post.await_count == 2
-    out = fake_hub.post.await_args_list[0].args[0]
-    assert isinstance(out, Text)
-    assert out.content == "resolved body"
-    assert out.source.sender_id == "cron"
-    assert out.source.channel in {"telegram", "feishu"}

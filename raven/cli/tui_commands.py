@@ -354,7 +354,7 @@ async def _fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> No
 
 
 def _build_cron_callback_spine(base_on_cron, emitter):
-    """Wrap the spine cron callback so a delivering job's reply is fanned out as a
+    """Wrap the spine cron callback so a job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
     returns its reply (read back from the runner via ``readback_texts``); the cron
@@ -364,7 +364,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
 
     async def wrapped(job):
         response = await base_on_cron(job)
-        if job.payload.deliver and response:
+        if response:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -622,15 +622,13 @@ async def _run_rpc_server_until_done(
     turn_ids: dict[str, str] = {}
     turn_teardown = None
     if agent_loop is not None:
-        from types import SimpleNamespace
-
         from raven.cli._cron_handler import make_on_cron_job
 
         # Build the spine before wiring cron: a reminder submits a CRON turn
         # through this scheduler, captured non-streaming and read back via
         # cron_readback so the wrapper can fan it out as a cron.delivered event.
         cron_readback: dict[str, str] = {}
-        turn_scheduler, turn_hub, turn_ids, turn_teardown = build_tui(
+        turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_tui(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
@@ -644,11 +642,8 @@ async def _run_rpc_server_until_done(
         # before cron.start() so an immediately-firing job has its callback.
         if agent_loop.cron_service is not None:
             base_on_cron = make_on_cron_job(
-                agent_loop,
-                turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
-                channel_manager=SimpleNamespace(enabled_channels=["tui"]),
                 default_channel="tui",
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)

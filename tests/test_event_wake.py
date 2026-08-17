@@ -336,9 +336,7 @@ def _make_job():
         enabled=True,
         schedule=CronSchedule(kind="at", at_ms=1000),
         payload=CronPayload(
-            kind="agent_turn",
             message="reminder body",
-            deliver=False,
             channel="cli",
             to="direct",
         ),
@@ -379,7 +377,7 @@ async def test_cron_completion_enqueues_event_and_wakes():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     await on_job(_make_job())
 
     events = queue.peek_all()
@@ -404,7 +402,7 @@ async def test_cron_failure_enqueues_failure_event_and_reraises():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     with pytest.raises(RuntimeError, match="provider down"):
         await on_job(_make_job())
 
@@ -433,7 +431,7 @@ async def test_cron_recovery_drops_stale_failure_event():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     with pytest.raises(RuntimeError):
         await on_job(_make_job())
     assert [e.context_key for e in queue.peek_all()] == ["cron:job_wake:fail"]
@@ -454,7 +452,7 @@ async def test_cron_failure_after_success_keeps_both_events():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     await on_job(_make_job())
     with pytest.raises(RuntimeError):
         await on_job(_make_job())
@@ -477,7 +475,7 @@ async def test_cron_event_emit_is_best_effort():
     queue.enqueue.side_effect = ValueError("queue broken")
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     assert await on_job(_make_job()) == "fine"
     with pytest.raises(RuntimeError, match="the real error"):
         await on_job(_make_job())
@@ -490,6 +488,6 @@ async def test_cron_without_wake_wiring_unchanged():
     hub = MagicMock()
     submit, readback = _spine_submit(["resolved body"])
 
-    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback)
     result = await on_job(_make_job())
     assert result == "resolved body"

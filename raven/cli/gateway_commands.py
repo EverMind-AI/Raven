@@ -64,22 +64,6 @@ def build_model_routing(config, provider):
     return router, provider
 
 
-_GATEWAY_IM_CHANNELS: tuple[str, ...] = (
-    "whatsapp",
-    "telegram",
-    "discord",
-    "feishu",
-    "mochat",
-    "dingtalk",
-    "email",
-    "slack",
-    "qq",
-    "matrix",
-    "wecom",
-    "weixin",
-)
-
-
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
     open to anyone. Returns the banner text, or None when either leg is safe.
@@ -113,17 +97,16 @@ def _risk_banner(config) -> str | None:
 
 def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
-    enabled IM channels only.
+    enabled IM channels only (field-driven via ``enabled_channel_names``, so a
+    channel added to ``ChannelsConfig`` is covered without touching this module).
 
-    The gateway owns cron jobs for its IM channels. It does NOT claim ephemeral
-    ``tui``/``cli`` jobs: those are fired by the interactive process that created
+    The gateway owns cron jobs for its IM channels. It does NOT claim
+    ``tui``/``cli`` jobs: those fire in the interactive process that created
     them (the TUI / ``raven agent`` session), so a TUI-set reminder always
-    delivers to the TUI rather than racing the gateway and being forwarded to an
-    IM channel. The trade-off is no cross-process fallback while that process is
-    down; restoring "fire at origin, hand off only after the origin exits" is a
-    deferred cron-delivery-ownership design, not this set.
+    delivers to the TUI rather than racing the gateway — fire-at-origin, no
+    trigger-time re-routing.
     """
-    return {name for name in _GATEWAY_IM_CHANNELS if getattr(getattr(config.channels, name, None), "enabled", False)}
+    return config.channels.enabled_channel_names()
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -422,12 +405,8 @@ def register(app: typer.Typer) -> None:
                     send_max_retries=config.gateway.send_max_retries,
                 )
                 cron.on_job = make_on_cron_job(
-                    agent,
-                    gw_hub,
                     submit=gw_scheduler.submit,
                     readback_texts=gw_readback_texts,
-                    channel_manager=channels,
-                    session_manager=session_manager,
                     default_channel="cli",
                     system_events=system_events,
                     wake=wake,

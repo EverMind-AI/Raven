@@ -32,7 +32,6 @@ def _add(svc, msg, schedule, *, channel="cli", to="direct", topic_tag=None):
         name=msg[:30],
         schedule=schedule,
         message=msg,
-        deliver=True,
         channel=channel,
         to=to,
         topic_tag=topic_tag,
