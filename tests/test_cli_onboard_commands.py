@@ -5307,10 +5307,10 @@ class TestPointingRavenAtAnEverosYouRun:
     def test_an_unreachable_address_is_refused(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Recording an address that never answered would defer the failure to
         every future session, with nothing left to say why."""
+        import questionary
+
         from raven.cli import onboard_everos
         from raven.plugin.memory.everos._server import ProbeResult
-
-        import questionary
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
