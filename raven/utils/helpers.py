@@ -4,22 +4,14 @@ import base64
 import binascii
 import json
 import math
+import os
 import re
+import struct
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import tiktoken
-from loguru import logger
-
-# Workspace sync runs before the CLI decides logger.enable/disable("raven"),
-# so an unscoped debug in this module would spam stderr through loguru's
-# default sink on every first run. A later logger.enable("raven") still
-# lifts this rule (loguru drops descendant rules whenever a parent rule is
-# set), but the CLI flips logging only after its startup sync -- so the
-# per-file detail below reaches callers that enable logging before syncing
-# (tests, embedders), not the first sync of a `--logs` run.
-logger.disable(__name__)
 
 
 def detect_image_mime(data: bytes) -> str | None:
@@ -207,6 +199,85 @@ def safe_filename(name: str) -> str:
     return _UNSAFE_CHARS.sub("_", name).strip()
 
 
+def safe_path_segment(name: str) -> str:
+    """Like ``safe_filename``, but safe to use as a bare directory name.
+
+    ``safe_filename`` leaves ``.`` and ``..`` intact. That is harmless where a
+    suffix follows (``sessions/<chat_id>.jsonl`` turns ``..`` into ``...jsonl``)
+    but not for a directory segment: ``<root>/<channel>/..`` resolves back out
+    of the root, and every key that normalises the same way would then share
+    one directory. Dot-only names are exactly that set -- any other name
+    containing dots is an ordinary component -- so they fold to underscores,
+    which is what ``safe_filename`` already produces for unsafe input.
+    """
+    cleaned = safe_filename(name)
+    if cleaned and not cleaned.strip("."):
+        return "_" * len(cleaned)
+    return cleaned
+
+
+_SLUG_UNSAFE = re.compile(r"[^A-Za-z0-9]")
+
+# Above this many characters the slug is truncated and a hash of the full path
+# is appended. Matches the reference implementation's cap.
+_SLUG_MAX_LEN = 200
+
+
+def _slug_hash(text: str) -> str:
+    """Base36 of the reference implementation's 32-bit string hash.
+
+    ``h = h * 31 + code_unit`` truncated to a signed 32-bit int each step, then
+    ``abs()``. Iterates UTF-16 code units, not code points, because the
+    reference reads ``charCodeAt`` -- for a path containing a non-BMP character
+    the two disagree.
+    """
+    units = struct.unpack(f"<{len(text.encode('utf-16-le')) // 2}H", text.encode("utf-16-le"))
+    value = 0
+    for unit in units:
+        value = (value * 31 + unit) & 0xFFFFFFFF
+        if value >= 0x80000000:
+            value -= 0x100000000
+    value = abs(value)
+    if value == 0:
+        return "0"
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while value:
+        value, remainder = divmod(value, 36)
+        out = digits[remainder] + out
+    return out
+
+
+def project_slug(directory: str | Path) -> str:
+    """Flatten a directory into one filesystem-safe segment naming that project.
+
+    Reproduces the scheme Claude Code uses for ``~/.claude/projects/``: replace
+    each non-alphanumeric character with ``-``, so ``/srv/work/my_app`` becomes
+    ``-srv-work-my-app`` -- separators, dots and underscores alike. Characters
+    are replaced one for one, not by runs, so ``/a//b`` keeps both dashes; the
+    leading ``-`` is the root slash. Past 200 characters the result is truncated
+    and a hash of the whole path appended, which is what keeps long paths apart
+    once their tails are cut off.
+
+    The slug is a label, not a reversible encoding, and short paths get no
+    disambiguation at all: ``/srv/a_b`` and ``/srv/a/b`` produce the same
+    segment, in the reference implementation too. That is safe here only
+    because nothing treats the directory name as the project's identity -- the
+    launch directory is recorded in each session's metadata
+    (``SessionManager``), the same way the reference records ``cwd`` on every
+    transcript entry.
+    """
+    # `os.path.expanduser`, not `Path(...)`: constructing a Path normalises the
+    # string (`/a//b` -> `/a/b`, a trailing slash dropped), and the reference
+    # slugs the raw directory string. Callers pass `Path.cwd()`, which is
+    # already normalised, so this only matters for a hand-written path.
+    path = os.path.expanduser(str(directory))
+    slug = _SLUG_UNSAFE.sub("-", path)
+    if len(slug) <= _SLUG_MAX_LEN:
+        return slug
+    return f"{slug[:_SLUG_MAX_LEN]}-{_slug_hash(path)}"
+
+
 def split_message(content: str, max_len: int = 2000) -> list[str]:
     """
     Split content into chunks within max_len, preferring line breaks.
@@ -383,12 +454,9 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         return []
 
     added: list[str] = []
-    existed = 0
 
     def _write(src, dest: Path):
-        nonlocal existed
         if dest.exists():
-            existed += 1
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
@@ -442,13 +510,10 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     _write(tpl / "HEARTBEAT.md", workspace / "HEARTBEAT.md")
     (workspace / "skills").mkdir(exist_ok=True)
 
-    if added:
-        for name in added:
-            logger.debug("workspace sync: created {}", name)
     if added and not silent:
         from rich.console import Console
 
         _c = Console(stderr=True)
-        label = "Initialized workspace" if existed == 0 else "Updated workspace templates"
-        _c.print(f"  [dim]{label} ({len(added)} file{'s' if len(added) != 1 else ''})[/dim]")
+        for name in added:
+            _c.print(f"  [dim]Created {name}[/dim]")
     return added

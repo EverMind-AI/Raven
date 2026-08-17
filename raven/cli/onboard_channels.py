@@ -119,6 +119,13 @@ def _select_channel() -> Optional[str]:
     return picked
 
 
+# Channel fields this step must not treat as credentials. They are empty by
+# default like a credential is, but each has a working default resolved
+# elsewhere, so asking for them here would put an unexplained prompt ahead of
+# the tokens the user actually came to enter.
+_NON_CREDENTIAL_CHANNEL_FIELDS = frozenset({"enabled", "workspace"})
+
+
 def _prompt_channel_fields(channel: str) -> Any:
     """Reflect a channel's Pydantic schema and prompt for credential-like fields."""
     questionary = oc._require_questionary()
@@ -136,7 +143,9 @@ def _prompt_channel_fields(channel: str) -> Any:
     promptable = [
         (path, spec)
         for path, spec in specs.items()
-        if path != "enabled" and spec.get("type", "") == "str" and spec.get("default") in ("", None)
+        if path not in _NON_CREDENTIAL_CHANNEL_FIELDS
+        and spec.get("type", "") == "str"
+        and spec.get("default") in ("", None)
     ]
     if promptable:
         names = ", ".join(path for path, _ in promptable)

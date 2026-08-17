@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any
 from raven.memory_engine.skill_local.local_pool import LocalPool
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.memory_engine.skill_local.types import SkillMeta
-from raven.skill_hub.policy import is_blocked, normalize_blocklist
 
 log = logging.getLogger(__name__)
 
@@ -74,23 +73,10 @@ class LocalSkillCatalog:
         )
 
         self._config = config
-        self._blocklist = normalize_blocklist(getattr(config, "blocklist", None))
 
         # Local-pool BM25 retrieval over file-based skills (workspace +
-        # builtin). Always available — no model, no GPU. Blocklisted
-        # skills are hidden from the index via a filtered registry view
-        # so they never surface through retrieval; the router pool drop
-        # in SkillsSegmentBuilder stays the backstop for other sources.
-        pool_registry: Any = self._registry
-        if self._blocklist:
-            skipped = sorted({m.name for m in self._registry.list_all() if self._is_blocked(m.name)})
-            if skipped:
-                log.info(
-                    "skill blocklist: hiding blocked skill(s) from the local pool: %s",
-                    ", ".join(skipped),
-                )
-            pool_registry = _BlocklistRegistryView(self._registry, self._blocklist)
-        self._local_pool = LocalPool(pool_registry)
+        # builtin). Always available — no model, no GPU.
+        self._local_pool = LocalPool(self._registry)
 
         # Background SKILL.md watcher. Auto-started by default so the
         # common long-lived consumer (ContextBuilder) picks up hand-edits
@@ -111,9 +97,6 @@ class LocalSkillCatalog:
             self.start_file_watcher()
 
     # ── Pool/registry access (for LocalSkillSource) ──────────────────
-
-    def _is_blocked(self, name: str) -> bool:
-        return is_blocked(self._blocklist, name)
 
     @property
     def registry(self) -> SkillRegistry:
@@ -216,25 +199,29 @@ class LocalSkillCatalog:
         """Full SKILL.md content, or ``None`` if absent."""
         return self._registry.get_body(name)
 
+    # Truncation priority for the always-set, lowest number survives first.
+    # Explicit because sorting on the source *label* is alphabetical, which is
+    # a different order that only looks right by accident: ``builtin`` happens
+    # to sort ahead of ``external``, but so does ``external`` ahead of
+    # ``workspace``, so a user's own always-skill was the first thing dropped.
+    _ALWAYS_SOURCE_RANK: dict[str, int] = {"builtin": 0, "workspace": 1, "external": 2}
+    _ALWAYS_SOURCE_RANK_OTHER = 3
+
     def get_always_skills(self) -> list[SkillMeta]:
         """Skills flagged ``always: true`` whose requirements are met.
 
-        R3: truncation order is by local_dirs list order (which maps to
-        source priority in the registry) + alphabetical within each
-        source. WARN lists dropped skill names.
+        Truncation to ``always_max`` keeps ``builtin`` first (shipped skills
+        describe the runtime's own tools -- dropping one leaves a tool nobody
+        told the agent how to use), then ``workspace`` (the user's own pool),
+        then ``external``, then any mirror source alphabetically; within a
+        source, by name. WARN lists dropped skill names.
         """
         if getattr(self._config, "disable_always", False):
             return []
-        # Registry list_all already returns skills ordered by layer
-        # iteration (workspace → extra_dirs in order → builtin), and
-        # within each layer by discovery order.  Sort stably by
-        # (source priority, name) so truncation is predictable.
         all_always = [
-            m
-            for m in self._registry.list_all()
-            if m.always and not self._is_blocked(m.name) and self._registry.check_available(m.name, source=m.source)
+            m for m in self._registry.list_all() if m.always and self._registry.check_available(m.name, source=m.source)
         ]
-        all_always.sort(key=lambda m: (m.source, m.name))
+        all_always.sort(key=self._always_sort_key)
         cap = int(getattr(self._config, "always_max", 5) or 5)
         if len(all_always) > cap:
             kept = all_always[:cap]
@@ -247,6 +234,13 @@ class LocalSkillCatalog:
             )
             return kept
         return all_always
+
+    @classmethod
+    def _always_sort_key(cls, meta: SkillMeta) -> tuple[int, str, str]:
+        """``(source rank, source, name)`` -- stable and independent of scan order."""
+        source = meta.source or ""
+        rank = cls._ALWAYS_SOURCE_RANK.get(source, cls._ALWAYS_SOURCE_RANK_OTHER)
+        return (rank, source, meta.name)
 
     def load_skills_for_context(
         self,
@@ -282,7 +276,7 @@ class LocalSkillCatalog:
             skills = resolved
         parts: list[str] = []
         for m in skills:
-            if not m.content or self._is_blocked(m.name):
+            if not m.content:
                 continue
             body = m.content
             # db-only rows without on-disk assets get a synthetic
@@ -386,6 +380,62 @@ class LocalSkillCatalog:
                 break
         return "\n\n---\n\n".join(parts) if parts else ""
 
+    def build_skill_digest(self, skills: "list[SkillMeta]") -> str:
+        """Render skills as digest entries — description, not body.
+
+        The counterpart to :meth:`load_skills_for_context` for skills that
+        declare ``inject: description``: the agent learns the skill exists
+        and what it is for, and fetches the body when it decides to act on
+        it. That fetch route is the whole contract — a description-mode
+        skill is excluded from BM25 routing (it is ``always``), so nothing
+        else will ever surface its content, and the named tool has to be one
+        that registers wherever the registry does.
+
+        ``read_skill`` leads, not the path: it reads the body out of the
+        registry, so it works under ``restrictToWorkspace``, where a builtin
+        skill's on-disk path (inside the installed package, never inside the
+        workspace) is refused by the filesystem tools. The path follows as a
+        second route — still the right one for ``exec`` on bundled scripts.
+        ``use_skill`` is the wrong verb for this: it materializes a bundle,
+        which a body-only fetch does not need.
+        """
+        parts: list[str] = []
+        for m in skills:
+            entry = f"### Skill: {m.name}\n\n{m.description}\n"
+            hint = f'\n**Full instructions**: call `read_skill("local/{m.name}")` to load the body'
+            path_obj = getattr(m, "path", None)
+            path_str = str(path_obj) if path_obj is not None else ""
+            if path_obj is not None and not path_str.startswith("sqlite:") and path_obj.exists():
+                hint += f", or read `{path_str}` directly"
+            entry += hint + " before acting on this skill.\n"
+            parts.append(entry)
+        return "\n\n---\n\n".join(parts) if parts else ""
+
+    def load_always_block(
+        self,
+        skills: "list[SkillMeta]",
+        max_inject: int | None = None,
+    ) -> str:
+        """Render the ``# Active Skills`` body from a mixed always-set.
+
+        Splits on each skill's ``inject`` mode: ``description`` skills get
+        a digest entry, the rest keep the full-body rendering. ``max_inject``
+        caps only the full bodies — a digest entry costs a few dozen tokens
+        and exists precisely to stay resident, so capping it would hide the
+        very skill it advertises.
+        """
+        digest_metas = [m for m in skills if getattr(m, "inject", "full") == "description"]
+        full_metas = [m for m in skills if getattr(m, "inject", "full") != "description"]
+        parts = [
+            block
+            for block in (
+                self.build_skill_digest(digest_metas),
+                self.load_skills_for_context(full_metas, max_inject=max_inject),
+            )
+            if block
+        ]
+        return "\n\n---\n\n".join(parts)
+
     def get_skill_metadata(self, name: str) -> dict | None:
         """Top-level frontmatter dict, or ``None`` if absent."""
         return self._registry.get_raw_metadata(name)
@@ -417,7 +467,6 @@ class LocalSkillCatalog:
                         resolved.append(meta)
                 only = resolved
             metas = list(only)
-        metas = [m for m in metas if not self._is_blocked(m.name)]
         if not metas:
             return ""
 
@@ -446,9 +495,8 @@ class LocalSkillCatalog:
         (workspace, builtin, external mirrors).
 
         Used by CLI ``skill list`` / inspection helpers — gathers
-        everything unranked, deliberately including blocklisted skills so
-        inspection can show a blocked-but-present skill. Hot-path
-        retrieval goes through :class:`SkillForgeRouter` instead.
+        everything unranked. Hot-path retrieval goes through
+        :class:`SkillForgeRouter` instead.
         """
         return self._registry.list_all()
 
@@ -459,22 +507,6 @@ class LocalSkillCatalog:
     ) -> SkillMeta | None:
         """Resolve a (name, source) to a ``SkillMeta`` via the local registry."""
         return self._registry.get(name, source=source)
-
-
-class _BlocklistRegistryView:
-    """Registry proxy handed to :class:`LocalPool` — hides blocklisted
-    skills from the BM25 index while delegating everything else to the
-    real registry, so index rebuilds keep flowing through unchanged."""
-
-    def __init__(self, registry: SkillRegistry, blocklist: frozenset[str]) -> None:
-        self._registry = registry
-        self._blocklist = blocklist
-
-    def list_all(self) -> list[SkillMeta]:
-        return [m for m in self._registry.list_all() if not is_blocked(self._blocklist, m.name)]
-
-    def __getattr__(self, item: str) -> Any:
-        return getattr(self._registry, item)
 
 
 # ----------------------------------------------------------------------

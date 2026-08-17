@@ -128,6 +128,7 @@ class CuratorSegmentBuilder:
                 "budget": asdict(ctx.budget),
                 "message_count": len(ctx.session_messages),
                 "max_steps": self.max_steps,
+                "pinned_message_ids": [item.id for item in manifest if item.pinned],
             },
         )
 
@@ -240,7 +241,7 @@ class CuratorSegmentBuilder:
             tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
             messages.append({"role": "assistant", "content": response.content, "tool_calls": tool_call_dicts})
             for tool_call in response.tool_calls:
-                result = await registry.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                result = await registry.execute(tool_call.name, tool_call.arguments)
                 messages.append(
                     {
                         "role": "tool",

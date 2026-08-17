@@ -152,16 +152,22 @@ def test_set_default_model_creates_nested_structure_when_missing(cfg_path: Path)
 
 
 def test_update_cron_config_writes_into_empty_config(cfg_path: Path) -> None:
-    prev = update_cron_config("default_timezone", "UTC", config_path=cfg_path)
+    prev = update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
     assert prev is None
     data = _read(cfg_path)
-    assert data["cron"]["defaultTimezone"] == "UTC"
+    assert data["cron"]["forwardChannels"] == ["telegram"]
 
 
 def test_update_cron_config_returns_previous_value(cfg_path: Path) -> None:
-    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
-    prev = update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
-    assert prev == "UTC"
+    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+    prev = update_cron_config("forward_channels", ["feishu"], config_path=cfg_path)
+    assert prev == ["telegram"]
+    data = _read(cfg_path)
+    assert data["cron"]["forwardChannels"] == ["feishu"]
+
+
+def test_update_cron_config_default_timezone(cfg_path: Path) -> None:
+    update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["cron"]["defaultTimezone"] == "America/Vancouver"
 
@@ -171,12 +177,8 @@ def test_update_cron_config_unknown_key_raises(cfg_path: Path) -> None:
         update_cron_config("nonexistent_key", "x", config_path=cfg_path)
 
 
-def test_update_cron_config_retired_forward_channels_raises(cfg_path: Path) -> None:
-    with pytest.raises(KeyError, match="Unknown cron config key"):
-        update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
-
-
 def test_reset_cron_config_removes_section(cfg_path: Path) -> None:
+    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
     update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     reset_cron_config(config_path=cfg_path)
     data = _read(cfg_path)
@@ -192,11 +194,11 @@ def test_update_cron_preserves_sibling_sections(cfg_path: Path) -> None:
             }
         )
     )
-    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
+    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
     data = _read(cfg_path)
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
     assert data["providers"]["openai"]["apiKey"] == "sk-keep-me"
-    assert data["cron"]["defaultTimezone"] == "UTC"
+    assert data["cron"]["forwardChannels"] == ["telegram"]
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +279,7 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["weights"] == {
-        "local": 0.96,
+        "local": 1.0,
         "everos": 0.9,
         "hub": 0.85,
     }

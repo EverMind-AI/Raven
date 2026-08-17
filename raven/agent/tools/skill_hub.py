@@ -5,10 +5,12 @@ Two tools that complete the Skill Hub integration's progressive disclosure
 the ``# Skills`` catalog) already lands the candidate list each turn; these
 tools are the on-demand fetch the LLM drives after seeing it.
 
-``read_skill`` is **Hub-driven**. Local and Everos candidates already ship
-their ``content`` in the ``RouterHit`` (rendered into the ``# Skills`` /
-``# Active Skills`` context), so the body round-trip only matters for Hub
-candidates (``hub/<slug>``) whose catalog entry is metadata-only.
+``read_skill`` is the **body** route, for every source. A Hub candidate's
+catalog entry is metadata-only; a local skill declaring ``inject: description``
+is advertised by its digest entry alone and is excluded from BM25 routing, so
+for both the body exists nowhere in context until this tool fetches it. Local
+and Everos ids resolve straight from the registry, which is why this tool
+registers wherever the registry does and needs no Hub endpoint.
 
 ``use_skill`` is **source-agnostic**. The LLM sees one fused, source-tagged
 catalog, so it should not reason about provenance — it calls ``use_skill`` with
@@ -31,13 +33,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
-from raven.skill_hub.audit import record_install, write_install_meta
-from raven.skill_hub.policy import SkillPolicy, is_blocked
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from pathlib import Path
-
     from raven.memory_engine.skill_local.registry import SkillRegistry
     from raven.skill_hub import SkillHubClient
 
@@ -51,6 +48,22 @@ def _split_qualified_id(skill_id: str) -> tuple[str, str]:
     if not sep:
         return "hub", source
     return source, native
+
+
+def _lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
+    """Resolve a router-namespaced id against the physical-layer registry.
+
+    The two carry different vocabularies and must be translated, not passed
+    through: ``local`` is a router namespace spanning every on-disk layer
+    (``workspace`` / ``builtin`` / ``external`` / ``mirror/*``) and is never
+    itself a layer, so it resolves to the layer-priority winner. ``everos`` is
+    both a namespace and a layer, and keeps its exact compound-key lookup.
+    """
+    if registry is None:
+        return None
+    if source == "local":
+        return registry.get(native)
+    return registry.get(native, source=source)
 
 
 class ReadSkillTool(Tool):
@@ -71,12 +84,13 @@ class ReadSkillTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read the full SKILL.md body of a candidate skill from the "
-            "'# Skills' catalog so you can decide whether it fits before using "
-            "it. Pass the skill's qualified id exactly as shown in brackets in "
-            "the catalog (e.g. 'hub/my-skill'). This does NOT download or run "
-            "anything — it only returns the instructions. For local/everos "
-            "skills the body is usually already in your context."
+            "Read a skill's full SKILL.md body — its actual instructions. Pass "
+            "the qualified id exactly as shown in the '# Skills' or '# Active "
+            "Skills' context (e.g. 'local/my-skill', 'hub/my-skill'). This does "
+            "NOT download or run anything. Call it for any skill listed by "
+            "description alone, whether to judge if it fits or because you have "
+            "decided to follow it; a skill whose body is already shown in "
+            "context needs no fetch."
         )
 
     @property
@@ -87,8 +101,9 @@ class ReadSkillTool(Tool):
                 "skill_id": {
                     "type": "string",
                     "description": (
-                        "The skill's qualified id, exactly as shown in the "
-                        "'# Skills' catalog brackets (e.g. 'hub/my-skill')."
+                        "The skill's qualified id, with its '<source>/' prefix, "
+                        "exactly as the context shows it (e.g. 'local/my-skill', "
+                        "'hub/my-skill')."
                     ),
                 },
             },
@@ -97,11 +112,11 @@ class ReadSkillTool(Tool):
 
     async def execute(self, skill_id: Any = None, **_: Any) -> str:
         if not skill_id or not isinstance(skill_id, str):
-            return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
+            return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
         if source in ("local", "everos"):
-            meta = self._registry.get(native, source=source) if self._registry else None
+            meta = _lookup_on_disk(self._registry, source, native)
             if meta is None:
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
@@ -110,7 +125,13 @@ class ReadSkillTool(Tool):
             return f"## {meta.name}\n{meta.content}"
 
         if self._client is None:
-            return "Error: Skill Hub is not configured; cannot read a remote skill body."
+            # A bare id (no '<source>/') lands here, so name the local form:
+            # this tool now serves on-disk skills too, and a dropped prefix is
+            # the likelier mistake than a genuine Hub read without a Hub.
+            return (
+                f"Error: cannot read {skill_id!r} — Skill Hub is not configured. Only on-disk skills are "
+                f"readable here; pass the qualified id with its prefix, e.g. 'local/{native}'."
+            )
         try:
             meta = await self._client.get(native)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
@@ -132,20 +153,9 @@ class UseSkillTool(Tool):
         self,
         client: "SkillHubClient | None" = None,
         registry: "SkillRegistry | None" = None,
-        *,
-        min_safety: float = 0.7,
-        blocklist: "Iterable[str] | None" = None,
-        auto_install: str = "auto",
-        install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
-        self._policy = SkillPolicy.create(
-            min_safety=min_safety,
-            blocklist=blocklist,
-            auto_install=auto_install,
-        )
-        self._install_audit_path = install_audit_path
 
     @property
     def name(self) -> str:
@@ -184,9 +194,6 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
-        if is_blocked(self._policy.blocklist, native):
-            return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
-
         if source in ("local", "everos"):
             return self._use_on_disk(source, native)
         if source == "hub":
@@ -195,7 +202,7 @@ class UseSkillTool(Tool):
 
     def _use_on_disk(self, source: str, native: str) -> str:
         """Resolve an already-materialized local/everos skill dir."""
-        meta = self._registry.get(native, source=source) if self._registry else None
+        meta = _lookup_on_disk(self._registry, source, native)
         if meta is None:
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "
@@ -207,55 +214,13 @@ class UseSkillTool(Tool):
         return f"## {meta.name}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{meta.content}"
 
     async def _use_hub(self, native: str) -> str:
-        """Policy-check, then download + extract a Hub skill.
-
-        The detail metadata is fetched first because it is the only
-        payload that carries ``score_safety`` (catalog search omits it);
-        on pass it doubles as ``prefetched_meta`` so install() skips the
-        redundant round-trip.
-        """
+        """Download + extract a Hub skill, then expose its scripts dir."""
         if self._client is None:
             return "Error: Skill Hub is not configured; cannot fetch a remote skill."
         try:
-            meta = await self._client.get(native)
+            info = await self._client.install(native)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
             return f"Error: failed to install skill {native!r} from the Hub: {e}"
-
-        slug = str(meta.get("slug") or meta.get("name") or native)
-        score = meta.get("score_safety")
-        refusal = self._policy.refusal_for_detail(meta, native)
-        if refusal is not None:
-            return f"Error: refusing to install hub skill: {refusal}."
-
-        skip = await self._policy.install_skip_reason(slug)
-        if skip is not None:
-            logger.info("use_skill install skipped: %s", skip)
-            return f"Skill install skipped: {skip}. Use read_skill to view the skill body."
-
-        try:
-            info = await self._client.install(native, prefetched_meta=meta)
-        except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
-            return f"Error: failed to install skill {native!r} from the Hub: {e}"
-        record_install(
-            self._install_audit_path,
-            slug=str(info.get("slug") or slug),
-            version=str(info.get("version") or ""),
-            trigger="use_skill",
-            score_safety=score,
-            skill_dir=info.get("dir"),
-        )
-        write_install_meta(
-            info.get("dir"),
-            slug=str(info.get("slug") or slug),
-            version=str(info.get("version") or ""),
-            trigger="use_skill",
-        )
-        logger.warning(
-            "installed hub skill %s@%s via use_skill (score_safety=%s)",
-            info.get("slug") or slug,
-            info.get("version") or "",
-            score,
-        )
         # Best-effort: make the freshly extracted skill visible to the
         # registry on subsequent turns. No-op if the cache isn't a scanned
         # source yet; the returned scripts_dir is usable this turn regardless.

@@ -8,13 +8,13 @@ AgentLoop and instead bind the helper to a minimal stand-in.
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from raven.agent.loop import AgentLoop
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
-from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class _FakeProvider:
@@ -40,8 +40,15 @@ class _FakeProvider:
 
 
 def _bind_helper(provider: _FakeProvider):
-    """Bind ``_llm_call_stream`` to a SimpleNamespace stand-in for ``self``."""
-    fake_self = SimpleNamespace(provider=provider)
+    """Bind ``_llm_call_stream`` to a SimpleNamespace stand-in for ``self``.
+
+    The stand-in carries every attribute the helper reads; the reconnect budget
+    is taken from the real class so these tests assert the shipped behavior.
+    """
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+    )
     return AgentLoop._llm_call_stream.__get__(fake_self)
 
 
@@ -256,6 +263,18 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
     assert seen == ["partial"]
 
 
+class _ApiError(Exception):
+    """Stand-in for ``litellm.APIError``: a 500 the classifier calls retryable."""
+
+    status_code = 500
+
+
+class _BadRequestError(Exception):
+    """Stand-in for a 400: the classifier calls it fatal (no retry, no fallback)."""
+
+    status_code = 400
+
+
 async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     """A non-streaming provider's chat() error, replayed through the base
     fallback as a single terminal delta with finish_reason='error', must not
@@ -272,7 +291,6 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
-
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
@@ -289,6 +307,150 @@ async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
     assert response.content == "Azure OpenAI API Error 404: deployment not found"
     assert response.finish_reason == "error"
     assert response.error_classification is classification
+
+
+async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
+    """Reconnecting a stream that already emitted deltas would duplicate them in
+    the caller's UI, so a partially-streamed failure is not retried — it
+    propagates, which is what makes the turn fail (N-TURNFAILED)."""
+
+    class _FailAfterContent:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            yield StreamDelta(content="partial")
+            raise _ApiError("APIError: OpenrouterException - Server disconnected")
+
+    provider = _FailAfterContent()
+    call = _bind_helper(provider)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    with pytest.raises(_ApiError):
+        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1  # retryable, but deltas already reached the caller
+    assert seen == ["partial"]
+
+
+async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
+    """A retryable failure before the first delta is safe to reconnect: no output
+    reached the caller, so the second attempt is indistinguishable from the first."""
+
+    class _FailFirstConnect:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            if self.calls == 1:
+                raise _ApiError("APIError: OpenrouterException - Server disconnected")
+                yield  # pragma: no cover - makes this an async generator
+            yield StreamDelta(content="recovered")
+
+    provider = _FailFirstConnect()
+    call = _bind_helper(provider)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 2
+    assert response.finish_reason == "stop"
+    assert response.content == "recovered"
+    assert seen == ["recovered"]
+
+
+async def test_llm_call_stream_does_not_reconnect_a_fatal_error() -> None:
+    """A non-retryable failure (400) is raised at once — a reconnect would just
+    reproduce it."""
+
+    class _FailFatally:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            raise _BadRequestError("invalid request")
+            yield  # pragma: no cover - makes this an async generator
+
+    provider = _FailFatally()
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    with pytest.raises(_BadRequestError):
+        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1
+
+
+async def test_llm_call_stream_surfaces_errors_from_a_provider_without_a_classifier() -> None:
+    """A duck-typed provider need not implement classify_error. Consulting it
+    unguarded would replace the real failure with an AttributeError raised from
+    inside the handler."""
+
+    class _NoClassifier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            raise _ApiError("APIError: OpenrouterException - Server disconnected")
+            yield  # pragma: no cover - makes this an async generator
+
+    provider = _NoClassifier()
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    with pytest.raises(_ApiError):
+        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1  # unclassifiable -> fatal, no reconnect
+
+
+async def test_llm_call_stream_timeout_does_not_reconnect() -> None:
+    """The per-chunk idle cap already waited the full timeout, so a stalled stream
+    ends the call rather than doubling the stall with a reconnect."""
+
+    class _StallProvider:
+        classify_error = LLMProvider.classify_error
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat_stream(self, **_kwargs: Any):
+            self.calls += 1
+            raise TimeoutError
+            yield  # pragma: no cover - makes this an async generator
+
+    provider = _StallProvider()
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert provider.calls == 1
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "network"
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
@@ -372,207 +534,3 @@ async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
 
     assert response.reasoning_content == "thinking"
     assert response.content == "visible</think> more text"
-
-
-# ---------------------------------------------------------------------------
-# Truncation detection: three independent signals, OR'd
-# ---------------------------------------------------------------------------
-
-
-def _provider_with_ceiling(chunks: list[StreamDelta], max_tokens: int = 4096) -> _FakeProvider:
-    """A provider whose configured ceiling the loop can compare usage against."""
-    provider = _FakeProvider(chunks)
-    provider.generation = SimpleNamespace(max_tokens=max_tokens)
-    return provider
-
-
-async def test_truncation_detected_from_upstream_finish_reason() -> None:
-    """Signal 1: the backend says it stopped at the ceiling."""
-    chunks = [StreamDelta(content="partial"), StreamDelta(content=None, finish_reason="length")]
-    response = await _bind_helper(_provider_with_ceiling(chunks))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is True
-    assert response.finish_reason == "length"
-
-
-async def test_unparseable_arguments_on_the_last_call_are_read_as_a_cut() -> None:
-    """The backend claims a clean `tool_calls` stop and the arguments do not
-    parse -- gpt-4o's measured shape on a ceiling hit, 4 of 4 probes.
-
-    Generation is sequential, so nothing arrives after a cut: a repair on the
-    last call of a turn is the turn ending mid-write. The reading is stated as
-    likely rather than certain, since a model can also just write bad JSON, and
-    the refusal does not depend on which it was.
-
-    What this replaces is a comparison of usage against the ceiling, which
-    needed the request and the check to agree on a number and a model id.
-    """
-    chunks = [
-        StreamDelta(
-            content=None,
-            tool_call_delta={
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": "call_1",
-                        "function": {"name": "write_file", "arguments": '{"content": "def foo('},
-                    }
-                ]
-            },
-        ),
-        StreamDelta(content=None, finish_reason="tool_calls"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is False, "the turn-level verdict still belongs to the upstream"
-    assert response.tool_calls[0].run_meta.arguments_repaired is True
-    assert response.tool_calls[0].run_meta.last_of_turn is True, "the position is what makes it readable"
-    assert response.tool_calls[0].run_meta.truncation is None, "a reading, not a recorded fact"
-    assert response.tool_calls[0].arguments["_raw_arguments"] == '{"content": "def foo('
-
-
-async def test_complete_response_is_not_flagged_truncated() -> None:
-    """None of the three signals present: a normal turn stays unflagged."""
-    chunks = [
-        StreamDelta(content="all done"),
-        StreamDelta(content=None, usage={"completion_tokens": 12}, finish_reason="stop"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is False
-    assert response.finish_reason == "stop"
-
-
-async def test_complete_tool_call_is_not_flagged_truncated() -> None:
-    """Well-formed tool arguments must not read as truncation."""
-    chunks = [
-        StreamDelta(
-            content=None,
-            tool_call_delta={
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": "call_1",
-                        "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
-                    }
-                ]
-            },
-        ),
-        StreamDelta(content=None, usage={"completion_tokens": 20}, finish_reason="tool_calls"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is False
-    assert response.tool_calls[0].arguments == {"path": "a.py"}
-
-
-async def test_a_clean_stop_with_no_unparsed_call_is_not_truncation() -> None:
-    """Usage no longer participates: a turn the upstream calls done, whose last
-    call parses, is done -- whatever the token count says.
-
-    The comparison that used to live here (usage against the resolved ceiling)
-    required the check and the request to agree on one number and one model id.
-    They drifted five times on this branch, and each time the check stopped
-    firing without ever failing. No surveyed agent carries it.
-    """
-    provider = _FakeProvider(
-        [
-            StreamDelta(content="x", usage={"completion_tokens": DEFAULT_MAX_OUTPUT_TOKENS}),
-            StreamDelta(content=None, finish_reason="stop"),
-        ]
-    )  # no .generation at all
-    response = await _bind_helper(provider)(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="not/in-any-catalogue"
-    )
-
-    assert response.truncated is False
-    assert response.max_tokens is None, "no ceiling is claimed when the loop sent none"
-
-
-def _two_calls_last_one_cut() -> list[StreamDelta]:
-    return [
-        StreamDelta(
-            content=None,
-            tool_call_delta={
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": "call_1",
-                        "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
-                    },
-                    {
-                        "index": 1,
-                        "id": "call_2",
-                        "function": {"name": "write_file", "arguments": '{"content": "def foo('},
-                    },
-                ]
-            },
-        ),
-        StreamDelta(content=None, finish_reason="length"),
-    ]
-
-
-async def test_only_the_last_tool_call_is_marked_truncated() -> None:
-    """Calls arrive in order, so everything before the last one finished intact.
-
-    Marking all of them tells a model that a complete call was cut off; if that
-    call is genuinely malformed it then gets the wrong diagnosis for a mistake
-    it really did make.
-    """
-    response = await _bind_helper(_provider_with_ceiling(_two_calls_last_one_cut(), max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is True
-    assert response.tool_calls[0].run_meta is None
-    assert response.tool_calls[1].run_meta is not None
-    assert response.tool_calls[1].run_meta.truncation is not None
-
-
-async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
-    """It is metadata about the call, not an argument the model wrote.
-
-    ``to_openai_tool_call`` serializes ``arguments`` into the assistant message
-    that goes back upstream next turn, and the loop does that before the
-    registry ever sees the call. A marker living in that dict would therefore
-    be echoed to the model as a field it never sent.
-    """
-    response = await _bind_helper(_provider_with_ceiling(_two_calls_last_one_cut(), max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    payload = json.dumps([tc.to_openai_tool_call() for tc in response.tool_calls])
-
-    assert response.tool_calls[1].run_meta is not None
-    assert "truncation" not in payload
-    assert "run_meta" not in payload
-    assert "_truncated" not in payload
-
-
-async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
-    """The other order: text first, then the call, cut while writing it."""
-    chunks = [
-        StreamDelta(content="I will write the file now"),
-        StreamDelta(
-            content=None,
-            tool_call_delta={
-                "tool_calls": [
-                    {"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"path": "a.py"'}}
-                ]
-            },
-        ),
-        StreamDelta(content=None, finish_reason="length"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.tool_calls[0].run_meta is not None

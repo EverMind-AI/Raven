@@ -22,9 +22,6 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 ### §1.1 Top rule: don't add comments unless necessary
 
-- Every new code file must document its purpose in English with an appropriate
-  module docstring or equivalent file-level documentation. Inline comments
-  still follow the necessity rules below.
 - Match the style of surrounding lines. If neighboring code has no comments, **don't** add one to your new line.
 - Comment **only** when:
   - the logic is non-obvious;
@@ -362,6 +359,7 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 ## 7. Repository assets
 
 - Do not commit report assets or standalone web artifacts, regardless of size. This includes images, GIFs, SVGs, videos, audio files, PDFs, HTML files, web manifests, and WASM bundles.
+- The application source trees (`bridge/`, `ui/`, `ui-tui/`, `ui-webui/`) are exempt from that extension list: a product frontend carries its own entry HTML and icon SVGs as source, not as report assets. Everything else in this section, including the 1 MiB limit, still applies to them.
 - Store public-report assets outside git and link to them when needed.
 - Do not add or modify files over 1 MiB unless the maintainer explicitly approves it before the commit.
 - Run `make check-large-files` when touching docs, demos, reports, assets, or generated outputs; CI enforces the same rule on added and modified PR files.

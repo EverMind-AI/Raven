@@ -95,6 +95,43 @@ class Tool(ABC):
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
 
+    # Channels this tool works on; None means every channel. One gateway process
+    # serves the web channel and every enabled IM channel from a single registry,
+    # so a tool whose effect exists on only one of them (deliver_files needs the
+    # web UI's download box) would otherwise be advertised everywhere and refuse
+    # only once called. Declaring the set withholds it from the schema instead,
+    # per turn -- see ToolRegistry.set_channel.
+    channels: frozenset[str] | None = None
+
+    def blocking_for(self, params: dict[str, Any]) -> bool:
+        """This call's blocking verdict. Defaults to the class flag.
+
+        Overridden by a tool that forwards to another tool (``tool_call``), where
+        the verdict belongs to the target named in ``params`` — reading the
+        forwarder's own flag would both double-wrap the target in a ceiling it
+        opted out of and misreport the call to a turn stream.
+        """
+        return self.blocking_interaction
+
+    def metadata_owner(self, params: dict[str, Any]) -> "Tool":
+        """The tool holding this call's metadata. Defaults to self.
+
+        Overridden by a tool that forwards to another tool (``tool_call``), where
+        the result — and so the metadata — is produced by the target named in
+        ``params``. Without this the forwarded tool's payload is stranded and the
+        UI silently renders nothing.
+        """
+        return self
+
+    def take_metadata(self) -> dict[str, Any] | None:
+        """Structured payload for this call's turn-stream event, consumed once.
+
+        Opt-in: ``execute`` returns only a string, so a tool whose result also
+        has to reach a UI (rather than the model) hands it back here and the loop
+        attaches it to the emitted ToolEvent.
+        """
+        return None
+
     _TYPE_MAP = {
         "string": str,
         "integer": int,
@@ -143,42 +180,6 @@ class Tool(ABC):
         arguments. Override only when a tool wants a cleaner label than the
         generic one (e.g. ask_user showing just its question, not the raw
         arguments blob).
-        """
-        return None
-
-    @property
-    def truncation_hint(self) -> str | None:
-        """What to do differently when a call to this tool arrives cut off.
-
-        The generic truncation message can only say "send less", which leaves a
-        model to guess at what smaller looks like -- and dropping the largest
-        field is one of the guesses. What it needs is the next action, and only
-        the tool knows what that is: write_file can be appended to, a shell
-        command can be split into several runs, and some tools have no smaller
-        form at all.
-
-        ``None`` (the default) means the generic message stands on its own.
-
-        Only for a cut the upstream confirmed. Where the cause is merely likely
-        see ``incomplete_hint``: advice written for a turn that ran out of room
-        misleads a model that simply wrote bad JSON, and sends it looking for a
-        size problem it does not have.
-        """
-        return None
-
-    @property
-    def incomplete_hint(self) -> str | None:
-        """What to do differently when a call arrives unparseable and last.
-
-        Same situation as ``truncation_hint`` under one of its two readings, and
-        deliberately a separate string rather than the same one reused: this one
-        is consumed under an ``If it was the output limit:`` heading and has to
-        read as the consequent of a condition, where the other states a fact.
-
-        The near-duplication is the cost of not asserting a cause we cannot
-        establish. A tool answering one of the two and not the other leaves the
-        ambiguous refusal with no way forward, which is the case that exists
-        because the upstream under-reports -- guarded by a test.
         """
         return None
 

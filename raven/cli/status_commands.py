@@ -16,12 +16,7 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def status():
         """Show Raven status."""
-        from raven.config.loader import (
-            ConfigReadError,
-            get_config_path,
-            load_config,
-            read_raw_or_raise,
-        )
+        from raven.config.loader import get_config_path, load_config
 
         config_path = get_config_path()
         config = load_config()
@@ -29,19 +24,7 @@ def register(app: typer.Typer) -> None:
 
         console.print(f"{__logo__} Raven Status\n")
 
-        # Three states, not two: a present-but-unparseable file used to show the
-        # same checkmark as a healthy one, right before the provider walk below
-        # aborted on it. The detailed remedy still comes from that walk.
-        if not config_path.exists():
-            config_state = "[red]missing[/red]"
-        else:
-            try:
-                read_raw_or_raise(config_path)
-            except ConfigReadError:
-                config_state = "[red]invalid[/red]"
-            else:
-                config_state = "[green]✓[/green]"
-        console.print(f"Config: {config_path} {config_state}")
+        console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
         console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
 
         if config_path.exists():
@@ -55,25 +38,16 @@ def register(app: typer.Typer) -> None:
             # the loaded config is the only view that includes credentials
             # supplied by environment variable, which the file on disk does not
             # hold. Reading either one alone shows a configured provider as unset.
-            # Only configured providers get a row; the rest fold into one count
-            # so a single-provider setup is not buried under 20 'not set' rows.
-            unconfigured = 0
             for info in list_providers():
                 label = info["display_name"] or info["name"]
                 section = config.providers.get(info["name"])
                 if info["is_oauth"]:
                     # The token lives in a file, so the listing is the only source.
-                    if not info["configured"]:
-                        unconfigured += 1
-                        continue
-                    state = "[green]✓ (OAuth)[/green]"
+                    state = "[green]✓ (OAuth)[/green]" if info["configured"] else "[dim]not set (OAuth)[/dim]"
                 elif info["is_local"]:
                     # Local deployments show api_base instead of api_key
                     api_base = (section.api_base if section else None) or info["api_base"]
-                    if not api_base:
-                        unconfigured += 1
-                        continue
-                    state = f"[green]✓ {api_base}[/green]"
+                    state = f"[green]✓ {api_base}[/green]" if api_base else "[dim]not set[/dim]"
                 else:
                     # `providers.auth`, like every other gate. Reading `api_key`
                     # here made this the one place that called Azure configured
@@ -81,13 +55,9 @@ def register(app: typer.Typer) -> None:
                     # holding only `api_key_list`.
                     from raven.providers.auth import credential_status
 
-                    if not credential_status(info["name"], section, include_external=True).ok:
-                        unconfigured += 1
-                        continue
-                    state = "[green]✓[/green]"
+                    status = credential_status(info["name"], section, include_external=True)
+                    state = "[green]✓[/green]" if status.ok else "[dim]not set[/dim]"
                 console.print(f"{label}: {state}")
-            if unconfigured:
-                console.print(f"[dim]{unconfigured} providers not configured (raven provider list to see all)[/dim]")
 
 
 __all__ = ["register"]

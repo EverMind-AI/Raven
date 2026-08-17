@@ -1,12 +1,12 @@
 import asyncio
+from contextlib import nullcontext
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.cli._repl_spine import (
     CliOutlet,
-    TurnUsageSummary,
-    _render_summary_line,
     build_repl,
     make_hub_sink,
+    run_repl_loop,
 )
 from raven.spine import (
     ChatType,
@@ -86,11 +86,11 @@ async def test_runner_stream_flag_is_forwarded():
     runner = AgentTurnRunner(loop, stream=True)
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
-    assert loop.calls[0]["stream"] is True  # build_tui would pass True; build_repl False
+    assert loop.calls[0]["stream"] is True  # build_rpc_spine would pass True; build_repl False
 
 
 async def test_runner_forwards_inline_tool_stream():
-    # build_repl / build_tui wire inline_tool_stream=True so deep_research streams
+    # build_repl / build_rpc_spine wire inline_tool_stream=True so deep_research streams
     # its answer inline; the gateway leaves it False.
     loop = FakeAgentLoop()
     runner = AgentTurnRunner(loop, stream=False, inline_tool_stream=True)
@@ -112,7 +112,7 @@ async def test_cli_outlet_renders_text():
 async def test_cli_outlet_eats_non_text():
     rendered: list[str] = []
     outlet = CliOutlet("cli", rendered.append)
-    # No render_notice: both Notice kinds eaten, status quo.
+    # No render_notice (interactive REPL): both Notice kinds eaten, status quo.
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS))
     await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT))
     assert rendered == []  # eaten, not rendered
@@ -165,7 +165,7 @@ async def test_cli_outlet_renders_reasoning_as_progress():
 
 
 async def test_cli_outlet_eats_reasoning_without_progress():
-    # No render_notice -> eaten, status quo.
+    # No render_notice (interactive REPL before wiring) -> eaten, status quo.
     rendered: list[str] = []
     await CliOutlet("cli", rendered.append).deliver(Reasoning(content="searching..."))
     assert rendered == []
@@ -197,14 +197,25 @@ async def test_sink_routes_deliverables_and_drops_lifecycle():
     assert isinstance(hub.dispatched[0], Text)
 
 
-# --- build_repl: real scheduler + hub + CliOutlet, only the agent loop faked ---
+# --- run_repl_loop: real scheduler + hub + CliOutlet, only the edges faked ---
+# (per the reviewers' rule: faking the spine path would make the R1 ordering test
+#  pass trivially; the result()->render race only exists on the real async path.)
 
 
 class _EchoLoop:
     async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
-        # The one-shot path wires stream=False; run_turn emits the reply as one Text.
+        # REPL wires stream=False; run_turn emits the reply as one Text.
         await emit(Text(content=f"reply<{req.text}>", source=req.source))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
+def _wire_real_spine():
+    """The real assembly via build_repl (Scheduler + DeliveryHub + CliOutlet); only
+    the agent loop is fake. The render callback appends to a shared event log
+    alongside the prompt marker, so this exercises build_repl's wiring too."""
+    events: list[str] = []
+    scheduler, hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: events.append(f"render:{t}"))
+    return events, hub, scheduler, teardown
 
 
 async def test_build_repl_defaults_to_single_slot_pools():
@@ -225,6 +236,93 @@ async def test_build_repl_honors_configured_pool_sizes():
         await teardown()
 
 
+async def test_repl_loop_renders_each_reply_before_the_next_prompt():
+    events, hub, scheduler, teardown = _wire_real_spine()
+    await run_repl_loop(
+        read_input=_make_reader(events, ["a", "b", "exit"]),
+        submit=scheduler.submit,
+        wait_idle=hub.wait_idle,
+        channel="cli",
+        chat_id="c",
+        is_exit=lambda c: c == "exit",
+        handle_slash=lambda c: False,
+        thinking=nullcontext,
+        on_exit=lambda: events.append("exit"),
+    )
+    await teardown()
+    # both inputs processed (no drop) and each reply rendered before the next prompt
+    assert events == [
+        "prompt",
+        "render:reply<a>",
+        "prompt",
+        "render:reply<b>",
+        "prompt",
+        "exit",
+    ]
+
+
+async def test_repl_loop_handles_empty_reply_without_hanging():
+    events: list[str] = []
+
+    class EmptyLoop:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+            # An empty reply emits no Text (run_turn skips empty content); the loop
+            # must still not hang — wait_idle returns since no queue was built.
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+    scheduler, hub, teardown = build_repl(EmptyLoop(), "cli", lambda t: events.append(f"render:{t!r}"))
+    await run_repl_loop(
+        read_input=_make_reader(events, ["hi", "exit"]),
+        submit=scheduler.submit,
+        wait_idle=hub.wait_idle,
+        channel="cli",
+        chat_id="c",
+        is_exit=lambda c: c == "exit",
+        handle_slash=lambda c: False,
+        thinking=nullcontext,
+        on_exit=lambda: events.append("exit"),
+    )
+    await teardown()
+    assert events == ["prompt", "prompt", "exit"]  # empty reply renders nothing, loop did not hang
+
+
+async def test_repl_loop_ctrl_c_mid_turn_exits_cleanly():
+    events: list[str] = []
+
+    class _BoomHandle:
+        async def result(self):
+            raise KeyboardInterrupt  # Ctrl-C lands while the turn is running
+
+    await run_repl_loop(
+        read_input=_make_reader(events, ["hi", "exit"]),
+        submit=lambda req: _BoomHandle(),
+        wait_idle=_anoop,
+        channel="cli",
+        chat_id="c",
+        is_exit=lambda c: c == "exit",
+        handle_slash=lambda c: False,
+        thinking=nullcontext,
+        on_exit=lambda: events.append("clean-exit"),
+    )
+    assert events == ["prompt", "clean-exit"]  # mid-turn Ctrl-C -> clean exit, not an uncaught traceback
+
+
+async def test_repl_loop_slash_command_does_not_submit():
+    submitted: list = []
+    await run_repl_loop(
+        read_input=_make_reader([], ["/help", "exit"]),
+        submit=lambda req: submitted.append(req),
+        wait_idle=_anoop,
+        channel="cli",
+        chat_id="c",
+        is_exit=lambda c: c == "exit",
+        handle_slash=lambda c: True,  # claimed as a slash command
+        thinking=nullcontext,
+        on_exit=lambda: None,
+    )
+    assert submitted == []  # a handled slash command is not submitted as a turn
+
+
 async def test_build_repl_teardown_leaves_no_pending_tasks():
     # The two bugs were both in teardown/interrupt; guard it: after a real turn,
     # scheduler.shutdown() + hub.aclose() must stop every task build_repl/submit
@@ -240,49 +338,17 @@ async def test_build_repl_teardown_leaves_no_pending_tasks():
     assert all(t.done() for t in spawned)  # teardown stopped every one
 
 
-class _FakeUsageTracker:
-    """snapshot()-only stand-in; each set() swaps in a new lifetime total."""
+def _make_reader(events, inputs):
+    queue = list(inputs)
 
-    def __init__(self) -> None:
-        from raven.token_wise.base import UsageSnapshot
+    async def read_input() -> str:
+        events.append("prompt")
+        if not queue:
+            raise EOFError
+        return queue.pop(0)
 
-        self._snap = UsageSnapshot(model="stub")
-
-    def snapshot(self):
-        return self._snap
-
-    def set(self, **totals) -> None:
-        from raven.token_wise.base import UsageSnapshot
-
-        self._snap = UsageSnapshot(model="stub", **totals)
+    return read_input
 
 
-def test_turn_summary_tiny_cost_shows_floor_not_free():
-    # 4 decimal places round a sub-cent cost like 0.00004 down to "$0",
-    # which reads as a free call; the line must show a floor instead.
-    tracker = _FakeUsageTracker()
-    summary = TurnUsageSummary(tracker)
-    summary.turn_started()
-    tracker.set(input_tokens=100, output_tokens=10, estimated_cost_usd=0.00004)
-    line = summary.take_line()
-    assert line is not None
-    assert "<$0.0001" in line
-    assert " $0 " not in f" {line} "
-
-
-def test_turn_summary_normal_cost_still_renders_exact():
-    tracker = _FakeUsageTracker()
-    summary = TurnUsageSummary(tracker)
-    summary.turn_started()
-    tracker.set(input_tokens=200, output_tokens=20, estimated_cost_usd=0.0042)
-    line = summary.take_line()
-    assert line is not None
-    assert "$0.0042" in line
-
-
-def test_summary_line_indented_like_progress_notices(capsys):
-    # agent_commands renders progress notices as '  [dim]. ...' (two-space
-    # indent); the summary line sits in the same visual column.
-    _render_summary_line("1.2k in / 340 out tokens")
-    out = capsys.readouterr().out
-    assert out.startswith("  ↳")
+async def _anoop(*a, **k):
+    return None

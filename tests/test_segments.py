@@ -6,7 +6,6 @@ reproduce the segment its old inline block in ``ContextBuilder`` emitted.
 
 from __future__ import annotations
 
-import types
 from pathlib import Path
 
 from raven.agent.context import ContextBuilder
@@ -52,6 +51,11 @@ class _Backend:
         return list(self._mems)
 
 
+def _tool_defs(*names: str):
+    """A ``get_tool_definitions`` callable in OpenAI function-call shape."""
+    return lambda: [{"type": "function", "function": {"name": n, "parameters": {}}} for n in names]
+
+
 class _Source:
     name = "local"
     weight = 1.0
@@ -66,20 +70,34 @@ class _Source:
 # ---------------------------------------------------------------------------
 
 
-def _provider_config(model: str, provider: str, api_key: str | None = None, api_base: str | None = None):
-    """A config stand-in exposing exactly what _resolved_model_id reads."""
-    cfg = types.SimpleNamespace(agents=types.SimpleNamespace(defaults=types.SimpleNamespace(model=model)))
-    cfg.get_provider_name = lambda m=None: provider
-    cfg.get_api_key = lambda m=None: api_key
-    cfg.get_api_base = lambda m=None: api_base
-    return cfg
-
-
 class TestIdentityBootstrap:
     async def test_identity_matches_legacy(self, tmp_path: Path) -> None:
         seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
         legacy = ContextBuilder(workspace=tmp_path)._get_identity()
         assert seg.text == legacy
+
+    async def test_identity_names_both_directories(self, tmp_path: Path) -> None:
+        """The model is told where it works and where its memory lives, and the
+        two are not the same directory."""
+        from raven.agent.workdir import bind
+
+        home = tmp_path / "home"
+        home.mkdir()
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with bind(project):
+            seg = await IdentitySegmentBuilder(home).build(_ctx(home))
+
+        assert f"Working directory: {project}" in seg.text
+        assert f"Agent home: {home}" in seg.text
+        assert f"{home}/user_memory/profile/user.md" in seg.text
+        assert str(project / "user_memory") not in seg.text
+
+    async def test_identity_falls_back_to_agent_home_when_unbound(self, tmp_path: Path) -> None:
+        """No binding means the pre-split single-directory behaviour."""
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+        assert f"Working directory: {tmp_path}" in seg.text
 
     async def test_bootstrap_none_when_no_files(self, tmp_path: Path) -> None:
         seg = await BootstrapSegmentBuilder(tmp_path).build(_ctx(tmp_path))
@@ -91,39 +109,6 @@ class TestIdentityBootstrap:
         assert seg is not None
         assert "## TOOLS.md" in seg.text
         assert "tool docs" in seg.text
-
-    def test_identity_contains_model_id(self, tmp_path: Path) -> None:
-        prompt = render.identity_text(tmp_path, model="openrouter/some-model")
-        assert "openrouter/some-model" in prompt
-
-    def test_identity_default_model_resolved_lazily(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
-        assert "openrouter/acme/lazy-model" in render.identity_text(tmp_path)
-
-    def test_legacy_identity_contains_model_id(self, tmp_path: Path, monkeypatch) -> None:
-        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
-        legacy = ContextBuilder(workspace=tmp_path)._get_identity()
-        assert "openrouter/acme/lazy-model" in legacy
-
-    def test_resolved_model_id_codex_matches_wire_form(self, monkeypatch) -> None:
-        """openai_codex bypasses LiteLLM and its client strips the provider
-        prefix before sending; the identity line must report that wire form,
-        not the stored one."""
-        cfg = _provider_config("openai-codex/gpt-5.1-codex", "openai_codex")
-        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
-        assert render._resolved_model_id() == "gpt-5.1-codex"
-
-    def test_resolved_model_id_azure_matches_wire_form(self, monkeypatch) -> None:
-        """azure_openai sends the id as a URL deployment name with the prefix
-        stripped; the identity line must match."""
-        cfg = _provider_config("azure_openai/gpt-4o", "azure_openai")
-        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
-        assert render._resolved_model_id() == "gpt-4o"
-
-    def test_resolved_model_id_gateway_prefix_applied(self, monkeypatch) -> None:
-        cfg = _provider_config("acme/some-model", "openrouter", api_key="sk-or-v1-abc")
-        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
-        assert render._resolved_model_id() == "openrouter/acme/some-model"
 
 
 class TestMemory:
@@ -169,6 +154,31 @@ class TestSkills:
         assert seg.meta["injected_skill_ids"] == []
 
 
+class TestCollectToolNames:
+    """Shared by segments 4 and 5, with opposite consequences for a wrong
+    answer: segment 5 loses a gate hint, segment 4 loses content. Both read
+    ``None`` as 'do not gate', so the empty-vs-unknown distinction is load
+    bearing and pinned here."""
+
+    def test_reads_openai_and_flat_shapes(self) -> None:
+        got = render.collect_tool_names(lambda: [{"function": {"name": "a"}}, {"name": "b"}])
+        assert got == ["a", "b"]
+
+    def test_unwired_and_raising_and_empty_are_all_none(self) -> None:
+        def _boom():
+            raise RuntimeError("x")
+
+        assert render.collect_tool_names(None) is None
+        assert render.collect_tool_names(_boom) is None
+        # Empty list collapses to None too: an agent with zero tools is not a
+        # real state, so treating it as "unknown" is the safe reading.
+        assert render.collect_tool_names(lambda: []) is None
+
+    def test_malformed_entries_are_skipped_not_fatal(self) -> None:
+        got = render.collect_tool_names(lambda: ["junk", {"function": "notadict"}, {"name": "ok"}])
+        assert got == ["ok"]
+
+
 class TestActiveSkills:
     async def test_none_on_empty_workspace(self, tmp_path: Path) -> None:
         b = ActiveSkillsSegmentBuilder(ContextBuilder(workspace=tmp_path).skills)
@@ -177,3 +187,71 @@ class TestActiveSkills:
         # or emits a well-formed # Active Skills block (never malformed).
         if seg is not None:
             assert seg.text.startswith("# Active Skills")
+
+    async def test_dag_skill_is_resident_as_a_digest(self, tmp_path: Path) -> None:
+        """With its tool registered, the shipped orchestration skill reaches the
+        system prompt every turn — as description + routes only, body on disk."""
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_tool_defs("read_file", "run_subagent_dag"),
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is not None
+        assert "### Skill: subagent-dag-orchestration" in seg.text
+        assert "run_subagent_dag" in seg.text  # from the description
+        assert 'read_skill("local/subagent-dag-orchestration")' in seg.text
+        # A distinctive line from deep in SKILL.md, i.e. the body proper.
+        assert "## When to use" not in seg.text
+
+    async def test_skill_withheld_when_its_required_tool_is_absent(self, tmp_path: Path) -> None:
+        """``run_subagent_dag`` only registers when third-party sub-agents are
+        configured, but the skill advertising it ships always-on. Without this
+        gate the agent is told every turn to reach for a tool it cannot call."""
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_tool_defs("read_file", "spawn", "exec"),
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is None or "subagent-dag-orchestration" not in seg.text
+
+    async def test_unwired_tool_lookup_does_not_gate(self, tmp_path: Path) -> None:
+        """No callable wired → unknown, not empty. A wiring gap must degrade to
+        showing the skill, never to silently blanking the segment."""
+        b = ActiveSkillsSegmentBuilder(ContextBuilder(workspace=tmp_path).skills)
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is not None
+        assert "subagent-dag-orchestration" in seg.text
+
+    async def test_malformed_requires_does_not_break_or_hide_a_skill(self, tmp_path: Path) -> None:
+        """A hand-authored ``requires`` of the wrong shape must not raise into
+        prompt assembly, nor silently withhold the skill."""
+        skill_dir = tmp_path / "skills" / "wonky"
+        skill_dir.mkdir(parents=True)
+        skill_dir.joinpath("SKILL.md").write_text(
+            '---\nname: wonky\ndescription: d\nmetadata: {"raven":{"always":true,"requires":{"tools":7}}}\n---\n\nbody\n',
+            encoding="utf-8",
+        )
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_tool_defs("read_file"),
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is not None
+        assert "### Skill: wonky" in seg.text
+
+    async def test_raising_tool_lookup_does_not_gate(self, tmp_path: Path) -> None:
+        def _boom() -> list[dict]:
+            raise RuntimeError("registry unavailable")
+
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_boom,
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is not None
+        assert "subagent-dag-orchestration" in seg.text

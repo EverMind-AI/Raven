@@ -1,10 +1,12 @@
-"""Shared low-level rendering helpers for segment builders.
+"""Shared low-level helpers for segment builders.
 
-These are the pure(ish) render functions formerly living as
+Mostly the pure(ish) render functions formerly living as
 ``ContextBuilder`` methods. Keeping them here lets each
 :class:`SegmentBuilder` (and the ``UserBuilder`` inside
 :class:`ContextAssembler`) share one implementation without a
-``ContextBuilder`` instance.
+``ContextBuilder`` instance. :func:`collect_tool_names` is the one
+non-render entry, shared by the two builders that gate content on which
+tools the agent actually holds.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import detect_image_mime, image_block
 
@@ -76,46 +79,46 @@ def _language_directive() -> str:
     return ""
 
 
-def _resolved_model_id() -> str:
-    """The routed model id (gateway/provider prefix applied) from config.
+def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> list[str] | None:
+    """Names in the agent's live tool list, or ``None`` when unknowable.
 
-    Delegates the storage-to-wire conversion to ``providers.wire`` instead
-    of constructing a provider — that would import litellm and mutate env
-    vars during prompt assembly. Reads config lazily and never raises;
-    ``""`` means "unknown" and the identity block skips the line.
+    ``None`` is not "no tools" — it means the caller was built without tool
+    awareness, or the lookup raised. Callers must read it as "do not gate",
+    never as an empty set, so a wiring gap degrades to showing too much
+    rather than silently suppressing content.
     """
+    if get_tool_definitions is None:
+        return None
     try:
-        from raven.config.loader import load_config
-        from raven.providers.registry import find_by_name, find_gateway
-        from raven.providers.wire import wire_model
-
-        config = load_config()
-        model = config.agents.defaults.model
-        provider_name = config.get_provider_name(model)
-        gateway = find_gateway(
-            provider_name,
-            config.get_api_key(model),
-            config.get_api_base(model),
-        )
-        # spec mirrors the non-LiteLLM call sites (codex / azure strip their
-        # own prefix on the wire); a gateway still decides alone when set.
-        return wire_model(model, spec=find_by_name(provider_name), gateway=gateway)
+        defs = get_tool_definitions()
     except Exception:
-        return ""
+        return None
+    names: list[str] = []
+    for d in defs or []:
+        if not isinstance(d, dict):
+            continue
+        # OpenAI function-call schema → name lives under ``function.name``;
+        # also accept a flat ``name``.
+        fn = d.get("function") if isinstance(d.get("function"), dict) else None
+        if fn and isinstance(fn.get("name"), str):
+            names.append(fn["name"])
+        elif isinstance(d.get("name"), str):
+            names.append(d["name"])
+    return names or None
 
 
-def identity_text(workspace: Path, model: str | None = None) -> str:
+def identity_text(agent_home: Path, work_dir: Path | None = None) -> str:
     """Segment 1 — the core identity / runtime block.
 
-    ``model`` is the resolved routed model id (full ``provider/model``
-    form) told to the model so it never guesses its own identity from
-    pretraining. ``None`` (the default) resolves it lazily from config.
+    ``work_dir`` defaults to the directory bound for the running turn, and
+    falls back to ``agent_home`` when nothing is bound — the single-directory
+    behaviour a loop built without a workdir resolver still has.
     """
-    workspace_path = str(workspace.expanduser().resolve())
+    home_path = str(agent_home.expanduser().resolve())
+    bound = work_dir or workdir.current()
+    work_path = str(Path(bound).expanduser().resolve()) if bound else home_path
     system = platform.system()
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-    resolved_model = model if model is not None else _resolved_model_id()
-    model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
 
     if system == "Windows":
         platform_policy = """## Platform Policy (Windows)
@@ -134,13 +137,14 @@ def identity_text(workspace: Path, model: str | None = None) -> str:
 You are Raven, a helpful AI assistant.
 {_language_directive()}
 ## Runtime
-{runtime}{model_line}
+{runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
-- User profile: {workspace_path}/user_memory/profile/user.md (preferences, identity, project context)
-- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+## Directories
+- Working directory: {work_path} — files you produce go here; relative paths resolve here.
+- Agent home: {home_path} — your own memory and skills, not a place for user artifacts.
+  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)
+  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+  - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
 

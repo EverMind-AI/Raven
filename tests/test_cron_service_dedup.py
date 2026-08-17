@@ -27,11 +27,12 @@ def svc(tmp_path: Path) -> CronService:
     return CronService(tmp_path / "jobs.json")
 
 
-def _add(svc, msg, schedule, *, channel="tui", to="direct", topic_tag=None):
+def _add(svc, msg, schedule, *, channel="cli", to="direct", topic_tag=None):
     return svc.add_job(
         name=msg[:30],
         schedule=schedule,
         message=msg,
+        deliver=True,
         channel=channel,
         to=to,
         topic_tag=topic_tag,
@@ -81,7 +82,7 @@ def test_topic_tag_dedup_isolated_by_channel(svc):
         svc,
         "msg A",
         CronSchedule(kind="cron", expr="0 9 * * *"),
-        channel="tui",
+        channel="cli",
         to="alice",
         topic_tag="exercise",
     )

@@ -416,6 +416,42 @@ class TestBoxliteTranslateCwd:
         result = e._translate_cwd("/completely/outside")
         assert result == "/workspace"
 
+    def test_extra_volume_root_translates_to_its_own_guest_path(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd(str(home)) == "/agent-home"
+
+    def test_extra_volume_subdir_translates_correctly(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        (home / "skills").mkdir(parents=True)
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd(str(home / "skills")) == "/agent-home/skills"
+
+    def test_path_outside_every_volume_falls_back_to_workspace(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        e = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            extra_volumes=[[str(home), "/agent-home", "rw"]],
+        )
+        assert e._translate_cwd("/completely/outside") == "/workspace"
+
 
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
@@ -1162,7 +1198,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None):
+        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=()):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build

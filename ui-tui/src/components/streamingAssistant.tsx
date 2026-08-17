@@ -12,6 +12,7 @@ import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { appendToolShelfMessage } from '../lib/liveProgress.js'
+import { DagPanel } from './dagPanel.js'
 import { EpisodeView } from './episodeView.js'
 import { MessageLine } from './messageLine.js'
 import { TodoPanel } from './todoPanel.js'
@@ -49,6 +50,8 @@ export const StreamingAssistant = memo(function StreamingAssistant({
 
   return (
     <>
+      <LiveDagPanels />
+
       {groupedSegments(streamSegments).map((msg, i) => (
         <MessageLine
           cols={cols}
@@ -103,6 +106,24 @@ export const StreamingAssistant = memo(function StreamingAssistant({
           t={ui.theme}
         />
       )}
+    </>
+  )
+})
+
+/** The turn's in-flight DAG graphs.
+ *
+ * Only the legacy transcript needs this: the episodes view renders each graph in
+ * the tool row it belongs to (see `episodeView`), and drawing them here as well
+ * would show every graph twice. */
+export const LiveDagPanels = memo(function LiveDagPanels() {
+  const ui = useStore($uiState)
+  const dagRuns = useTurnSelector(state => state.dagRuns)
+
+  return (
+    <>
+      {dagRuns.map(run => (
+        <DagPanel key={run.runId} run={run} t={ui.theme} />
+      ))}
     </>
   )
 })

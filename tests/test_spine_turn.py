@@ -83,3 +83,22 @@ def test_turn_request_deliver_text_defaults_none():
     # (~15 call sites) are unaffected.
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
     assert req.deliver_text is None
+
+
+def test_direct_target_defaults_to_none():
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+    )
+    assert req.direct_target is None
+
+
+def test_direct_target_carries_agent_and_handle():
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+        direct_target=("Raven-Code", "refactor-auth"),
+    )
+    assert req.direct_target == ("Raven-Code", "refactor-auth")

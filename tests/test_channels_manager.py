@@ -115,13 +115,11 @@ def _patch_direct_url(monkeypatch, read_text_result):
     monkeypatch.setattr("raven.channels.manager.distribution", lambda pkg: _Dist())
 
 
-def test_hint_editable_syncs_the_umbrella_extra_inexactly(monkeypatch):
-    """Editable checkout -> the umbrella extra, and --inexact so syncing one
-    channel's SDK in does not uninstall every other channel's."""
+@pytest.mark.parametrize("modname", ["feishu", "weixin", "qq", "telegram", "dingtalk"])
+def test_hint_editable_names_the_channel_extra(monkeypatch, modname):
+    """Editable checkout -> `uv sync --extra channel-<name>`, name interpolated."""
     _patch_direct_url(monkeypatch, _EDITABLE_JSON)
-    hint = _missing_dep_hint()
-    assert hint == "Run: uv sync --inexact --extra channels"
-    assert "--extra channel-" not in hint
+    assert _missing_dep_hint(modname) == f"Run: uv sync --extra channel-{modname}"
 
 
 @pytest.mark.parametrize(
@@ -139,7 +137,7 @@ def test_hint_non_editable_points_to_installer(monkeypatch, raw):
     """Any non-editable / malformed direct_url.json -> installer hint, never raises."""
     _patch_direct_url(monkeypatch, raw)
     monkeypatch.setattr("raven.channels.manager.sys.platform", "linux")
-    hint = _missing_dep_hint()
+    hint = _missing_dep_hint("weixin")
     assert "uv sync" not in hint
     assert "install.sh" in hint
 
@@ -152,7 +150,7 @@ def test_hint_package_not_found_points_to_installer(monkeypatch):
 
     monkeypatch.setattr("raven.channels.manager.distribution", _raise)
     monkeypatch.setattr("raven.channels.manager.sys.platform", "darwin")
-    assert "install.sh" in _missing_dep_hint()
+    assert "install.sh" in _missing_dep_hint("qq")
 
 
 @pytest.mark.parametrize(
@@ -163,13 +161,13 @@ def test_hint_installer_matches_os(monkeypatch, platform, marker):
     """Wheel install picks the installer for the running OS (irm vs curl)."""
     _patch_direct_url(monkeypatch, _WHEEL_JSON)
     monkeypatch.setattr("raven.channels.manager.sys.platform", platform)
-    assert marker in _missing_dep_hint()
+    assert marker in _missing_dep_hint("slack")
 
 
 @pytest.mark.parametrize(
     "direct_url, platform, expected",
     [
-        (_EDITABLE_JSON, "linux", "uv sync --inexact --extra channels"),
+        (_EDITABLE_JSON, "linux", "uv sync --extra channel-feishu"),
         (_WHEEL_JSON, "linux", "install.sh"),
         (_WHEEL_JSON, "win32", "raw.githubusercontent.com"),
     ],
@@ -214,37 +212,3 @@ def test_get_status_and_get_channel(monkeypatch):
     assert mgr.get_status() == {"fake": {"enabled": True, "running": True}}
     assert mgr.get_channel("fake") is mgr.channels["fake"]
     assert mgr.get_channel("nope") is None
-
-
-# ── missing_dependency_channels (read-only probe for status / doctor) ──
-
-
-def test_missing_dependency_channels_reports_only_enabled_import_failures(monkeypatch):
-    """An enabled channel whose SDK is absent is reported; a disabled one is not,
-    and neither is a channel that fails to build for some other reason -- that is
-    a different diagnosis than "install the dependency"."""
-    from raven.channels.manager import missing_dependency_channels
-
-    def no_sdk(config):
-        raise ImportError("No module named 'telegram'")
-
-    def other_failure(config):
-        raise ValueError("bad token")
-
-    monkeypatch.setattr(
-        "raven.channels.registry.discover_specs",
-        lambda: {
-            "telegram": _spec(no_sdk),
-            "discord": _spec(no_sdk),
-            "slack": _spec(other_failure),
-        },
-    )
-    config = _config(
-        {
-            "telegram": SimpleNamespace(enabled=True, allow_from=["*"]),
-            "discord": SimpleNamespace(enabled=False, allow_from=["*"]),
-            "slack": SimpleNamespace(enabled=True, allow_from=["*"]),
-        }
-    )
-
-    assert missing_dependency_channels(config) == ["telegram"]

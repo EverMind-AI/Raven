@@ -55,7 +55,7 @@ def _decision(
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     return ws
 
@@ -317,7 +317,7 @@ async def test_decision_consumer_short_circuits_agent_loop(pending_store, tmp_pa
             channel=req.source.channel, chat_id=req.source.chat_id, content="✓ consumed by decision_consumer"
         )
 
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir(parents=True, exist_ok=True)
 
     loop = AgentLoop(
@@ -347,7 +347,7 @@ async def test_decision_consumer_falls_through_on_none(pending_store, tmp_path):
         calls["n"] += 1
         return None
 
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir(parents=True, exist_ok=True)
 
     class _FakeProvider:

@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.12"
+version = "0.1.11"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -36,6 +36,11 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
+    # UTS-46 host mapping for the browser's navigation check. Already present
+    # transitively (httpx), declared here because the check is security-load-
+    # bearing: it has to fold a host the way Chromium does before deciding, and
+    # a dependency that only arrives by accident is one an upgrade can remove.
+    "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -61,7 +66,9 @@ channel-slack = [
     "slackify-markdown>=0.2.0,<1.0.0",
 ]
 channel-discord = ["websockets>=16.0,<17.0"]
-channel-whatsapp = []
+channel-whatsapp = [
+    "qrcode[pil]>=8.0",
+]
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
     "mistune>=3.0.0,<4.0.0",
@@ -101,6 +108,12 @@ tools = [
 sandbox = [
     "anyio>=4.0",
     "boxlite==0.9.5 ; sys_platform != 'win32'",
+]
+# Driving a real browser is an opt-in extra: playwright pulls a browser binary
+# of its own, which no other capability needs. raven.browser imports it lazily
+# and reports the extra as missing rather than failing to start.
+browser = [
+    "playwright>=1.49,<2.0",
 ]
 dev = [
     "pytest>=8.0,<10.0",
@@ -178,7 +191,11 @@ constraint-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
+extend-exclude = [
+    "benchmarks/**/data",
+    "benchmarks/**/results",
+    "benchmarks/**/output",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
@@ -189,10 +206,26 @@ ignore = ["E501"]
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
+# The service's own tests live beside it (they need agentscope, so the root
+# pytest run cannot collect them) and follow the same conventions.
+"ui-webui/service/tests/**" = ["E402", "S101"]
+# agentscope, adopted into the web service (Apache-2.0, see NOTICES.md and
+# ui-webui/service/agentscope/PROVENANCE.md). Linted like the rest of the repo,
+# but its own conventions are grandfathered rather than rewritten: bare asserts,
+# capitalised locals/functions, exception names without an Error suffix, and one
+# `token` variable ruff reads as a credential. Formatting is skipped separately
+# (ruff-format in .pre-commit-config.yaml) -- restyling 207 files would be ~3.5k
+# lines of cosmetic churn with no functional gain.
+"ui-webui/service/agentscope/**" = ["S101", "S105", "N802", "N806", "N812", "N818"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
 "raven/tracing/instrument.py" = ["N803"]
+
+# The login shell has to be resolved through PATH rather than pinned to an
+# absolute path: a fixed /bin/bash would defeat capturing a login shell that
+# may live elsewhere on a given host.
+"raven/agent/subagent/backends/env.py" = ["S607"]
 
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
@@ -269,37 +302,6 @@ markers = [
     "real_llm: hits a real everos runtime (LLM + embedding); skipped unless EVEROS_LLM__API_KEY / EVEROS_EMBEDDING__MODEL are configured",
     "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
 ]
-
-[tool.coverage.run]
-branch = true
-source = ["raven"]
-omit = [
-    "raven/__main__.py",
-    "raven/evolver/__main__.py",
-    "raven/utils/win_fcntl_shim.py",
-]
-
-[tool.coverage.report]
-precision = 2
-show_missing = true
-omit = [
-    "raven/__main__.py",
-    "raven/evolver/__main__.py",
-    "raven/utils/win_fcntl_shim.py",
-]
-exclude_also = [
-    "if TYPE_CHECKING:",
-    "if __name__ == .__main__.:",
-]
-
-[tool.coverage.html]
-directory = "htmlcov"
-
-[tool.coverage.xml]
-output = "coverage.xml"
-
-[tool.coverage.json]
-output = "coverage.json"
 
 [dependency-groups]
 dev = [

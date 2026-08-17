@@ -122,7 +122,7 @@ def build_context_engine(
             user_id=memory_config.user_id,
             memory_top_k=memory_config.memory_top_k,
         ),
-        ActiveSkillsSegmentBuilder(builder.skills),
+        ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
         SkillsSegmentBuilder(
             router,
             skill_top_k=skill_forge_router_config.top_k,
@@ -133,12 +133,6 @@ def build_context_engine(
             ),
             hub_client=skill_hub_client,
             get_tool_definitions=get_tool_definitions,
-            min_safety=skill_forge_router_config.hub.min_safety,
-            blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-            auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
-            install_audit_path=(
-                workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
-            ),
         ),
         CuratorSegmentBuilder(
             workspace=workspace,
@@ -217,7 +211,6 @@ def _build_router(
         sources=sources,
         over_fetch_factor=skill_forge_router_config.over_fetch_factor,
         dedup_by=skill_forge_router_config.dedup_by,
-        rrf_k=skill_forge_router_config.rrf_k,
     )
 
 

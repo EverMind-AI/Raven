@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
-from datetime import datetime
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,24 +18,12 @@ import typer
 from rich.console import Console
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
-LATEST_RELEASE_WEB = "https://github.com/EverMind-AI/Raven/releases/latest"
-RELEASE_TAG_PREFIX = "https://github.com/EverMind-AI/Raven/releases/tag/"
-RELEASE_DOWNLOAD_PREFIX = "https://github.com/EverMind-AI/Raven/releases/download/"
 _VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-_REQUEST_TIMEOUT = 10.0
-# The fallback exists to rescue a failing command, so it may not add another full
-# timeout to the wait: three sequential requests at 10s would triple the worst case.
-_FALLBACK_TIMEOUT = 5.0
 console = Console()
 
 
 class UpgradeError(RuntimeError):
     pass
-
-
-class ReleaseLookupError(UpgradeError):
-    """Latest-release discovery failed. The local installation is fine, so the
-    caller must not advise reinstalling."""
 
 
 @dataclass(frozen=True)
@@ -51,11 +38,41 @@ class ToolInstallTarget:
     bin_dir: Path
 
 
-_UPGRADE_HELPER_SOURCE = r"""import subprocess
+_UPGRADE_HELPER_SOURCE = r"""import json
+import os
+import subprocess
 import sys
+import time
 
 
 def wait_for_parent(parent_pid):
+    if sys.platform != "win32":
+        return wait_for_parent_posix(parent_pid)
+    return wait_for_parent_windows(parent_pid)
+
+
+def wait_for_parent_posix(parent_pid):
+    # POSIX has no waitable handle for a non-child process, so poll the pid.
+    # Bounded, so a parent that refuses to die cannot leave the helper resident.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            os.kill(parent_pid, 0)
+        except ProcessLookupError:
+            return 0
+        except PermissionError:
+            # The pid exists but belongs to someone else, i.e. the parent is
+            # gone and its pid was recycled. Treat that as exited.
+            return 0
+        except OSError as exc:
+            print(f"Unable to upgrade Raven: could not watch Raven ({exc}).", file=sys.stderr)
+            return 1
+        time.sleep(0.2)
+    print("Unable to upgrade Raven: waiting for Raven to exit timed out.", file=sys.stderr)
+    return 1
+
+
+def wait_for_parent_windows(parent_pid):
     import ctypes
     from ctypes import wintypes
 
@@ -105,12 +122,26 @@ def wait_for_parent(parent_pid):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (4, 5):
+    if len(args) not in (4, 5, 6):
         print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
         return 2
 
     uv_path, wheel_url, current_version, latest_version = args[:4]
-    if len(args) == 5:
+    # A 6th argument is a JSON argv the helper runs after a successful install:
+    # `raven serve` uses it to bring the gateway back up on the same port, so an
+    # open GUI can reconnect instead of dying with the process it asked to
+    # replace. The CLI passes 4 args and keeps the old exec-in-place behaviour.
+    relaunch = None
+    if len(args) == 6:
+        try:
+            relaunch = json.loads(args[5])
+        except ValueError:
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+        if not (isinstance(relaunch, list) and relaunch and all(isinstance(x, str) for x in relaunch)):
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+    if len(args) >= 5:
         try:
             parent_pid = int(args[4])
         except (TypeError, ValueError):
@@ -174,6 +205,15 @@ def main(argv=None):
         return 1
 
     print(f"Raven upgraded: {current_version} -> {latest_version}")
+    if relaunch is not None:
+        try:
+            kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
+            subprocess.Popen(relaunch, **kwargs)
+        except OSError as exc:
+            print(f"Raven upgraded, but could not restart it: {exc}.", file=sys.stderr)
+            return 1
+        print("Raven restarted.")
+        return 0
     print("Restart any other running Raven process to use the new version.")
     return 0
 
@@ -191,7 +231,7 @@ def _upgrade_helper_bootstrap() -> str:
 def _version_key(value: str) -> tuple[int, int, int]:
     match = _VERSION_RE.fullmatch(value)
     if match is None:
-        raise UpgradeError(f"Unsupported Raven version: {value!r}")
+        raise UpgradeError(f"Unsupported Raven version: {value}")
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch)
 
@@ -200,189 +240,64 @@ def _current_version() -> str:
     return metadata.version("raven")
 
 
-def _user_agent() -> str:
-    return f"raven/{_current_version()}"
-
-
-def _release_wheel_name(version: str) -> str:
-    return f"raven-{version}-py3-none-any.whl"
-
-
-def _release_wheel_url(version: str) -> str:
-    return f"{RELEASE_DOWNLOAD_PREFIX}v{version}/{_release_wheel_name(version)}"
-
-
 def _parse_release_payload(payload: object) -> ReleaseInfo:
     if not isinstance(payload, dict):
-        raise ReleaseLookupError("Malformed GitHub release payload")
+        raise UpgradeError("Malformed GitHub release payload")
 
     draft = payload.get("draft")
     prerelease = payload.get("prerelease")
     if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-        raise ReleaseLookupError("Malformed GitHub release payload")
+        raise UpgradeError("Malformed GitHub release payload")
     if draft or prerelease:
-        raise ReleaseLookupError("Latest Raven release is not stable")
+        raise UpgradeError("Latest Raven release is not stable")
 
     tag_name = payload.get("tag_name")
     if not isinstance(tag_name, str) or not tag_name.startswith("v"):
-        raise ReleaseLookupError("Malformed GitHub release payload")
+        raise UpgradeError("Malformed GitHub release payload")
     version = ".".join(str(part) for part in _version_key(tag_name))
 
     assets = payload.get("assets")
     if not isinstance(assets, list):
-        raise ReleaseLookupError("Malformed GitHub release payload")
+        raise UpgradeError("Malformed GitHub release payload")
 
-    wheel_name = _release_wheel_name(version)
+    wheel_name = f"raven-{version}-py3-none-any.whl"
     exact_wheels: list[str] = []
     for asset in assets:
         if not isinstance(asset, dict):
-            raise ReleaseLookupError("Malformed GitHub release payload")
+            raise UpgradeError("Malformed GitHub release payload")
         name = asset.get("name")
         wheel_url = asset.get("browser_download_url")
         if not isinstance(name, str) or not isinstance(wheel_url, str):
-            raise ReleaseLookupError("Malformed GitHub release payload")
+            raise UpgradeError("Malformed GitHub release payload")
         if name == wheel_name:
             exact_wheels.append(wheel_url)
 
     if len(exact_wheels) != 1:
-        raise ReleaseLookupError(f"Expected exactly one release wheel named {wheel_name}")
+        raise UpgradeError(f"Expected exactly one release wheel named {wheel_name}")
 
     wheel_url = exact_wheels[0]
-    if wheel_url != _release_wheel_url(version):
-        raise ReleaseLookupError(f"Untrusted Raven release wheel URL: {wheel_url}")
+    parsed_url = urlparse(wheel_url)
+    expected_path = f"/EverMind-AI/Raven/releases/download/v{version}/{wheel_name}"
+    if parsed_url.scheme != "https" or parsed_url.netloc != "github.com" or parsed_url.path != expected_path:
+        raise UpgradeError(f"Untrusted Raven release wheel URL: {wheel_url}")
 
     return ReleaseInfo(version=version, wheel_url=wheel_url)
-
-
-def _rate_limit_detail(response: httpx.Response) -> str:
-    detail = "GitHub rate limit exhausted (unauthenticated requests share 60 per hour per IP)"
-    try:
-        resets_at = datetime.fromtimestamp(int(response.headers["x-ratelimit-reset"]))
-    except (KeyError, ValueError, OSError, OverflowError):
-        return detail
-    return f"{detail}, resetting at {resets_at:%H:%M:%S}"
-
-
-def _github_failure_detail(error: Exception) -> str:
-    if isinstance(error, httpx.HTTPStatusError):
-        response = error.response
-        if response.status_code in (403, 429):
-            if response.headers.get("x-ratelimit-remaining") == "0":
-                return _rate_limit_detail(response)
-            # The secondary (abuse) limit leaves the primary budget untouched and
-            # says when to come back instead.
-            retry_after = response.headers.get("retry-after")
-            if retry_after:
-                return f"GitHub asked us to retry in {retry_after}s (HTTP {response.status_code})"
-        return f"HTTP {response.status_code} {response.reason_phrase}".strip()
-    return str(error).strip() or type(error).__name__
-
-
-def _sentence(error: Exception) -> str:
-    """Terminate the message with a period unless it already ends in one.
-
-    Strips a single trailing period rather than the whole run, so a message ending in
-    an ellipsis keeps it.
-    """
-    return f"{str(error).removesuffix('.')}."
-
-
-def _fetch_latest_release_via_api(client: httpx.Client) -> ReleaseInfo:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": _user_agent(),
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    response = client.get(LATEST_RELEASE_API, headers=headers)
-    response.raise_for_status()
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        # A proxy or captive portal answering 200 with HTML is a remote failure the
-        # release page can recover from, so it has to reach the fallback: DecodingError
-        # is an httpx.HTTPError but not a TransportError, so it never reads as "offline".
-        raise httpx.DecodingError("GitHub API returned a non-JSON body", request=response.request) from exc
-    return _parse_release_payload(payload)
-
-
-def _fetch_latest_version_via_redirect(client: httpx.Client, *, timeout: float = _REQUEST_TIMEOUT) -> str:
-    """Read the latest stable version off the release page, which no API quota applies to.
-
-    The timeout belongs to the caller: this is one of three sequential requests when
-    `raven upgrade` falls back, but the only request the update notice makes.
-    """
-    response = client.get(
-        LATEST_RELEASE_WEB,
-        headers={"User-Agent": _user_agent()},
-        follow_redirects=False,
-        timeout=timeout,
-    )
-    location = response.headers.get("location", "")
-    tag = location[len(RELEASE_TAG_PREFIX) :] if location.startswith(RELEASE_TAG_PREFIX) else ""
-    if not response.has_redirect_location or not tag:
-        raise ReleaseLookupError(f"HTTP {response.status_code} without a release tag redirect")
-    return ".".join(str(part) for part in _version_key(tag))
-
-
-def _fetch_latest_release_via_redirect(client: httpx.Client) -> ReleaseInfo:
-    version = _fetch_latest_version_via_redirect(client, timeout=_FALLBACK_TIMEOUT)
-    wheel_url = _release_wheel_url(version)
-    try:
-        client.head(
-            wheel_url,
-            headers={"User-Agent": _user_agent()},
-            follow_redirects=True,
-            timeout=_FALLBACK_TIMEOUT,
-        ).raise_for_status()
-    except httpx.HTTPError as exc:
-        raise ReleaseLookupError(
-            f"release {version} has no wheel at the expected URL ({_github_failure_detail(exc)})"
-        ) from exc
-    return ReleaseInfo(version=version, wheel_url=wheel_url)
-
-
-def _resolve_latest_release(client: httpx.Client) -> ReleaseInfo:
-    try:
-        return _fetch_latest_release_via_api(client)
-    except httpx.HTTPError as error:
-        # Only transport / status / decoding failures fall back. No payload-level
-        # failure is routed around, because the release page cannot re-check what the
-        # payload carries -- above all the draft / prerelease flags, where falling
-        # back would install exactly what the API rejected.
-        api_error = error
-
-    try:
-        return _fetch_latest_release_via_redirect(client)
-    except (UpgradeError, httpx.HTTPError) as web_error:
-        message = (
-            f"could not resolve the latest Raven release "
-            f"(GitHub API: {_github_failure_detail(api_error)}; "
-            f"release page: {_github_failure_detail(web_error)})"
-        )
-        if isinstance(api_error, httpx.TransportError) and isinstance(web_error, httpx.TransportError):
-            message += "; check your network and try again"
-        raise ReleaseLookupError(message) from web_error
 
 
 def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": f"raven/{_current_version()}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     if client is not None:
-        return _resolve_latest_release(client)
-    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
-        return _resolve_latest_release(owned_client)
-
-
-def fetch_latest_version(client: httpx.Client | None = None) -> str:
-    """Return the latest stable version, resolved without touching the API quota.
-
-    The update notice needs a version string and nothing else -- no payload, no wheel
-    URL -- so it stays off `api.github.com` entirely. That budget is 60 requests per
-    hour per IP for unauthenticated callers, and a daily check from every install
-    behind one egress is what drains it.
-    """
-    if client is not None:
-        return _fetch_latest_version_via_redirect(client)
-    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
-        return _fetch_latest_version_via_redirect(owned_client)
+        response = client.get(LATEST_RELEASE_API, headers=headers)
+        response.raise_for_status()
+        return _parse_release_payload(response.json())
+    with httpx.Client(timeout=10.0, follow_redirects=True) as owned_client:
+        response = owned_client.get(LATEST_RELEASE_API, headers=headers)
+        response.raise_for_status()
+        return _parse_release_payload(response.json())
 
 
 def _direct_url_data() -> dict[str, object] | None:
@@ -546,6 +461,78 @@ def _handoff_upgrade(
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
 
 
+@dataclass(frozen=True)
+class UpgradePlan:
+    current_version: str
+    release: ReleaseInfo
+    target: ToolInstallTarget
+
+
+def plan_upgrade() -> UpgradePlan:
+    """Resolve what an upgrade would install, or raise ``UpgradeError`` with why.
+
+    Network-bound (fetches the latest release), so callers on an event loop must
+    run it in a thread.
+    """
+    current_version = _current_version()
+    release = _fetch_latest_release()
+    if _version_key(current_version) >= _version_key(release.version):
+        raise UpgradeError(f"Raven {current_version} is already up to date")
+    if _is_editable_install():
+        raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
+    target = _uv_tool_target()
+    if target is None:
+        raise UpgradeError("This Raven installation is not managed by uv")
+    return UpgradePlan(current_version=current_version, release=release, target=target)
+
+
+def spawn_detached_upgrade(
+    plan: UpgradePlan,
+    *,
+    parent_pid: int,
+    relaunch: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> None:
+    """Start the upgrade helper as a process that outlives this one.
+
+    The CLI's ``_handoff_upgrade`` execs the helper in place, which a server
+    cannot do: it still owes its caller a reply. So the helper is detached
+    instead, told which pid to wait for, and optionally given a command to run
+    once the install lands (see the helper's 6th argument).
+    """
+    uv_value = shutil.which("uv")
+    if uv_value is None:
+        raise UpgradeError("uv was not found on PATH")
+    uv_path = _external_executable(uv_value, label="uv")
+    base_python = _external_executable(getattr(sys, "_base_executable", None), label="Raven base Python")
+
+    env = os.environ.copy()
+    env["UV_TOOL_DIR"] = str(plan.target.tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(plan.target.bin_dir)
+    if extra_env:
+        env.update(extra_env)
+
+    argv = [
+        str(base_python),
+        "-I",
+        "-c",
+        _upgrade_helper_bootstrap(),
+        str(uv_path),
+        plan.release.wheel_url,
+        plan.current_version,
+        plan.release.version,
+        str(parent_pid),
+    ]
+    if relaunch is not None:
+        argv.append(json.dumps(relaunch))
+
+    kwargs: dict[str, object] = {} if sys.platform == "win32" else {"start_new_session": True}
+    try:
+        subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
+    except OSError as exc:
+        raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
+
+
 def register(app: typer.Typer) -> None:
     @app.command()
     def upgrade(
@@ -588,9 +575,6 @@ def register(app: typer.Typer) -> None:
                 )
 
             _handoff_upgrade(release, current_version, target)
-        except ReleaseLookupError as exc:
-            console.print(f"[red]Unable to upgrade Raven:[/red] {_sentence(exc)}")
-            raise typer.Exit(1) from exc
         except (
             UpgradeError,
             httpx.HTTPError,
@@ -598,7 +582,8 @@ def register(app: typer.Typer) -> None:
             metadata.PackageNotFoundError,
         ) as exc:
             console.print(
-                f"[red]Unable to upgrade Raven:[/red] {_sentence(exc)} "
-                "If the problem persists, rerun the official installer."
+                f"[red]Unable to upgrade Raven:[/red] {exc}. "
+                "Check your network and try again; if the problem persists, "
+                "rerun the official installer."
             )
             raise typer.Exit(1) from exc

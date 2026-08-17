@@ -19,6 +19,9 @@ can hold many sessions while the `session_key={channel}:{chat_id}` invariant is
 unchanged. Channel is a dimension (key prefix + store subdirectory + metadata
 field), not part of the user-facing identity.
 
+A session's `metadata["model"]`, when present, is the model its turns run on; it
+outranks the router and falls back to `agents.defaults.model` when absent.
+
 **Session id** (user-facing term only):
 The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
@@ -55,8 +58,20 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
-`max_concurrent` (default 4) and a per-session hourly rate limit.
+`max_concurrent` (default 8) and a per-session hourly rate limit, both shared with the
+nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
+
+**Subagent working directory** (`workspace=` on every backend's `run`):
+Where a sub-agent's commands and file tools act: the *session's* working directory, the same
+one the dispatching turn's own tools get. Every dispatch supplies it — `spawn` captures
+`workdir.current()` at spawn time (the sub-agent outlives the turn whose binding it would
+read), a DAG node takes the same, and a Direct Chat resolves `session_workdir` because its
+branch returns before `workdir.bind` wraps the turn body. Distinct from **Agent home**
+(`SubagentManager.workspace`, `~/.raven/workspace`), which holds raven's memory and skills
+and is only the fallback for a dispatch that supplied nothing.
+_Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
+raven's own memory instead of the user's checkout, and says nothing about having done so.
 
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
@@ -75,8 +90,10 @@ verbatim `deliver_text` push). Configured via `raven deep-research` or onboardin
 _Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
 
 **Checkpoint** (`agent/loop/checkpoint.py`):
-A once-per-turn commit of the workspace into a shadow git repo (separate from the
-user's `.git`), so an interrupted or failed turn can be rolled back.
+A once-per-turn commit of the session workspace into a shadow git repo (separate from the
+user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
+per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
+the running turn is bound to.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
@@ -111,7 +128,10 @@ _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+ca
 
 **Lane**:
 The per-conversation serial execution domain inside the Scheduler: runs one turn at a time
-and is the unit of cancellation. A stalled Lane never blocks other Lanes.
+and is the unit of cancellation. A stalled Lane never blocks other Lanes. A conversation can
+be a *sub*-conversation: a Direct Chat runs on `session#agent/handle`
+(`raven.spine.turn.direct_lane`), which is what lets several instances answer at once while
+the main agent keeps its own serial lane.
 _Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
 
 **TurnRequest**:
@@ -126,9 +146,12 @@ _Avoid_: conflating Deliverable with lifecycle events (`TurnStarted`/`TurnFailed
 those are emitted by the Spine worker, not a runner.
 
 **OriginPools**:
-Per-origin concurrency gates: a `USER` pool and a `system` pool for proactive origins
-(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), sized independently with no borrowing.
-A user turn never waits on a proactive task's LLM slot.
+Per-origin concurrency gates: a `USER` pool, a `system` pool for proactive origins
+(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), and a `direct` pool for Direct Chats, sized
+independently with no borrowing. A user turn never waits on a proactive task's LLM slot, and
+never waits behind several sub-agents answering. The direct pool is chosen per *request*
+rather than per origin - a Direct Chat is a `USER` turn, and an origin of its own would need
+a deliberate home in every origin switch in the codebase.
 
 ### Proactivity
 
@@ -144,26 +167,6 @@ _Avoid_: using "Sentinel" as the name of the whole proactivity subsystem (stale 
 **Scheduler**:
 The time-driven trigger path inside the Proactive Engine: cron jobs and heartbeat.
 _Avoid_: conflating with Sentinel
-
-**Fire-at-origin**:
-The cron ownership rule: a job is claimed and delivered only by the runner that
-owns its creation-time channel binding (`payload.channel/to`) — the gateway for
-enabled IM channels, an open TUI session for `tui`.
-A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
-dropped at that runner's next startup); there is no trigger-time re-routing.
-_Avoid_: reintroducing fire-time channel selection (the retired
-`cron.forward_channels`) — bind the target at creation instead. The `cli`
-channel value is retired with the REPL; stored `cli`-bound jobs migrate to
-`tui` at load time.
-
-**Fixed-delay interval**:
-The scheduling contract for `--every` jobs: the next run is computed from the
-moment the previous fire **completed**, not from the moment it was due. A job
-that takes 15s to run therefore repeats every `interval + 15s`, and its clock
-drifts by design — the property being bought is that a slow run can never
-overlap itself or leave a backlog to catch up on.
-_Avoid_: calling this fixed-rate, or reading `--every 2m` as a promise to fire
-on the two-minute mark; calendar-anchored schedules are what `--cron` is for.
 
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
@@ -181,7 +184,7 @@ _Avoid_: calling the TUI a channel — `channel="tui"` on a message is a routing
 
 **TUI**:
 The terminal front-end (`ui-tui/`) and the only interactive local front-end; talks to
-the Runtime solely via TUI-RPC. Not a Channel.
+the Runtime solely via the RPC protocol. Not a Channel.
 
 **CLI**:
 The one-shot command-line entry point (`raven <command>`) for operations and
@@ -190,6 +193,18 @@ _Avoid_: using "CLI" for the interactive REPL (retiring)
 
 **Routing Tag**:
 The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
+
+**Deliverable**:
+An output file the agent hands to the user through the `deliver_files` tool, addressed by an
+opaque token in the persisted registry (`deliverables/deliverables.json`) rather than by path.
+Web-channel only: the download UI exists only there, and the tool is not registered on any
+other surface.
+_Avoid_: calling any file the agent wrote a Deliverable - only a `deliver_files` call makes one.
+
+**Delivery Manifest**:
+The structured list of Deliverables a single `deliver_files` call produced (name, size, media
+type, token), carried on `ToolEvent.metadata` so it reaches the web UI and persists in message
+history. Never carries file bytes.
 
 ### Token Efficiency
 
@@ -318,13 +333,26 @@ keys by *model* and picks a backend per request; a Provider Endpoint keys by *ac
 under one provider. And a bare `api_base` is one endpoint's address, not the endpoint --
 an endpoint is the whole credential group under a label.
 
-### TUI-RPC
+**ResolvingProvider**:
+The Provider the gateway is built with (`providers/resolving_provider.py`): it
+holds no endpoint of its own and dispatches each call to the vendor adapter that
+`Config.get_provider_name(model)` resolves to, memoized per vendor. Lets two
+sessions on two vendors run concurrently without swapping a shared adapter. It is
+the gateway's entire provider only with routing off or on the `ecoclaw` backend;
+with `routing.backend == "knn"`, `build_model_routing` wraps it as
+`PerModelProvider(..., fallback=ResolvingProvider)`, so routed model names go to
+their configured endpoints and every other model still resolves through it.
+_Avoid_: confusing it with ModelRouter / KNNModelRouter, which select a *model*;
+this selects the *vendor* for an already-chosen model.
 
-**TUI-RPC**:
-The single transport between Runtime and TUI (stdio pipe / Unix socket), carrying two
-message kinds: Request/Response (TUI → Runtime method calls) and Notification
-(Runtime → TUI one-way events).
-_Avoid_: calling a Notification "the bus" or "broadcast" — Spine events never cross into the TUI directly
+### RPC Protocol
+
+**RPC Protocol**:
+The single transport between Runtime and any interactive client (stdio pipe / Unix socket
+for the TUI, a WebSocket for `raven serve`), carrying two message kinds: Request/Response
+(client → Runtime method calls) and Notification (Runtime → client one-way events).
+_Avoid_: calling it TUI-RPC — the terminal is one of its clients, not its owner; and calling
+a Notification "the bus" or "broadcast" — Spine events never cross into a client directly
 
 **Turn Event**:
 A typed payload streamed to the TUI over Notifications while a turn runs
@@ -366,6 +394,25 @@ SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (Segment 6).
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
+**Inject Mode**:
+How an `always` skill occupies `# Active Skills`, declared per skill as
+`inject: full` (default — the whole SKILL.md body) or `inject: description`
+(a digest entry: name, description, and the absolute SKILL.md path to read on
+demand). Description mode keeps a skill permanently discoverable at a few dozen
+tokens; it is the only way to surface an `always` skill cheaply, since being
+`always` also excludes it from BM25 routing into `# Skills`.
+_Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
+
+**Skill Requirements**:
+A skill's optional `requires` block, declaring what its procedure needs before
+it is worth showing. `bins` / `env` are process-static and resolved in
+`SkillRegistry.check_available`; `tools` is live runtime state (the DAG tool
+registers only when third-party sub-agents are configured, and hot-applies) and
+is enforced per turn by `ActiveSkillsSegmentBuilder` against the definitions
+actually being sent. Every sub-key is optional and every malformed shape
+degrades to "nothing declared" — see `requires_list`.
+_Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
+
 **Curator**:
 An internal, bounded agent loop whose only job is to build the main agent's next
 context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
@@ -402,7 +449,17 @@ _Avoid_: summarize, compact (ambiguous between this and Archive)
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
-protected, archived) — what the Slow Path reads instead of full history.
+protected, pinned, archived) — what the Slow Path reads instead of full history.
+
+**Pinned**:
+A Manifest flag on the messages that fetched a skill body the agent cannot
+re-derive (`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole
+tool exchange is added to every later ContextPlan whether or not the plan names
+it, refused by Archive, and trimmed last. Set on the latest fetch per skill id
+only, so a re-read moves the pin instead of adding a second copy.
+_Avoid_: using "protected" for this — Protected means the head-of-session
+exchanges, and it only shields an id from budget trimming, not from a
+ContextPlan that never mentioned it.
 
 **Working State**:
 The distilled session notes (goals, open threads, decisions) the Curator maintains
@@ -434,30 +491,26 @@ A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`end
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
-candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
+candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
-**SkillPolicy** (`skill_hub/policy.py`):
-The install-time safety decision both Hub install paths consult before any
-`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
-tool. `refusal_for_detail()` checks, in order: the operator blocklist
-(`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
-`min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
-score; a missing or malformed score passes), and an external home-dotdir lint over the
-skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
-candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
-Every install that passes is appended to a JSONL audit trail
-(`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
-`install_skip_reason()` is the separate operator-consent gate over the bundle download
-itself (`skillForge.autoInstall`: `auto` / `prompt` / `off`), consulted by both call sites
-right before `install()`, after all safety vetting. A consent decline is a **skip**, not a
-refusal: the already-vetted skill body still injects (and `read_skill` still works), only
-the on-disk bundle is withheld. Alongside the JSONL trail, a passing install stamps a
-one-time `.install-meta.json` into the skill directory (`write_install_meta`, first
-install wins) — the O(1) provenance source behind `raven skill list`'s Installed column.
-_Avoid_: calling an autoInstall skip a "refusal" or "block" — refusals are safety verdicts
-on the skill; a skip is withheld operator consent for the download.
+**PlugHub** (`plughub/`):
+The plugin marketplace: a catalogue of installable integrations (`catalog.json`), and the
+transactional installer that lands one. A catalogue entry contributes pieces -- an MCP
+server, credentials, a skill -- and `install` lands them all or none. Distinct from **Skill
+Hub**, which is a remote marketplace for skills alone.
+_Avoid_: "market" on its own for either one -- both surfaces are called that in prose, and
+the RPC groups (`plughub.*` vs `skillhub.*`) are separate.
+
+**Ledger**:
+One JSON file per PlugHub-installed plugin (`plugins/<catalog_id>.json`), recording the
+exact pieces a transaction landed so uninstall replays them in reverse rather than
+guessing. It is also the provenance oracle: a config entry **with** a ledger came from the
+market, **without** one was written by hand -- which is what decides whether removing it
+replays pieces or just deletes a config stanza.
+_Avoid_: "manifest" -- that is the plugin's own declaration; a ledger is the record of one
+install of it.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
@@ -526,23 +579,161 @@ writes completed/failed (never unknown) into `HISTORY.md`.
 
 ### Workspace & Onboarding
 
-**Workspace**:
+**Agent home** (`get_workspace_path()`, `raven/config/paths.py`):
 The per-agent filesystem tree (default `~/.raven/workspace`) holding the agent's and user's
-memory, skills, and root task files. Exactly one per running agent.
-_Avoid_: confusing the Workspace (the live instance) with the Workspace Template it is seeded from.
+memory (`MemoryStore`'s `user_memory/`), skills, session transcripts and their metadata
+directories (`SessionManager`'s `sessions/<group>/`), the Skill Hub cache (`skills/hub/`), and the Workspace Template seed. Seeded by
+`sync_workspace_templates()`. Exactly one per agent, never per session. Set by `--home` or
+`agents.defaults.workspace`.
+_Avoid_: "workspace" unqualified — this term used to cover both agent-wide and per-session
+storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
+Agent home or Session workspace, whichever is meant.
+
+**Subagent history** (`raven/agent/subagent_history.py`):
+The per-session audit trail of every delegation to a Subagent, inside that session's
+metadata directory at
+`<agent home>/sessions/<group>/<chat_id>/subagents/`, holding `spawn/<call_id>/`
+(one directory per `spawn` call: `prompt.md`, `out.md` or `error.md`, `meta.json`) and
+`mas_dag/<run_id>/` (one per `run_subagent_dag` run: `graph.json`, `manifest.json`,
+`<node>.prompt.md`, `<node>.out.md`, plus a per-session `mas_dag/index.json`). Both record
+what `SubagentBackend.run()` returned, so both are already truncated to the sub-agent's
+`max_output_chars` — not raw stdout. Failed and cancelled calls are recorded too. Lives
+beside the session transcript rather than in the Session workspace: it has the transcript's
+lifetime, while a working directory can be repointed at any project on disk. `sessions/` is
+a protected subtree, so no working directory can be aimed at it and no tool write can reach
+the history. Append-only: no expiry, no size cap, reclaimed only by deleting the session.
+DAG runs dominate its volume — a node's rendered `prompt.md` inlines each dependency's full
+output, so a chain stores the same text once per hop.
+The `mas_dag/index.json` is not only a discovery list: it carries each run's node
+ids, claimed when the run starts, and their outcome once it ends, which is what makes a
+**DAG node id** addressable (below). Reads and writes of it are serialized per root
+within a process (`_store.index_guard`); two processes sharing one session still race.
+_Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
+sat in whatever directory the run happened to use and had no `spawn` counterpart.
+
+**Handoff Block** (`raven/agent/subagent/direct_chat.py`):
+The pointer block the runtime prepends to the user's next turn to the main agent after one
+or more Direct Chats: per instance, a UTC time span and the paths of each turn's
+`prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
+Subagent history. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
+and taken-and-cleared on the next turn that has no `direct_target`, so a segment is reported
+exactly once. Every byte in it is raven-minted - agent names from config, handles from the
+registry, call ids from `make_call_id` - which is why it is prepended unwrapped; a field
+echoing a sub-agent's own reply would break that.
+_Avoid_: "handoff summary" - it is deliberately not a summary; nothing in it is generated.
+
+**Reply Streaming** (`raven/agent/subagent/backends/base.py`):
+Whether a Subagent backend hands its reply over as it forms - `SubagentBackend.streams`
+plus the `on_delta` callback - rather than only returning it whole. Read from the mechanism
+that would have to deliver it, never declared: raven-loop and openai always stream, acp
+forwards the `agent_message_chunk` updates it already receives, and a cli agent streams only
+if its configured command asks its CLI for partial output - `claude` under
+`--include-partial-messages` (on the resume template too), while `codex exec --json` has no
+partial event to ask for. Asked for by a Direct Chat alone; a spawn takes the whole reply and keeps
+`chat_with_retry`'s retry ladder, which streaming trades away (a stream that already
+rendered cannot be retried without duplicating itself). What streams is the same text the
+record stores, so a caller that rendered the deltas must not deliver the return value again.
+_Avoid_: conflating it with the roster's `live-progress` tag, which says a transport reports
+its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
+invisible to the model and is about the answer itself.
+
+**Capability Snapshot** (`raven/agent/acp/capabilities.py`):
+What one ACP agent reported at its last handshake - protocol version, whether it can
+resume / fork / load a session, its models and auth methods - recorded by a Test and read
+back as the source of a Subagent's statefulness. Keyed by agent name and stamped with a
+fingerprint of the fields that decide how it launches (`command`, `cwd`, `env`,
+`readyTimeoutMs`; deliberately not `name` / `enabled`, which change nothing about what an
+agent can do). A snapshot whose fingerprint no longer matches is **stale**, not absent: its
+*capabilities* are still used, because dropping them defaults the agent to stateless - which
+costs it resume, its Instance Chip, and the `instance` parameter in the spawn schema - while
+its *verdict* is not, because a green light for a command that has since been edited is a
+claim no measurement backs. The `/subagents` row for a stale entry asks for a test.
+_Avoid_: reading it as a liveness check - it is one measurement, taken at Test time, not a
+statement about the agent right now.
+
+**Unattended Approval** (`raven/agent/acp/permissions.py`):
+How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
+from the options the agent offered by their protocol `kind` (`allow_always`, then
+`allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
+third answer - a dispatch has no operator and no surface that could render a prompt - and
+*not* answering is not one either: measured on `codex-acp`, any error to this request,
+including the `method not found` raven used to send, cancels the whole turn. Presets that
+take a launch-time never-ask setting carry it too, so the question is not asked at all.
+The same trust boundary the cli transport already ran under (`codex -a never`,
+`claude --permission-mode auto`), stated in one place instead of per command template.
+Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
+unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
+that way.
+
+**Stop Reason** (`raven/agent/subagent/backends/acp_agent.py`):
+What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
+other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
+and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop
+reason, budgeted before the reply is clamped to `maxOutputChars` so the notice cannot be
+the part that is cut. Kept rather than raised because a partial answer is worth having;
+noticed rather than returned bare because neither the main agent nor a person in a Direct
+Chat can otherwise tell the text simply stops.
+
+**DAG node id** (`raven/agent/subagent_dag/_graph.py`, `_store.py`):
+A node's name inside a `run_subagent_dag` graph, and the address a *later* graph in the
+same conversation uses to read what that node produced — `{{ <id>.output }}`, needing no
+`depends_on`, since the node has already finished (naming it there is allowed and orders
+nothing). That second role is why the id is
+**unique per conversation, not per graph**: reusing one an earlier run took is refused, so
+an id names one node and one output. An id is claimed for the whole run, whatever the
+outcome, but only a `completed` node can be referenced; a failed, skipped or still-running
+one keeps its id and is refused with which of the three it is. A run stopped by `/stop` or
+a shutdown records its unfinished nodes as `skipped` on the way out, so "still-running"
+means what it says rather than outliving the run that claimed it. Distinct from an
+`instance` handle, which shares a sub-agent *session* rather than naming an output.
+_Avoid_: "node name" — the id is an address, not a label.
+
+**Working directory** (`raven/agent/workdir.py`):
+The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
+and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.
+`raven tui` and `raven agent` use the process launch directory, so the agent works in the
+checkout you started it from (Workdir policy `LAUNCH_DIR`); intermediate artifacts it
+produces there go under that directory's `.raven/` (the shadow-git repo lives at
+`.raven/shadow.git`). `raven gateway` gives each channel one directory (Workdir policy
+`PER_CHANNEL`), set by `channels.<name>.workspace` — `gateway.web.workspace` for the web
+channel — and defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
+Overridable per invocation via `--workspace`/`-w` (the working directory itself on
+tui/agent, the root the per-channel defaults hang off on gateway), or per running gateway
+session from the web UI, persisted in `Session.metadata["workdir"]` and taking effect on
+the next turn. An override must be absolute, and may be neither Agent home, nor one of its
+memory/skills/transcript subtrees, nor any directory containing Agent home. Each distinct
+working directory grows its own shadow-git repository once a checkpoint runs there; they
+are reclaimed only by deleting those directories.
+_Avoid_: "session workspace" — the gateway's unit is the channel, not the conversation.
+_Avoid_: confusing with Agent home — when `restrict_to_workspace` fences tools, it admits
+both roots, but they stay two different directories with different lifetimes.
+
+**Project slug** (`project_slug()`, `raven/utils/helpers.py`):
+A launch directory flattened into one filesystem-safe segment, following the convention
+Claude Code uses for `~/.claude/projects/`: every run of non-alphanumeric characters becomes
+a single `-` (per character, not per run), and past 200 characters the slug is truncated with
+a base36 hash of the whole path appended. `/srv/work/my_app` is `-srv-work-my-app`. Groups a
+project's sessions on `raven tui` / `raven agent`, where it is the `<group>` directory under
+`sessions/`. Neither reversible nor collision-free — `/srv/a_b` and `/srv/a/b` slug the same,
+as they do in the reference. The project's identity is therefore carried by
+`Session.metadata["project_dir"]`, not by the directory name.
+
+**Workdir policy** (`WorkdirPolicy`, `raven/agent/workdir.py`):
+Which default a `WorkdirResolver` falls back to when a session has no explicit override:
+`LAUNCH_DIR` or `PER_CHANNEL`. Fixed per entrypoint (tui/agent vs. gateway), not user-facing.
 
 **Workspace Template** (`templates/`):
-The bundled markdown seed files copied into a Workspace on first run by
+The bundled markdown seed files copied into Agent home on first run by
 `sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
 `SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
 profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
 (tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
 under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
-`HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
+`HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds the
-Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds
+Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —

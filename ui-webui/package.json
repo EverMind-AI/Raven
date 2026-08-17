@@ -1,0 +1,30 @@
+{
+	"name": "agentscope-web-ui",
+	"version": "1.0.0",
+	"private": true,
+	"scripts": {
+		"dev:frontend": "pnpm --filter frontend dev",
+		"dev": "pnpm dev:frontend",
+		"build:frontend": "pnpm --filter frontend build",
+		"build": "pnpm build:frontend",
+		"format": "prettier --write . && pnpm --filter frontend lint:fix",
+		"format:check": "prettier --check . && pnpm --filter frontend lint",
+		"prepare": "husky"
+	},
+	"lint-staged": {
+		"frontend/**/*.{ts,tsx}": [
+			"prettier --write",
+			"cd frontend && pnpm eslint --fix"
+		],
+		"*.{json,css,md,html,yaml,yml}": [
+			"prettier --write"
+		]
+	},
+	"devDependencies": {
+		"eslint-config-prettier": "^10.1.8",
+		"eslint-plugin-prettier": "^5.5.5",
+		"husky": "^9.1.7",
+		"lint-staged": "^17.0.5",
+		"prettier": "^3.8.3"
+	}
+}

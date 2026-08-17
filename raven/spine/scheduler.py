@@ -45,11 +45,24 @@ class OriginPools:
     origins, sized independently. No global cap (total concurrency is their sum)
     and no borrowing between them, so a user turn never waits on an LLM slot
     behind a proactive task.
+
+    A direct chat is a third pool rather than a third origin: it *is* a USER
+    turn, and inventing an origin for it would need a deliberate home in every
+    origin switch in the codebase. It is separated because several sub-agents
+    answering must not make the user queue to say one sentence to the main agent.
     """
 
-    def __init__(self, user: int, system: int):
+    def __init__(self, user: int, system: int, direct: int = 8):
         self._user = asyncio.Semaphore(user)
         self._system = asyncio.Semaphore(system)
+        self._direct = asyncio.Semaphore(direct)
+
+    def for_request(self, req: TurnRequest) -> asyncio.Semaphore:
+        """The gate this turn waits on, read from the request rather than the
+        origin alone -- a direct chat is a USER turn with its own pool."""
+        if req.direct_target is not None:
+            return self._direct
+        return self.for_origin(req.origin)
 
     def for_origin(self, origin: Origin) -> asyncio.Semaphore:
         if origin is Origin.USER:
@@ -266,7 +279,7 @@ class Lane:
         outcome: TurnOutcome | None = None
         started = False
         try:
-            async with self._pools.for_origin(req.origin):
+            async with self._pools.for_request(req):
                 await self._sink(TurnStarted(conversation_id=self._conversation_id))
                 started = True
                 run_start = time.monotonic()
@@ -276,6 +289,10 @@ class Lane:
                 await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
             raise
         except Exception as exc:
+            # The event carries only str(exc) to the front-end, so this is the
+            # only place the traceback is ever recorded — without it a failed
+            # turn leaves no trace on the process side at all.
+            logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             if started:
                 await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
             return None

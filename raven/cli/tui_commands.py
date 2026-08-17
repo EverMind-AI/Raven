@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 import typer
 
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
+from raven.utils.helpers import project_slug
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
@@ -353,37 +354,8 @@ async def _fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> No
         await emitter.emit(session_key, {"type": "cron.delivered", "payload": payload})
 
 
-async def _fanout_cron_missed(emitter, *, drops) -> None:
-    """Fan a ``cron.missed`` event out to every active TUI session.
-
-    Fired once, right after ``cron_service.start()`` dropped past-due one-shot
-    reminders. At that point the client has not called ``turn.subscribe`` yet
-    (server bring-up precedes the handshake), so with no active session the
-    event is queued on the emitter and flushed to the first subscription that
-    registers — unlike ``cron.delivered``, whose no-subscriber case is a
-    silent no-op because a job fire always happens after the client attached.
-    """
-    from datetime import datetime, timezone
-
-    items = [
-        {
-            "name": d.name,
-            "scheduled_at": datetime.fromtimestamp(d.at_ms / 1000, tz=timezone.utc).isoformat(),
-            "message": d.message,
-        }
-        for d in drops
-    ]
-    event = {"type": "cron.missed", "payload": {"count": len(items), "items": items}}
-    sessions = list(emitter._by_session.keys())
-    if not sessions:
-        emitter.queue_startup_event(event)
-        return
-    for session_key in sessions:
-        await emitter.emit(session_key, event)
-
-
 def _build_cron_callback_spine(base_on_cron, emitter):
-    """Wrap the spine cron callback so a job's reply is fanned out as a
+    """Wrap the spine cron callback so a delivering job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
     returns its reply (read back from the runner via ``readback_texts``); the cron
@@ -393,7 +365,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
 
     async def wrapped(job):
         response = await base_on_cron(job)
-        if response:
+        if job.payload.deliver and response:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -406,7 +378,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
     return wrapped
 
 
-def _build_tui_agent_loop():
+def _build_agent_loop(workspace: str | None = None, home: str | None = None):
     """Construct the AgentLoop singleton served by ``turn.send``.
 
     Mirrors the minimal slice of ``raven agent`` setup needed to handle
@@ -427,13 +399,13 @@ def _build_tui_agent_loop():
     from pydantic import ValidationError
 
     from raven.providers.auth import MissingCredentialsError
-    from raven.tui_rpc.errors import InternalError
+    from raven.rpc.errors import InternalError
 
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.cli._cron_handler import chain_cron_activity_reset
-        from raven.cli._helpers import load_runtime_config, make_lazy_provider
+        from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
+        from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
             build_plugin_tools,
@@ -445,12 +417,30 @@ def _build_tui_agent_loop():
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.session.manager import SessionManager
 
-        config = load_runtime_config(None, None)
+        config = load_runtime_config(None, home=home)
         ec_config = load_raven_config()
         skill_forge_cfg = ec_config.skill_forge
 
         provider = make_lazy_provider(config)
-        session_manager = SessionManager(config.workspace_path)
+        # Model routing (config.routing). A no-op when routing is disabled; the
+        # knn wrapper only reads the lazy provider's plain fields, so deferring
+        # the litellm build survives it.
+        router, provider = build_model_routing(config, provider)
+        # Sessions group by launch directory here, the way Claude Code groups
+        # by project: one terminal session belongs to the checkout it was
+        # started in. The gateway passes no slug -- one daemon serves every
+        # project, so its grouping is the channel instead.
+        launch_dir = Path.cwd()
+        session_manager = SessionManager(
+            config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
+        )
+        workdir_resolver = WorkdirResolver(
+            WorkdirPolicy.LAUNCH_DIR,
+            agent_home=config.workspace_path,
+            launch_dir=Path.cwd(),
+            explicit_workdir=validate_override(workspace, config.workspace_path) if workspace else None,
+            sessions=session_manager,
+        )
 
         cron = CronService(
             get_cron_dir() / "jobs.json",
@@ -478,7 +468,9 @@ def _build_tui_agent_loop():
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            router=router,
             brave_api_key=config.tools.web.search.api_key or None,
+            jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
@@ -486,21 +478,24 @@ def _build_tui_agent_loop():
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
+            workdir_resolver=workdir_resolver,
             mcp_servers=config.tools.mcp_servers,
+            disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
+            skill_forge_router_config=ec_config.skill_forge.router,
             runtime_config=ec_config.runtime,
+            context_config=ec_config.context,
+            memory_config=ec_config.memory,
             backend=backend,
             plugin_tools=plugin_tools,
+            # Gates run_subagent_dag: AgentLoop registers it only when the roster
+            # is non-empty, since its nodes dispatch to these agents.
+            third_party_subagents=config.subagents.third_party,
             # TUI is always a multi-turn interactive session.
             interactive=True,
-            # Anti-runaway reset: user turns arrive as (tui, default), the
-            # same pair CronTool.set_context binds into new jobs, so genuine
-            # TUI activity zeroes the silent-fire counters counted by this
-            # process's on_cron_job (no Sentinel hook in the TUI to chain).
-            on_user_inbound=chain_cron_activity_reset(cron),
         )
         agent_loop.configure_personalization(
             config.agents.defaults.enable_personalization,
@@ -531,7 +526,7 @@ def _build_tui_agent_loop():
         from loguru import logger as _logger
 
         _logger.exception(
-            "tui: _build_tui_agent_loop init crash ({}); surfacing as -32603 internal_error",
+            "tui: _build_agent_loop init crash ({}); surfacing as -32603 internal_error",
             type(e).__name__,
         )
         raise InternalError(
@@ -547,7 +542,7 @@ def _build_tui_agent_loop():
         from loguru import logger as _logger
 
         _logger.exception(
-            "tui: _build_tui_agent_loop uncaught exception; surfacing as -32603 internal_error",
+            "tui: _build_agent_loop uncaught exception; surfacing as -32603 internal_error",
         )
         raise InternalError(
             detail=str(e),
@@ -565,29 +560,32 @@ async def _run_rpc_server_until_done(
     auth_token: str,
     handshake_deadline_s: float,
     proc_done: asyncio.Event,
+    workspace: str | None = None,
+    home: str | None = None,
 ) -> bool:
     """Run RpcServer until the child exits or we abort on handshake timeout.
 
     Returns True if handshake succeeded (system.hello was received within the
     deadline); False if it timed out.
     """
-    # Lazy import: keeps tui_commands importable without pulling tui_rpc on
+    # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
-    from raven.tui_rpc.approval_broker import ApprovalBroker
-    from raven.tui_rpc.confirm_broker import ConfirmBroker
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import register_aligned_methods_except_system
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.approval_broker import ApprovalBroker
+    from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import register_aligned_methods_except_system
+    from raven.rpc.methods.system import (
         system_hello as _orig_hello,
     )
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.methods.system import (
         system_ping,
+        system_upgrade,
         system_version,
     )
-    from raven.tui_rpc.question_broker import QuestionBroker
-    from raven.tui_rpc.server import RpcServer
-    from raven.tui_rpc.spine import build_tui
-    from raven.tui_rpc.subscriptions import SubscriptionEmitter
+    from raven.rpc.question_broker import QuestionBroker
+    from raven.rpc.server import RpcServer
+    from raven.rpc.spine import build_rpc_spine, make_dag_progress_sink
+    from raven.rpc.subscriptions import SubscriptionEmitter
 
     handshake_done = asyncio.Event()
 
@@ -615,7 +613,7 @@ async def _run_rpc_server_until_done(
     # clarify.request and awaits clarify.respond, mirroring ConfirmBroker.
     question_broker = QuestionBroker(send_frame=server.send_frame)
 
-    # Wire AgentLoop for turn.send streaming (CAP-CHAT-1). _build_tui_agent_loop
+    # Wire AgentLoop for turn.send streaming (CAP-CHAT-1). _build_agent_loop
     # mirrors the minimal subset of `raven agent` boilerplate needed to
     # serve chat turns from a TUI subprocess (no sentinel/cron — those are
     # the gateway's responsibility). Eager build at server bring-up so a
@@ -623,12 +621,12 @@ async def _run_rpc_server_until_done(
     # An init crash is latched into ``build_error`` and re-raised by the
     # factory closure on first ``turn.send``; ``_spawn_agent_loop_task`` emits
     # the typed -32603 error event to the UI through the subscription emitter.
-    from raven.tui_rpc.errors import RpcError
+    from raven.rpc.errors import RpcError
 
     agent_loop = None
     build_error: RpcError | None = None
     try:
-        agent_loop = _build_tui_agent_loop()
+        agent_loop = _build_agent_loop(workspace=workspace, home=home)
     except RpcError as e:
         build_error = e
 
@@ -640,6 +638,10 @@ async def _run_rpc_server_until_done(
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
         agent_loop.set_deep_research_broker(question_broker)
+        # Fan run_subagent_dag progress to the turn's conversation so the TUI can
+        # draw the graph. Goes through the loop (not the tool) so a DAG tool
+        # registered later by a mid-session config apply inherits the sink too.
+        agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
 
     def _agent_loop_factory():
         if agent_loop is not None:
@@ -648,25 +650,32 @@ async def _run_rpc_server_until_done(
             raise build_error
         return None
 
-    # Wire the spine turn path: build_tui assembles the Scheduler + delivery hub
+    # Wire the spine turn path: build_rpc_spine assembles the Scheduler + delivery hub
     # + streaming sink the turn.* handlers submit onto. Only when an agent loop
     # exists — otherwise turn.send surfaces the build error / -32008 itself.
-    from raven.tui_rpc.methods import turn as turn_module
+    from raven.rpc.methods import turn as turn_module
 
     turn_scheduler = None
     turn_ids: dict[str, str] = {}
+    # Owned here, not by the spine, because two collaborators need the same map:
+    # turn.send binds a turn's addressee into it and the spine's outlet/sink read
+    # it back to tag that turn's events (see build_rpc_spine).
+    direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
+        from types import SimpleNamespace
+
         from raven.cli._cron_handler import make_on_cron_job
 
         # Build the spine before wiring cron: a reminder submits a CRON turn
         # through this scheduler, captured non-streaming and read back via
         # cron_readback so the wrapper can fan it out as a cron.delivered event.
         cron_readback: dict[str, str] = {}
-        turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_tui(
+        turn_scheduler, turn_hub, turn_ids, turn_teardown = build_rpc_spine(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
+            direct_targets=direct_targets,
             readback_texts=cron_readback,
             approval_responder=approval_broker,
         )
@@ -677,28 +686,31 @@ async def _run_rpc_server_until_done(
         # before cron.start() so an immediately-firing job has its callback.
         if agent_loop.cron_service is not None:
             base_on_cron = make_on_cron_job(
+                agent_loop,
+                turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
+                channel_manager=SimpleNamespace(enabled_channels=["tui"]),
                 default_channel="tui",
-                cron_service=agent_loop.cron_service,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
-            # start() dropped past-due one-shot reminders on this runner's
-            # partition; surface them as one cron.missed startup notice.
-            if agent_loop.cron_service.last_startup_drops:
-                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
 
     # Wrap system.hello to latch the handshake event; the umbrella below
     # registers everything else (cli.dispatch + setup.status + reload.mcp +
     # config.* + session.* + terminal.* + stubs + slash routing + turn.*).
     # Keeping production aligned with the umbrella means any future
-    # register_*_methods helper added in raven/tui_rpc/methods/__init__.py
+    # register_*_methods helper added in raven/rpc/methods/__init__.py
     # is picked up automatically — no more registration drift where new
     # handlers worked in the demo runner but returned -32601 in `raven tui`.
     dispatcher.register("system.hello", hello_then_signal)
     dispatcher.register("system.ping", system_ping)
     dispatcher.register("system.version", system_version)
+    # Registered here too, though it only acts inside `raven serve`: the handler
+    # answers with a typed "not_serving" refusal the client can show, which is
+    # more use than the -32601 an unregistered name would give, and it keeps
+    # this path in lock-step with the umbrella (see the drift test).
+    dispatcher.register("system.upgrade", system_upgrade)
     register_aligned_methods_except_system(
         dispatcher,
         emitter=emitter,
@@ -708,6 +720,7 @@ async def _run_rpc_server_until_done(
         question_broker=question_broker,
         scheduler=turn_scheduler,
         turn_ids=turn_ids,
+        direct_targets=direct_targets,
         build_error=build_error,
     )
 
@@ -772,7 +785,6 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
-                await agent_loop.drain_backend_stores()
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger
@@ -780,6 +792,24 @@ async def _run_rpc_server_until_done(
                 _logger.exception(
                     "tui: memory backend stop failed; continuing shutdown",
                 )
+        try:
+            from raven.browser import get_browser
+
+            await get_browser().close()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: browser close failed; continuing shutdown")
+        # ACP agents are launched with start_new_session, so they do not get the
+        # terminal's signals and outlive this process unless the pool is closed.
+        try:
+            from raven.agent.acp.pool import close_pool
+
+            await close_pool()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: acp pool close failed; continuing shutdown")
         serve_task.cancel()
         try:
             await serve_task
@@ -859,6 +889,8 @@ def run_subprocess_with_rpc(
     args: list[str],
     cwd: Path,
     forward_signals: bool = True,
+    workspace: str | None = None,
+    home: str | None = None,
 ) -> int:
     """Spawn Node child with a per-session TCP-loopback socket; run RpcServer; enforce handshake.
 
@@ -941,7 +973,9 @@ def run_subprocess_with_rpc(
         # ownership of this one socket and closes it on teardown, so the outer
         # cleanup must not double-close it.
         _flags["handed_off"] = True
-        return await _run_rpc_server_until_done(conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done)
+        return await _run_rpc_server_until_done(
+            conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done, workspace=workspace, home=home
+        )
 
     waiter = threading.Thread(target=_waiter, daemon=True)
     waiter.start()
@@ -988,7 +1022,7 @@ def _print_node_help(out=None) -> None:
     msg = (
         "✗ TUI 启动失败：未找到 Node.js ≥ 22。\n"
         "  安装：https://nodejs.org/  或  brew install node@22  或  nvm install 22\n"
-        '  或：一次性提问  ->  raven agent -m "..."\n'
+        "  或：临时使用行式 REPL  ->  raven agent --legacy-repl\n"
     )
     typer.echo(msg, file=out)
 
@@ -1055,10 +1089,34 @@ def tui(
         "--preview-colors",
         help="Preview color tokens in their real UI contexts and exit (no TTY needed).",
     ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Working directory for this run (default: current directory)",
+    ),
+    home: str | None = typer.Option(
+        None,
+        "--home",
+        help="Agent home directory (memory, skills, transcripts)",
+    ),
 ) -> None:
     """Launch Raven native TUI."""
     if ctx.invoked_subcommand is not None:
         return
+
+    # Validate -w before Node ever spawns. _build_agent_loop performs the
+    # same check, but by then it runs inside the RPC server's blanket
+    # except-Exception handler, which would turn a bad flag into a -32603
+    # surfaced on the user's first chat message instead of a launch-time error.
+    if workspace is not None:
+        from raven.agent.workdir import validate_override
+        from raven.cli._helpers import load_runtime_config
+
+        try:
+            validate_override(workspace, load_runtime_config(None, home=home).workspace_path)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
 
     # Startup gate: a config that cannot reach a model is settled before the TUI
     # owns the terminal. Skipped for the no-TTY diagnostic spawns
@@ -1163,7 +1221,7 @@ def tui(
         if no_rpc:
             exit_code = run_subprocess(npx, tsx_args, cwd=_UI_TUI_DIR)
         else:
-            exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR)
+            exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR, workspace=workspace, home=home)
     else:
         dist_entry = resolve_dist_entry()
         if dist_entry is None and not check:
@@ -1188,7 +1246,9 @@ def tui(
         if no_rpc:
             exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=dist_cwd)
         else:
-            exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=dist_cwd)
+            exit_code = run_subprocess_with_rpc(
+                node_path, [str(dist_entry)], cwd=dist_cwd, workspace=workspace, home=home
+            )
         if _is_abnormal_child_exit(exit_code):
             _diagnose_crash(node_path, dist_entry, dist_cwd)
 

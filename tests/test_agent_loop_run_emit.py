@@ -318,6 +318,41 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
 
 
+@pytest.mark.parametrize("blocking", [True, False])
+async def test_tool_start_event_carries_the_registry_blocking_verdict(tmp_path, blocking):
+    """ToolEvent(START).blocking must mirror the registered tool's own flag.
+
+    This is the whole chain the web channel depends on: registry -> loop payload
+    -> ToolEvent -> wire. A blocking tool runs a sub-agent with no automatic
+    deadline and emits nothing until it finishes, so a client that clocks the
+    stream has to learn from this field that the silence is expected.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    tool = _FakeTool()
+    tool.blocking_interaction = blocking
+    loop.tools.register(tool)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase == ToolPhase.START)
+    assert start.blocking is blocking
+
+
 async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     # The ToolResult branch: the model's context gets model_text while the UI
     # event's preview carries display_text. Every other fake tool in this file
@@ -981,3 +1016,104 @@ async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     loop._set_tool_context = _spy
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain, stream=False)
     assert seen["message_id"] is None  # empty extras -> metadata={} -> no message_id
+
+
+async def test_a_failing_display_call_costs_the_label_not_the_turn(tmp_path):
+    """``display_call`` gets the model's raw arguments -- the registry's cast and
+    validation run later, on the execute path -- so it sees shapes the schema
+    forbids. It only labels a transcript row, yet an exception from it used to
+    leave the emit and end the turn with no reply at all: that is how a
+    JSON-encoded array argument took a turn down.
+
+    Driven through ``run_turn`` rather than against the helper, so that inlining
+    the guard back into the call site fails here instead of passing quietly.
+    """
+
+    class _ExplodingLabel(Tool):
+        @property
+        def name(self) -> str:
+            return "exploding"
+
+        @property
+        def description(self) -> str:
+            return "raises from display_call"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def display_call(self, args: dict) -> str | None:
+            raise AttributeError("'str' object has no attribute 'get'")
+
+        async def execute(self, **kwargs) -> str:
+            return "tool-ran"
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "exploding", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ExplodingLabel())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display is None  # the label is what was lost
+    complete = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert complete.result_preview == "tool-ran"  # the tool still ran
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)  # the turn finished
+
+
+async def test_a_working_display_call_still_labels_the_row(tmp_path):
+    class _LabelledTool(Tool):
+        @property
+        def name(self) -> str:
+            return "labelled"
+
+        @property
+        def description(self) -> str:
+            return "labels its row"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        def display_call(self, args: dict) -> str | None:
+            return "the label"
+
+        async def execute(self, **kwargs) -> str:
+            return "tool-ran"
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "labelled", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_LabelledTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display == "the label"

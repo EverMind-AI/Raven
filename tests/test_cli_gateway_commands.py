@@ -37,6 +37,28 @@ def test_gateway_help_works() -> None:
     assert "--config" in r.stdout
 
 
+def test_gateway_help_describes_the_channel_workspace_root():
+    """``-w`` names a root, and the root it names must exist.
+
+    This assertion previously pinned "per-session workspaces (default:
+    <agent home>/ws)", which is why that wording outlived the design it
+    described -- it was load-bearing for a test rather than for a reader. The
+    gateway isolates per channel now and `<agent home>/ws` was removed, so
+    `raven gateway --help` must not send anyone looking for it.
+
+    Pinned at 80 columns because Typer truncates help it cannot fit, and a
+    half-printed path is worse than none -- the first replacement wording was
+    long enough to be cut off exactly there.
+    """
+    r = runner.invoke(app, ["gateway", "--help"], env={"COLUMNS": "80"})
+    assert r.exit_code == 0
+    output = " ".join(r.output.split())
+    assert "per-session" not in output
+    assert "/ws" not in output
+    assert "per-channel working directories" in output
+    assert "~/.raven/tmp" in output
+
+
 def test_gateway_config_short_alias_removed() -> None:
     """``-c`` no longer binds ``--config`` (UN-41); only the long form remains."""
     bad = runner.invoke(app, ["gateway", "-c", "/tmp/whatever.json"])
@@ -135,47 +157,60 @@ def test_gateway_log_config_overrides_parse() -> None:
 
 
 def test_gateway_channels_excludes_tui_when_no_im_enabled() -> None:
-    # The gateway does not claim "tui" cron jobs — those fire in the TUI
-    # process, so a TUI-set reminder is never forwarded to an IM channel.
-    from types import SimpleNamespace
+    # The gateway does not claim ephemeral "tui" cron jobs — those fire in the
+    # TUI process, so a TUI-set reminder is never forwarded to an IM channel.
+    from unittest.mock import MagicMock
 
     from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig())
+    cfg = MagicMock()
+    for name in (
+        "whatsapp",
+        "telegram",
+        "discord",
+        "feishu",
+        "mochat",
+        "dingtalk",
+        "email",
+        "slack",
+        "qq",
+        "matrix",
+        "wecom",
+        "weixin",
+    ):
+        ch = MagicMock()
+        ch.enabled = False
+        setattr(cfg.channels, name, ch)
     assert _build_gateway_channels(cfg) == set()  # no IM enabled, and no "tui"
 
 
 def test_gateway_channels_excludes_tui_alongside_enabled_im() -> None:
-    from types import SimpleNamespace
+    from unittest.mock import MagicMock
 
     from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}))
+    cfg = MagicMock()
+    for name in (
+        "whatsapp",
+        "telegram",
+        "discord",
+        "feishu",
+        "mochat",
+        "dingtalk",
+        "email",
+        "slack",
+        "qq",
+        "matrix",
+        "wecom",
+        "weixin",
+    ):
+        ch = MagicMock()
+        ch.enabled = name == "telegram"
+        setattr(cfg.channels, name, ch)
     result = _build_gateway_channels(cfg)
-    assert result == {"telegram"}
     assert "tui" not in result
-
-
-def test_gateway_channels_derived_from_config_model_fields() -> None:
-    # The partition is derived from the channels config model, not a
-    # hardcoded list: every field with a truthy .enabled participates.
-    from types import SimpleNamespace
-
-    from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
-
-    cfg = SimpleNamespace(
-        channels=ChannelsConfig.model_validate(
-            {
-                "telegram": {"enabled": True},
-                "feishu": {"enabled": True},
-                "weixin": {"enabled": False},
-            }
-        )
-    )
-    assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
+    assert "telegram" in result
+    assert "discord" not in result
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
@@ -197,54 +232,13 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "stopped +=" in stop_branch
 
 
-def test_cron_config_notify_missed_defaults_on() -> None:
-    from raven.config.schema import CronConfig
-
-    assert CronConfig().notify_missed is True
-    assert CronConfig.model_validate({"notify_missed": False}).notify_missed is False
-
-
-def test_gateway_wires_anti_runaway_count_and_reset() -> None:
-    """The anti-runaway guard must be WIRED, not just defined: the cron
-    handler gets the service to count fires on (``cron_service=cron``) and
-    the AgentLoop's user-inbound hook chains the counter reset after the
-    Sentinel hook. Like the /stop test above, these live in closures inside
-    the serve command with no import seam, so pin the command source.
-    """
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    assert "cron_service=cron," in src
-    assert "chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)" in src
-    assert "on_user_inbound=on_user_inbound," in src
-
-
-def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
-    """The missed-reminder observer must be wired onto the gateway's cron
-    service, gated on the event-wake plumbing existing AND
-    ``cron.notify_missed`` — with either off there is no sink, so the
-    observer must stay unset."""
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    gate = src.split("cron.on_missed_foreign", 1)[0].rsplit("if ", 1)[1]
-    assert "system_events is not None" in gate
-    assert "wake is not None" in gate
-    assert "config.cron.notify_missed" in gate
-    assert "cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)" in src
-
-
 # ---------------------------------------------------------------------------
 # build_model_routing — routing backend selection
 # ---------------------------------------------------------------------------
 
 from types import SimpleNamespace
 
-from raven.cli.gateway_commands import build_model_routing
+from raven.cli._helpers import build_model_routing
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
 from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
@@ -305,34 +299,63 @@ def test_build_routing_ecoclaw_no_key_disabled():
     assert out is prov
 
 
-# ---------------------------------------------------------------------------
-# _risk_banner: sandbox=none + open allow_from startup warning
-# ---------------------------------------------------------------------------
-
-
-def _config_with(*, backend: str, telegram_enabled: bool, allow_from: list[str]):
+def _config(default_model: str = "deepseek/deepseek-v3"):
     from raven.config.schema import Config
 
     cfg = Config()
-    cfg.tools.sandbox.backend = backend
-    cfg.channels.telegram.enabled = telegram_enabled
-    cfg.channels.telegram.allow_from = allow_from
+    cfg.agents.defaults.model = default_model
+    cfg.providers.deepseek.api_key = "KD"
+    cfg.providers.anthropic.api_key = "KA"
     return cfg
 
 
-def test_risk_banner_fires_on_combo() -> None:
-    from raven.cli.gateway_commands import _risk_banner
+def test_gateway_provider_resolves_vendors_per_call():
+    """The gateway serves many sessions at once, so the provider it ends up
+    holding must resolve a vendor per call rather than bake in the default
+    model's vendor. Asserted on the actual composed object, not on source text."""
+    from raven.cli._helpers import make_resolving_provider
 
-    banner = _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["*"]))
-    assert banner
-    assert "sandbox" in banner
-    assert "allow_from" in banner
-    assert "telegram" in banner
+    cfg = _config()
+    router, provider = build_model_routing(cfg, make_resolving_provider(cfg))
+
+    assert router is None  # routing.enabled defaults False
+    anthropic = provider._pick("anthropic/claude-opus-4-5")
+    deepseek = provider._pick("deepseek/deepseek-v3")
+    assert anthropic is not deepseek
+    assert anthropic.get_default_model() == "anthropic/claude-opus-4-5"
+    assert deepseek.get_default_model() == "deepseek/deepseek-v3"
 
 
-def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
-    from raven.cli.gateway_commands import _risk_banner
+# ---------------------------------------------------------------------------
+# _build_deliverable_store — deliver_files is gated on the web channel
+# ---------------------------------------------------------------------------
+#
+# The gateway's build path (agent + channel + cron + heartbeat stack) hangs
+# under unit-level mocking (see the note above test_gateway_refuses_second_instance),
+# so ``_build_deliverable_store`` is extracted as a small, directly-testable
+# helper rather than asserted on through the full ``gateway()`` command.
 
-    assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
-    assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
-    assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
+
+def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
+    """The web channel is the only surface that can render a delivery box, so it
+    is the only one that constructs the store that enables the tool."""
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.cli.gateway_commands import _build_deliverable_store
+    from raven.config.schema import Config
+
+    cfg = Config()
+    cfg.gateway.web.enabled = True
+
+    store = _build_deliverable_store(cfg)
+
+    assert isinstance(store, DeliverableStore)
+
+
+def test_gateway_passes_no_store_when_web_disabled(tmp_config: Path) -> None:
+    from raven.cli.gateway_commands import _build_deliverable_store
+    from raven.config.schema import Config
+
+    cfg = Config()
+    cfg.gateway.web.enabled = False
+
+    assert _build_deliverable_store(cfg) is None

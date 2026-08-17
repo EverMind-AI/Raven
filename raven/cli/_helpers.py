@@ -27,7 +27,41 @@ console = Console()
 DEFAULT_PROBE_MESSAGE = "Hi! Say hello in one sentence."
 
 
-def check_provider_credentials(config: Config) -> None:
+def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
+    """At REPL exit, list cron jobs pinned to channel="cli" that won't fire
+    while the REPL is down. Hint at the config knob that forwards them to
+    a durable channel at trigger time."""
+    from datetime import datetime
+
+    try:
+        jobs = cron_service.list_jobs()
+    except Exception:
+        return
+    now_ms = int(datetime.now().timestamp() * 1000)
+    pending = [
+        j
+        for j in jobs
+        if (j.payload.channel or "") == "cli" and j.state.next_run_at_ms and j.state.next_run_at_ms > now_ms
+    ]
+    if not pending:
+        return
+
+    console.print(f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]")
+    for j in pending:
+        fire = datetime.fromtimestamp(j.state.next_run_at_ms / 1000).strftime("%H:%M")
+        mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
+        console.print(f"   - '{j.name}' at {fire} (in {mins} min)")
+
+    if config.cron.forward_channels == []:
+        console.print(
+            "[dim]   Tip: cron.forward_channels is empty — these reminders will "
+            "be dropped silently when they fire. Run "
+            "`raven cron config set forward_channels '*'` to broadcast to "
+            "all enabled channels.[/dim]"
+        )
+
+
+def check_provider_credentials(config: Config, model: str | None = None) -> None:
     """Fail-fast when the configured provider is missing required credentials.
 
     Cheap (no litellm import), so it can run at startup even when the real
@@ -47,7 +81,7 @@ def check_provider_credentials(config: Config) -> None:
     from raven.providers.auth import MissingCredentialsError, credential_status
     from raven.providers.registry import find_by_model, split_model_id
 
-    model = config.agents.defaults.model
+    model = model or config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     if not provider_name:
         # Routing found no configured section, so name the provider the model id
@@ -59,55 +93,24 @@ def check_provider_credentials(config: Config) -> None:
             "no provider configured",
             # A command, not a config path: the old text pointed at
             # ~/.raven/config.json, the layout the CLI exists to hide.
-            remedy=(
-                "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
-                "Or run `raven onboard` for guided setup."
-            ),
+            remedy="Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>",
         )
 
     status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
-    if status.ok:
-        return
-
-    # A first run fails this check while naming a provider the user never chose:
-    # with nothing configured, routing falls back to the schema's default model,
-    # whose vendor then gets reported as the thing to go fix. Sending someone who
-    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
-    # so answer the wizard instead. Both halves are required -- a user who picked
-    # this model, or who has some other provider working, gets the specific
-    # verdict, which for the OAuth families names a sign-in rather than a key.
-    # Names come from the declared fields *and* the extras: an undeclared
-    # provider key is a supported shape, and `ProvidersConfig.get` is the only
-    # place allowed to resolve either kind, so route both through it rather than
-    # reading `__dict__` -- which sees no extras and would call a user whose one
-    # working credential lives there unconfigured.
-    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
-    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
-    if not chose_a_model and not any(
-        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
-    ):
-        raise MissingCredentialsError(
-            "no provider is configured yet -- run `raven onboard` for guided setup",
-            remedy="Already have a key? raven provider set <name> --api-key <key>",
-        )
-
-    raise MissingCredentialsError(
-        status.summary,
-        provider=provider_name,
-        remedy="Run `raven onboard` for guided setup.",
-    )
+    if not status.ok:
+        raise MissingCredentialsError(status.summary, provider=provider_name)
 
 
-def make_provider(config: Config):
-    """Create the appropriate LLM provider from config."""
+def make_provider(config: Config, model: str | None = None):
+    """Create the appropriate LLM provider from config, for ``model`` (default:
+    the configured agent default)."""
     from raven.providers.auth import MissingCredentialsError
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
 
-    check_provider_credentials(config)
-
-    model = config.agents.defaults.model
+    model = model or config.agents.defaults.model
+    check_provider_credentials(config, model)
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
@@ -199,6 +202,7 @@ def make_provider(config: Config):
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(
         temperature=defaults.temperature,
+        max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
     )
@@ -225,6 +229,7 @@ def make_lazy_provider(config: Config):
         default_model=defaults.model,
         generation=GenerationSettings(
             temperature=defaults.temperature,
+            max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
         ),
@@ -297,8 +302,8 @@ def print_probe_troubleshooting(provider: str | None) -> None:
     )
 
 
-def load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
-    """Load config and optionally override the active workspace."""
+def load_runtime_config(config: str | None = None, home: str | None = None) -> Config:
+    """Load config and optionally override agent home."""
     from raven.config.loader import load_config, set_config_path
 
     config_path = None
@@ -311,8 +316,8 @@ def load_runtime_config(config: str | None = None, workspace: str | None = None)
         Console(stderr=True).print(f"[dim]Using config: {config_path}[/dim]")
 
     loaded = load_config(config_path)
-    if workspace:
-        loaded.agents.defaults.workspace = workspace
+    if home:
+        loaded.agents.defaults.workspace = home
     return loaded
 
 
@@ -350,26 +355,57 @@ def print_deprecated_memory_window_notice(config: Config) -> None:
         )
 
 
-def print_config_migration_notices() -> None:
-    """Tell the user about any config line a migration just changed for them.
+def make_resolving_provider(config: Config):
+    """Provider that resolves each call's vendor from its model name. Used by the
+    gateway, where different sessions can be on different vendors at once."""
+    from raven.providers.resolving_provider import ResolvingProvider
 
-    The migrations run inside the loader, which has no terminal; this is the
-    place that does. Call it after the config is loaded and before the command
-    takes over the screen -- once printed, the notices are gone.
+    check_provider_credentials(config)
+    return ResolvingProvider(config)
+
+
+def build_model_routing(config, provider):
+    """Return ``(router, provider)`` for the configured routing backend.
+
+    - ``knn``: build a :class:`KNNModelRouter` and wrap ``provider`` in a
+      :class:`PerModelProvider` so routed model names reach their endpoints
+      (other models fall back to ``provider`` unchanged).
+    - ``ecoclaw``: build the PinchBench :class:`ModelRouter`.
+    - routing disabled, or ecoclaw with no API key: return ``(None, provider)``.
     """
-    from raven.config.loader import drain_migration_notices
+    if not config.routing.enabled:
+        return None, provider
 
-    for notice in drain_migration_notices():
-        console.print(f"[yellow]Config updated:[/yellow] {notice}")
+    if config.routing.backend == "knn":
+        from raven.providers.per_model_provider import PerModelProvider
+        from raven.routing.knn_router import KNNModelRouter
+
+        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
+        return router, PerModelProvider(config.routing.models, fallback=provider)
+
+    from raven.routing.router import ModelRouter
+
+    openrouter = config.providers.get("openrouter")
+    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
+    if not api_key:
+        console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
+        return None, provider
+
+    from raven.routing.types import RoutingProfileName
+
+    profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
+    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
+    return router, provider
 
 
 __all__ = [
     "DEFAULT_PROBE_MESSAGE",
+    "warn_about_pending_cli_reminders",
     "make_provider",
     "send_probe",
     "print_probe_troubleshooting",
     "load_runtime_config",
+    "build_model_routing",
     "parse_fake_now",
     "print_deprecated_memory_window_notice",
-    "print_config_migration_notices",
 ]

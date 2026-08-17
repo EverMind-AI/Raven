@@ -75,9 +75,10 @@ def main(
     from raven.cli.tui_commands import tui as _tui_entry
 
     # Delegate to the exact `raven tui` callback so the onboarding gate and
-    # launch behavior are identical for both entry points. Pass explicit
-    # plain defaults (the function's typer.Option defaults are OptionInfo
-    # sentinels, only resolved when typer drives the command).
+    # launch behavior are identical for both entry points. Every option of
+    # `tui` must be passed an explicit plain default: its typer.Option
+    # defaults are OptionInfo sentinels that only typer resolves, and an
+    # omitted one arrives here as a sentinel that reads as "flag was set".
     _tui_entry(
         ctx,
         check=False,
@@ -85,6 +86,8 @@ def main(
         color=None,
         print_colors=False,
         preview_colors=False,
+        workspace=None,
+        home=None,
     )
 
 
@@ -98,6 +101,7 @@ from raven.cli import (
     gateway_commands,
     onboard_commands,
     plugin_commands,
+    serve_commands,
     status_commands,
     tracing_commands,
     upgrade_commands,
@@ -109,6 +113,7 @@ agent_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)
+serve_commands.register(app)
 tracing_commands.register(app)
 upgrade_commands.register(app)
 
@@ -142,6 +147,13 @@ from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
 
+# Singular `plugin` beside the existing plural `plugins` listing: the group holds
+# per-server actions (`plugin auth <server>`), which is a different verb shape
+# from "show me what is installed".
+from raven.cli.plugin_commands import plugin_app
+
+app.add_typer(plugin_app, name="plugin")
+
 from raven.cli.import_commands import import_app
 
 app.add_typer(import_app, name="import")
@@ -172,15 +184,6 @@ def run() -> None:
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
         raise SystemExit(1) from exc
-    finally:
-        # Every command loads the config, so any of them can be the one that
-        # migrates it -- `status`, `provider list`, `cron list`. Only `agent` and
-        # `gateway` say so up front, and an unsaid notice is lost rather than
-        # deferred: the watermark leaves the next load with nothing to report.
-        # So this is the catch-all for every other command.
-        from raven.cli._helpers import print_config_migration_notices
-
-        print_config_migration_notices()
 
 
 if __name__ == "__main__":

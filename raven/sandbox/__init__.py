@@ -38,6 +38,7 @@ def build_executor(
     sandbox_cfg: SandboxConfig | None,
     workspace: Path,
     owned_ids: set[str] | None = None,
+    extra_volumes: tuple[tuple[str, str, str], ...] = (),
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
@@ -48,6 +49,10 @@ def build_executor(
     owned_ids: optional shared set that BoxliteExecutor populates with its VM
     ID on start and removes on stop. Used by SandboxDebugServer to distinguish
     VMs owned by this process from those of other processes.
+
+    extra_volumes: additional (host_path, guest_path, mode) mounts appended to
+    ``sandbox_cfg.extra_volumes``, e.g. keeping agent home reachable inside
+    the VM when the mounted workspace does not already cover it.
     """
     backend = sandbox_cfg.backend if sandbox_cfg else "none"
 
@@ -79,7 +84,7 @@ def build_executor(
             memory_mib=sandbox_cfg.memory_mib,
             disk_size_gb=sandbox_cfg.disk_size_gb,
             allow_net=sandbox_cfg.allow_net,
-            extra_volumes=sandbox_cfg.extra_volumes,
+            extra_volumes=[*sandbox_cfg.extra_volumes, *[list(v) for v in extra_volumes]],
             default_timeout=sandbox_cfg.default_timeout,
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,

@@ -13,14 +13,30 @@ from raven.agent.tools.skill_hub import (
 
 
 class _FakeRegistry:
-    """Minimal SkillRegistry stand-in: ``get(name, source)`` over a dict."""
+    """Minimal SkillRegistry stand-in, keyed the way the real one is.
+
+    Entries are keyed by *physical layer* — ``workspace`` / ``builtin`` /
+    ``external`` / ``everos`` — never by the ``local`` router namespace, which
+    SkillRegistry does not know. ``source=None`` resolves to the layer-priority
+    winner. Keying a fixture under ``("local", name)`` would make a broken
+    namespace passthrough look green.
+    """
+
+    _LAYER_PRIORITY = ("workspace", "external", "builtin", "everos")
 
     def __init__(self, metas: dict[tuple[str, str], object]) -> None:
+        assert not any(layer == "local" for layer, _ in metas), "'local' is a router namespace, not a registry layer"
         self._metas = metas
         self.invalidated: list[str] = []
 
     def get(self, name: str, source: str | None = None):
-        return self._metas.get((source, name))
+        if source is not None:
+            return self._metas.get((source, name))
+        candidates = [(layer, m) for (layer, key), m in self._metas.items() if key == name]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: self._LAYER_PRIORITY.index(c[0]))
+        return candidates[0][1]
 
     def invalidate_source(self, source: str) -> None:
         self.invalidated.append(source)
@@ -35,7 +51,6 @@ class _FakeClient:
         self._raises = raises
         self.get_calls: list[str] = []
         self.install_calls: list[str] = []
-        self.install_meta: list[dict | None] = []
 
     async def get(self, skill_id: str):
         self.get_calls.append(skill_id)
@@ -43,9 +58,8 @@ class _FakeClient:
             raise RuntimeError("boom")
         return self._get_result
 
-    async def install(self, skill_id: str, *, prefetched_meta=None):
+    async def install(self, skill_id: str):
         self.install_calls.append(skill_id)
-        self.install_meta.append(prefetched_meta)
         if self._raises:
             raise RuntimeError("boom")
         return self._install_result
@@ -100,7 +114,7 @@ class TestReadSkill:
 
     async def test_local_body_from_registry(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "local body", with_scripts=False)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await ReadSkillTool(registry=reg).execute(skill_id="local/x")
         assert "local body" in out
 
@@ -121,7 +135,7 @@ class TestUseSkill:
 
     async def test_local_with_scripts(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "body here", with_scripts=True)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await UseSkillTool(registry=reg).execute(skill_id="local/x")
         assert "scripts_dir:" in out
         assert str(tmp_path / "x" / "scripts") in out
@@ -129,7 +143,7 @@ class TestUseSkill:
 
     async def test_local_without_scripts_is_instruction_only(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "just instructions", with_scripts=False)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await UseSkillTool(registry=reg).execute(skill_id="local/x")
         assert "no bundled scripts" in out
         assert "scripts_dir:" not in out
@@ -145,6 +159,33 @@ class TestUseSkill:
             skill_id="local/nope",
         )
         assert out.startswith("Error")
+
+    async def test_local_id_reaches_a_builtin_via_the_real_registry(self, tmp_path: Path) -> None:
+        """Pins the namespace translation against a real SkillRegistry.
+
+        No fake can catch this one: the bug was handing ``source="local"``
+        straight to ``SkillRegistry.get``, whose compound key only ever holds
+        physical layers (workspace / builtin / external), so every ``local/*``
+        id — the exact form the router prints in the ``# Skills`` brackets and
+        both tool descriptions tell the agent to copy — resolved to None.
+        """
+        from raven.memory_engine.skill_local import SkillRegistry
+
+        workspace = tmp_path / "chanwork"
+        workspace.mkdir()
+        builtin = tmp_path / "builtin" / "demo"
+        builtin.mkdir(parents=True)
+        (builtin / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: d\n---\n\nDEMO BODY\n",
+            encoding="utf-8",
+        )
+        registry = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin")
+        assert registry.get("demo").source == "builtin"  # never "local"
+
+        for tool in (UseSkillTool(registry=registry), ReadSkillTool(registry=registry)):
+            out = await tool.execute(skill_id="local/demo")
+            assert not out.startswith("Error"), out
+            assert "DEMO BODY" in out
 
     async def test_hub_install_and_registry_invalidation(self) -> None:
         client = _FakeClient(
@@ -184,157 +225,3 @@ class TestUseSkill:
         client = _FakeClient(raises=True)
         out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
         assert out.startswith("Error") and "failed to install" in out
-
-
-class TestUseSkillSafetyPolicy:
-    """Install-time policy: min_safety and blocklist must gate use_skill."""
-
-    async def test_low_safety_hub_skill_refused(self) -> None:
-        client = _FakeClient(
-            get_result={"score_safety": 0.2, "slug": "tag-memory", "skill_md": "evil"},
-            install_result={"slug": "tag-memory", "version": "v1", "skill_md": "evil"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/tag-memory",
-        )
-        assert out.startswith("Error")
-        assert "score_safety" in out
-        assert client.install_calls == []
-
-    async def test_score_missing_allows_install(self) -> None:
-        client = _FakeClient(
-            get_result={"slug": "foo"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error")
-        assert client.install_calls == ["foo"]
-
-    async def test_blocklisted_hub_skill_refused_before_network(self) -> None:
-        client = _FakeClient(get_result={"slug": "tag-memory"})
-        out = await UseSkillTool(client=client, blocklist=["Tag-Memory"]).execute(
-            skill_id="hub/tag-memory",
-        )
-        assert out.startswith("Error") and "blocklist" in out
-        assert client.get_calls == []
-        assert client.install_calls == []
-
-    async def test_blocklisted_local_skill_refused(self, tmp_path: Path) -> None:
-        meta = _meta(tmp_path, "x", "body", with_scripts=True)
-        reg = _FakeRegistry({("local", "x"): meta})
-        out = await UseSkillTool(registry=reg, blocklist=["x"]).execute(
-            skill_id="local/x",
-        )
-        assert out.startswith("Error") and "blocklist" in out
-
-    async def test_policy_pass_reuses_prefetched_meta(self) -> None:
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error")
-        assert client.get_calls == ["foo"]
-        assert client.install_meta == [{"score_safety": 0.9, "slug": "foo"}]
-
-    async def test_external_path_in_body_refused(self) -> None:
-        client = _FakeClient(
-            get_result={
-                "score_safety": 0.9,
-                "slug": "tag-memory",
-                "skill_md": "python scripts/db.py --db ~/.openclaw/db.sqlite",
-            },
-        )
-        out = await UseSkillTool(client=client).execute(skill_id="hub/tag-memory")
-        assert out.startswith("Error") and "~/.openclaw" in out
-        assert client.install_calls == []
-
-    async def test_install_appends_audit_record(self, tmp_path: Path) -> None:
-        import json
-
-        audit = tmp_path / "installs.jsonl"
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
-            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": "/cache/foo"},
-        )
-        out = await UseSkillTool(
-            client=client,
-            min_safety=0.7,
-            install_audit_path=audit,
-        ).execute(skill_id="hub/foo")
-        assert not out.startswith("Error")
-        rec = json.loads(audit.read_text(encoding="utf-8").strip())
-        assert rec["slug"] == "foo"
-        assert rec["trigger"] == "use_skill"
-
-    async def test_install_writes_install_meta(self, tmp_path: Path) -> None:
-        import json
-
-        skill_dir = tmp_path / "foo@v2"
-        skill_dir.mkdir()
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
-            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": str(skill_dir)},
-        )
-        out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
-        assert not out.startswith("Error")
-        rec = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
-        assert rec["slug"] == "foo"
-        assert rec["version"] == "v2"
-        assert rec["source"] == "hub"
-        assert rec["trigger"] == "use_skill"
-        assert rec["installed_at"]
-
-
-class _FakeStdin:
-    def __init__(self, *, tty: bool) -> None:
-        self._tty = tty
-
-    def isatty(self) -> bool:
-        return self._tty
-
-
-class TestUseSkillAutoInstall:
-    """skillForge.autoInstall gates the Hub bundle download in use_skill."""
-
-    def _client(self) -> _FakeClient:
-        return _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "skill_md": "ok"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-
-    async def test_off_skips_install_with_notice(self) -> None:
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="off").execute(
-            skill_id="hub/foo",
-        )
-        assert out.startswith("Skill install skipped")
-        assert "'off'" in out
-        assert client.install_calls == []
-
-    async def test_prompt_without_tty_skips(self, monkeypatch) -> None:
-        import sys
-
-        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="prompt").execute(
-            skill_id="hub/foo",
-        )
-        assert out.startswith("Skill install skipped")
-        assert client.install_calls == []
-
-    async def test_prompt_tty_confirmation_installs(self, monkeypatch) -> None:
-        import sys
-
-        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
-        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="prompt").execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error") and not out.startswith("Skill install skipped")
-        assert client.install_calls == ["foo"]

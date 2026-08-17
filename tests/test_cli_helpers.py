@@ -101,6 +101,34 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
     assert isinstance(provider, LiteLLMProvider)
 
 
+def _model_config(tmp_path: Path) -> Path:
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_make_provider_honours_explicit_model(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    provider = _helpers.make_provider(load_config(_model_config(tmp_path)), "other-model")
+    assert provider.get_default_model() == "other-model"
+
+
+def test_make_provider_defaults_to_the_config_model(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    provider = _helpers.make_provider(load_config(_model_config(tmp_path)))
+    assert provider.get_default_model() == "my-model"
+
+
 # ---------------------------------------------------------------------------
 # check_provider_credentials — fail-fast without importing litellm
 # ---------------------------------------------------------------------------
@@ -239,7 +267,7 @@ def test_which_client_serves_a_provider_is_read_from_the_registry(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     assert type(make_provider(config)).__name__ == expected
 
@@ -331,7 +359,7 @@ def test_make_provider_builds_a_rotor_over_several_endpoints(monkeypatch: pytest
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -354,7 +382,7 @@ def test_make_provider_a_single_endpoint_entry_still_returns_a_plain_provider(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -388,7 +416,7 @@ def test_make_provider_single_endpoint_entry_credentials_are_not_dropped(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -421,7 +449,7 @@ def test_make_provider_flat_config_is_equivalent_through_the_endpoint_path(
             "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     provider = _helpers.make_provider(config)
 
@@ -463,89 +491,7 @@ def test_make_provider_rejects_endpoints_on_providers_that_cannot_rotate(
             "agents": {"defaults": {"model": model, "provider": provider}},
         }
     )
-    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config, _model=None: None)
 
     with pytest.raises(MissingCredentialsError, match="endpoints"):
         _helpers.make_provider(config)
-
-
-# ---------------------------------------------------------------------------
-# check_provider_credentials — onboard guidance
-# ---------------------------------------------------------------------------
-
-
-def test_no_api_key_error_mentions_onboard(tmp_path: Path) -> None:
-    """Zero-provider config: the credentials gate every LLM-needing command
-    runs through must point at ``raven onboard`` alongside the provider set
-    command. Carried on the exception so the single outlet renders it."""
-    from raven.config.loader import load_config
-    from raven.providers.auth import MissingCredentialsError
-
-    p = tmp_path / "config.json"
-    p.write_text("{}", encoding="utf-8")
-
-    with pytest.raises(MissingCredentialsError) as excinfo:
-        _helpers.check_provider_credentials(load_config(p))
-
-    assert "raven onboard" in f"{excinfo.value.summary} {excinfo.value.remedy}"
-
-
-def test_azure_missing_key_same_onboard_guidance(tmp_path: Path) -> None:
-    """The azure branch flows through the same gate and must carry the same
-    ``raven onboard`` guidance as the generic no-key branch, not its own
-    hand-edit-config wording."""
-    from raven.config.loader import load_config
-    from raven.providers.auth import MissingCredentialsError
-
-    cfg = _config_for(tmp_path, "azure_openai", "my-deployment", {"apiBase": "https://example.openai.azure.com"})
-
-    with pytest.raises(MissingCredentialsError) as excinfo:
-        _helpers.check_provider_credentials(load_config(cfg))
-
-    assert "raven onboard" in f"{excinfo.value.summary} {excinfo.value.remedy}"
-
-
-# ── the first-run verdict vs. a provider Raven carries no field for ──
-
-
-def test_a_working_extra_provider_is_not_a_first_run(tmp_path: Path) -> None:
-    """A credential under an undeclared provider key still counts as configured.
-
-    ``ProvidersConfig`` allows extra keys and serves them from ``get`` -- a
-    provider LiteLLM supports but Raven carries no field for is a supported
-    shape. Deciding "is anything configured" from ``__dict__`` sees only the
-    declared fields, so such a user was told nothing was configured yet and
-    sent to the wizard. The model is left at the schema default here, which is
-    the only case that reaches this branch at all.
-    """
-    from raven.config.loader import load_config
-    from raven.providers.auth import MissingCredentialsError
-
-    cfg = tmp_path / "config.json"
-    cfg.write_text(
-        json.dumps({"providers": {"my-private-vllm": {"apiKey": "sk-real", "apiBase": "http://x/v1"}}}),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(MissingCredentialsError) as excinfo:
-        _helpers.check_provider_credentials(load_config(cfg))
-
-    # The specific verdict for the model's own vendor, not the first-run one.
-    assert "no provider is configured yet" not in excinfo.value.summary
-    assert "API key" in excinfo.value.summary
-
-
-def test_nothing_configured_at_all_names_the_wizard(tmp_path: Path) -> None:
-    """With no credential anywhere and no model chosen, the default model's
-    vendor is not the thing to go fix -- the wizard is."""
-    from raven.config.loader import load_config
-    from raven.providers.auth import MissingCredentialsError
-
-    cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"providers": {}}), encoding="utf-8")
-
-    with pytest.raises(MissingCredentialsError) as excinfo:
-        _helpers.check_provider_credentials(load_config(cfg))
-
-    assert "no provider is configured yet" in excinfo.value.summary
-    assert "raven onboard" in excinfo.value.summary

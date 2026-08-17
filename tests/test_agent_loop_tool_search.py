@@ -61,6 +61,10 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         restrict_to_workspace=True,
         tool_search_config=cfg,
         strategies=strategies,
+        # web_search is the cataloged domain tool these tests fold away, and the
+        # loop only registers it when a search key resolves. Supplying one keeps
+        # the subject of the test present for the right reason.
+        brave_api_key="test-serper-key",
     )
 
 

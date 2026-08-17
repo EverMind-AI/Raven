@@ -1,113 +1,30 @@
-"""Spine wiring for the one-shot ``agent -m`` path: the runner (an
-AgentTurnRunner with stream=False, so the reply is one Text), the outlet that
-renders a turn's text to the console, and the sink that feeds the delivery hub.
+"""Spine wiring for the REPL: the runner (an AgentTurnRunner with stream=False,
+so the reply is one Text), the outlet that renders a turn's text to the console,
+and the sink that feeds the delivery hub.
 
-The one-shot turn runs through spine (submit -> lane -> run_turn -> hub ->
-outlet). spine never imports cli; cli imports spine.
+The REPL runs turns through spine (submit -> lane -> run_turn -> hub -> outlet).
+spine never imports cli; cli imports spine.
 """
 
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.spine import (
+    ChatType,
     Deliverable,
     Notice,
     NoticeKind,
+    Origin,
     OriginPools,
     Scheduler,
+    Source,
     Text,
+    TurnHandle,
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
 from raven.spine.events import Reasoning
-
-
-def _fmt_tokens(n: int) -> str:
-    if n >= 1000:
-        return f"{n / 1000:.1f}".rstrip("0").rstrip(".") + "k"
-    return str(n)
-
-
-class TurnUsageSummary:
-    """Per-turn usage accounting for the CLI summary line.
-
-    Fed by an in-memory UsageTracker registered on the agent loop's TokenWise
-    registry (same source the persistent telemetry tracker reads). The runner
-    wrapper marks the turn start; the CliOutlet takes the delta after the
-    turn's reply renders. ``take_line`` advances the baseline so a second
-    deliverable in the same turn cannot double-report."""
-
-    def __init__(self, tracker: Any) -> None:
-        self._tracker = tracker
-        self._baseline = tracker.snapshot()
-        self._started: float | None = None
-
-    def turn_started(self) -> None:
-        self._baseline = self._tracker.snapshot()
-        self._started = time.monotonic()
-
-    def take_line(self) -> str | None:
-        total = self._tracker.snapshot()
-        base = self._baseline
-        self._baseline = total
-        in_tokens = (
-            (total.input_tokens - base.input_tokens)
-            + (total.cache_read_tokens - base.cache_read_tokens)
-            + (total.cache_write_tokens - base.cache_write_tokens)
-        )
-        out_tokens = total.output_tokens - base.output_tokens
-        if in_tokens <= 0 and out_tokens <= 0:
-            return None
-        parts = [f"{_fmt_tokens(in_tokens)} in / {_fmt_tokens(out_tokens)} out tokens"]
-        cost = (total.estimated_cost_usd or 0.0) - (base.estimated_cost_usd or 0.0)
-        if cost > 0:
-            # Below the 4-decimal render floor a real cost would round to "$0"
-            # and read as a free call; show the floor instead of a lie.
-            parts.append("<$0.0001" if cost < 0.0001 else "$" + f"{cost:.4f}".rstrip("0").rstrip("."))
-        if self._started is not None:
-            parts.append(f"{time.monotonic() - self._started:.1f}s")
-        return " · ".join(parts)
-
-
-class _SummaryTurnRunner:
-    """Marks the turn boundary for TurnUsageSummary; delegates the turn."""
-
-    def __init__(self, inner: Any, summary: TurnUsageSummary) -> None:
-        self._inner = inner
-        self._summary = summary
-
-    async def run(self, req: TurnRequest, emit: Any, drain: Any) -> Any:
-        self._summary.turn_started()
-        return await self._inner.run(req, emit, drain)
-
-
-def _build_turn_summary(agent_loop: Any) -> TurnUsageSummary | None:
-    """Wire the per-turn usage summary when the config switch is on.
-
-    Returns None (feature fully off, zero output) when ``cli.turn_summary``
-    is false or the loop has no TokenWise registry to observe (test stubs)."""
-    strategies = getattr(agent_loop, "strategies", None)
-    if strategies is None:
-        return None
-    from raven.config.loader import load_config
-
-    if not load_config().cli.turn_summary:
-        return None
-    from raven.token_wise.usage_tracker import UsageTracker
-
-    tracker = UsageTracker(persist=False)
-    strategies.register(tracker)
-    return TurnUsageSummary(tracker)
-
-
-def _render_summary_line(line: str) -> None:
-    from rich.console import Console
-
-    # Two-space indent matches the render_notice progress lines in
-    # agent_commands, so the summary sits in the same visual column.
-    Console().print(f"  [dim]↳ {line}[/dim]")
 
 
 class CliOutlet:
@@ -117,10 +34,15 @@ class CliOutlet:
     ``render_notice`` is opt-in progress rendering: when set, a Notice (and the
     Reasoning a long tool like deep_research streams, see ``deliver``) renders as
     a progress line, gated by ``send_progress`` (PROGRESS) and ``send_tool_hints``
-    (TOOL_HINT). The one-shot ``-m`` path wires it so deep_research progress is
-    visible; note this also surfaces the model's per-tool progress hint on every
-    tool call, gated by the same flags. A surface that omits it eats Notice /
-    Reasoning as before."""
+    (TOOL_HINT). Both the one-shot ``-m`` path and the interactive REPL wire it so
+    deep_research progress is visible; note this also surfaces the model's
+    per-tool progress hint on every tool call, gated by the same flags. A surface
+    that omits it eats Notice / Reasoning as before.
+
+    ``render_marker`` is opt-in: a Text whose ``source.extras._sentinel_origin``
+    is set renders this proactive marker before its content (the interactive
+    REPL passes the 🐦‍⬛ marker the old bus consumer printed). Left None elsewhere,
+    so a normal turn reply renders unchanged."""
 
     def __init__(
         self,
@@ -128,25 +50,23 @@ class CliOutlet:
         render: Callable[[str], None],
         *,
         render_notice: Callable[[str], None] | None = None,
+        render_marker: Callable[[], None] | None = None,
         send_progress: bool = False,
         send_tool_hints: bool = False,
-        summary: TurnUsageSummary | None = None,
     ) -> None:
         self.name = channel
         self.capabilities = Capabilities()
         self._render = render
         self._render_notice = render_notice
+        self._render_marker = render_marker
         self._send_progress = send_progress
         self._send_tool_hints = send_tool_hints
-        self._summary = summary
 
     async def deliver(self, out: Deliverable) -> None:
         if isinstance(out, Text):
+            if self._render_marker is not None and out.source is not None and out.source.extras.get("_sentinel_origin"):
+                self._render_marker()
             self._render(out.content)
-            if self._summary is not None:
-                line = self._summary.take_line()
-                if line:
-                    _render_summary_line(line)
         elif isinstance(out, Notice) and self._render_notice is not None:
             if out.kind is NoticeKind.PROGRESS and self._send_progress:
                 self._render_notice(out.detail or "")
@@ -154,7 +74,7 @@ class CliOutlet:
                 self._render_notice(out.detail or "")
         elif isinstance(out, Reasoning):
             # A long tool (deep_research) streams coarse progress as Reasoning; the
-            # model itself never emits Reasoning here (this path runs non-streaming).
+            # model itself never emits Reasoning here (REPL runs non-streaming).
             if self._render_notice is not None and self._send_progress and out.content:
                 self._render_notice(out.content)
         # Other Notice kinds / ToolEvent / MediaOut are eaten (render-can't path).
@@ -166,40 +86,33 @@ def build_repl(
     render: Callable[[str], None],
     *,
     render_notice: Callable[[str], None] | None = None,
+    render_marker: Callable[[], None] | None = None,
     send_progress: bool = False,
     send_tool_hints: bool = False,
     user_pool: int = 1,
     system_pool: int = 1,
 ) -> tuple[Scheduler, DeliveryHub, Callable[[], Awaitable[None]]]:
-    """Wire the spine pieces a one-shot ``-m`` turn flows through: a hub with the
-    channel's CliOutlet registered, and a Scheduler whose runner bridges the agent
-    loop and whose sink is that hub. Returns those plus a ``teardown`` the caller
-    awaits on exit — stop the scheduler (no more events) then close the hub's
-    outlet workers — shared with the test so the teardown sequence itself is
-    covered.
+    """Wire the spine pieces a REPL turn flows through: a hub with the channel's
+    CliOutlet registered, and a Scheduler whose runner bridges the agent loop and
+    whose sink is that hub. Returns those plus a ``teardown`` the caller awaits on
+    exit — stop the scheduler (no more events) then close the hub's outlet workers
+    — shared with the test so the teardown sequence itself is covered.
 
-    ``render_notice`` + the two config flags are threaded to the CliOutlet so
-    progress lines render; a caller that omits them keeps Notice eaten.
-
-    The per-turn usage summary (cli.turn_summary) is wired here, at the
-    CliOutlet's deliver tail, so it renders once right after the reply."""
-    summary = _build_turn_summary(agent_loop)
+    ``render_notice`` + the two config flags are threaded to the CliOutlet for the
+    one-shot ``-m`` path; the interactive REPL omits them (Notice stays eaten)."""
     hub = DeliveryHub()
     hub.register(
         CliOutlet(
             channel,
             render,
             render_notice=render_notice,
+            render_marker=render_marker,
             send_progress=send_progress,
             send_tool_hints=send_tool_hints,
-            summary=summary,
         )
     )
-    runner: Any = AgentTurnRunner(agent_loop, stream=False, inline_tool_stream=True)
-    if summary is not None:
-        runner = _SummaryTurnRunner(runner, summary)
     scheduler = Scheduler(
-        runner,
+        AgentTurnRunner(agent_loop, stream=False, inline_tool_stream=True),
         OriginPools(user=user_pool, system=system_pool),
         make_hub_sink(hub),
     )
@@ -209,3 +122,49 @@ def build_repl(
         await hub.aclose()
 
     return scheduler, hub, teardown
+
+
+async def run_repl_loop(
+    read_input: Callable[[], Awaitable[str]],
+    submit: Callable[[TurnRequest], TurnHandle],
+    wait_idle: Callable[[str], Awaitable[None]],
+    *,
+    channel: str,
+    chat_id: str,
+    is_exit: Callable[[str], bool],
+    handle_slash: Callable[[str], bool],
+    thinking: Callable[[], Any],
+    on_exit: Callable[[], None],
+) -> None:
+    """Read a line, submit it as a turn, wait for the turn to finish AND its
+    output to render, then prompt again — so a reply always lands before the next
+    prompt. result() means the turn stopped emitting; wait_idle is the render
+    barrier that the async outlet has caught up. tty/console and exit/slash are
+    injected so this runs against the real scheduler and hub under test."""
+    while True:
+        # Wrap the whole iteration (read + turn) so Ctrl-C / EOF at any point —
+        # including mid-turn — exits cleanly, as the bus loop did.
+        try:
+            user_input = await read_input()
+            command = user_input.strip()
+            if not command:
+                continue
+            if is_exit(command):
+                on_exit()
+                return
+            if command.startswith("/") and handle_slash(command):
+                continue
+            handle = submit(
+                TurnRequest(
+                    origin=Origin.USER,
+                    source=Source(channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM),
+                    text=user_input,
+                    conversation=f"{channel}:{chat_id}",
+                )
+            )
+            with thinking():
+                await handle.result()
+            await wait_idle(channel)
+        except (EOFError, KeyboardInterrupt):
+            on_exit()
+            return
