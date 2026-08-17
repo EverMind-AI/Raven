@@ -66,12 +66,31 @@ def check_provider_credentials(config: Config) -> None:
         )
 
     status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
-    if not status.ok:
+    if status.ok:
+        return
+
+    # A first run fails this check while naming a provider the user never chose:
+    # with nothing configured, routing falls back to the schema's default model,
+    # whose vendor then gets reported as the thing to go fix. Sending someone who
+    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
+    # so answer the wizard instead. Both halves are required -- a user who picked
+    # this model, or who has some other provider working, gets the specific
+    # verdict, which for the OAuth families names a sign-in rather than a key.
+    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    if not chose_a_model and not any(
+        credential_status(name, section, include_external=True).ok
+        for name, section in config.providers.__dict__.items()
+    ):
         raise MissingCredentialsError(
-            status.summary,
-            provider=provider_name,
-            remedy="Run `raven onboard` for guided setup.",
+            "no provider is configured yet -- run `raven onboard` for guided setup",
+            remedy="Already have a key? raven provider set <name> --api-key <key>",
         )
+
+    raise MissingCredentialsError(
+        status.summary,
+        provider=provider_name,
+        remedy="Run `raven onboard` for guided setup.",
+    )
 
 
 def make_provider(config: Config):

@@ -4516,12 +4516,46 @@ def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
 # --------------------------------------------------------------------------- first-run hints
 
 
-def test_install_sh_all_set_mentions_onboard() -> None:
-    """The install.sh closing hints must point first-time users at ``raven onboard``
-    (README already does; the installer's "All set" block must match)."""
-    text = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
-    tail = text[text.index("All set") :]
-    assert "raven onboard" in tail
+def test_installers_send_first_run_to_bare_raven() -> None:
+    """Both installers' first-run block names bare ``raven``, not the wizard.
+
+    The startup gate runs the wizard from bare ``raven`` and continues into the
+    TUI in the same process, so naming ``raven onboard`` here would present one
+    continuous flow as two commands to run in sequence.
+    """
+    root = Path(__file__).resolve().parents[1]
+    for name in ("install.sh", "install.ps1"):
+        first_run = (root / name).read_text()
+        first_run = first_run[first_run.index("All set") :]
+        assert "sets you up on first run" in first_run, name
+        assert "raven onboard" not in first_run, name
+
+
+def test_installers_tell_an_upgrade_apart_from_a_first_run() -> None:
+    """A re-run over an existing config is an upgrade: say so instead of
+    repeating first-time-setup wording, and name the in-place path (which keeps
+    the channel extras rather than re-downloading everything)."""
+    root = Path(__file__).resolve().parents[1]
+    for name in ("install.sh", "install.ps1"):
+        text = (root / name).read_text()
+        assert "config.json" in text, name
+        assert "Raven updated" in text, name
+        assert "raven upgrade" in text, name
+
+
+def test_readme_quickstart_matches_the_installer_hint() -> None:
+    """The README's first step and the installer's first-run hint must name the
+    same command. They drifted once -- the installer said nothing about setup
+    while the README opened with ``raven onboard`` -- and a first-time user who
+    followed the terminal hit the missing-credentials error instead."""
+    root = Path(__file__).resolve().parents[1]
+    for name, heading in (
+        ("README.md", "### Onboard and run"),
+        ("README.zh-CN.md", "### 完成引导并运行"),
+    ):
+        text = (root / name).read_text()
+        block = text[text.index(heading) :][:200]
+        assert "```bash\nraven\n```" in block, name
 
 
 def test_pick_model_shows_default_positioning_line(
