@@ -76,10 +76,15 @@ def check_provider_credentials(config: Config) -> None:
     # so answer the wizard instead. Both halves are required -- a user who picked
     # this model, or who has some other provider working, gets the specific
     # verdict, which for the OAuth families names a sign-in rather than a key.
+    # Names come from the declared fields *and* the extras: an undeclared
+    # provider key is a supported shape, and `ProvidersConfig.get` is the only
+    # place allowed to resolve either kind, so route both through it rather than
+    # reading `__dict__` -- which sees no extras and would call a user whose one
+    # working credential lives there unconfigured.
     chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
     if not chose_a_model and not any(
-        credential_status(name, section, include_external=True).ok
-        for name, section in config.providers.__dict__.items()
+        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
     ):
         raise MissingCredentialsError(
             "no provider is configured yet -- run `raven onboard` for guided setup",
