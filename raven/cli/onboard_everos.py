@@ -1486,6 +1486,69 @@ def _retry_or_skip_address() -> str:
     return str(choice)
 
 
+_SWITCH_TO_MANAGED = object()
+
+
+def _enabled_unowned_menu() -> object:
+    """Keep the server you run, move it, or hand the job to raven."""
+    questionary = oc._require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    slice_ = _recorded_memory_slice()
+    where = slice_.get("base_url") or "?"
+    oc.console.print()
+    oc.console.print(
+        oc._t(
+            f"  [green]v Long-term memory uses the EverOS you run at {where}.[/green]",
+            f"  [green]✓ 长期记忆正在使用你自己运行的 EverOS：{where}。[/green]",
+        ),
+        highlight=False,
+    )
+    action = questionary.select(
+        oc._t("What would you like to do?", "想做什么？"),
+        choices=[
+            questionary.Choice(oc._t("Keep it", "保持不变"), value="keep"),
+            questionary.Choice(oc._t("Point Raven at a different address", "改成别的地址"), value="address"),
+            # The way out. Without it this menu is a one-way door: the managed
+            # path is unreachable and the only exit is editing config.json by
+            # hand. Offered as its own answer rather than as a side effect of
+            # "reconfigure", which is how ownership used to flip unasked.
+            questionary.Choice(
+                oc._t("Let Raven run its own EverOS instead", "改用 Raven 自己运行的 EverOS"),
+                value="managed",
+            ),
+        ],
+        style=RAVEN_STYLE,
+        qmark=oc._QMARK,
+    ).ask()
+    if action is None:
+        raise typer.Exit(1)
+    if action == "managed":
+        # Say what it costs before taking it: their server keeps its data and
+        # keeps running, but raven stops reading it, so the memories behind that
+        # address stop being the ones it recalls.
+        oc.console.print(
+            oc._t(
+                f"  [yellow]! Raven will build its own memory and stop using {where}.[/yellow]\n"
+                "  [dim]That server and its data are untouched -- Raven simply stops reading them.[/dim]",
+                f"  [yellow]⚠ Raven 将建立自己的记忆，不再使用 {where}。[/yellow]\n"
+                "  [dim]那台服务器和它的数据不受影响，只是 Raven 不再读它。[/dim]",
+            ),
+            highlight=False,
+        )
+        return _SWITCH_TO_MANAGED
+    if action == "address" and not _use_self_managed_everos():
+        # A refused address leaves the working one in place rather than
+        # discarding a setup that was fine a moment ago.
+        oc.console.print(
+            oc._t(
+                f"  [dim]Keeping {where}.[/dim]",
+                f"  [dim]继续使用 {where}。[/dim]",
+            )
+        )
+    return None
+
+
 def _use_self_managed_everos() -> bool:
     """Point raven at an EverOS the user runs. Returns False if it is unreachable.
 
@@ -2029,6 +2092,27 @@ def _step4_memory(
     oc.console.print(
         oc._t("  [dim]Looking for an existing memory service...[/dim]", "  [dim]正在查找已有的记忆服务...[/dim]")
     )
+    if _memory_enabled() and _recorded_memory_slice().get("owned") is False:
+        # A server the user runs, and this is settled before discovery is even
+        # consulted. Two reasons, both of which used to bite.
+        #
+        # Configuring models is not an action that exists here -- that is raven
+        # writing into a root it owns, which by definition it does not. Sharing
+        # the managed menu made "Reconfigure" the only plausible button for
+        # changing the address, and it answered by recording raven's own root,
+        # flipping ownership and overwriting the address, none of it confirmed.
+        #
+        # And discovery adds raven's own roots with owned=True unconditionally,
+        # so an abandoned managed root -- the normal leftover after switching --
+        # would be picked and adopted before any menu appeared. A recorded
+        # ownership decision outranks a directory that happens to still exist.
+        if _enabled_unowned_menu() is not _SWITCH_TO_MANAGED:
+            return None
+        # An explicit handover. Recorded here rather than left to the branch that
+        # builds the root, because everything downstream -- _memory_enabled(),
+        # owned_everos_root() -- has to see the new answer first.
+        _record_root(default_everos_root(), owned=True)
+
     found = _discover.pick(_discover.discover())
 
     if found is not None and not found.owned:
