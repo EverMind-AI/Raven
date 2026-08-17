@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from raven.cli.update_notice import update_notice
-from raven.config.loader import load_config
+from raven.config.loader import drain_migration_notices, load_config
 from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
@@ -178,6 +178,14 @@ async def _default_session_info(
     notice = update_notice(_RAVEN_VERSION)
     if notice is not None:
         info["update_available"], info["update_command"] = notice
+
+    # Anything a config migration changed on the user's behalf while this
+    # backend booted. The CLI prints these itself; a TUI/served-page user never
+    # sees that terminal, so the first session of the launch carries them into
+    # the transcript instead. Drained, so a later resume does not repeat them.
+    migrated = drain_migration_notices()
+    if migrated:
+        info["config_notices"] = migrated
 
     return info
 

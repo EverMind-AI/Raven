@@ -201,6 +201,11 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         sys(`warning: ${info.config_warning}`)
       }
 
+      // Not a warning: the backend already migrated the config line it names.
+      for (const notice of info?.config_notices ?? []) {
+        sys(notice)
+      }
+
       if (msg) {
         const bareId = r.session_id.includes(':') ? r.session_id.slice(r.session_id.indexOf(':') + 1) : r.session_id
         sys(`${msg}, new session id = ${bareId}`)

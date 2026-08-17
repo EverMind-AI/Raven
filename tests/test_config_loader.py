@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from raven.config.loader import load_config
+from raven.config.loader import drain_migration_notices, load_config
+from raven.config.schema import CURRENT_CONFIG_VERSION
 
 
 def _write(path: Path, body: dict) -> None:
@@ -252,3 +253,150 @@ def test_bad_config_warns_again_after_recovery(tmp_path: Path, capsys) -> None:
     load_config(p)
     captured = capsys.readouterr()
     assert (captured.out + captured.err).count("not valid JSON") == 2
+
+
+# ── The retired 65536 context-window pin ────────────────────────────────
+#
+# Pre-0.1.11 bootstraps dumped every schema default to disk, and back then
+# ``contextWindowTokens`` defaulted to 65536. A pin outranks the model's real
+# window by design, so on upgraded installs that fossil silently caps every
+# model at 64k. It is cleared once, under a ``configVersion`` stamp -- the
+# value itself carries no provenance, so the stamp is the only thing separating
+# "we planted this" from "the user chose this".
+
+
+def _defaults(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"]
+
+
+def test_legacy_context_window_pin_is_dropped_and_stamped(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536, "model": "anthropic/claude-opus-4-5"}}})
+
+    cfg = load_config(p)
+
+    assert cfg.agents.defaults.context_window_tokens is None
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "contextWindowTokens" not in on_disk["agents"]["defaults"]
+    assert on_disk["configVersion"] == CURRENT_CONFIG_VERSION
+    # Untouched neighbours: the write is surgical, not a re-dump of the model.
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-5"
+
+
+def test_legacy_context_window_pin_dropped_in_snake_case_too(tmp_path: Path) -> None:
+    """Configs in the wild use either casing; the schema accepts both."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"context_window_tokens": 65536}}})
+
+    assert load_config(p).agents.defaults.context_window_tokens is None
+    assert "context_window_tokens" not in _defaults(p)
+
+
+def test_context_window_pin_survives_once_stamped(tmp_path: Path) -> None:
+    """The user's own 65536 is theirs. Same value, same file -- but the stamp
+    says this config already had its one pass, so the pin stands."""
+    p = tmp_path / "config.json"
+    _write(p, {"configVersion": CURRENT_CONFIG_VERSION, "agents": {"defaults": {"contextWindowTokens": 65536}}})
+
+    assert load_config(p).agents.defaults.context_window_tokens == 65536
+    assert _defaults(p)["contextWindowTokens"] == 65536
+
+
+def test_other_context_window_pins_are_never_touched(tmp_path: Path) -> None:
+    """Only the one retired default is a fossil; every other number was typed
+    by someone."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 32768}}})
+
+    assert load_config(p).agents.defaults.context_window_tokens == 32768
+    assert _defaults(p)["contextWindowTokens"] == 32768
+
+
+def test_migration_write_back_keeps_extension_blocks(tmp_path: Path) -> None:
+    """The mapping ``load_config`` migrates has the extension blocks popped, so
+    writing *that* back would delete the user's memory / plugins / skillForge
+    sections. Guards the re-read the persist step does instead."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"contextWindowTokens": 65536}},
+            "memory": {"backend": "everos"},
+            "plugins": {"enabled": ["demo"]},
+            "skillForge": {"detect_min_tool_calls": 3},
+        },
+    )
+
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["memory"] == {"backend": "everos"}
+    assert on_disk["plugins"] == {"enabled": ["demo"]}
+    assert on_disk["skillForge"] == {"detect_min_tool_calls": 3}
+
+
+def test_migration_write_back_does_not_materialise_defaults(tmp_path: Path) -> None:
+    """``save_config`` dumps every default (~8 KB). Using it here would re-plant
+    exactly the kind of fossil this migration pulls out."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536, "model": "x/y"}}})
+
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert set(on_disk["agents"]["defaults"]) == {"model"}
+    assert "tools" not in on_disk
+
+
+def test_migration_is_correct_even_when_the_file_cannot_be_written(tmp_path: Path) -> None:
+    """A read-only home must not brick the boot: the in-memory migration is
+    what makes the process correct, the write only keeps the file honest."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+    tmp_path.chmod(0o500)
+    try:
+        cfg = load_config(p)
+    finally:
+        tmp_path.chmod(0o700)
+
+    assert cfg.agents.defaults.context_window_tokens is None
+    assert _defaults(p)["contextWindowTokens"] == 65536
+
+
+def test_migration_notice_is_told_once_per_process(tmp_path: Path) -> None:
+    """Several loads per command (status and doctor do; the RPC server reloads
+    every turn) owe the user one telling."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
+
+    drain_migration_notices()
+    load_config(p)
+    load_config(p)
+    notices = drain_migration_notices()
+
+    assert len(notices) == 1
+    assert "contextWindowTokens" in notices[0]
+    assert drain_migration_notices() == []
+
+
+def test_no_notice_when_nothing_was_migrated(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"model": "x/y"}}})
+
+    drain_migration_notices()
+    load_config(p)
+
+    assert drain_migration_notices() == []
+
+
+def test_config_without_the_fossil_is_left_byte_identical(tmp_path: Path) -> None:
+    """The stamp lands only on a file we actually edited. Commands like
+    ``provider use`` promise to leave the config alone when they decide not to
+    act, and a load-time stamp would quietly break that promise for everyone."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"model": "x/y"}}})
+    before = p.read_bytes()
+
+    load_config(p)
+
+    assert p.read_bytes() == before

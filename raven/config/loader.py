@@ -2,13 +2,21 @@
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from raven.config.schema import Config
+from raven.config.schema import CURRENT_CONFIG_VERSION, Config
+
+# The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
+# then ``AgentDefaults.context_window_tokens`` defaulted to this number and
+# ``save_config`` dumped every default. A pin is honoured over the model's real
+# window by design, so on an upgraded install this exact value silently caps
+# every model at 64k -- see ``_migrate_legacy_context_window``.
+LEGACY_CONTEXT_WINDOW_TOKENS = 65_536
 
 # Single source of truth for Raven extension block keys.
 # Both _migrate_config (pop before base Config validates) and
@@ -37,6 +45,14 @@ _current_config_path: Path | None = None
 # Paths already warned about as malformed in this process; repeated
 # load_config calls (status/doctor load more than once) warn only once.
 _warned_paths: set[str] = set()
+
+# User-facing lines produced by a migration that actually changed something,
+# waiting to be printed by whichever CLI entry point owns the terminal.
+# Migrations run inside the loader, which has no console of its own and whose
+# logs land in a file nobody reads; a config the user can see us edit has to be
+# announced where the user is looking. Drained, not read, so N loads per
+# process yield one telling.
+_migration_notices: list[str] = []
 
 
 def set_config_path(path: Path) -> None:
@@ -90,6 +106,117 @@ def read_raw_or_raise(path: Path) -> dict[str, Any]:
         ) from exc
 
 
+def drain_migration_notices() -> list[str]:
+    """Take the pending migration notices, clearing them.
+
+    Drained rather than read so that a process loading the config several times
+    (status and doctor do; the TUI RPC server reloads every turn) tells the user
+    once. Callers own a console -- see ``cli._helpers``.
+    """
+    notices = list(_migration_notices)
+    _migration_notices.clear()
+    return notices
+
+
+def _config_version(data: dict[str, Any]) -> int:
+    """The migration generation stamped on a raw config mapping.
+
+    Absent / unparseable means generation 0, i.e. a file written before the
+    stamp existed -- every migration still owes it a pass.
+    """
+    raw = data.get("configVersion", data.get("config_version"))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Clear the retired 65536 context-window pin. True when ``data`` changed.
+
+    Gated on the stamp, and stamps in turn, because the value carries no
+    provenance: 65536 written by the old bootstrap and 65536 chosen by a user
+    are the same three bytes. Running once means we clear what we planted; from
+    then on the number is the user's, and the ladder in
+    ``providers.rates.effective_context_window`` honours it like any other pin.
+
+    ``notify`` is for the caller that has a user to tell -- the persist pass
+    re-runs this on the raw file and must not double-announce.
+
+    Nothing found means nothing written: the stamp lands only on a file we
+    actually edited, so a config that never carried the fossil is left byte for
+    byte alone. The cost is a narrow hole -- someone who hand-sets 65536 on a
+    still-unstamped config has it cleared once, with the notice explaining why,
+    and their second attempt sticks (that first clear stamps the file). Paid
+    knowingly: touching every config on earth to close it is the worse trade.
+    """
+    if _config_version(data) >= CURRENT_CONFIG_VERSION:
+        return False
+
+    agents = data.get("agents")
+    defaults = agents.get("defaults") if isinstance(agents, dict) else None
+    if not isinstance(defaults, dict):
+        return False
+
+    changed = False
+    for legacy_key in ("contextWindowTokens", "context_window_tokens"):
+        if defaults.get(legacy_key) == LEGACY_CONTEXT_WINDOW_TOKENS:
+            defaults.pop(legacy_key)
+            changed = True
+            logging.getLogger(__name__).info(
+                "Migrated: dropped agents.defaults.%s (the retired 65536 default)",
+                legacy_key,
+            )
+
+    if not changed:
+        return False
+
+    notice = (
+        f"Removed the leftover `contextWindowTokens: {LEGACY_CONTEXT_WINDOW_TOKENS}` from your config (an old "
+        "default, written there by earlier versions). The context window now follows each model's real size. "
+        "Put the line back if you did want that number -- for an endpoint served with a smaller window, for "
+        "instance."
+    )
+    # Deduped, not just drained: the extension loader migrates its own read of
+    # the same file, so one command can walk this path twice before anything is
+    # printed.
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    data["configVersion"] = CURRENT_CONFIG_VERSION
+    return True
+
+
+def _persist_migrated_config(path: Path) -> None:
+    """Apply the stamped migrations to the file itself. Best effort, once.
+
+    Re-reads the raw file instead of reusing the mapping ``load_config`` already
+    migrated: that one has the extension blocks popped (see
+    ``pop_extension_keys``), so writing it back would delete the user's memory /
+    plugins / skillForge sections. ``save_config`` is no use here either -- it
+    dumps every default (~8 KB), re-planting the very kind of fossil this
+    migration exists to pull out. So: surgical edit, atomic replace.
+
+    Silent on failure (read-only home, a lost race with another process): the
+    in-memory migration already made this process correct, and the write only
+    serves to keep the file from disagreeing with it. Two processes racing here
+    write byte-identical content.
+    """
+    try:
+        raw = read_raw_or_raise(path)
+    except ConfigReadError:
+        return
+    if not raw or not _migrate_legacy_context_window(raw):
+        return
+
+    tmp = path.with_name(path.name + ".migrating")
+    try:
+        tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        logging.getLogger(__name__).debug("Could not persist config migration to %s: %s", path, exc)
+        tmp.unlink(missing_ok=True)
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
@@ -107,7 +234,13 @@ def load_config(config_path: Path | None = None) -> Config:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
+            # The stamp before and after: a migration only stamps a file it
+            # actually changed, so this pair is also the "did anything happen"
+            # signal -- and the reason an untouched config costs no extra file
+            # read per load (the TUI RPC server reloads every turn).
+            unstamped = _config_version(data) < CURRENT_CONFIG_VERSION
             data = _migrate_config(data)
+            migrated = unstamped and _config_version(data) >= CURRENT_CONFIG_VERSION
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
@@ -142,6 +275,10 @@ def load_config(config_path: Path | None = None) -> Config:
                 raise ValueError(
                     f"Config at {path} fails schema validation:\n{e}",
                 ) from e
+            # Only once the migrated data is known to validate: a file we
+            # cannot load is a file we have no business rewriting.
+            if migrated:
+                _persist_migrated_config(path)
 
     if config is None:
         config = Config()
@@ -177,6 +314,11 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
     import logging as _logging
 
     _log = _logging.getLogger(__name__)
+
+    # Stamped, run-once migrations first: they are the ones allowed to reach
+    # back out to disk (see _persist_migrated_config), and the stamp they set
+    # must not be confused by anything the shims below do.
+    _migrate_legacy_context_window(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})

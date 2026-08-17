@@ -352,6 +352,19 @@ def print_deprecated_memory_window_notice(config: Config) -> None:
         )
 
 
+def print_config_migration_notices() -> None:
+    """Tell the user about any config line a migration just changed for them.
+
+    The migrations run inside the loader, which has no terminal; this is the
+    place that does. Call it after the config is loaded and before the command
+    takes over the screen -- once printed, the notices are gone.
+    """
+    from raven.config.loader import drain_migration_notices
+
+    for notice in drain_migration_notices():
+        console.print(f"[yellow]Config updated:[/yellow] {notice}")
+
+
 __all__ = [
     "DEFAULT_PROBE_MESSAGE",
     "make_provider",
@@ -360,4 +373,5 @@ __all__ = [
     "load_runtime_config",
     "parse_fake_now",
     "print_deprecated_memory_window_notice",
+    "print_config_migration_notices",
 ]
