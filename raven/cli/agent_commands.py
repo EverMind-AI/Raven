@@ -23,6 +23,7 @@ from raven.cli._helpers import (
     load_runtime_config,
     make_provider,
     parse_fake_now,
+    print_config_migration_notices,
     print_deprecated_memory_window_notice,
 )
 from raven.cli._plugin_stack import (
@@ -168,6 +169,7 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
+        print_config_migration_notices()
         sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)

@@ -457,3 +457,32 @@ async def test_reading_the_banner_endpoint_does_not_rotate(config) -> None:
     loop.provider = _rotor(["eu", "us"], strategy="round_robin")
 
     assert [(await _default_session_info(loop, config))["endpoint"] for _ in range(3)] == ["eu", "eu", "eu"]
+
+
+# ---------------------------------------------------------------------------
+# Config-migration notices (the producer side; the TUI renders them as system
+# lines next to config_warning / credential_warning)
+# ---------------------------------------------------------------------------
+
+
+async def test_default_session_info_carries_config_migration_notices(fake_agent_loop, config, monkeypatch) -> None:
+    """A migration that edited the user's config must reach the user.
+
+    The CLI prints these itself, but a TUI or served-page user never sees that
+    terminal -- unpopulated here, a config Raven rewrote would be announced
+    nowhere.
+    """
+    monkeypatch.setattr(session_module, "drain_migration_notices", lambda: ["Removed the leftover line."])
+
+    info = await _default_session_info(fake_agent_loop, config)
+
+    assert info["config_notices"] == ["Removed the leftover line."]
+
+
+async def test_default_session_info_omits_config_notices_when_none(fake_agent_loop, config, monkeypatch) -> None:
+    """Nothing migrated means the key stays absent, not present-and-empty."""
+    monkeypatch.setattr(session_module, "drain_migration_notices", lambda: [])
+
+    info = await _default_session_info(fake_agent_loop, config)
+
+    assert "config_notices" not in info
