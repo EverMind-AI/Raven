@@ -442,11 +442,14 @@ describe('createChatStream — cron.missed startup notice', () => {
     expect(sysCalls).toHaveLength(1)
     const block = sysCalls[0]
     expect(block).toContain('missed 2 reminders')
-    // Fixed 2025 timestamps are never "today": the dated form must render.
-    expect(block).toMatch(/hydrate — scheduled 06-04 \d{2}:\d{2}: 记得喝水/)
-    expect(block).toMatch(/stretch — scheduled 06-04 \d{2}:\d{2}: 起来活动一下/)
-    // Non-today timestamps render the dated local form: MM-DD HH:MM.
-    expect(block).toMatch(/scheduled 06-04 \d{2}:\d{2}/)
+    // Fixed 2025 timestamps are never "today" in any timezone: the dated
+    // form must render — but the calendar day is LOCAL while the fixture is
+    // UTC, so assert the shape, never a literal date.
+    expect(block).toMatch(/hydrate — scheduled \d{2}-\d{2} \d{2}:\d{2}: 记得喝水/)
+    expect(block).toMatch(/stretch — scheduled \d{2}-\d{2} \d{2}:\d{2}: 起来活动一下/)
+    // Non-today timestamps render the dated local form (shape only: the
+    // local calendar day shifts with the machine's timezone).
+    expect(block).toMatch(/scheduled \d{2}-\d{2} \d{2}:\d{2}/)
     // A missed notice is a transcript block, not a turn — the UI must stay idle.
     expect(stream.isTurnActive()).toBe(false)
   })
