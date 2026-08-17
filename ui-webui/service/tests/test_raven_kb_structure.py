@@ -282,3 +282,33 @@ def test_the_structured_parser_only_claims_what_it_can_cut():
     left_behind = set(TextParser.supported_media_types) - set(StructuredTextParser.supported_media_types)
     assert left_behind, "TextParser would be redundant, and the service could drop it"
     assert "text/plain" in left_behind
+
+
+def test_html_that_omits_the_head_close_is_still_sectioned():
+    """`</head>` is optional in HTML and `html.parser` never closes it, so the
+    drop counter used to stay above zero for the rest of the file: every body came
+    out empty, no sections were produced, and `parse` fell back to one whole-file
+    Section carrying the raw markup -- the exact input this module exists to avoid.
+    """
+    html = (
+        "<html>\n<head><title>Quarterly</title><style>body{color:red}</style>\n"
+        "<body>\n<h1>Findings</h1><p>Revenue rose.</p>\n"
+        "<h2>Risks</h2><p>Supply chain.</p>\n</body></html>"
+    )
+    sections = _parse(html, "q.html")
+
+    assert [s.metadata["heading"] for s in sections] == ["Findings", "Risks"]
+    body = "\n".join(s.content.text for s in sections)
+    assert "<style" not in body and "<title" not in body
+    assert "Revenue rose." in body and "Supply chain." in body
+
+
+def test_a_script_inside_the_body_is_still_dropped():
+    """The counter reset keys on `<body>`, which must not weaken the guard for
+    tags that legitimately open after it."""
+    html = "<html><body><h1>A</h1><script>steal()</script><p>one</p></body></html>"
+    sections = _parse(html, "q.html")
+
+    body = "\n".join(s.content.text for s in sections)
+    assert "one" in body
+    assert "steal()" not in body

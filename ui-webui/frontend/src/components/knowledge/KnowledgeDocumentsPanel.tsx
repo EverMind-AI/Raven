@@ -22,7 +22,7 @@ import {
 	EmptyTitle,
 } from '@/components/ui/empty.tsx';
 import { useUploadContext } from '@/context/UploadContext';
-import { isInFlight, isTerminal } from '@/context/uploadTypes';
+import { isInFlight } from '@/context/uploadTypes';
 import type { UploadPhase, UploadTask } from '@/context/uploadTypes';
 import { useDocumentStatusPolling } from '@/hooks/useDocumentStatusPolling';
 import { useKnowledgeDocuments } from '@/hooks/useKnowledgeDocuments';
@@ -311,9 +311,14 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 	// There is no server-side replace, so a swap is upload-then-delete, in that
 	// order: a failed upload must not take the existing document with it.
 	const replaceTargetRef = useRef<KnowledgeDocumentView | null>(null);
-	const [pendingSwaps, setPendingSwaps] = useState<Record<string, string>>({});
 
 	const { enqueue, cancel, dismiss, tasksForKb, clearFinishedForKb } = useUploadContext();
+	// Tasks the retire-the-original pass has already handled. The pairing lives on
+	// the task now, so it stays `ready` and keeps matching on every later render;
+	// without this the delete would be re-issued each time. A ref rather than
+	// state because it must not itself trigger the effect.
+	const retiredRef = useRef<Set<string>>(new Set());
+
 	const { documents, refetch } = useKnowledgeDocuments(knowledgeBaseId);
 	const tasks = tasksForKb(knowledgeBaseId);
 	const { statuses } = useDocumentStatusPolling({
@@ -395,8 +400,7 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 			replaceTargetRef.current = null;
 			e.target.value = '';
 			if (!file || !target) return;
-			const [task] = enqueue(knowledgeBaseId, [file]);
-			if (task) setPendingSwaps((m) => ({ ...m, [task.taskId]: target.id }));
+			enqueue(knowledgeBaseId, [file], target.id);
 		},
 		[enqueue, knowledgeBaseId],
 	);
@@ -472,29 +476,31 @@ export function KnowledgeDocumentsPanel({ knowledgeBaseId }: KnowledgeDocumentsP
 	// that ends in error or was cancelled leaves the original in place, which
 	// is the point of ordering the swap this way.
 	useEffect(() => {
-		const done = tasks.filter((task) => pendingSwaps[task.taskId] && isTerminal(task.phase));
-		if (done.length === 0) return;
-		setPendingSwaps((m) => {
-			const next = { ...m };
-			for (const task of done) delete next[task.taskId];
-			return next;
-		});
-		const replaced = done.filter((task) => task.phase === 'ready');
+		const replaced = tasks.filter(
+			(task) =>
+				task.replacesDocumentId &&
+				task.phase === 'ready' &&
+				!retiredRef.current.has(task.taskId),
+		);
 		if (replaced.length === 0) return;
+		for (const task of replaced) retiredRef.current.add(task.taskId);
 		void (async () => {
 			for (const task of replaced) {
 				try {
 					await knowledgeBaseApi.deleteDocument(
 						knowledgeBaseId,
-						pendingSwaps[task.taskId],
+						task.replacesDocumentId!,
 					);
 				} catch {
+					// Let it be retried on the next pass rather than stranding the
+					// stale copy for good.
+					retiredRef.current.delete(task.taskId);
 					toast.error(t('knowledge.document.replaceStaleLeft'));
 				}
 			}
 			await refetch();
 		})();
-	}, [tasks, pendingSwaps, knowledgeBaseId, refetch, t]);
+	}, [tasks, knowledgeBaseId, refetch, t]);
 
 	const hasFinishedLocalTasks = tasks.some((t) => !isInFlight(t.phase));
 
