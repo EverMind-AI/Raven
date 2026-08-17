@@ -918,6 +918,10 @@ class CronService:
                     job.updated_at_ms = self._now_ms()
                     if enabled:
                         job.state.next_run_at_ms = _compute_next_run(job.schedule, self._now_ms())
+                        # Re-enabling is deliberate user engagement with this
+                        # job: without a counter reset, one auto-disabled at
+                        # the limit would re-disable on its very next fire.
+                        job.state.silent_fire_count = 0
                     else:
                         job.state.next_run_at_ms = None
                     self._save_store()

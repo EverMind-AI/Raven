@@ -289,3 +289,23 @@ async def test_reset_matches_legacy_jobs_without_channel_attribution(tmp_path):
 
     assert svc.notify_user_active(channel="telegram", to="tg_1") == 1
     assert next(j for j in svc._load_store().jobs).state.silent_fire_count == 0
+
+
+async def test_reenable_resets_the_runaway_counter(tmp_path):
+    """Re-enabling an auto-disabled job is deliberate user engagement: the
+    counter must reset, or the very next fire would re-disable it at the
+    still-saturated limit."""
+    store_path = tmp_path / "jobs.json"
+    svc = CronService(store_path, allowed_channels={"tui"})
+    job_id = _add_every_job(svc, limit=2)
+    svc.record_fire(job_id)
+    disabled = svc.record_fire(job_id)
+    assert disabled is True
+    assert _stored(store_path, job_id)["enabled"] is False
+
+    svc.enable_job(job_id, enabled=True)
+    stored = _stored(store_path, job_id)
+    assert stored["enabled"] is True
+    assert stored["state"]["silentFireCount"] == 0
+    # The next fire counts from zero instead of insta-disabling again.
+    assert svc.record_fire(job_id) is False

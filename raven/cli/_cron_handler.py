@@ -210,6 +210,23 @@ def make_on_cron_job(
                     # clobber the disable record_fire just persisted.
                     job.enabled = False
                     job.state.next_run_at_ms = None
+                    # Auto-disable must be user-visible, not a log line: ride
+                    # the same event/heartbeat path as missed notices.
+                    if system_events is not None and wake is not None:
+                        from raven.proactive_engine.system_events import SystemEvent
+
+                        system_events.enqueue(
+                            SystemEvent(
+                                text=(
+                                    f"Recurring reminder '{job.name}' was auto-disabled after "
+                                    f"{job.silent_fire_limit} fires with no reply from you. "
+                                    f"Re-enable it with: raven cron enable {job.id}"
+                                ),
+                                source="cron",
+                                context_key=f"cron:{job.id}:autodisabled",
+                            )
+                        )
+                        wake.request_wake_now(f"cron:{job.id}:autodisabled")
             except Exception as exc:  # noqa: BLE001 — fire accounting is best-effort
                 logger.warning(
                     "cron record_fire failed for {}: {}: {}",

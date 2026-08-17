@@ -282,6 +282,22 @@ def cron_list(
     )
     _print_runner_status(service)
 
+    if not all_:
+        # An auto-disabled reminder (counter at its limit) would otherwise
+        # vanish from the default view without a trace.
+        auto_disabled = [
+            j
+            for j in service.list_jobs(include_disabled=True)
+            if not j.enabled and j.silent_fire_limit and j.state.silent_fire_count >= j.silent_fire_limit
+        ]
+        if auto_disabled:
+            names = ", ".join(f"'{j.name}' ({j.id})" for j in auto_disabled[:3])
+            more = "..." if len(auto_disabled) > 3 else ""
+            console.print(
+                f"[yellow]⚠[/yellow] {len(auto_disabled)} reminder(s) auto-disabled after repeated "
+                f"fires with no reply: {names}{more} — re-enable with `raven cron enable <id>`"
+            )
+
     if not jobs:
         console.print("[dim]  (no jobs to list — pass --all to include disabled)[/dim]")
         return
