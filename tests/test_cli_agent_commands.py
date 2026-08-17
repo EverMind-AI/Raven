@@ -41,6 +41,16 @@ def test_agent_help_works() -> None:
     assert "--markdown" in r.stdout
 
 
+def test_agent_help_omits_removed_skill_extract_flags() -> None:
+    """The inert skill-extraction flags stay removed: the mechanism their
+    help text described was replaced by the MemoryBackend plugin, so the
+    flags never had any effect."""
+    r = runner.invoke(app, ["agent", "--help"])
+    assert r.exit_code == 0
+    assert "--wait-skill-extract" not in r.stdout
+    assert "--flush-skill-buffer" not in r.stdout
+
+
 def test_agent_without_message_prints_pointer_and_exits_nonzero(tmp_config: Path) -> None:
     """Bare ``raven agent`` no longer enters an interactive loop: it points
     at ``raven tui`` / ``agent -m`` and exits non-zero."""

@@ -125,36 +125,6 @@ def register(app: typer.Typer) -> None:
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
-        wait_skill_extract: bool = typer.Option(
-            False,
-            "--wait-skill-extract/--no-wait-skill-extract",
-            help=(
-                "Block exit until in-flight everos extraction tasks finish. "
-                "Off by default — extraction is fire-and-forget, so the CLI "
-                "returns as soon as the agent responds and any in-flight "
-                "boundary-detection / case-extraction LLM call may be "
-                "cancelled by interpreter shutdown. When on (without "
-                "--flush-skill-buffer), the per-session pending-turn buffer "
-                "is left intact for the next CLI invocation, which is the "
-                "mode you want for scripted multi-turn boundary-detection "
-                "testing (multiple ``-m`` calls sharing the same ``-s``)."
-            ),
-        ),
-        flush_skill_buffer: bool = typer.Option(
-            False,
-            "--flush-skill-buffer/--no-flush-skill-buffer",
-            help=(
-                "Send a ``session_end`` signal for this session before exit, "
-                "draining whatever turns are sitting in the everos "
-                "boundary-detection buffer through case + skill extraction. "
-                "Pair with --wait-skill-extract to actually block on the "
-                "resulting LLM calls (a flush without --wait-skill-extract "
-                "schedules the drain but won't survive interpreter "
-                "shutdown). Use on the final ``-m`` of a scripted "
-                "multi-turn session, or to force extraction after a single "
-                "``-m`` turn (a lone turn never trips a boundary on its own)."
-            ),
-        ),
         fake_now: str | None = typer.Option(
             None,
             "--fake-now",
@@ -373,20 +343,6 @@ def register(app: typer.Typer) -> None:
                     await handle.result()
                 await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
                 await teardown()
-                if wait_skill_extract or flush_skill_buffer:
-                    # ``flush_skill_buffer`` sends session_end so any
-                    # buffered turns drain through extraction (a single
-                    # -m turn never trips a boundary on its own).
-                    # ``wait_skill_extract`` blocks on the in-flight
-                    # tasks; without it the flush schedules work that
-                    # interpreter shutdown will cancel. The two flags
-                    # are orthogonal — scripted multi-turn testing uses
-                    # --wait-skill-extract alone so the buffer survives
-                    # for the next CLI run.
-                    await agent_loop.await_pending_extractions(
-                        flush_session_id=session_id if flush_skill_buffer else None,
-                        wait=wait_skill_extract,
-                    )
                 await agent_loop.close_mcp()
             finally:
                 if backend is not None:
