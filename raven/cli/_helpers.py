@@ -66,12 +66,36 @@ def check_provider_credentials(config: Config) -> None:
         )
 
     status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
-    if not status.ok:
+    if status.ok:
+        return
+
+    # A first run fails this check while naming a provider the user never chose:
+    # with nothing configured, routing falls back to the schema's default model,
+    # whose vendor then gets reported as the thing to go fix. Sending someone who
+    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
+    # so answer the wizard instead. Both halves are required -- a user who picked
+    # this model, or who has some other provider working, gets the specific
+    # verdict, which for the OAuth families names a sign-in rather than a key.
+    # Names come from the declared fields *and* the extras: an undeclared
+    # provider key is a supported shape, and `ProvidersConfig.get` is the only
+    # place allowed to resolve either kind, so route both through it rather than
+    # reading `__dict__` -- which sees no extras and would call a user whose one
+    # working credential lives there unconfigured.
+    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
+    if not chose_a_model and not any(
+        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
+    ):
         raise MissingCredentialsError(
-            status.summary,
-            provider=provider_name,
-            remedy="Run `raven onboard` for guided setup.",
+            "no provider is configured yet -- run `raven onboard` for guided setup",
+            remedy="Already have a key? raven provider set <name> --api-key <key>",
         )
+
+    raise MissingCredentialsError(
+        status.summary,
+        provider=provider_name,
+        remedy="Run `raven onboard` for guided setup.",
+    )
 
 
 def make_provider(config: Config):

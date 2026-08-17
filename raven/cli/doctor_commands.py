@@ -50,6 +50,7 @@ class RoutingInfo:
 @dataclass
 class FeaturesInfo:
     channels_enabled: list[str] = field(default_factory=list)
+    channels_missing_deps: list[str] = field(default_factory=list)
     skill_forge_enabled: bool = False
 
 
@@ -196,8 +197,11 @@ def _gather_static_checks() -> DoctorReport:
     except Exception:
         skill_forge_on = False
 
+    from raven.channels.manager import missing_dependency_channels
+
     report.features = FeaturesInfo(
         channels_enabled=enabled,
+        channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
 
@@ -373,6 +377,11 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"  Channels:    {count} enabled  ({', '.join(features.channels_enabled)})")
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
+        if features.channels_missing_deps:
+            from raven.channels.manager import _missing_dep_hint
+
+            names = ", ".join(features.channels_missing_deps)
+            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
 

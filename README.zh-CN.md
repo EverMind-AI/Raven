@@ -67,9 +67,10 @@ irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.
 ### 完成引导并运行
 
 ```bash
-raven onboard
 raven
 ```
+
+首次运行只需这一条：尚未配置时，`raven` 会先带你走完引导，然后在同一次会话里直接进入 TUI。之后想重新配置，再显式运行 `raven onboard`。
 
 双语 onboarding 向导会配置六个方面，无需手动编辑 `~/.raven/config.json`：
 
