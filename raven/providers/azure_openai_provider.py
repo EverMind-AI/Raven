@@ -123,10 +123,12 @@ class AzureOpenAIProvider(LLMProvider):
             ),
             # None means "no opinion" and reaches here from chat_with_retry, which
             # resolves it from generation settings; those default to None so the
-            # ceiling comes from the model catalogue.
+            # ceiling comes from the model catalogue -- looked up under the id
+            # this request is sent under, which is what the truncation check on
+            # the way back also asks about.
             "max_completion_tokens": max(
                 1,
-                send_max_tokens(getattr(self, "generation", None), deployment_name)
+                send_max_tokens(getattr(self, "generation", None), self.wire_model_id(deployment_name))
                 if max_tokens is None
                 else max_tokens,
             ),  # Azure API 2024-10-21 uses max_completion_tokens
