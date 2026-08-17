@@ -18,7 +18,14 @@ from typing import Any, Callable, Coroutine, Iterator
 
 from loguru import logger
 
-from raven.proactive_engine.schedulers.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
+from raven.proactive_engine.schedulers.cron.types import (
+    CronJob,
+    CronJobState,
+    CronPayload,
+    CronSchedule,
+    CronStartupDrop,
+    CronStore,
+)
 
 # Stale-claim TTL — if a claim is older than this, another process may steal
 # it (the original process likely crashed mid-job).
@@ -137,6 +144,10 @@ class CronService:
         # so newly created jobs' next_run_at_ms aligns with simulated time
         # rather than real wall-clock.
         self._now_fn = now_fn
+        # Past-due one-shot reminders dropped by the last start() recompute,
+        # kept so the embedding process can surface them to the user (the
+        # drop itself only leaves a warning log).
+        self.last_startup_drops: list[CronStartupDrop] = []
 
     def _now_ms(self) -> int:
         """Return current time in ms, honouring fake-clock injection."""
@@ -307,7 +318,9 @@ class CronService:
         Past-due one-shot 'at' reminders are dropped — we don't re-deliver
         reminders missed while the service was down (matches iOS /
         Slack / Google Calendar behavior). A warning log records each
-        drop so users can audit via gateway logs.
+        drop so users can audit via gateway logs, and the drops are kept
+        on ``last_startup_drops`` so the embedding process can surface a
+        missed-reminders notice to the user.
 
         Recurring ('every', 'cron') jobs just advance to the next future
         run — missed intervals are skipped, not backfilled.
@@ -320,7 +333,7 @@ class CronService:
         if not self._store:
             return
         now = self._now_ms()
-        dropped: list[str] = []
+        dropped: list[CronStartupDrop] = []
         kept = []
         for job in self._store.jobs:
             if not job.enabled or not self._owns_channel(job.payload.channel):
@@ -328,17 +341,23 @@ class CronService:
                 continue
             next_run = _compute_next_run(job.schedule, now)
             if job.schedule.kind == "at" and next_run is None:
-                stale_ms = now - (job.schedule.at_ms or 0)
-                dropped.append(f"{job.name!r} ({stale_ms // 1000}s late)")
+                dropped.append(
+                    CronStartupDrop(
+                        name=job.name,
+                        message=job.payload.message,
+                        at_ms=job.schedule.at_ms or 0,
+                    )
+                )
                 continue
             job.state.next_run_at_ms = next_run
             kept.append(job)
         self._store.jobs = kept
+        self.last_startup_drops = dropped
         if dropped:
             logger.warning(
                 "Cron: dropped {} past-due one-shot reminder(s) on startup: {}",
                 len(dropped),
-                "; ".join(dropped),
+                "; ".join(f"{d.name!r} ({(now - d.at_ms) // 1000}s late)" for d in dropped),
             )
 
     def _get_next_wake_ms(self) -> int | None:
