@@ -100,7 +100,7 @@ def make_on_cron_job(
     *,
     submit: "Callable[[TurnRequest], TurnHandle]",
     readback_texts: "dict[str, str] | None" = None,
-    default_channel: str = "cli",
+    default_channel: str = "tui",
     sentinel_runner: "SentinelRunner | None" = None,
     system_events: "SystemEventQueue | None" = None,
     wake: "WakeScheduler | None" = None,
@@ -123,8 +123,9 @@ def make_on_cron_job(
     ``submit`` is wired; without it the system event sees no reply text.
 
     ``default_channel`` is used when the job payload doesn't specify one
-    (legacy pre-attribution jobs) — REPL passes "cli" so the reminder
-    renders inline in the terminal; the TUI passes "tui".
+    (legacy pre-attribution jobs) — every runner passes "tui" so such a
+    job surfaces in the interactive TUI session (the "cli" channel value
+    is retired).
 
     ``sentinel_runner`` is optional. When present, F-G makes cron fires
     write to the shared NudgePolicy ledger (topic_fired_at +

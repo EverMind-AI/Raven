@@ -30,7 +30,7 @@ from raven.spine import Origin
 
 def _make_job(
     *,
-    channel: str | None = "cli",
+    channel: str | None = "tui",
     to: str | None = "direct",
     name: str = "test_job",
 ) -> CronJob:
@@ -98,12 +98,12 @@ async def test_tui_binding_passes_through_unchanged(spine):
 
 
 async def test_legacy_job_without_channel_uses_default(spine):
-    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="cli")
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
 
     await handler(_make_job(channel=None, to=None, name="b3"))
 
     req = spine.captured[0]
-    assert req.source.channel == "cli"
+    assert req.source.channel == "tui"
     assert req.source.chat_id == "direct"
 
 
@@ -207,13 +207,13 @@ async def test_turn_failure_emits_failed_event_and_reraises():
 
 
 # ─────────────────────────────────────────────────────────────────────
-# REPL assembly: cron wired with submit=build_repl's scheduler.
-# A cli-bound job renders once via the CliOutlet — the source binding is
-# the outlet, nothing else fires.
+# Interactive-surface assembly: cron wired with submit=a spine scheduler
+# whose hub owns the "tui" outlet. A tui-bound job renders once via that
+# outlet — the source binding is the outlet, nothing else fires.
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_repl_assembly_cron_renders_once_via_clioutlet(fake_hub_unused=None):
+async def test_interactive_assembly_cron_renders_once_via_outlet():
     from raven.cli._repl_spine import build_repl
     from raven.spine import Text, TurnOutcome, Usage
 
@@ -223,16 +223,13 @@ async def test_repl_assembly_cron_renders_once_via_clioutlet(fake_hub_unused=Non
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     rendered: list[str] = []
-    scheduler, hub, teardown = build_repl(_CronEchoLoop(), "cli", rendered.append)
-    handler = make_on_cron_job(
-        submit=scheduler.submit,
-        default_channel="cli",
-    )
+    scheduler, hub, teardown = build_repl(_CronEchoLoop(), "tui", rendered.append)
+    handler = make_on_cron_job(submit=scheduler.submit)
 
     try:
-        await handler(_make_job(channel="cli", to="direct", name="repl1"))
-        await hub.wait_idle("cli")
+        await handler(_make_job(channel="tui", to="direct", name="tui1"))
+        await hub.wait_idle("tui")
     finally:
         await teardown()
 
-    assert rendered == ["cron-reply<cron:job_repl1>"]
+    assert rendered == ["cron-reply<cron:job_tui1>"]

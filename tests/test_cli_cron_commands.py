@@ -39,7 +39,7 @@ def populated_cron(fake_cron_dir: Path) -> CronService:
         name="morning meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="妈妈吃药提醒：早晨",
-        channel="cli",
+        channel="tui",
         to="direct",
     )
     svc.add_job(
@@ -135,7 +135,7 @@ def test_get_shows_topic_tag(runner, fake_cron_dir):
         name="meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="吃药",
-        channel="cli",
+        channel="tui",
         to="direct",
         topic_tag="medication_morning",
     )
@@ -189,7 +189,7 @@ def test_get_ambiguous_prefix(runner, fake_cron_dir):
                             "kind": "agent_turn",
                             "message": "x",
                             "deliver": True,
-                            "channel": "cli",
+                            "channel": "tui",
                             "to": "direct",
                         },
                         "state": {"nextRunAtMs": 1, "silentFireCount": 0},
@@ -203,7 +203,7 @@ def test_get_ambiguous_prefix(runner, fake_cron_dir):
                             "kind": "agent_turn",
                             "message": "y",
                             "deliver": True,
-                            "channel": "cli",
+                            "channel": "tui",
                             "to": "direct",
                         },
                         "state": {"nextRunAtMs": 1, "silentFireCount": 0},
@@ -331,7 +331,7 @@ def test_run_warns_when_active_claim_present(
         name="x",
         schedule=_Sched(kind="every", every_ms=60_000),
         message="m",
-        channel="cli",
+        channel="tui",
         to="direct",
     )
     # Hand-poke a fresh claim by another pid (simulate gateway running).
@@ -364,7 +364,7 @@ def test_run_one_shot_at_with_delete_warns_about_removal(
         name="future thing",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),  # year 2033
         message="x",
-        channel="cli",
+        channel="tui",
         to="direct",
         delete_after_run=True,  # this is the default for at-kind
     )
@@ -389,7 +389,7 @@ def test_run_one_shot_at_without_delete_warns_about_disable(
         name="future demo",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),
         message="x",
-        channel="cli",
+        channel="tui",
         to="direct",
         delete_after_run=False,
     )
