@@ -137,7 +137,12 @@ class ExecTool(Tool):
         # "Send it in smaller pieces" is meaningless for a command: half a
         # command is not a command. What splits here is the work, not the
         # argument.
-        return "If it was too long, shorten the command or split the work across several runs."
+        return "Shorten the command, or split the work across several runs."
+
+    @property
+    def incomplete_hint(self) -> str:
+        # Phrased as the consequent of a condition; see Tool.incomplete_hint.
+        return "shorten the command, or split the work across several runs."
 
     @property
     def parameters(self) -> dict[str, Any]:

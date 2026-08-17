@@ -38,16 +38,20 @@ def _gen(max_tokens: int | None = 60) -> SimpleNamespace:
 
 
 def test_upstream_length_alone_flags_truncation() -> None:
-    """Signal 1 on its own. This is what the non-streaming path relies on.
+    """The upstream saying so, on its own -- and it is the only evidence that
+    covers a cut with no tool call in it at all.
 
-    It cannot see whether the arguments JSON needed repairing -- the provider
-    repairs it before the loop is handed the result -- so if this signal did
-    not stand alone, the CLI would have no detection at all.
+    The ceiling it carries is whatever the caller passed as ``sent``, named in
+    the message and compared against nothing. Passed here so the message can
+    say a number; absent, it simply does not.
     """
     calls = [_call()]
 
     sent, truncated = flag_truncation(
-        _gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=calls
+        finish_reason="length",
+        usage=None,
+        tool_calls=calls,
+        sent=60,
     )
 
     assert truncated is True
@@ -56,97 +60,11 @@ def test_upstream_length_alone_flags_truncation() -> None:
     assert calls[0].run_meta.truncation.at_tokens == 60
 
 
-def test_usage_reaching_the_ceiling_flags_truncation_without_finish_reason() -> None:
-    """Signal 2 on its own -- for backends that report a clean stop anyway."""
-    calls = [_call()]
-
-    _, truncated = flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
-        finish_reason="stop",
-        usage={"completion_tokens": 60},
-        tool_calls=calls,
-    )
-
-    assert truncated is True
-    assert calls[0].run_meta is not None
-
-
-def test_a_repair_alone_is_malformed_json_not_a_ceiling_hit() -> None:
-    """No length stop, no ceiling hit -- just JSON the model got wrong.
-
-    The call is still refused (its arguments cannot be trusted), but nothing
-    about the turn says it was cut, so it must not be recorded as truncated
-    nor told to resend in smaller pieces.
-    """
-    calls = [_call()]
-    calls[0].run_meta = RunMeta(arguments_repaired=True)
-
-    _, truncated = flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
-        finish_reason="tool_calls",
-        usage={"completion_tokens": 12},
-        tool_calls=calls,
-    )
-
-    assert truncated is False
-    assert calls[0].run_meta.truncation is None
-    assert calls[0].run_meta.arguments_repaired is True
-
-
-def test_a_repair_under_a_ceiling_hit_is_a_cut() -> None:
-    """Same repair, but usage says the turn hit the ceiling."""
-    calls = [_call()]
-    calls[0].run_meta = RunMeta(arguments_repaired=True)
-
-    _, truncated = flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
-        finish_reason="tool_calls",
-        usage={"completion_tokens": 60},
-        tool_calls=calls,
-    )
-
-    assert truncated is True
-    assert calls[0].run_meta.truncation is not None
-
-
-def test_an_earlier_malformed_call_is_bad_json_even_when_the_turn_was_cut() -> None:
-    """Three calls, the first malformed, and the turn did hit the ceiling.
-
-    Both get refused, for different reasons, and the position is what tells
-    them apart: a cut leaves no later calls to arrive, so a repair on anything
-    but the last call was the model writing bad JSON. Reading it as a cut
-    would tell the model to resend in pieces something that was never too long.
-
-    This is also the shape that made a per-response boolean wrong -- it would
-    have refused the third call and dispatched the first.
-    """
-    calls = [_call("write_file"), _call("read_file"), _call("list_dir")]
-    calls[0].run_meta = RunMeta(arguments_repaired=True)
-
-    flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
-        finish_reason="length",
-        usage=None,
-        tool_calls=calls,
-    )
-
-    assert calls[0].run_meta.truncation is None, "an earlier repair is bad JSON, not a cut"
-    assert calls[0].run_meta.arguments_repaired is True, "but it is still refused"
-    assert calls[2].run_meta.truncation is not None, "the last call is the one that was cut"
-    assert calls[1].run_meta is None, "the untouched middle call stays dispatchable"
-
-
 def test_a_complete_turn_is_left_alone() -> None:
     """No signal present: nothing is flagged and no call is marked."""
     calls = [_call()]
 
     _, truncated = flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
         finish_reason="stop",
         usage={"completion_tokens": 12},
         tool_calls=calls,
@@ -160,7 +78,7 @@ def test_only_the_last_call_of_a_truncated_turn_is_marked() -> None:
     """Calls arrive in order, so the earlier ones finished before the ceiling."""
     calls = [_call("read_file", {"path": "a.py"}), _call("write_file", {"path": "snake.py"})]
 
-    flag_truncation(_gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=calls)
+    flag_truncation(finish_reason="length", usage=None, tool_calls=calls)
 
     assert calls[0].run_meta is None
     assert calls[1].run_meta is not None
@@ -168,9 +86,7 @@ def test_only_the_last_call_of_a_truncated_turn_is_marked() -> None:
 
 def test_a_truncated_turn_with_no_tool_calls_marks_nothing() -> None:
     """A cut-off prose answer is still truncated; there is just nothing to mark."""
-    _, truncated = flag_truncation(
-        _gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=[]
-    )
+    _, truncated = flag_truncation(finish_reason="length", usage=None, tool_calls=[])
 
     assert truncated is True
 
@@ -369,8 +285,6 @@ def test_a_cut_inside_tool_arguments_marks_the_call() -> None:
     calls = [_call()]
 
     flag_truncation(
-        _gen(60),
-        model="anthropic/claude-opus-4-5",
         finish_reason="length",
         usage=None,
         tool_calls=calls,
@@ -447,11 +361,16 @@ class _LyingFinishReason(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_a_malformed_call_is_refused_on_the_non_streaming_path(workspace) -> None:
-    """No usable finish_reason, no ceiling hit -- only the repaired arguments.
+async def test_a_cut_is_named_as_one_when_the_upstream_will_not_say_so(workspace) -> None:
+    """End to end on the path the CLI takes, with the backend claiming success.
 
-    Without the observation reaching the loop, the turn reads as a plain schema
-    error and the model is told it forgot a field it did send.
+    This is the whole point of the position rule. The model gets the reading
+    that leads somewhere -- the turn probably ran out of room, here is how to
+    continue -- instead of a complaint about JSON it cannot act on, which is
+    what it read for forty turns in the incident this work started from.
+
+    Hedged, because the arguments really might be malformed; the refusal does
+    not depend on which.
     """
     provider = _LyingFinishReason()
     agent = AgentLoop(
@@ -470,7 +389,10 @@ async def test_a_malformed_call_is_refused_on_the_non_streaming_path(workspace) 
     tool_replies = [m for m in provider.seen[1] if m.get("role") == "tool"]
     assert tool_replies
     text = str(tool_replies[-1].get("content", ""))
-    assert "invalid arguments" in text
+    assert "did not parse" in text and "output token limit" in text
+    assert "simply malformed" in text, "the other cause is offered too"
+    assert "nothing here tells the two apart" in text, "and neither is asserted"
+    assert "mode=append" in text, "and the tool's own way forward is attached, under its condition"
     assert "missing required" not in text
 
 
@@ -518,58 +440,6 @@ async def test_the_llm_call_span_records_a_truncated_non_streaming_turn() -> Non
     assert attrs.get("llm.max_tokens") == 60
 
 
-@pytest.mark.asyncio
-async def test_the_ceiling_comes_from_the_model_that_actually_answered() -> None:
-    """A fallback hop changes which ceiling the usage should be measured against.
-
-    `chat_with_retry` walks `[model, *fallback_models]` and `LLMResponse` does
-    not record which one answered, so a caller judging afterwards can only use
-    the model it asked for. When a fallback serves the turn, that is the wrong
-    ceiling: too small and a complete call reads as truncated, too large and a
-    real cut goes unnoticed.
-
-    The two numbers below are both bounded by ``OUTPUT_SHARE_OF_WINDOW``, so
-    what separates them is the window as much as the ceiling: gpt-4o asks
-    16384 of its 128000, the fallback 50000 of its 200000. That the pair stays
-    distinct is what the case needs; which of the two bounds produced each is
-    not its subject.
-    """
-    from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse
-
-    class _FirstModelFails(LLMProvider):
-        def __init__(self) -> None:
-            super().__init__()
-            self.generation = GenerationSettings()  # no pin: ceiling comes from the catalogue
-            self.served: list[str] = []
-
-        async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
-            self.served.append(model or "")
-            if model == "openai/gpt-4o":
-                return LLMResponse(content="", finish_reason="error", error_classification=None)
-            # 20000 tokens: over what gpt-4o would have carried, under the
-            # fallback's -- so the two models give opposite verdicts here.
-            return LLMResponse(content="ok", finish_reason="stop", usage={"completion_tokens": 20000})
-
-        def classify_error(self, exc=None, content=None):
-            from raven.providers.base import ErrorClassification
-
-            return ErrorClassification(category="server", retryable=False, should_fallback=True)
-
-        def get_default_model(self) -> str:
-            return "openai/gpt-4o"
-
-    provider = _FirstModelFails()
-    response = await provider.chat_with_retry(
-        messages=[{"role": "user", "content": "hi"}],
-        model="openai/gpt-4o",
-        fallback_models=["anthropic/claude-opus-4-5"],
-    )
-
-    assert provider.served == ["openai/gpt-4o", "anthropic/claude-opus-4-5"]
-    assert response.max_tokens == 50000, "the ceiling must be the fallback's, not the requested model's"
-    assert response.truncated is False, "20000 tokens is a normal reply for the model that answered"
-
-
 def test_a_truncated_reply_with_no_tool_calls_is_still_logged() -> None:
     """A plain answer cut at the ceiling has nothing to refuse, but is still
     the event an operator goes looking for in the log.
@@ -582,9 +452,7 @@ def test_a_truncated_reply_with_no_tool_calls_is_still_logged() -> None:
     seen: list[str] = []
     sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
     try:
-        _, truncated = flag_truncation(
-            _gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=[]
-        )
+        _, truncated = flag_truncation(finish_reason="length", usage=None, tool_calls=[])
     finally:
         logger.remove(sink)
 
@@ -617,30 +485,6 @@ class _RecordsTheCeilingItWasSent(LLMProvider):
 
     def get_default_model(self) -> str:
         return "stub"
-
-
-@pytest.mark.asyncio
-async def test_an_explicit_ceiling_is_what_usage_is_measured_against() -> None:
-    """Nine call sites pin `max_tokens` on `chat_with_retry` (judge pins 64,
-    the curator 2048). The request carries that pin, so the ceiling check has
-    to use it too -- recomputing from `generation` yields the catalogue value,
-    which usage never reaches, and signal 2 is dead for every one of them.
-
-    That is the drift `send_max_tokens` was written to prevent: a check that
-    stops firing without ever failing.
-    """
-    provider = _RecordsTheCeilingItWasSent()
-
-    response = await provider.chat_with_retry(
-        messages=[{"role": "user", "content": "hi"}],
-        model="anthropic/claude-opus-4-5",
-        max_tokens=64,
-    )
-
-    assert provider.sent == [64], "the pin is what goes out"
-    assert response.max_tokens == 64, "and what the model is told it stopped at"
-    assert response.truncated is True
-    assert response.tool_calls[0].run_meta.truncation.at_tokens == 64
 
 
 @pytest.mark.asyncio
@@ -751,43 +595,58 @@ async def test_a_subagent_does_not_dispatch_a_truncated_call(tmp_path, monkeypat
     assert "[truncated]" in str(tool_replies[-1].get("content", ""))
 
 
-class _BehindAGateway(LLMProvider):
-    """Sends under a gateway-prefixed id, as `wire_model` produces."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.generation = GenerationSettings()
-
-    def wire_model_id(self, model: str) -> str:
-        return f"openrouter/{model}"
-
-    async def chat(self, messages, tools=None, model=None, max_tokens=None, **kwargs) -> LLMResponse:
-        return LLMResponse(
-            content="",
-            tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "a.py"})],
-            # The shape signal 2 exists for: a clean stop on a cut-off turn.
-            finish_reason="tool_calls",
-            usage={"completion_tokens": 4096},
-        )
-
-    def get_default_model(self) -> str:
-        return "openai/gpt-4o"
+# ---------------------------------------------------------------------------
+# Position, not arithmetic: which repaired call was the one that got cut
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_the_non_streaming_ceiling_uses_the_id_the_request_was_sent_under() -> None:
-    """Each provider rewrites the model id before sending it, differently:
-    LiteLLM through its gateway, azure into a deployment name, codex by
-    dropping its own prefix. The catalogue files those spellings as separate
-    rows -- measured, openai/gpt-4o answers 16384 and openrouter/openai/gpt-4o
-    answers 4096 -- so the stored id is the wrong thing to size a sent request
-    against, and wrong in the direction that hides a cut rather than inventing
-    one.
+def test_an_earlier_call_failing_to_parse_is_still_read_as_bad_json() -> None:
+    """A repair with complete calls after it cannot be a cut -- the cut would
+    have left nothing after it. That is bad JSON, and telling the model to send
+    it in smaller pieces sends it after a problem it does not have."""
+    calls = [_call("write_file"), _call("read_file"), _call("list_dir")]
+    calls[0].run_meta = RunMeta(arguments_repaired=True)
+
+    flag_truncation(finish_reason="tool_calls", usage=None, tool_calls=calls)
+
+    assert calls[0].run_meta.truncation is None
+    assert calls[0].run_meta.arguments_repaired is True, "still refused, different reason"
+    assert calls[2].run_meta is None, "a complete last call stays dispatchable"
+
+
+def test_usage_reaching_a_ceiling_is_no_longer_a_signal() -> None:
+    """Removed on purpose, not by accident.
+
+    Comparing usage against the ceiling required the request and the check to
+    agree on one number and one model id -- three invariants that broke five
+    times on this branch. None of the surveyed agents (LiteLLM, OpenClaw,
+    opencode, hermes-agent) carries this signal at all.
+
+    What replaces it is the position rule above, which catches the shape that
+    loses data: measured over four realistic argument blobs, every one of 323
+    cut points that drops a field leaves JSON that will not parse.
     """
-    provider = _BehindAGateway()
+    calls = [_call()]
 
-    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
+    _, truncated = flag_truncation(
+        finish_reason="stop",
+        usage={"completion_tokens": 64000},
+        tool_calls=calls,
+        sent=64000,
+    )
 
-    assert response.max_tokens == 4096, "the ceiling of the id that was actually sent"
-    assert response.truncated is True
-    assert response.tool_calls[0].run_meta.truncation.at_tokens == 4096
+    assert truncated is False
+    assert calls[0].run_meta is None
+
+
+def test_no_ceiling_is_invented_when_none_was_sent() -> None:
+    """The recomputation this removes is what forced every caller to agree on a
+    number and an id. Absent one, the message says the limit without naming it.
+    """
+    calls = [_call()]
+
+    sent, truncated = flag_truncation(finish_reason="length", usage=None, tool_calls=calls)
+
+    assert sent is None, "nothing was sent, so nothing is claimed"
+    assert truncated is True, "signal 1 still speaks for itself"
+    assert "at the output limit" in calls[0].run_meta.truncation.as_error("write_file")

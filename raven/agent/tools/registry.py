@@ -79,12 +79,32 @@ class ToolRegistry:
         if truncation:
             hint = tool.truncation_hint
             return truncation.as_error(name) + (f" {hint}" if hint else "")
+        if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
+            # Two facts, two readings, and nothing here to choose between them.
+            # The arguments did not parse and nothing arrived after this call,
+            # which is the shape a cut leaves -- and equally the shape of a
+            # model writing bad JSON on its last call. Each reading gets its own
+            # branch rather than one being asserted: a model told to split up a
+            # call it merely misspelled goes looking for a size problem it does
+            # not have. Longer than a verdict, and the length is the point.
+            hint = tool.incomplete_hint
+            limit_branch = (
+                f"\n\nIf it was the output limit: {hint}"
+                if hint
+                else "\n\nIf it was the output limit: send this call again in a smaller form."
+            )
+            return (
+                f"Error: [incomplete arguments] The arguments for '{name}' did not parse, and it "
+                f"was the last call of the turn. Two things can cause that: the reply hit its "
+                f"output token limit part-way through writing this call, or the arguments were "
+                f"simply malformed. It was not run either way, and nothing here tells the two "
+                f"apart." + limit_branch + "\n\nIf the arguments were malformed: send the same "
+                "call again with well-formed arguments."
+            )
         if run_meta and run_meta.arguments_repaired:
-            # Same refusal, different cause. Nothing about the turn says it was
-            # cut -- no ceiling hit, no length stop -- so the arguments are
-            # malformed rather than incomplete, and telling this model to send
-            # the content in smaller pieces would send it after a problem it
-            # does not have.
+            # Calls arrived after this one, so a cut cannot explain it: the
+            # model wrote bad JSON. Telling it to send the content in smaller
+            # pieces would send it after a problem it does not have.
             return (
                 f"Error: [invalid arguments] The arguments for '{name}' were not valid JSON, "
                 f"so this call was not run. Send it again with well-formed arguments."

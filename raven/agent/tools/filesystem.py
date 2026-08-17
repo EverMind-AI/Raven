@@ -214,11 +214,17 @@ class WriteFileTool(_FsTool):
     @property
     def truncation_hint(self) -> str:
         return (
-            "Arguments that run past the limit are discarded whole rather than partly "
-            "saved, so if that is what happened, write the content across several calls. "
-            "Which mode to use depends on whether any of this file has landed yet, which "
-            "your earlier calls show: mode=overwrite to start one that has not, "
-            "mode=append to carry on from what is already there."
+            "Arguments cut off by that limit are discarded whole rather than partly saved, "
+            "so write the content across several calls: mode=overwrite to start a file, "
+            "mode=append to continue one you have already begun."
+        )
+
+    @property
+    def incomplete_hint(self) -> str:
+        return (
+            "arguments cut off that way are discarded whole rather than partly saved, so "
+            "send the content across several calls -- mode=overwrite to start a file, "
+            "mode=append to continue one you have already begun."
         )
 
     async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:

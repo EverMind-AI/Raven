@@ -10,10 +10,12 @@ registry unwraps here and hands back a ``str`` with the display string attached.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers.base import RunMeta, TruncationInfo
 
@@ -346,13 +348,17 @@ def test_shipped_tools_that_can_be_split_say_how() -> None:
     write_hint = WriteFileTool(".").truncation_hint or ""
     assert "mode=append" in write_hint
     exec_hint = ExecTool().truncation_hint or ""
-    assert "shorten the command" in exec_hint
+    assert "horten the command" in exec_hint
 
-    # Conditional, not imperative. Refusing the last call of a truncated turn
-    # is a guess -- it can have arrived whole -- so neither hint may order a
-    # model to split up something that was never too long.
+    # `truncation_hint` speaks only where the upstream confirmed the cut, so it
+    # states rather than hedges. The hedging moved to `incomplete_hint`, which
+    # is read under an "If it was the output limit:" heading -- lower-case and
+    # continuing a sentence rather than opening one.
     for hint in (write_hint, exec_hint):
-        assert "if that is what happened" in hint or hint.startswith("If it was too long")
+        assert not hint.lstrip().startswith("If "), "no condition where the upstream was explicit"
+    for tool in (WriteFileTool("."), ExecTool()):
+        incomplete = tool.incomplete_hint or ""
+        assert incomplete and incomplete[0].islower(), "reads as the consequent of a condition"
 
 
 @pytest.mark.asyncio
@@ -377,3 +383,87 @@ async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> 
     assert "may have been cut short" in out
     assert "Send it again" in out
     assert "not resend" not in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_an_unparsed_earlier_call_is_told_it_is_bad_json() -> None:
+    """Calls arrived after it, so a cut cannot explain it -- and the advice for
+    a cut would be wrong."""
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    text = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(arguments_repaired=True)
+    )
+
+    assert "invalid arguments" in text
+    assert "well-formed arguments" in text
+    assert "mode=append" not in text, "splitting it up is not the fix here"
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_refusal_never_asserts_that_a_cut_happened() -> None:
+    """`truncation_hint` is advice for a turn that ran out of room, so it is
+    only ever attached when the upstream said so. Here nothing did: the
+    arguments failed to parse and no call followed, which a cut explains and
+    plain malformed JSON explains equally well.
+
+    Acting on truncation advice after writing bad JSON sends a model hunting
+    for a size problem it does not have, so both readings are offered, each
+    under its own condition, and the message says outright that nothing here
+    tells them apart. Longer is acceptable; asserting is not.
+    """
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    text = await registry.execute(
+        "write_file",
+        {"path": "a.py", "content": "x"},
+        run_meta=RunMeta(arguments_repaired=True, last_of_turn=True),
+    )
+
+    assert "[incomplete arguments]" in text
+    assert "[truncated]" not in text, "that marker is the upstream's to earn"
+    assert "output token limit" in text, "the reading is named"
+    assert "tells the two apart" in text, "and disclaimed"
+    for branch in ("If it was the output limit", "If the arguments were malformed"):
+        assert branch in text, f"missing the {branch!r} branch"
+
+
+@pytest.mark.asyncio
+async def test_each_case_carries_its_own_tool_advice() -> None:
+    """A certain cut and an ambiguous one are different situations, so a tool
+    speaks to each in its own words rather than one string doing double duty."""
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    certain = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(truncation=TruncationInfo(at_tokens=8192))
+    )
+    ambiguous = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(arguments_repaired=True, last_of_turn=True)
+    )
+
+    assert "[truncated]" in certain and "8192-token" in certain
+    assert "mode=append" in certain and "mode=append" in ambiguous
+    assert "If it was the output limit" not in certain, "no hedging where the upstream was explicit"
+
+
+def test_a_tool_that_speaks_to_one_case_speaks_to_both() -> None:
+    """The two hints say nearly the same thing in different frames, which is
+    exactly how they drift apart. A tool that answers one and not the other
+    leaves the ambiguous refusal with no way forward -- the case where the
+    upstream lied, which is the one this machinery exists for."""
+    from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
+    from raven.agent.tools.shell import ExecTool
+
+    tools = [
+        WriteFileTool(workspace=Path(".")),
+        ReadFileTool(workspace=Path(".")),
+        EditFileTool(workspace=Path(".")),
+        ListDirTool(workspace=Path(".")),
+        ExecTool(working_dir="."),
+    ]
+    mismatched = [type(t).__name__ for t in tools if bool(t.truncation_hint) != bool(t.incomplete_hint)]
+
+    assert not mismatched, "these answer one case and not the other: " + ", ".join(mismatched)

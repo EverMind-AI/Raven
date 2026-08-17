@@ -397,32 +397,17 @@ async def test_truncation_detected_from_upstream_finish_reason() -> None:
     assert response.finish_reason == "length"
 
 
-async def test_truncation_detected_from_output_tokens_alone() -> None:
-    """Signal 2: usage reached the ceiling even though the backend says "stop".
+async def test_unparseable_arguments_on_the_last_call_are_read_as_a_cut() -> None:
+    """The backend claims a clean `tool_calls` stop and the arguments do not
+    parse -- gpt-4o's measured shape on a ceiling hit, 4 of 4 probes.
 
-    Some backends report a clean stop on a truncated reply, so trusting
-    finish_reason alone would miss this entirely.
-    """
-    chunks = [
-        StreamDelta(content="partial"),
-        StreamDelta(content=None, usage={"completion_tokens": 4096}, finish_reason="stop"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
+    Generation is sequential, so nothing arrives after a cut: a repair on the
+    last call of a turn is the turn ending mid-write. The reading is stated as
+    likely rather than certain, since a model can also just write bad JSON, and
+    the refusal does not depend on which it was.
 
-    assert response.truncated is True
-    assert response.max_tokens == 4096
-
-
-async def test_unparseable_arguments_alone_are_malformed_json_not_a_cut() -> None:
-    """Arguments that do not parse, and nothing else saying the turn was cut.
-
-    This used to count as truncation on its own. It cannot: a model writing
-    bad JSON produces exactly this, and reporting it as a ceiling hit both
-    mis-records the turn in tracing and tells the model to send its content in
-    smaller pieces -- advice for a problem it does not have. The call is still
-    refused; only the stated cause differs.
+    What this replaces is a comparison of usage against the ceiling, which
+    needed the request and the check to agree on a number and a model id.
     """
     chunks = [
         StreamDelta(
@@ -443,9 +428,10 @@ async def test_unparseable_arguments_alone_are_malformed_json_not_a_cut() -> Non
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
 
-    assert response.truncated is False
+    assert response.truncated is False, "the turn-level verdict still belongs to the upstream"
     assert response.tool_calls[0].run_meta.arguments_repaired is True
-    assert response.tool_calls[0].run_meta.truncation is None
+    assert response.tool_calls[0].run_meta.last_of_turn is True, "the position is what makes it readable"
+    assert response.tool_calls[0].run_meta.truncation is None, "a reading, not a recorded fact"
     assert response.tool_calls[0].arguments["_raw_arguments"] == '{"content": "def foo('
 
 
@@ -488,14 +474,14 @@ async def test_complete_tool_call_is_not_flagged_truncated() -> None:
     assert response.tool_calls[0].arguments == {"path": "a.py"}
 
 
-async def test_ceiling_check_compares_against_what_was_sent() -> None:
-    """Signal 2 measures usage against the ceiling the request actually carried.
+async def test_a_clean_stop_with_no_unparsed_call_is_not_truncation() -> None:
+    """Usage no longer participates: a turn the upstream calls done, whose last
+    call parses, is done -- whatever the token count says.
 
-    Reading it from configuration while the provider resolved its own is how
-    this check stops firing without ever failing: the two numbers drift and
-    the comparison quietly stops matching. A provider with no ``generation``
-    at all still has a resolvable ceiling -- the catalogue default -- so there
-    is no "unknown ceiling" branch left to sit out.
+    The comparison that used to live here (usage against the resolved ceiling)
+    required the check and the request to agree on one number and one model id.
+    They drifted five times on this branch, and each time the check stopped
+    firing without ever failing. No surveyed agent carries it.
     """
     provider = _FakeProvider(
         [
@@ -507,44 +493,8 @@ async def test_ceiling_check_compares_against_what_was_sent() -> None:
         messages=[{"role": "user", "content": "hi"}], tools=None, model="not/in-any-catalogue"
     )
 
-    assert response.max_tokens == DEFAULT_MAX_OUTPUT_TOKENS
-    assert response.truncated is True
-
-
-async def test_output_below_the_resolved_ceiling_is_not_truncation() -> None:
-    """The other side of the same comparison."""
-    provider = _FakeProvider(
-        [
-            StreamDelta(content="x", usage={"completion_tokens": 12}),
-            StreamDelta(content=None, finish_reason="stop"),
-        ]
-    )
-    response = await _bind_helper(provider)(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="not/in-any-catalogue"
-    )
-
     assert response.truncated is False
-
-
-async def test_pinned_generation_ceiling_wins_over_the_catalogue() -> None:
-    """An explicit number is a call-site decision, not a hint.
-
-    This is the path a caller like the personalizer takes when it asks for a
-    short answer -- the catalogue must not widen it back out.
-    """
-    provider = _provider_with_ceiling(
-        [
-            StreamDelta(content="x", usage={"completion_tokens": 120}),
-            StreamDelta(content=None, finish_reason="stop"),
-        ],
-        max_tokens=120,
-    )
-    response = await _bind_helper(provider)(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="anthropic/claude-opus-4-5"
-    )
-
-    assert response.max_tokens == 120
-    assert response.truncated is True
+    assert response.max_tokens is None, "no ceiling is claimed when the loop sent none"
 
 
 def _two_calls_last_one_cut() -> list[StreamDelta]:
@@ -584,7 +534,7 @@ async def test_only_the_last_tool_call_is_marked_truncated() -> None:
     assert response.truncated is True
     assert response.tool_calls[0].run_meta is None
     assert response.tool_calls[1].run_meta is not None
-    assert response.tool_calls[1].run_meta.truncation.at_tokens == 4096
+    assert response.tool_calls[1].run_meta.truncation is not None
 
 
 async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
@@ -607,23 +557,6 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
     assert "_truncated" not in payload
 
 
-async def test_a_pin_above_the_model_ceiling_is_bounded_by_it() -> None:
-    """A pin is a call site's decision, but not a licence to exceed the model.
-
-    Every pin in the tree today is far below any real ceiling, so this bound
-    never fires -- which is why it has to be written down: the first pin that
-    is not below it would be a rejected request, with nothing at the call site
-    saying why.
-    """
-    provider = _provider_with_ceiling(
-        [StreamDelta(content="x"), StreamDelta(content=None, finish_reason="stop")],
-        max_tokens=10_000_000,
-    )
-    response = await _bind_helper(provider)(messages=[{"role": "user", "content": "hi"}], tools=None, model="gpt-4o")
-
-    assert response.max_tokens == 16384  # gpt-4o's catalogue ceiling, not the pin
-
-
 async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     """The other order: text first, then the call, cut while writing it."""
     chunks = [
@@ -643,39 +576,3 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     )
 
     assert response.tool_calls[0].run_meta is not None
-
-
-async def test_the_ceiling_is_looked_up_under_the_id_the_request_was_sent_under() -> None:
-    """A gateway rewrites the model id, and the two ids are different rows.
-
-    `wire_model` puts the gateway's prefix in front of a stored vendor id, and
-    LiteLLM files the two spellings separately -- measured, openai/gpt-4o
-    answers 16384 while openrouter/openai/gpt-4o answers 4096. The request goes
-    out under the rewritten one, so a check that looks up the stored one
-    compares usage against a ceiling four times too large and never fires.
-
-    Only when nothing pinned a ceiling: a pinned one is passed through and no
-    lookup happens on either side.
-
-    Narrow on purpose, and worth knowing what it cannot see: the stub below
-    answers `wire_model_id` itself, which manufactures the agreement between
-    request and check that a real assembly has to earn. That the wrapper
-    providers forward it at all is
-    `test_provider_resolution_invariants.py::test_a_wrapping_provider_forwards_the_id_its_inner_will_send`;
-    that `chat_stream` sizes its own request under it is
-    `test_litellm_provider_stream.py::test_chat_stream_sizes_the_request_under_the_id_it_sends`.
-    """
-    chunks = [
-        StreamDelta(content="partial"),
-        StreamDelta(content=None, usage={"completion_tokens": 4096}, finish_reason="stop"),
-    ]
-    provider = _FakeProvider(chunks)
-    provider.generation = SimpleNamespace(max_tokens=None)
-    provider.wire_model_id = lambda model: f"openrouter/{model}"
-
-    response = await _bind_helper(provider)(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
-    )
-
-    assert response.max_tokens == 4096, "the ceiling of the id that was actually sent"
-    assert response.truncated is True

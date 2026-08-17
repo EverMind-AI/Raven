@@ -39,6 +39,10 @@ def failure_class(model_text: str) -> str:
     low = model_text[:200].lower()
     if "[truncated]" in low:
         return "truncated"
+    if "[incomplete arguments]" in low:
+        # Its own class, not "truncated": the cause is undecided, and the nudge
+        # that fires on a streak has to stay undecided with it.
+        return "incomplete_arguments"
     if "[invalid arguments]" in low:
         # Its own class, not "schema": a model that sent malformed JSON and
         # then sent a well-formed call missing a field has changed what it is
@@ -93,6 +97,12 @@ def loop_break_nudge(tool: str, n: int, failure: str = "other") -> str:
             f"[loop] `{tool}` has been cut off at the output limit {n} times in a row. "
             "Splitting it further is the way through, but the pieces are still too big -- "
             "make the next one substantially smaller rather than resending this one."
+        )
+    if failure == "incomplete_arguments":
+        return (
+            f"[loop] `{tool}` has come back unparseable {n} times in a row, and which of the "
+            "two causes it is has not been established. Change both: send a substantially "
+            "smaller payload, and check the argument shape against the tool's schema."
         )
     return (
         f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "

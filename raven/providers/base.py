@@ -176,11 +176,12 @@ class TruncationInfo:
     def as_error(self, tool_name: str) -> str:
         """What is known, and what is only inferred, kept apart.
 
-        Known: the turn stopped at the output limit. Inferred: that this call
-        was cut, which follows from generation being sequential but not from
-        anything the upstream said -- a turn can finish a call and then hit the
-        limit in the prose after it. Saying "this call was cut" as a fact sends
-        a model to split up a call that was whole.
+        Known: the turn stopped at the output limit, because the upstream said
+        so. Inferred: that this call was the cut one, which follows from
+        generation being sequential but not from anything the upstream said --
+        a turn can finish a call and then hit the limit in the prose after it.
+        Saying "this call was cut" as a fact sends a model to split up a call
+        that was whole.
 
         The refusal is not conditional on that inference. A call that may be
         incomplete is not dispatched either way; being wrong costs one retry.
@@ -221,6 +222,14 @@ class RunMeta:
 
     truncation: TruncationInfo | None = None
     arguments_repaired: bool = False
+    #: This call was the last one of its turn. Only ever set alongside
+    #: ``arguments_repaired``, because that is the only place it means
+    #: anything: generation is sequential, so nothing arrives after a cut, and
+    #: a repair with no calls after it is the shape a cut leaves. Recorded as
+    #: the position it is rather than as a verdict -- whether the turn ran out
+    #: of room is a reading of these two facts, and it belongs in the sentence
+    #: the model reads, not in the record.
+    last_of_turn: bool = False
 
 
 @dataclass
@@ -327,22 +336,18 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     they get whatever is already loaded, then the fixed fallback. A caller
     about to build a request wants the default.
 
-    Absent a pin, the answer is also bounded by ``OUTPUT_SHARE_OF_WINDOW``.
-    That bound is what keeps the prompt and the answer addable: the agent
-    loop's budget reserves this very number and lets a prompt grow into the
-    rest, so a request asking for the model's whole ceiling instead would be
-    granted a prompt it cannot coexist with. A pin skips the share on purpose
-    -- a caller asking for a long answer has said so.
+    The model's own ceiling is the answer, unbounded by anything else. Holding
+    a share of the window back for the reply is the budget's business (see
+    ``OUTPUT_SHARE_OF_WINDOW``), and it stopped being this function's the
+    moment requests stopped volunteering a ceiling: there is no longer a sum
+    that has to fit, only a margin.
     """
-    from raven.providers.rates import OUTPUT_SHARE_OF_WINDOW, resolve_context_window, resolve_max_output_tokens
+    from raven.providers.rates import resolve_max_output_tokens
 
     ceiling = resolve_max_output_tokens(model, allow_fetch=allow_fetch)
     pin = pinned if pinned is not None else getattr(generation, "max_tokens", None)
     if pin:
         return min(int(pin), ceiling)
-    window = resolve_context_window(model or "", allow_fetch=allow_fetch)
-    if window:
-        return min(ceiling, int(window * OUTPUT_SHARE_OF_WINDOW))
     return ceiling
 
 
@@ -931,16 +936,13 @@ class LLMProvider(ABC):
             )
             if response.finish_reason != "error":
                 # Judged here, not by the caller: this runs inside the
-                # ``llm.call`` span (``trace.instrument`` extracts attributes in
-                # a ``finally`` and closes the span before the caller sees the
-                # result), and ``current_model`` is the model that actually
-                # answered -- a fallback hop makes the requested one the wrong
-                # ceiling to compare usage against.
+                # ``llm.call`` span, and ``trace.instrument`` extracts its
+                # attributes in a ``finally`` that closes the span before the
+                # caller sees the result -- a verdict reached afterwards is
+                # recorded as ``False`` every time.
                 from raven.providers.truncation import flag_truncation
 
                 response.max_tokens, response.truncated = flag_truncation(
-                    self.generation,
-                    model=wire_id,
                     sent=sent,
                     finish_reason=response.finish_reason,
                     usage=response.usage,

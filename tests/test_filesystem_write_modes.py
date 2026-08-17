@@ -133,5 +133,5 @@ def test_the_truncation_hint_does_not_assume_the_file_is_empty() -> None:
     hint = WriteFileTool(".").truncation_hint or ""
 
     assert "the first with mode=overwrite" not in hint, "an unconditional restart"
-    assert "mode=overwrite" in hint, "the fresh-file case is still named"
-    assert "earlier calls" in hint, "and where the model can tell which case it is in"
+    assert "mode=overwrite to start a file" in hint, "the fresh-file case is named as a choice"
+    assert "mode=append to continue one you have already begun" in hint, "and so is the other"

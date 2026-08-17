@@ -1688,12 +1688,10 @@ class AgentLoop:
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
 
+        # No ceiling passed: the provider resolves its own after the loop has
+        # handed over the request, so the number this turn carried is not
+        # knowable here. Nothing is compared against it, so nothing is missing.
         sent_max_tokens, truncated = flag_truncation(
-            getattr(self.provider, "generation", None),
-            # The id this went out under, not the stored one -- a gateway files
-            # under its own catalogue row with its own ceiling. getattr because
-            # the loop accepts duck-typed providers, as with `generation` below.
-            model=getattr(self.provider, "wire_model_id", lambda m: m)(model),
             finish_reason=upstream_finish_reason,
             usage=final_usage,
             tool_calls=tool_calls,
