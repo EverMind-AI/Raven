@@ -2179,7 +2179,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 # ---------------------------------------------------------------------------
 
 
-def _print_next_steps(*, warnings: list[str]) -> None:
+def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> None:
     from rich.table import Table
 
     console.print()
@@ -2247,6 +2247,17 @@ def _print_next_steps(*, warnings: list[str]) -> None:
             padding=(1, 2),
         )
     )
+
+    if not show_next_steps:
+        # The startup gate runs the wizard with the TUI already on its way in,
+        # so a list of commands to try next is answered before it is read.
+        console.print(
+            _t(
+                "  [dim]Setup complete - starting the TUI...[/dim]",
+                "  [dim]配置完成,正在进入 TUI...[/dim]",
+            )
+        )
+        return
 
     table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
     table.add_column(style="accent", no_wrap=True)
@@ -2774,6 +2785,7 @@ def run_wizard(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
+    show_next_steps: bool = True,
 ) -> None:
     """Run the 6-step onboarding wizard end-to-end.
 
@@ -2804,6 +2816,7 @@ def run_wizard(
             yes=yes,
             reset=reset,
             skip_test=skip_test,
+            show_next_steps=show_next_steps,
         )
     finally:
         _logger.enable("raven")
@@ -2848,6 +2861,7 @@ def _run_wizard_body(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
+    show_next_steps: bool = True,
 ) -> None:
     global _LANG
     _check_tty_or_die(non_interactive)
@@ -2936,11 +2950,14 @@ def _run_wizard_body(
         else:
             index += 1
 
-    _print_next_steps(warnings=warnings)
+    _print_next_steps(warnings=warnings, show_next_steps=show_next_steps)
 
 
 # ---------------------------------------------------------------------------
-# Startup gate — invoked by bare `raven` / `raven agent` / TUI entry points
+# Startup gate — invoked by bare `raven` and `raven tui` (the same callback).
+# One-shot `raven agent` deliberately stays out: launching a six-step wizard
+# from a scriptable command would be a surprise, so it reports the missing
+# credentials through `check_provider_credentials` instead.
 # ---------------------------------------------------------------------------
 
 
@@ -2961,7 +2978,7 @@ def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
         return
 
     if not _configured_providers():
-        run_wizard(non_interactive=non_interactive)
+        run_wizard(non_interactive=non_interactive, show_next_steps=False)
         return
 
     model = (_load_raw_config().get("agents", {}) or {}).get("defaults", {}).get("model")

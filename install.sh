@@ -259,16 +259,27 @@ install_raven() {
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
+  # Read before installing so the closing hint can tell a first run from an
+  # upgrade; the install itself never writes config.json (the wizard does).
+  if [ -f "$RAVEN_HOME/config.json" ]; then
+    had_config=1
+  else
+    had_config=0
+  fi
   detect_platform
   ensure_uv
   ensure_node
   install_raven
 
   printf '\n'
-  ok "All set! Open a new terminal (or source your shell profile), then run:"
-  printf '\n    \033[1mraven onboard\033[0m    # first-time setup\n'
-  printf '    \033[1mraven\033[0m            # enter the TUI\n'
-  printf '    \033[1mraven agent\033[0m -m "hello"\n\n'
+  if [ "$had_config" = 1 ]; then
+    ok "Raven updated. Your config in $RAVEN_HOME is unchanged."
+    printf '\n    \033[1mraven\033[0m    # continue where you left off\n\n'
+    printf '  tip: next time you can upgrade in place with \033[1mraven upgrade\033[0m\n\n'
+  else
+    ok "All set! Open a new terminal (or source your shell profile), then run:"
+    printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
+  fi
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi

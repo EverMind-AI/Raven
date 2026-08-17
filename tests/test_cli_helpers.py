@@ -503,3 +503,49 @@ def test_azure_missing_key_same_onboard_guidance(tmp_path: Path) -> None:
         _helpers.check_provider_credentials(load_config(cfg))
 
     assert "raven onboard" in f"{excinfo.value.summary} {excinfo.value.remedy}"
+
+
+# ── the first-run verdict vs. a provider Raven carries no field for ──
+
+
+def test_a_working_extra_provider_is_not_a_first_run(tmp_path: Path) -> None:
+    """A credential under an undeclared provider key still counts as configured.
+
+    ``ProvidersConfig`` allows extra keys and serves them from ``get`` -- a
+    provider LiteLLM supports but Raven carries no field for is a supported
+    shape. Deciding "is anything configured" from ``__dict__`` sees only the
+    declared fields, so such a user was told nothing was configured yet and
+    sent to the wizard. The model is left at the schema default here, which is
+    the only case that reaches this branch at all.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"providers": {"my-private-vllm": {"apiKey": "sk-real", "apiBase": "http://x/v1"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.check_provider_credentials(load_config(cfg))
+
+    # The specific verdict for the model's own vendor, not the first-run one.
+    assert "no provider is configured yet" not in excinfo.value.summary
+    assert "API key" in excinfo.value.summary
+
+
+def test_nothing_configured_at_all_names_the_wizard(tmp_path: Path) -> None:
+    """With no credential anywhere and no model chosen, the default model's
+    vendor is not the thing to go fix -- the wizard is."""
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {}}), encoding="utf-8")
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.check_provider_credentials(load_config(cfg))
+
+    assert "no provider is configured yet" in excinfo.value.summary
+    assert "raven onboard" in excinfo.value.summary

@@ -668,7 +668,11 @@ def cron_add(
     every: str = typer.Option(
         None,
         "--every",
-        help="Interval duration for fixed-interval recurring jobs (e.g. '7s', '5m', '1h30m', '7d'; units s/m/h/d)",
+        help=(
+            "Interval duration for fixed-interval recurring jobs (e.g. '7s', '5m', '1h30m', '7d'; "
+            "units s/m/h/d). Measured from the end of the previous run, so runs never overlap "
+            "and the clock drifts by the run's duration; use --cron for clock-anchored schedules"
+        ),
     ),
     tz: str = typer.Option(
         None,

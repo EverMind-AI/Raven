@@ -156,6 +156,15 @@ _Avoid_: reintroducing fire-time channel selection (the retired
 channel value is retired with the REPL; stored `cli`-bound jobs migrate to
 `tui` at load time.
 
+**Fixed-delay interval**:
+The scheduling contract for `--every` jobs: the next run is computed from the
+moment the previous fire **completed**, not from the moment it was due. A job
+that takes 15s to run therefore repeats every `interval + 15s`, and its clock
+drifts by design — the property being bought is that a slow run can never
+overlap itself or leave a backlog to catch up on.
+_Avoid_: calling this fixed-rate, or reading `--every 2m` as a promise to fire
+on the two-minute mark; calendar-anchored schedules are what `--cron` is for.
+
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
 proactive side of prediction).

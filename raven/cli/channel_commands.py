@@ -482,10 +482,12 @@ def _display_name(name: str) -> str:
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
+    from raven.channels.manager import _missing_dep_hint, missing_dependency_channels
     from raven.channels.registry import discover_channel_names
     from raven.config.loader import load_config
 
     config = load_config()
+    missing = set(missing_dependency_channels(config))
 
     table = Table(title="Channel Status")
     table.add_column("Channel", style="cyan")
@@ -495,12 +497,19 @@ def channels_status():
         section = getattr(config.channels, modname, None)
         enabled = section and getattr(section, "enabled", False)
         display = _display_name(modname)
-        table.add_row(
-            display,
-            "[green]✓[/green]" if enabled else "[dim]✗[/dim]",
-        )
+        state = "[green]✓[/green]" if enabled else "[dim]✗[/dim]"
+        if modname in missing:
+            state = "[yellow]⚠ SDK missing[/yellow]"
+        table.add_row(display, state)
 
     console.print(table)
+    if missing:
+        names = ", ".join(sorted(missing))
+        console.print(
+            f"\n[yellow]⚠ Enabled but cannot start: {names}[/yellow] "
+            "[dim](dependency not installed; the gateway disables these at startup)[/dim]"
+        )
+        console.print(f"  {_missing_dep_hint()}")
 
 
 @channels_app.command("login")

@@ -64,9 +64,10 @@ irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.
 ### Onboard and run
 
 ```bash
-raven onboard
 raven
 ```
+
+That is the whole first run: with nothing configured yet, `raven` walks you through setup and then opens the TUI in the same session. To reconfigure later, run `raven onboard` explicitly.
 
 The bilingual onboarding wizard configures six areas without requiring manual edits to `~/.raven/config.json`:
 
