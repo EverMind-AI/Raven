@@ -70,10 +70,7 @@ def check_provider_credentials(config: Config) -> None:
         raise MissingCredentialsError(
             status.summary,
             provider=provider_name,
-            remedy=(
-                "Run: raven provider set <name> --api-key <key>\n"
-                "Or run `raven onboard` for guided setup."
-            ),
+            remedy=("Run: raven provider set <name> --api-key <key>\nOr run `raven onboard` for guided setup."),
         )
 
 
