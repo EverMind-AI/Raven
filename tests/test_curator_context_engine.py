@@ -52,6 +52,7 @@ class CuratorScriptProvider(LLMProvider):
                             },
                         )
                     ],
+                    finish_reason="length" if self.curator_mode == "truncated" else "tool_calls",
                 )
             return LLMResponse(
                 content=None,
@@ -140,6 +141,37 @@ async def test_curator_slow_path_archives_and_writes_trace(tmp_path: Path):
     archived = [item for item in manifest["items"] if item["archived"]]
     assert [item["id"] for item in archived] == [0, 1]
     assert list((tmp_path / "memory/.curator/archive").glob("**/*.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_curator_does_not_dispatch_a_truncated_call(tmp_path: Path):
+    """The curator's loop is a second agent loop, and archiving is destructive.
+
+    A cut-off `curator_archive_messages` has an incomplete `message_ids` list
+    and nothing about it says so -- the arguments that did arrive validate.
+    `chat_with_retry` reaches the same verdict here as it does for the main
+    loop; the dispatch has to honour it.
+    """
+    provider = CuratorScriptProvider(curator_mode="truncated")
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
+    )
+
+    assembled = await loop.context_engine.assemble(
+        "cli:curator-cut",
+        _session_messages(),
+        _budget(),
+        turn=TurnContext(current_message="Please continue the curator design.", channel="cli", chat_id="curator-cut"),
+    )
+
+    assert assembled.metadata["path"] == "slow"
+    manifest = json.loads((tmp_path / "memory/.curator/manifest/cli_curator-cut.json").read_text(encoding="utf-8"))
+    assert [item for item in manifest["items"] if item["archived"]] == []
+
+    trace_text = Path(assembled.metadata["trace_path"]).read_text(encoding="utf-8")
+    assert "[truncated]" in trace_text
 
 
 @pytest.mark.asyncio

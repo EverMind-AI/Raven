@@ -254,7 +254,12 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    max_tokens: int = 8192
+    # No maxTokens here on purpose. A number in a config file cannot be right
+    # for every model -- too large is a 400, too small truncates silently --
+    # so the ceiling is resolved per model from the catalogue
+    # (providers/rates.resolve_max_output_tokens). An old config carrying the
+    # retired key is ignored rather than rejected: this model does not forbid
+    # extras.
     # None (or 0) means "figure it out" -- resolved against the model's real
     # window at construction time. A positive value pins the window, taking
     # priority over whatever the model's own catalogue reports.
@@ -336,8 +341,9 @@ class ModelOverlay(Base):
     their own deployment -- but it leaves no way to label several of them.
 
     Only what a person states about presentation. Token accounting is not in
-    scope here -- `agents.defaults.contextWindowTokens` / `maxTokens` already
-    hold it. What has no knob at all is a *price* for an endpoint no catalogue
+    scope here -- `agents.defaults.contextWindowTokens` holds what a person can
+    state about it, and the output ceiling resolves per model with no knob at
+    all. What has no knob either is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
     """

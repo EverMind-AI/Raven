@@ -615,3 +615,104 @@ def test_codex_carries_no_static_default_model() -> None:
         "OpenAICodexProvider takes a default model rather than requiring one, so a "
         "caller that omits it gets an id the backend refuses"
     )
+
+
+# ---------------------------------------------------------------------------
+# A provider that wraps another must forward the routing-identity questions
+# ---------------------------------------------------------------------------
+
+
+def _provider_classes(root: Path) -> dict[str, tuple[Path, ast.ClassDef]]:
+    """Every `LLMProvider` subclass in the tree, followed by name across files."""
+    classes: dict[str, tuple[Path, ast.ClassDef, set[str]]] = {}
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bases = {b.id if isinstance(b, ast.Name) else getattr(b, "attr", "") for b in node.bases}
+                classes[node.name] = (path, node, bases)
+
+    names = {"LLMProvider"}
+    while True:
+        grown = {n for n, (_, _, bases) in classes.items() if bases & names}
+        if grown <= names:
+            break
+        names |= grown
+    return {n: (p, node) for n, (p, node, _) in classes.items() if n in names and n != "LLMProvider"}
+
+
+def _delegates_a_chat_call(node: ast.ClassDef) -> bool:
+    """True when a method hands a chat call to something other than ``self``.
+
+    ``self._built().chat_stream(...)``, ``self._inners[0].chat(...)`` -- the
+    shape of a wrapper. A plain ``self.chat(...)`` or ``super().chat(...)`` is
+    the class answering for itself and does not count.
+    """
+    for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+        fn = call.func
+        if not isinstance(fn, ast.Attribute) or fn.attr not in ("chat", "chat_stream", "chat_with_retry"):
+            continue
+        target = fn.value
+        if isinstance(target, ast.Name) and target.id == "self":
+            continue
+        if isinstance(target, ast.Call) and isinstance(target.func, ast.Name) and target.func.id == "super":
+            continue
+        return True
+    return False
+
+
+def test_a_wrapping_provider_forwards_the_id_its_inner_will_send() -> None:
+    """``wire_model_id`` answers "which id does the request go out under", and
+    the wrapper is not the one that decides -- its inner is.
+
+    The base class answers identity, so a wrapper that does not forward it
+    still *has* the method: `getattr` finds it, no attribute error is raised,
+    and the caller silently sizes against the stored name while the inner sends
+    the gateway spelling. Measured, those are 16384 and 4096 for one gpt-4o.
+
+    Same reason ``can_serve`` and ``emits_unparsed_reasoning`` are forwarded:
+    all three are questions about the wire, and a wrapper has no wire.
+    """
+    root = Path(__file__).resolve().parents[1] / "raven"
+    offenders = [
+        f"{path.relative_to(root.parent)}::{name}"
+        for name, (path, node) in sorted(_provider_classes(root).items())
+        if _delegates_a_chat_call(node)
+        and not any(
+            isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef) and m.name == "wire_model_id" for m in node.body
+        )
+    ]
+
+    assert not offenders, (
+        "these providers hand a chat call to an inner but answer wire_model_id themselves: " + "; ".join(offenders)
+    )
+
+
+def test_a_lazy_provider_answers_with_its_inner_s_wire_id() -> None:
+    """The TUI's provider is a LazyProvider, so this is the interactive path.
+
+    Sized under the stored id, a truncated turn reads as a clean one: usage
+    reaches 4096, the check compares it against 16384, and gpt-4o reports
+    tool_calls rather than length on a ceiling hit (4 of 4 probes, see
+    providers/truncation.py) -- both signals miss and the cut call is
+    dispatched.
+    """
+    from raven.providers.base import GenerationSettings
+    from raven.providers.lazy import LazyProvider
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    inner = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
+    lazy = LazyProvider(lambda: inner, default_model="openai/gpt-4o", generation=GenerationSettings())
+
+    # Before materialization there is no wire to ask, and building one to answer
+    # would undo the deferral this class exists for. Nothing has been sized yet
+    # either: the check that asks this runs after a call, and the call builds.
+    assert lazy.wire_model_id("openai/gpt-4o") == "openai/gpt-4o"
+
+    lazy._built()  # what the first call, or prewarm, does
+
+    assert lazy.wire_model_id("openai/gpt-4o") == inner.wire_model_id("openai/gpt-4o")
+    assert lazy.wire_model_id("openai/gpt-4o") == "openrouter/openai/gpt-4o"

@@ -146,6 +146,42 @@ class Tool(ABC):
         """
         return None
 
+    @property
+    def truncation_hint(self) -> str | None:
+        """What to do differently when a call to this tool arrives cut off.
+
+        The generic truncation message can only say "send less", which leaves a
+        model to guess at what smaller looks like -- and dropping the largest
+        field is one of the guesses. What it needs is the next action, and only
+        the tool knows what that is: write_file can be appended to, a shell
+        command can be split into several runs, and some tools have no smaller
+        form at all.
+
+        ``None`` (the default) means the generic message stands on its own.
+
+        Only for a cut the upstream confirmed. Where the cause is merely likely
+        see ``incomplete_hint``: advice written for a turn that ran out of room
+        misleads a model that simply wrote bad JSON, and sends it looking for a
+        size problem it does not have.
+        """
+        return None
+
+    @property
+    def incomplete_hint(self) -> str | None:
+        """What to do differently when a call arrives unparseable and last.
+
+        Same situation as ``truncation_hint`` under one of its two readings, and
+        deliberately a separate string rather than the same one reused: this one
+        is consumed under an ``If it was the output limit:`` heading and has to
+        read as the consequent of a condition, where the other states a fact.
+
+        The near-duplication is the cost of not asserting a cause we cannot
+        establish. A tool answering one of the two and not the other leaves the
+        ambiguous refusal with no way forward, which is the case that exists
+        because the upstream under-reports -- guarded by a test.
+        """
+        return None
+
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""
         schema = self.parameters or {}
