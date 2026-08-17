@@ -23,7 +23,6 @@ from raven.providers.base import (
     StreamDelta,
     ToolCallRequest,
     format_llm_error,
-    send_max_tokens,
 )
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
@@ -432,16 +431,16 @@ class LiteLLMProvider(LLMProvider):
         else:
             messages, tools = prompt_cache.strip(messages, tools)
 
-        # Clamp max_tokens to at least 1 — negative or zero values cause
-        # LiteLLM to reject the request with "max_tokens must be at least 1".
-        max_tokens = max(
-            1, send_max_tokens(getattr(self, "generation", None), model) if max_tokens is None else max_tokens
-        )
+        # Never volunteered: a caller that wants a short answer pins one, and
+        # a vendor that requires the field has a LiteLLM transformation that
+        # supplies it. Clamped to at least 1 when present, since LiteLLM
+        # rejects a zero or negative value outright.
+        if max_tokens is not None:
+            max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
-            "max_tokens": max_tokens,
             "temperature": temperature,
             # Per-read httpx cap forwarded to the underlying client. This alone
             # cannot bound a backend that trickles bytes forever (the read timer
@@ -449,6 +448,8 @@ class LiteLLMProvider(LLMProvider):
             # asyncio.wait_for wall-clock cap below.
             "timeout": self.generation.timeout,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
@@ -527,11 +528,6 @@ class LiteLLMProvider(LLMProvider):
             reasoning_effort = gen.reasoning_effort
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
-        # After the resolution above, as `chat` does: the catalogue files the
-        # gateway spelling as its own row with its own ceiling, and the id in
-        # this request body has to be the one that ceiling belongs to.
-        if max_tokens is None:
-            max_tokens = send_max_tokens(gen, model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
         if self._supports_cache_control(original_model):
@@ -540,12 +536,9 @@ class LiteLLMProvider(LLMProvider):
         else:
             messages, tools = prompt_cache.strip(messages, tools)
 
-        max_tokens = max(1, max_tokens)
-
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
             # OpenAI-compatible providers only emit the trailing usage chunk
@@ -554,6 +547,8 @@ class LiteLLMProvider(LLMProvider):
             "stream_options": {"include_usage": True},
             "timeout": self.generation.timeout,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max(1, max_tokens)
 
         self._apply_model_overrides(model, kwargs)
 

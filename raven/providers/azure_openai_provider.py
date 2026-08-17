@@ -18,7 +18,6 @@ from raven.providers.base import (
     RunMeta,
     ToolCallRequest,
     format_llm_error,
-    send_max_tokens,
 )
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
@@ -123,18 +122,12 @@ class AzureOpenAIProvider(LLMProvider):
                 self._sanitize_empty_content(messages),
                 _AZURE_MSG_KEYS,
             ),
-            # None means "no opinion" and reaches here from chat_with_retry, which
-            # resolves it from generation settings; those default to None so the
-            # ceiling comes from the model catalogue -- looked up under the id
-            # this request is sent under, which is what the truncation check on
-            # the way back also asks about.
-            "max_completion_tokens": max(
-                1,
-                send_max_tokens(getattr(self, "generation", None), self.wire_model_id(deployment_name))
-                if max_tokens is None
-                else max_tokens,
-            ),  # Azure API 2024-10-21 uses max_completion_tokens
         }
+        # Azure API 2024-10-21 uses max_completion_tokens, and treats it as
+        # optional. Only a caller's own pin ever names one; absent that, the
+        # deployment's own limit applies.
+        if max_tokens is not None:
+            payload["max_completion_tokens"] = max(1, max_tokens)
 
         if self._supports_temperature(deployment_name, reasoning_effort):
             payload["temperature"] = temperature

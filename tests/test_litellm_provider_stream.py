@@ -414,18 +414,14 @@ async def test_upstream_length_does_not_trip_the_error_path(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_sizes_the_request_under_the_id_it_sends(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ceiling and the model id in one request body must come from one id.
+async def test_chat_stream_omits_the_ceiling_when_nobody_asked_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OpenAI-compatible shape treats `max_tokens` as optional, and every
+    surveyed agent leaves it out there rather than volunteering a number.
 
-    A gateway files under its own catalogue row with its own numbers, measured:
-    openai/gpt-4o answers 16384 and openrouter/openai/gpt-4o answers 4096. Sized
-    under the stored id, a streaming request asks a gateway for four times what
-    that row allows, and the truncation check on the way back -- which resolves
-    the id -- judges it against a ceiling the request never carried.
-
-    `chat()` in this same file already resolves before sizing. This asserts on
-    the outgoing request body rather than on the helper, because a stub provider
-    that never builds one cannot tell the two orders apart.
+    Volunteering one is what this whole branch has been paying for: the number
+    has to be right, has to match what any check compares against, and has to
+    add up with whatever the prompt was allowed to grow to. Omitted, the server
+    answers with its own limit and none of that applies.
     """
     captured: dict[str, Any] = {}
 
@@ -436,10 +432,64 @@ async def test_chat_stream_sizes_the_request_under_the_id_it_sends(monkeypatch: 
     monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
 
     provider = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
-    provider.generation = GenerationSettings()  # no pin: the ceiling comes from the id
+    provider.generation = GenerationSettings()
 
     async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
         pass
 
-    assert captured["model"] == "openrouter/openai/gpt-4o", "the gateway id is what goes out"
-    assert captured["max_tokens"] == 4096, "and the ceiling has to be that id's, not the stored one's"
+    assert "max_tokens" not in captured, "no ceiling was asked for and none is volunteered"
+
+
+@pytest.mark.asyncio
+async def test_no_ceiling_is_volunteered_even_where_the_api_requires_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic's Messages API does require `max_tokens` -- and LiteLLM's own
+    transformation supplies it, which is where that knowledge belongs.
+
+    Measured across all 26 rows LiteLLM files under `litellm_provider ==
+    "anthropic"`, its number and ours agree on every one, because both read the
+    same table. They can only differ on a model it does not know, and there
+    both sides are guessing from a constant; ours is not the better guess.
+
+    Deciding it here meant carrying a copy of LiteLLM's routing knowledge --
+    which vendor speaks which API -- and then keeping the copy aligned. That
+    alignment is what `wire_model_id` and three invariants existed for. The
+    surveyed agents do not have this problem because each protocol adapter owns
+    its own required fields; ours is LiteLLM, so it owns them.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-4-5")
+    provider.generation = GenerationSettings()
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert "max_tokens" not in captured, "LiteLLM's anthropic transformation fills this in"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_carries_an_explicit_pin_regardless(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that asked for a short answer gets one, on any vendor."""
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
+    provider.generation = GenerationSettings()
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], max_tokens=64):
+        pass
+
+    assert captured["max_tokens"] == 64
