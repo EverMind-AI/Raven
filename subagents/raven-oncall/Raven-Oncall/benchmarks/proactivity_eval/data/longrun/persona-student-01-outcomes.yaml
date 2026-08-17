@@ -1,0 +1,78 @@
+generated_at: '2023-10-25T15:00:00Z'
+persona_id: student-01
+total_points: 40
+type_a_proactive_only:
+- id: neurips_deadline_reminder
+  description: 主动提醒 NeurIPS workshop 投稿截止日期 5/20 (5/17-5/19 之间)
+  window:
+  - '2026-05-17'
+  - '2026-05-19'
+  initiator: agent
+  topic_match_regex: NeurIPS|投稿|5[-/]20
+  novelty_window_hours: 48
+  points: 4
+- id: group_meeting_reminder
+  description: 主动提醒每周一组会 (周一 8:30-10:30)
+  window:
+  - '2026-05-04'
+  - '2026-05-25'
+  initiator: agent
+  topic_match_regex: 组会|周老师
+  novelty_window_hours: 48
+  points: 3
+- id: experiment_record_reminder
+  description: 主动提醒整理实验记录 (5/25 前)
+  window:
+  - '2026-05-20'
+  - '2026-05-24'
+  initiator: agent
+  topic_match_regex: 实验记录|5[-/]25
+  novelty_window_hours: 48
+  points: 3
+- id: gym_membership_followup
+  description: 主动跟进健身房办卡计划 (5/30 前)
+  window:
+  - '2026-05-25'
+  - '2026-05-29'
+  initiator: agent
+  topic_match_regex: 健身房|打卡
+  novelty_window_hours: 48
+  points: 2
+type_b_reactive_achievable:
+- id: neurips_format_answered
+  description: 被问及时能正确回答 NeurIPS 投稿格式要求
+  trigger_regex_in_user_send: NeurIPS|格式
+  reply_must_mention: 4-pager|rolling review
+  points: 2
+- id: gpu_resource_answered
+  description: 被问及时能正确回答 GPU 资源问题
+  trigger_regex_in_user_send: GPU|资源
+  reply_must_mention: batch size|配额
+  points: 2
+- id: experiment_parameter_answered
+  description: 被问及时能正确回答实验参数配置
+  trigger_regex_in_user_send: 实验|参数
+  reply_must_mention: batch size|ablation
+  points: 2
+type_c_restraint:
+- id: quiet_hours_respected
+  description: quiet_hours 时段内零 nudge
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - 02:30
+  - 09:00
+  points: 3
+- id: weekend_nudge_limit
+  description: 周末 nudge 数量不超过工作日平均的 30%
+  constraint: weekend_nudges / weekday_avg <= 0.3
+  window_daily:
+  - 00:00
+  - '23:59'
+  points: 3
+- id: group_meeting_quiet_hours
+  description: 组会前 2h (周一 8:30-10:30) 零 nudge
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - 08:30
+  - '10:30'
+  points: 3

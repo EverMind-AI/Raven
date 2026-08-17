@@ -1,0 +1,630 @@
+#!/usr/bin/env python
+"""Host-side launcher for the Raven-Oncall watch agent.
+
+Raven-Oncall is the `feat/ops_round3_device` branch of Raven, which adds the
+on-call line: you hand it a long-running job, it submits the job, schedules its
+own next look, and comes back to decide. `docs/oncall-quickstart.zh-CN.md` in
+the checkout is the branch's own account of what works and what does not. This
+wrapper supplies the three things that line leaves to its host:
+
+- **a resident process to fire the wakes.** `ops_submit` schedules the next look
+  as a cron job on channel `cli`, and `raven agent -m` is one-shot: it exits as
+  soon as it replies, so nothing fires that wake. The branch ships the missing
+  piece as `raven.ops.wake_shell`; this launcher keeps exactly one of them alive
+  per install, started under a lock, so a campaign keeps watching itself after
+  the spawn that started it has returned.
+- **the right raven for a woken turn.** `wake_shell` resolves the child turn
+  through `shutil.which("raven")`, so with an unmodified PATH every wake would
+  run the *host's* raven - a build with no ops tools at all - against this
+  install's config. The shell is therefore started with this checkout's venv
+  first on PATH.
+- **an answer, and a verdict on whether there is one.** Exit 0 does not mean the
+  agent produced anything: only a config or credential error maps to non-zero.
+
+One call is one turn. The same `--session cli:<id>` across calls continues the
+conversation, but continuity of the *campaign* deliberately does not live there:
+a woken turn is a cold start with no history, and picks up from the campaign's
+ledger on disk. That is the behaviour under test, so nothing here hands a wake a
+conversation to lean on instead.
+
+stdout carries the reply and nothing else. Raven's CLI backend uses the whole of
+a child's output as the subagent's reply, so any progress line printed here would
+be pasted into the conversation as if the agent had said it. Diagnostics go to
+`launcher.log` in the conversation's state directory; `--verbose` mirrors them to
+stderr for a human running this by hand.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import fcntl
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+# The checkout lives beside this launcher, per the subagents/ convention.
+CHECKOUT = HERE / "Raven-Oncall"
+DEFAULT_CONFIG = HERE / "config.json"
+
+
+def env_value(name: str) -> str | None:
+    """Read a setting from the process environment, falling back to `.env`.
+
+    The environment wins so a caller can override one value without editing a
+    file that holds the others. Parsed by hand rather than with python-dotenv:
+    this launcher must stay importable under a bare `python3`, since that is
+    what the subagent entry invokes.
+    """
+    if value := os.environ.get(name):
+        return value.strip()
+    env_file = HERE / ".env"
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() == name and value.strip():
+                return value.strip()
+    return None
+
+
+# Where each secret belongs in the config the agent loads. They stay out of
+# `config.json` because that file is published; they are merged back in at
+# launch (see `render_config`). Raven reads none of them from the environment -
+# its config loader does no variable substitution - so a rendered file is the
+# only way to get them in.
+SECRET_SLOTS = {
+    "ONCALL_API_KEY": ("providers", "custom", "apiKey"),
+    "ONCALL_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
+    "ONCALL_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
+}
+REQUIRED_SECRETS = ("ONCALL_API_KEY",)
+
+# Everything the runtime persists - transcripts, the cron store, the ops home,
+# the wake shell's own files - lands here rather than in this folder. See
+# `render_config` for why writing the config here is what moves them.
+STATE_ROOT = Path(
+    env_value("ONCALL_STATE_ROOT") or Path.home() / ".raven" / "workspace" / "subagent_sessions" / "raven-oncall"
+)
+RENDERED_CONFIG = STATE_ROOT / "config.json"
+
+# This launcher's own per-conversation state - the launcher log and the run
+# record. Distinct from the runtime's data directory, which follows the rendered
+# config to STATE_ROOT; see `render_config`.
+RUN_ROOT = Path(env_value("ONCALL_RUN_ROOT") or STATE_ROOT / "runs")
+
+
+def render_config(source: Path) -> Path:
+    """Write a copy of `source` with the `.env` secrets merged in.
+
+    Two properties fix the location and the lifetime, and getting either wrong
+    breaks the watch rather than the run:
+
+    - Its parent *is* the runtime's data directory (`config.paths.get_data_dir`
+      returns the config file's own parent), so putting it under STATE_ROOT is
+      what moves the transcripts, the cron store, the ops home and the wake
+      shell's pid file and logs out of the project directory. There is no
+      separate knob for any of them; they all hang off this one path. What
+      matters is that every consumer agrees on it - `cron_store` and `ops_home`
+      derive from the same config path, so they follow automatically.
+    - It is a fixed name that is *not* deleted afterwards, unlike the other
+      launchers here. `ensure_wake_shell` starts a resident process holding this
+      path, and that process outlives the spawn by design: it re-reads the file
+      on every wake, so deleting it at the end of a run would strand the whole
+      campaign. Mode 600, and outside any published tree.
+    """
+    config = json.loads(source.read_text(encoding="utf-8"))
+    missing = [name for name in REQUIRED_SECRETS if not env_value(name)]
+    if missing:
+        raise SystemExit(
+            f"error: {', '.join(missing)} is not set; put it in {HERE / '.env'} (see .env.example) or export it"
+        )
+    for name, path in SECRET_SLOTS.items():
+        value = env_value(name)
+        if not value:
+            continue
+        node = config
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+        node[path[-1]] = value
+
+    # `config.json` carries the workspace as a bare name so the published file
+    # names no machine. Nothing passes --workspace, so this value is the one that
+    # takes effect; it resolves under STATE_ROOT rather than beside this file,
+    # because what the agent writes while working is no more the project's
+    # business than its transcripts are.
+    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    if workspace := defaults.get("workspace"):
+        defaults["workspace"] = str((STATE_ROOT / workspace).resolve())
+
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    # Create it unreadable to anyone else before a single secret byte is in it.
+    fd = os.open(RENDERED_CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(config, stream, indent=2, ensure_ascii=False)
+    return RENDERED_CONFIG
+
+
+_LOG_FILE: Path | None = None
+_VERBOSE = False
+
+
+def log(message: str) -> None:
+    """Record a diagnostic without contaminating the reply."""
+    if _VERBOSE:
+        print(message, file=sys.stderr, flush=True)
+    if _LOG_FILE is not None:
+        _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _LOG_FILE.open("a", encoding="utf-8") as stream:
+            stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+
+
+def safe_name(value: str) -> str:
+    """Fold a conversation id into one path segment.
+
+    The gateway sends a uuid, but this is a CLI flag anyone can set, and it names
+    a directory: `--session ../../elsewhere` must not escape the run root.
+    """
+    cleaned = "".join(c if c.isalnum() or c in "-_." else "_" for c in value.strip())
+    cleaned = cleaned.strip(".") or "unnamed"
+    return cleaned[:120]
+
+
+def cron_store(config: Path) -> Path:
+    return config.parent / "cron" / "jobs.json"
+
+
+def ops_home(config: Path) -> Path:
+    return config.parent / "ops"
+
+
+def read_json(path: Path) -> object | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+# --------------------------------------------------------------------------
+# the resident wake shell
+# --------------------------------------------------------------------------
+
+
+def pid_is_wake_shell(pid: int) -> bool:
+    """True when `pid` is alive and is our shell, not a recycled pid.
+
+    A pid file alone is not evidence: pids are reused, and a stale one pointing
+    at some unrelated process would make every later run believe the watch is up
+    while no wake ever fires.
+    """
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        if exc.errno != errno.EPERM:
+            return False
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    try:
+        return "raven.ops.wake_shell" in cmdline.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        # No procfs to check against: fall back to "the pid answers", which is
+        # the best available and still better than trusting the file alone.
+        return True
+
+
+def ensure_wake_shell(config: Path, *, checkout: Path) -> tuple[int | None, str]:
+    """Guarantee exactly one wake shell is polling this install's cron store.
+
+    Returns (pid, detail). Taken under an exclusive lock for the whole
+    check-and-start: two spawns arriving together would otherwise both see no
+    shell and start one each, and two claimers on one store is how a live run
+    gets turns nobody asked for.
+    """
+    state_dir = config.parent
+    state_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = state_dir / "wake_shell.pid"
+    lock_file = state_dir / "wake_shell.lock"
+    shell_log = state_dir / "logs" / "wake_shell.log"
+    shell_log.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_file.open("a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            recorded = read_json(pid_file) if pid_file.is_file() else None
+            if isinstance(recorded, dict) and isinstance(recorded.get("pid"), int):
+                pid = recorded["pid"]
+                if pid_is_wake_shell(pid):
+                    return pid, f"already running (pid {pid})"
+
+            venv_bin = checkout / ".venv" / "bin"
+            python = venv_bin / "python"
+            if not python.is_file():
+                return None, f"venv missing at {python}; run `uv sync` in {checkout}"
+
+            env = {**os.environ}
+            # The shell resolves the woken turn with shutil.which("raven"). Without
+            # this the wake would run the host's raven - no ops tools - against this
+            # config, and the failure is silent: the turn starts, finds no ops_*
+            # tool, and improvises.
+            env["PATH"] = f"{venv_bin}{os.pathsep}{env.get('PATH', '')}"
+            # LiteLLM otherwise fetches a remote price table on first completion in
+            # every process, and this shell starts one process per wake.
+            env["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+            env.setdefault("RAVEN_TRACING_DIR", str(state_dir / "traces"))
+
+            argv = [
+                str(python),
+                "-m",
+                "raven.ops.wake_shell",
+                "--store",
+                str(cron_store(config)),
+                "--config",
+                str(config),
+                # A wake that came due while no shell was up has still not been
+                # looked at. Without this the service drops it at startup and the
+                # campaign stalls with nothing in any log saying why.
+                "--fire-missed",
+            ]
+            handle = shell_log.open("a", encoding="utf-8")
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    cwd=str(checkout),
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=handle,
+                    stderr=handle,
+                    start_new_session=True,
+                )
+            finally:
+                handle.close()
+
+            # It refuses a shared store and exits 2; catching that here turns a
+            # silently dead watch into a reported one.
+            time.sleep(0.7)
+            if proc.poll() is not None:
+                tail = ""
+                try:
+                    tail = shell_log.read_text(encoding="utf-8").strip().splitlines()[-1][:200]
+                except (OSError, IndexError):
+                    pass
+                return None, f"failed to start (exit {proc.returncode}) {tail}".strip()
+
+            pid_file.write_text(
+                json.dumps({"pid": proc.pid, "store": str(cron_store(config)), "started_at": int(time.time())}) + "\n",
+                encoding="utf-8",
+            )
+            return proc.pid, f"started (pid {proc.pid}), log {shell_log}"
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+# --------------------------------------------------------------------------
+# reading back what the run left on disk
+# --------------------------------------------------------------------------
+
+
+def session_file(python: Path, config: Path, workspace: Path, chat_id: str) -> Path | None:
+    """Ask the checkout where it will keep this session's transcript.
+
+    Computed by the build rather than reproduced here: the layout
+    (`<workspace>/sessions/<channel>/<id>.jsonl`) and the filename escaping are
+    its own, and a copy here would point at the wrong file the next time either
+    changes. `_get_session_path` is private, but it is the single function that
+    knows the answer.
+    """
+    code = (
+        "import sys; from pathlib import Path;"
+        "from raven.config.loader import set_config_path;"
+        "from raven.session.manager import SessionManager;"
+        "set_config_path(Path(sys.argv[1]));"
+        "print(SessionManager(Path(sys.argv[2]))._get_session_path('cli:' + sys.argv[3]))"
+    )
+    proc = subprocess.run(
+        [str(python), "-c", code, str(config), str(workspace), chat_id],
+        capture_output=True,
+        text=True,
+        cwd=str(CHECKOUT),
+    )
+    if proc.returncode != 0:
+        log(f"[run] could not resolve the session path: {proc.stderr.strip()[-300:]}")
+        return None
+    return Path(proc.stdout.strip())
+
+
+def count_lines(path: Path) -> int:
+    """Lines already in the transcript, so a resumed turn can skip them."""
+    if not path.is_file():
+        return 0
+    with path.open(encoding="utf-8") as stream:
+        return sum(1 for _ in stream)
+
+
+def extract_answer(path: Path, skip_lines: int = 0) -> str | None:
+    """Return the last assistant answer written past `skip_lines`, or None.
+
+    A row carrying `tool_calls` is a step, not an answer, so the last assistant
+    row with text and no tool calls is the reply the agent committed.
+    """
+    answer: str | None = None
+    with path.open(encoding="utf-8") as stream:
+        for index, line in enumerate(stream):
+            if index < skip_lines:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("_type") == "metadata":
+                continue
+            if row.get("role") != "assistant" or row.get("tool_calls"):
+                continue
+            content = row.get("content")
+            if isinstance(content, str) and content.strip():
+                answer = content.strip()
+    return answer
+
+
+def pending_wakes(config: Path) -> list[str]:
+    """Describe the wakes this install still owes, soonest first."""
+    store = read_json(cron_store(config))
+    if not isinstance(store, dict):
+        return []
+    rows: list[tuple[int, str]] = []
+    now_ms = int(time.time() * 1000)
+    for job in store.get("jobs", []):
+        if not isinstance(job, dict) or not job.get("enabled", True):
+            continue
+        at = (job.get("state") or {}).get("next_run_at_ms")
+        if not isinstance(at, int):
+            continue
+        delta = (at - now_ms) // 1000
+        when = time.strftime("%H:%M:%S", time.localtime(at / 1000))
+        due = f"in {delta // 60}m{delta % 60:02d}s" if delta >= 0 else f"overdue by {-delta // 60}m"
+        rows.append((at, f"{job.get('name', job.get('id', '?'))} at {when} ({due})"))
+    return [text for _, text in sorted(rows)]
+
+
+def campaign_state(config: Path) -> list[str]:
+    """Summarise each campaign's trail: rounds, escalations, whether it closed.
+
+    Read from the campaign's own files rather than from what the agent said,
+    because the point of the trail is that it is not the agent's account.
+    """
+    home = ops_home(config)
+    if not home.is_dir():
+        return []
+    lines: list[str] = []
+    for campaign in sorted(p for p in home.iterdir() if p.is_dir()):
+        ledger = read_json(campaign / "ledger.json")
+        trials = len(ledger.get("records") or {}) if isinstance(ledger, dict) else 0
+        closed = (campaign / "reports.jsonl").is_file()
+        asked: str | None = None
+        events = campaign / "events.jsonl"
+        if events.is_file():
+            try:
+                for line in events.read_text(encoding="utf-8").splitlines():
+                    row = json.loads(line) if line.strip() else None
+                    if isinstance(row, dict) and row.get("kind") == "ask_owner":
+                        asked = str(row.get("question", ""))[:200]
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+        state = "finished, report filed" if closed else "still open"
+        lines.append(f"campaign '{campaign.name}': {trials} trial(s) in the ledger, {state}")
+        if asked and not closed:
+            # ops_ask_owner reaches nobody in this hosting - it is delivered to a
+            # cli channel with no person on it - so the question would otherwise
+            # sit unread in events.jsonl while the run waits on an answer.
+            lines.append(f"  it asked the owner: {asked}")
+    return lines
+
+
+def build_task(task: str, *, config: Path, resuming: bool) -> str:
+    """Prefix the task with the facts about this hosting the agent cannot discover.
+
+    On a resumed turn the history is already in context, so the preamble states
+    only what a fresh turn would not know.
+    """
+    where = (
+        "You are continuing the same conversation as earlier."
+        if resuming
+        else (
+            "You are on call, hosted headlessly: nobody is watching a terminal. Your wakes are "
+            f"fired by a resident shell polling {cron_store(config)}, so scheduling one with "
+            "ops_submit or ops_check_later really does bring you back - but a woken turn is a "
+            "cold start with no memory of this conversation, so whatever the next turn needs "
+            "must be in the campaign's ledger, not in your head."
+        )
+    )
+    return (
+        f"{task}\n\n"
+        f"---\n"
+        f"Environment: {where} Campaign state for this install lives under {ops_home(config)}. "
+        f"ops_ask_owner records the question on the campaign's trail and the owner reads it "
+        f"asynchronously - they may take a long time to answer, or never answer - so do not "
+        f"stand still waiting for a reply. Your reply to this turn is the whole report the "
+        f"caller receives right now."
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Run the Raven-Oncall watch agent for one turn")
+    ap.add_argument("--task", help="The task")
+    ap.add_argument("--prompt-file", help="File holding the task (alternative to --task)")
+    # The gateway substitutes {agent_id} here: a uuid it mints on the first turn
+    # of a conversation and replays on every later one.
+    ap.add_argument("--session", help="Conversation id; turns sharing one continue the same session")
+    ap.add_argument("--job", help="State directory name for a run by hand (default: a unique name)")
+    ap.add_argument("--config", default=str(DEFAULT_CONFIG))
+    ap.add_argument("--checkout", default=str(CHECKOUT))
+    # No wall-clock cap by default: the first turn of a campaign submits a job and
+    # returns, but a turn that decides to look before replying has no predictable
+    # length. The per-LLM-call and per-command limits in config.json still apply.
+    ap.add_argument("--timeout", type=int, default=0, help="Seconds; 0 (default) means no limit")
+    ap.add_argument(
+        "--no-wake-shell",
+        action="store_true",
+        help="Do not start the resident wake shell; scheduled wakes will not fire unless "
+        "something else is polling this store (a TUI on this config, for instance)",
+    )
+    ap.add_argument("--keep-going", action="store_true", help="Do not fail when no answer was committed")
+    ap.add_argument("--verbose", action="store_true", help="Mirror diagnostics to stderr; never when spawned")
+    args = ap.parse_args()
+
+    if args.prompt_file:
+        task = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+    elif args.task:
+        task = args.task.strip()
+    else:
+        raise SystemExit("error: pass --task or --prompt-file")
+    if not task:
+        raise SystemExit("error: the task is empty")
+
+    # Resolved: the interpreter path is handed to a subprocess whose cwd is the
+    # checkout, so a relative --checkout would not survive the chdir.
+    root = Path(args.checkout).expanduser().resolve()
+    raven_bin = root / ".venv" / "bin" / "raven"
+    if not raven_bin.is_file():
+        raise SystemExit(f"error: venv missing at {raven_bin}; run `uv sync` in {root}")
+
+    conversation = args.session or args.job or f"run-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    state_dir = RUN_ROOT / safe_name(conversation)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    global _LOG_FILE, _VERBOSE
+    _VERBOSE = args.verbose
+    _LOG_FILE = state_dir / "launcher.log"
+
+    config = render_config(Path(args.config).expanduser().resolve())
+    if not config.is_file():
+        raise SystemExit(f"error: no config at {config}")
+
+    # Before the turn, not after: the agent can schedule a wake inside this turn,
+    # and a shell started afterwards would race the job it is meant to fire.
+    shell_pid, shell_detail = (None, "not started (--no-wake-shell)")
+    if not args.no_wake_shell:
+        shell_pid, shell_detail = ensure_wake_shell(config, checkout=root)
+    log(f"[run] wake shell: {shell_detail}")
+
+    workspace = Path(
+        json.loads(config.read_text(encoding="utf-8"))
+        .get("agents", {})
+        .get("defaults", {})
+        .get("workspace", str(Path.home() / ".raven" / "workspace"))
+    ).expanduser()
+
+    transcript = session_file(root / ".venv" / "bin" / "python", config, workspace, conversation)
+    pre_lines = count_lines(transcript) if transcript is not None else 0
+    resuming = pre_lines > 0
+
+    argv = [
+        str(raven_bin),
+        "agent",
+        "--config",
+        str(config),
+        "--session",
+        f"cli:{conversation}",
+        "--no-markdown",
+        # Without this the process exits as soon as the answer is ready and
+        # interpreter shutdown cancels the in-flight everos extraction, so
+        # nothing reaches long-term memory.
+        "--wait-skill-extract",
+        # And without the flush, extraction never runs at all: a lone `-m` turn
+        # does not trip a boundary on its own, and most spawns are exactly one
+        # turn. The cost is one extraction pass per turn rather than one per
+        # detected boundary. Session continuity is unaffected either way - it
+        # lives in the transcript, not in everos's buffer.
+        "--flush-skill-buffer",
+        "-m",
+        build_task(task, config=config, resuming=resuming),
+    ]
+    log(f"[run] turn={'resume' if resuming else 'first'} timeout={args.timeout or 'none'} transcript={transcript}")
+
+    # Traces are the one thing that does not follow --config (they key off
+    # RAVEN_TRACING_DIR / RAVEN_HOME, not the data dir), so without this every
+    # turn here would write into the host raven's ~/.raven/traces.
+    env = {
+        **os.environ,
+        "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        "RAVEN_TRACING_DIR": os.environ.get("RAVEN_TRACING_DIR", str(config.parent / "traces")),
+    }
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(root),
+            timeout=args.timeout or None,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        rc: int | None = proc.returncode
+        stderr_tail = (proc.stderr or "").strip().splitlines()[-5:]
+    except subprocess.TimeoutExpired:
+        rc, stderr_tail = None, ["timed out"]
+    elapsed = int(time.time() - started)
+    log(f"[run] exit={rc} elapsed={elapsed}s")
+    for line in stderr_tail:
+        log(f"[run]   {line}")
+
+    if rc == 1:
+        # The only documented non-zero exit: config or credential error.
+        log("[run] FAILED: config/credential error")
+        print(f"FAILED: Raven-Oncall exited 1 (config or credential error). See {_LOG_FILE}", flush=True)
+        return 1
+
+    answer = None
+    if transcript is not None and transcript.is_file():
+        answer = extract_answer(transcript, pre_lines)
+    else:
+        log("[run] no transcript found")
+    log(f"[run] answer_chars={len(answer or '')}")
+
+    if answer is None:
+        reason = "timed out" if rc is None else "no answer was committed"
+        log(f"[run] FAILED: {reason}")
+        if not args.keep_going:
+            print(f"FAILED: Raven-Oncall produced no answer ({reason}). See {_LOG_FILE}", flush=True)
+            return 1
+        answer = f"(no answer committed: {reason})"
+
+    # The watch footer is the part of the reply the agent cannot write: whether
+    # anything will actually come back for it, and what its own trail says.
+    footer: list[str] = []
+    wakes = pending_wakes(config)
+    if wakes:
+        watcher = f"pid {shell_pid}" if shell_pid else f"NO WATCHER - {shell_detail}"
+        footer.append(f"next wake ({watcher}): " + "; ".join(wakes[:3]))
+    elif shell_pid:
+        footer.append("no wake is scheduled: nothing will come back on its own")
+    footer.extend(campaign_state(config))
+
+    out = [answer]
+    if footer:
+        out.append("\n--- watch state\n" + "\n".join(footer))
+    print("\n".join(out), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except SystemExit as exc:
+        # A setup error the caller caused has to reach them as the reply. stderr
+        # would too - the backend folds it in - but only when it decides stderr is
+        # non-empty, so the reliable channel is stdout, same as every other
+        # failure here. Numeric exits (argparse) pass through untouched.
+        if isinstance(exc.code, str):
+            print(exc.code, flush=True)
+            sys.exit(1)
+        raise

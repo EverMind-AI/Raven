@@ -1,0 +1,13 @@
+# Raven agent config (cases + pbench).
+#
+# Fields consumed by agents/raven/*.py at run time. CLI flags still
+# override (e.g. --max-iter 200 beats the yaml default).
+
+name: raven
+
+# AgentLoop config for cases.py --mode agent and pbench.py --runtime agent.
+max_iterations: 10
+agent_timeout_s: 180
+
+# pbench context-mode default. cold = raw obs only; warm = obs + synthesizer.
+default_context_mode: cold

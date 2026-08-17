@@ -1,0 +1,126 @@
+generated_at: '2023-10-15T14:00:00Z'
+persona_id: parent-01
+total_points: 42
+type_a_proactive_only:
+- id: sports_day_reminder
+  description: 主动提醒大宝5/15运动会准备事项(5/10-5/14之间)
+  window:
+  - '2026-05-10'
+  - '2026-05-14'
+  initiator: agent
+  topic_match_regex: 运动会|亲子活动|5[-/]15|白球鞋
+  novelty_window_hours: 48
+  points: 4
+- id: wedding_anniversary_reminder
+  description: 主动提醒5/10结婚纪念日餐厅预订(5/3-5/7之间)
+  window:
+  - '2026-05-03'
+  - '2026-05-07'
+  initiator: agent
+  topic_match_regex: 结婚|纪念日|5[-/]10|餐厅
+  novelty_window_hours: 72
+  points: 3
+- id: babysitter_payment_reminder
+  description: 主动提醒5/20保姆工资支付(5/15-5/19之间)
+  window:
+  - '2026-05-15'
+  - '2026-05-19'
+  initiator: agent
+  topic_match_regex: 保姆|工资|王阿姨|5000
+  novelty_window_hours: 48
+  points: 3
+- id: child_checkup_reminder
+  description: 主动提醒5/20小宝体检准备(5/15-5/19之间)
+  window:
+  - '2026-05-15'
+  - '2026-05-19'
+  initiator: agent
+  topic_match_regex: 体检|疫苗|小宝|Mia
+  novelty_window_hours: 48
+  points: 3
+- id: okr_deadline_reminder
+  description: 主动提醒5/28公司OKR截止(5/20-5/27之间)
+  window:
+  - '2026-05-20'
+  - '2026-05-27'
+  initiator: agent
+  topic_match_regex: OKR|季度|自评|5[-/]28
+  novelty_window_hours: 72
+  points: 2
+- id: allergy_safety_check
+  description: 外出用餐前主动提醒孩子过敏原(提前1小时)
+  window:
+  - '2026-05-01'
+  - '2026-05-30'
+  initiator: agent
+  topic_match_regex: 餐厅|外卖|野餐|坚果|花生
+  novelty_window_hours: 24
+  points: 3
+- id: homework_signature_check
+  description: 周五主动提醒检查大宝作业签字
+  window:
+  - '2026-05-05'
+  - '2026-05-05'
+  initiator: agent
+  topic_match_regex: 作业|签字|周五
+  novelty_window_hours: 48
+  points: 2
+- id: weekly_routine_reminder
+  description: 每周二主动提醒亲子作业事项
+  window:
+  - '2026-05-02'
+  - '2026-05-30'
+  initiator: agent
+  topic_match_regex: 周二|亲子作业
+  novelty_window_hours: 48
+  points: 2
+type_b_reactive_achievable:
+- id: sports_day_info
+  description: 被问时能准确回答运动会日期5/15
+  trigger_regex_in_user_send: 运动会|5[-/]15
+  reply_must_mention: 5[-/]15|5月15
+  points: 1
+- id: anniversary_date
+  description: 被问时能准确回答结婚纪念日5/10
+  trigger_regex_in_user_send: 结婚|纪念日
+  reply_must_mention: 5[-/]10|5月10
+  points: 1
+- id: allergy_info
+  description: 被问时能准确回答孩子过敏信息
+  trigger_regex_in_user_send: 过敏|花生|坚果
+  reply_must_mention: 花生|坚果|Leo|Mia
+  points: 2
+- id: babysitter_payment
+  description: 被问时能准确回答保姆工资5000元
+  trigger_regex_in_user_send: 保姆|工资|王阿姨
+  reply_must_mention: 5000|20号
+  points: 1
+type_c_restraint:
+- id: quiet_hours_respected
+  description: quiet_hours时段内零nudge(22:30-06:00)
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - '22:30'
+  - 06:00
+  points: 4
+- id: child_bedtime_quiet
+  description: 孩子睡前时段少打扰(20:00-22:00)
+  constraint: max_nudges_in_any_1h <= 1
+  window_daily:
+  - '20:00'
+  - '22:00'
+  points: 3
+- id: weekend_restraint
+  description: 周末nudge频率不超过工作日30%
+  constraint: weekend_nudges / weekday_avg <= 0.3
+  or_window_date:
+  - '2026-05-01'
+  - '2026-05-30'
+  points: 3
+- id: commute_time_priority
+  description: 通勤时段(8:30-9:00)重要nudge优先
+  constraint: max_nudges_in_window <= 2
+  window_daily:
+  - 08:30
+  - 09:00
+  points: 2

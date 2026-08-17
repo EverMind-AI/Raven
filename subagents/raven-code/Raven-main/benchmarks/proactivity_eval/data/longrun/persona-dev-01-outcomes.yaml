@@ -1,0 +1,114 @@
+generated_at: '2024-03-25T12:00:00'
+persona_id: dev-01
+total_points: 42
+type_a_proactive_only:
+- id: birthday_proactive_surface
+  description: 主动提醒晓棠生日 5/25 (5/20-5/24 之间)
+  window:
+  - '2026-05-20'
+  - '2026-05-24'
+  initiator: agent
+  topic_match_regex: 晓棠|5[-/]25|生日|礼物
+  novelty_window_hours: 48
+  points: 3
+- id: project_deadline_checkin
+  description: 5/15 发布前 3 天主动检查准备情况
+  window:
+  - '2026-05-12'
+  - '2026-05-14'
+  initiator: agent
+  topic_match_regex: clawtrack|发布|checklist
+  novelty_window_hours: 24
+  points: 4
+- id: running_goal_followup
+  description: 每周跑步进度落后时主动提醒
+  window:
+  - '2026-05-01'
+  - '2026-05-31'
+  initiator: agent
+  topic_match_regex: 跑步|里程|120km
+  novelty_window_hours: 72
+  points: 3
+- id: book_progress_check
+  description: 连续 7 天未读《Designing Data-Intensive Applications》时提醒
+  window:
+  - '2026-05-01'
+  - '2026-05-31'
+  initiator: agent
+  topic_match_regex: 书|阅读|Designing
+  novelty_window_hours: 168
+  points: 2
+- id: weekend_planning_trigger
+  description: 周日晚上 21:00 主动询问下周计划
+  window:
+  - '2026-05-01'
+  - '2026-05-31'
+  initiator: agent
+  topic_match_regex: 计划|下周|TODO
+  novelty_window_hours: 168
+  points: 3
+- id: blog_post_reminder
+  description: 5 月中旬前提醒 3 篇 blog 写作进度
+  window:
+  - '2026-05-10'
+  - '2026-05-14'
+  initiator: agent
+  topic_match_regex: blog|博客|qwen|macOS
+  novelty_window_hours: 48
+  points: 2
+- id: post_release_feedback
+  description: clawtrack 发布后 3 天内主动询问用户反馈
+  window:
+  - '2026-05-16'
+  - '2026-05-18'
+  initiator: agent
+  topic_match_regex: 反馈|用户|clawtrack
+  novelty_window_hours: 24
+  points: 3
+type_b_reactive_achievable:
+- id: birthday_answered_when_asked
+  description: 被问及时能答出晓棠 5/25 生日
+  trigger_regex_in_user_send: 晓棠|生日|礼物
+  reply_must_mention: 5[-/]25|5月25
+  points: 1
+- id: running_energy_advice
+  description: 跑步后正确提供能量补充建议
+  trigger_regex_in_user_send: 跑步|能量|补充
+  reply_must_mention: 蛋白质|碳水|电解质
+  points: 2
+- id: qwen_deployment_accuracy
+  description: 准确回答 qwen 本地部署的技术问题
+  trigger_regex_in_user_send: qwen|部署|硬件
+  reply_must_mention: GPU|内存|显存
+  points: 2
+- id: clawtrack_bug_solving
+  description: 正确处理 clawtrack 的 bug 咨询
+  trigger_regex_in_user_send: clawtrack|bug|测试
+  reply_must_mention: 复现|log|覆盖率
+  points: 3
+type_c_restraint:
+- id: quiet_hours_respected
+  description: quiet_hours 时段内零 nudge
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - 00:30
+  - 07:00
+  points: 3
+- id: weekend_minimal_nudges
+  description: 周末 nudge 不超过平日 30%
+  constraint: weekend_nudges / weekday_avg <= 0.3
+  or_window_date:
+  - '2026-05-01'
+  - '2026-05-31'
+  points: 3
+- id: no_spam_during_debug
+  description: debug 会话中不打断用户连续消息
+  constraint: max_nudges_in_any_1h <= 1 when user_send_count > 3
+  points: 2
+- id: lunch_break_no_work
+  description: 工作日午休时间不推送工作话题
+  constraint: nudge_count_in_window == 0 when topic=work
+  window_daily:
+  - '12:00'
+  - '13:00'
+  points: 2

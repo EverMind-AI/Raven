@@ -1,0 +1,62 @@
+# Example: AppWorld self-evolution run spec (built-in scorer line).
+#
+#   uv run python -m raven.evolver check --config <this file>            # validate setup
+#   uv run python -m raven.evolver run   --config <this file> --smoke   # tiny wiring run
+#   uv run python -m raven.evolver run   --config <this file>           # the real run
+#   uv run python -m raven.evolver status --config <this file>          # progress (sealed-safe)
+#
+# One command does everything: cold-start baseline (if missing) -> evolution
+# rounds -> terminate -> unseal + retention. Interrupt freely; the same
+# command resumes. `finalize` ends a run early and unseals (one-way).
+#
+# Prerequisites (see raven/evolver/README.md, "Bootstrap: AppWorld"):
+# an AppWorld install with data/, a subject runtime config JSON, and task
+# id lists. Replace every /path/to/... below.
+
+bench: appworld
+repo_root: /path/to/Raven                # the repo being evolved (subject)
+# base_sha: <commit-sha>                 # root node; omit to use repo_root's
+                                         # current HEAD (resolved once at launch
+                                         # and pinned for the whole run)
+work_dir: /path/to/evolution/work
+
+# Omit `models` entirely to use Raven's own configured model for all roles.
+# These are the evolution loop's brains — distinct from the subject agent's
+# model, which is pinned inside bench_config.config_path for the whole run.
+models:
+  driver:  {provider: claude_cli, model: claude-haiku-4-5, max_concurrency: 4}
+  design:  {provider: claude_cli, model: claude-opus-4-8}
+  verdict: {provider: claude_cli, model: claude-opus-4-8}
+  # or: {provider: openai_compat, base_url: https://host/v1, model: <name>,
+  #      api_key_env: EVOLVER_DRIVER_API_KEY}
+
+funnel:                       # all optional; example values for a compact run
+                              # (omitted -> defaults: k_screen 1, k_confirm 3,
+                              # budget 2x3, patience 10, max_rounds 20)
+  k_screen: 1
+  k_confirm: 3
+  budget:      {max_why_per_round: 2, candidates_per_why: 2}
+  termination: {patience: 5, max_rounds: 8}
+
+bench_config:
+  # Copy docs/examples/subject_runtime.json and fill in your endpoint.
+  config_path: /path/to/subject_runtime.json
+  appworld_data_root: /path/to/appworld    # holds data/; exported as APPWORLD_ROOT
+  train_task_file: /path/to/train.txt
+  # test_task_file: /path/to/test.txt      # enables the sealed test + retention
+  n: 90
+  conc: 8
+  base_port: 8600
+  extra_args: ["--task-timeout", "400"]
+  # whitelist: omit to use the repo default (raven/agent/, benchmarks/appworld/);
+  # every prefix is validated against base_sha at startup — a dead prefix
+  # refuses to start instead of silently dropping designer edits.
+
+# Deep-merged over the config when --smoke is passed (on top of the built-in
+# shrink: 1 WHY x 1 candidate x 1 round, K=1). work_dir gets a _smoke suffix.
+smoke:
+  bench_config:
+    train_task_ids: ["<failing-task-1>", "<failing-task-2>", "<failing-task-3>"]
+    n: 3
+    conc: 3
+    base_port: 8700

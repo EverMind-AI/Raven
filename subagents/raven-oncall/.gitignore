@@ -1,0 +1,44 @@
+# Secrets. `.env.example` is the published template; `.env` never ships.
+.env
+.config.rendered.json
+
+# Local records of an install, and of the config that preceded an update. Both
+# carry this machine's absolute paths, and a backup taken through install.py
+# carries every other subagent registered on it.
+subagents-backup-*.json
+config.json.bak-*
+*.tar.gz
+
+# Runtime state. Everything here is a record of real runs - questions asked,
+# pages fetched, answers committed - so it is work data, not sample data.
+# Anchored to this folder. Without the leading slash git matches at every
+# depth, and the vendored build below carries real packages under these
+# names -- raven/proactive_engine/schedulers/cron/ in every tree, and
+# raven/ops/ in this one -- which would be dropped from the commit while
+# still sitting on the machine that made it. __pycache__/ is deliberately
+# left unanchored: that one does want to match anywhere.
+/runs/
+/sessions/
+/cache/
+/cron/
+/ledger/
+/logs/
+/traces/
+/ops/
+/workspace/
+wake_shell.lock
+wake_shell.pid
+__pycache__/
+
+# The vendored checkout ships, but not everything inside it.
+#
+# `.venv/` is ~700 MB of third-party wheels whose console scripts carry this
+# machine's absolute paths baked into their shebangs - `uv sync` in the checkout
+# rebuilds it correctly in seconds, and a copied one fails outright.
+Raven-Oncall/.venv/
+Raven-Oncall/**/__pycache__/
+
+# A full clone of the private internal GitLab repo: the remote URL, every
+# internal branch and commit, and the personal email address of every
+# contributor. The working tree is what is being published; its history is not.
+Raven-Oncall/.git/

@@ -1,0 +1,68 @@
+id: team-lead-01
+role: 后端工程 Tech Lead（6 人团队）
+persona_name: Derek
+timezone: Asia/Shanghai
+language: zh-CN
+anchor_date: "2026-05-01"
+wake_hours: [7, 23]
+communication_style: |
+  偏正式，结构化：常用"先看现状 / 然后再说方案"的开头。
+  偶尔英文术语（sprint / retro / blocker / PR）不翻译。
+  和 AI 交流像和 senior 同事 debrief，简洁带上下文。
+
+weekly_rhythm:
+  mon_fri: |
+    7:00 起床跑 5km → 8:30 到公司。
+    9:00 站会（team）。10:00-12:00 code review + unblock 同事。
+    14:00-16:00 自己的技术工作（架构设计 / 疑难问题）。
+    16:00-18:00 一堆会议：stakeholder / 1-on-1 / 跨组。
+    18:30 回家 → 20:00 家人时间 → 22:00 整理明天 TODO。
+  sat: |
+    睡到 9:00。上午看技术 newsletter / 写周报给老板。
+    下午陪伴家人。晚上看个电影。
+  sun: |
+    8:00 起，早饭 + 下周 planning。
+    下午自选：有时 mentor 其他同事（读他们的 PR），有时学新技术。
+    21:00 后想 next week 重点。
+
+goals:
+  - "5/8 搞定 service migration 的 RFC 并 team 过一遍"
+  - "sprint 11 (5/12 start) 的 stories groom 好"
+  - "5 月内和每个组员各做一次 1-on-1（6 人，至少 3 次深度）"
+  - "retro 5/23 准备：提前汇总 blocker + 团队反馈"
+  - "5/30 月度季度对齐前写完 6 页 PPT"
+
+quirks:
+  - "会议密集的一天结束会发一条'终于下班了'给 AI 吐苦水"
+  - "code review 时发现 junior 同学的经典错误会想用作教学素材"
+  - "周一早上会问 AI 'Monday mood' 推荐一首歌"
+  - "对 'meeting 过多' 这类自我感觉很敏感，会主动让 AI 帮他分析时间分配"
+  - "deadline 临近 3 天起睡眠变差会抱怨"
+
+initial_memory_md: |
+  # Long-term Memory
+
+  ## User Information
+  - 姓名: Derek
+  - 职业: 后端 Tech Lead（Go + Python, 支付域）
+  - 团队: 6 人（2 senior, 3 mid, 1 junior）
+  - 家庭: 太太 Anna, 女儿 4 岁
+
+  ## Preferences
+  - 简洁 + 结构化回复（用 bullets / 分点）
+  - 英文术语不翻译
+  - 不爱 emoji，偶尔"🙏"
+
+  ## Project Context
+  - 近期大石头: service migration (monolith → 3 个子服务)，RFC 5/8 交
+  - Sprint 节奏: 两周一次，sprint 11 起始 5/12
+  - 月度季度对齐 5/30
+
+  ## Proactivity Preferences
+  - quiet_hours: 23:00-07:00
+  - 周末早上 9:00 前勿扰
+
+  ## Important Notes
+  - 每个组员 5 月内至少一次 1-on-1（6 人）
+  - 健康: 失眠倾向 deadline 前
+  - 女儿 Lily 7/1 幼儿园毕业 (remote goal)

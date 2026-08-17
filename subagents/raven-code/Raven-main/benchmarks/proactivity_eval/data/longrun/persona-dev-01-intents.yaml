@@ -1,0 +1,323 @@
+generated_at: '2024-03-25T12:00:00'
+persona_id: dev-01
+anchor_date: '2026-05-01'
+total_days: 30
+events:
+- at: '2026-05-01T19:30:00'
+  topic: clawtrack 的 CLI 参数解析有 bug，想找人吐槽
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-01T22:15:00'
+  topic: 突然想到女朋友生日礼物可以送智能手表，记下来
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: 考虑送智能手表作为生日礼物
+- at: '2026-05-02T12:30:00'
+  topic: 午休时想查下 qwen 本地部署的硬件要求
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T20:00:00'
+  topic: clawtrack 的测试覆盖率不够，想讨论怎么提升
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-03T07:30:00'
+  topic: 今天腿酸，要不要跑步？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-03T19:45:00'
+  topic: clawtrack 的发布 checklist 需要完善
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-04T21:30:00'
+  topic: 读《Designing Data-Intensive Applications》遇到难点，想请教
+  kind: learning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T10:00:00'
+  topic: 周六跑步后，想知道补充能量的健康食物
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-05T15:00:00'
+  topic: 写 blog 时不确定 macOS 小技巧的准确性
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T21:00:00'
+  topic: 周日晚上，列下周工作计划
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T19:00:00'
+  topic: clawtrack 的发布倒计时，有点焦虑
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-08T12:15:00'
+  topic: 午休时想查下智能手表的评测
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: null
+- at: '2026-05-08T20:30:00'
+  topic: clawtrack 的文档生成有问题，需要调试
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-09T07:45:00'
+  topic: 今天天气适合跑步吗？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-09T22:00:00'
+  topic: 突然想到 clawtrack 可以加个新功能，记下来
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: 考虑添加新功能到 clawtrack
+- at: '2026-05-10T19:30:00'
+  topic: clawtrack 的发布前最后测试
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 5
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-11T10:30:00'
+  topic: 周六跑步后，记录今天的跑步数据
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-11T15:30:00'
+  topic: 写 blog 时想确认 qwen 本地部署的步骤
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T21:00:00'
+  topic: 周日晚上，回顾本周进展并计划下周
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T19:00:00'
+  topic: clawtrack 发布前的最后准备
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-14T12:30:00'
+  topic: 午休时想查下女朋友喜欢的智能手表颜色
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: null
+- at: '2026-05-14T20:00:00'
+  topic: clawtrack 发布前的紧张感
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-15T19:30:00'
+  topic: clawtrack 发布成功，想分享喜悦
+  kind: vent
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-16T21:00:00'
+  topic: 读《Designing Data-Intensive Applications》的感想
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T12:15:00'
+  topic: 午休时想查下跑步后的拉伸技巧
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-18T10:00:00'
+  topic: 周六跑步后，记录今天的跑步数据
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-18T15:00:00'
+  topic: 写 blog 时想确认 macOS 小技巧的细节
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T21:00:00'
+  topic: 周日晚上，计划下周工作和生活
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T19:30:00'
+  topic: clawtrack 的用户反馈分析
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-21T12:30:00'
+  topic: 午休时想查下女朋友生日当天的餐厅
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: null
+- at: '2026-05-22T20:00:00'
+  topic: clawtrack 的下一个版本规划
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-23T07:45:00'
+  topic: 今天天气适合跑步吗？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-24T19:30:00'
+  topic: 女朋友生日礼物还没买，有点着急
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: null
+- at: '2026-05-25T12:00:00'
+  topic: 女朋友生日，想确认餐厅预订
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - girlfriend_birthday
+  reveals_new_fact: null
+- at: '2026-05-26T10:30:00'
+  topic: 周六跑步后，记录今天的跑步数据
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-26T15:30:00'
+  topic: 写 blog 时想确认 clawtrack 设计文章的细节
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-27T21:00:00'
+  topic: 周日晚上，回顾本月进展并计划下月
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-28T19:30:00'
+  topic: clawtrack 的用户反馈整理
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-29T12:15:00'
+  topic: 午休时想查下跑步鞋的推荐
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
+- at: '2026-05-30T20:00:00'
+  topic: clawtrack 的下一个版本开发计划
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - project_clawtrack
+  reveals_new_fact: null
+- at: '2026-05-31T07:45:00'
+  topic: 今天天气适合跑步吗？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - running_goal
+  reveals_new_fact: null
