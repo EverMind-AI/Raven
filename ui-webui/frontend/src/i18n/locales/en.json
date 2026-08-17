@@ -216,7 +216,8 @@
 			"placeholder": "Describe what this knowledge base is for."
 		},
 		"embeddingModel": {
-			"label": "Embedding model"
+			"label": "Embedding model",
+			"sourceHint": "The embedding model comes from the EverOS memory settings; configure it there to change it."
 		},
 		"dimension": {
 			"label": "Dimension"
@@ -225,7 +226,7 @@
 			"lockedTitle": "Dimension is locked to {{dimension}}d",
 			"lockedDescription": "This server already pins all knowledge bases to {{dimension}}-dim embeddings. Only compatible models are listed below.",
 			"noCompatibleTitle": "No compatible embedding models",
-			"noCompatibleAny": "None of your credentials expose an embedding model. Add a credential first.",
+			"noCompatibleAny": "No embedding model is configured. Set one up under Settings -> Memory (EverOS), in the Embedding role.",
 			"noCompatibleLocked": "None of your credentials expose a model that can produce {{dimension}}-dim embeddings."
 		},
 		"errors": {
@@ -313,6 +314,12 @@
 			"deleteConfirmTitle": "Delete document",
 			"deleteConfirmDescription": "Delete \"{{name}}\"? This removes the document and every indexed chunk. This action cannot be undone.",
 			"deleteError": "Could not delete document.",
+			"replaceStaleLeft": "Uploaded the replacement, but could not remove the old document.",
+			"preview": {
+				"description": "Stored text of this document.",
+				"failed": "Could not read the document",
+				"truncated": "Preview truncated; the file continues beyond what is shown."
+			},
 			"dropHint": "Drop files here to upload",
 			"dropHintIdle": "or drop files here",
 			"unsupportedExtension": "\"{{name}}\" was skipped — file type not supported.",
@@ -331,6 +338,7 @@
 				"cancel": "Cancel",
 				"dismiss": "Dismiss",
 				"remove": "Remove",
+				"replace": "Replace this document",
 				"clearFinished": "Clear finished"
 			}
 		},

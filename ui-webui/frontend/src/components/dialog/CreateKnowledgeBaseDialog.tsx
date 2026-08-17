@@ -214,6 +214,9 @@ export function CreateKnowledgeBaseDialog({
 							onAddCredential={onAddCredential}
 						/>
 					</Field>
+					<p className="text-xs text-muted-foreground">
+						{t('dialog-knowledge-base-create.embeddingModel.sourceHint')}
+					</p>
 					<Field orientation="horizontal">
 						<FieldLabel>{t('dialog-knowledge-base-create.dimension.label')}</FieldLabel>
 						<DimensionSelect

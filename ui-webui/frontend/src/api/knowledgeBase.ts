@@ -44,6 +44,30 @@ export interface UploadDocumentOptions {
  * progress in any current browser, so multipart uploads that drive a
  * progress UI have to fall back to XMLHttpRequest.
  */
+/** Media types the KB parsers accept, keyed by extension. Only consulted when
+ *  the browser could not name the type itself. */
+const MEDIA_TYPE_BY_EXTENSION: Record<string, string> = {
+	'.csv': 'text/csv',
+	'.htm': 'text/html',
+	'.html': 'text/html',
+	'.json': 'application/json',
+	'.markdown': 'text/markdown',
+	'.md': 'text/markdown',
+	'.rst': 'text/x-rst',
+	'.txt': 'text/plain',
+	'.xml': 'application/xml',
+	'.yaml': 'application/x-yaml',
+	'.yml': 'application/x-yaml',
+};
+
+function mediaTypeForFile(file: File): string | null {
+	const declared = (file.type || '').trim();
+	if (declared && declared !== 'application/octet-stream') return null;
+	const dot = file.name.lastIndexOf('.');
+	if (dot < 0) return null;
+	return MEDIA_TYPE_BY_EXTENSION[file.name.slice(dot).toLowerCase()] ?? null;
+}
+
 function uploadDocumentXhr(
 	knowledgeBaseId: string,
 	file: File,
@@ -52,6 +76,13 @@ function uploadDocumentXhr(
 	const { onProgress, signal } = options;
 	const formData = new FormData();
 	formData.append('file', file);
+	// The server routes an upload to a parser by media type, and browsers hand
+	// us application/octet-stream (or nothing) for extensions the OS has no
+	// mapping for -- .md and .rst most often. The route takes an explicit
+	// override for exactly this, so resolve it from the extension instead of
+	// letting a correct file be rejected as an unparseable type.
+	const resolved = mediaTypeForFile(file);
+	if (resolved) formData.append('content_type', resolved);
 
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -167,6 +198,17 @@ export const knowledgeBaseApi = {
 
 	uploadDocument: (knowledgeBaseId: string, file: File, options?: UploadDocumentOptions) =>
 		uploadDocumentXhr(knowledgeBaseId, file, options),
+
+	/** Head of a document's stored bytes, decoded as text, for preview. */
+	readDocument: (knowledgeBaseId: string, documentId: string) =>
+		client.get<{
+			document_id: string;
+			filename: string;
+			content_type: string | null;
+			size: number;
+			truncated: boolean;
+			content: string;
+		}>(`/knowledge_bases/${knowledgeBaseId}/documents/${documentId}/content`),
 
 	deleteDocument: (knowledgeBaseId: string, documentId: string) =>
 		client.delete(`/knowledge_bases/${knowledgeBaseId}/documents/${documentId}`),

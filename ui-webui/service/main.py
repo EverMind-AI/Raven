@@ -56,7 +56,15 @@ storage = RedisStorage(
     port=6379,
 )
 
-vector_store = QdrantStore(location=":memory:")
+# On disk rather than ":memory:": an in-process store drops every indexed
+# document on restart while the knowledge base records survive in Redis, so the
+# page keeps reporting documents as "ready" and every search returns nothing.
+# That reads as broken retrieval rather than an empty index. A local-path Qdrant
+# locks the directory to one process, which matches this single-service
+# deployment.
+vector_store = QdrantStore(
+    path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "qdrant"),
+)
 
 workspace_manager = LocalWorkspaceManager(
     basedir=os.path.join(
@@ -275,6 +283,27 @@ except ImportError as exc:  # raven not importable in this env — skip the page
     import logging
 
     logging.getLogger("uvicorn.error").warning("raven not importable; /raven/providers routes disabled: %s", exc)
+
+# Two knowledge-base routes AgentScope's own app does not provide here. The
+# embedding picker is served from Raven's config because AgentScope's walks the
+# caller's AgentScope credentials and asks each provider for model cards, and
+# this deployment has neither -- so the picker was always empty and no knowledge
+# base could be created. Preview reads a document's stored bytes back, which the
+# document routes cover for upload, list, status and delete but not for reading.
+#
+# Guarded because neither is load-bearing for the chat: a service that cannot
+# install them should still boot with retrieval working.
+try:
+    from agentscope.app.deps import get_blob_store, get_current_user_id
+    from raven_kb_embedding import install_kb_embedding_override
+    from raven_kb_preview import build_kb_preview_router
+
+    install_kb_embedding_override(app, storage)
+    app.include_router(build_kb_preview_router(storage, get_current_user_id, get_blob_store))
+except Exception as exc:  # noqa: BLE001 - the rest of the service must still boot
+    import logging
+
+    logging.getLogger("uvicorn.error").warning("knowledge: page helpers not installed: %s", exc)
 
 # The chat runs on the gateway, so also expose the Raven config-admin REST proxy
 # (P4) and close the shared gateway WebSocket connection on shutdown.
