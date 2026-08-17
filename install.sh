@@ -4,6 +4,9 @@
 #   Remote (website):   curl -fsSL https://raven.evermind.ai/install.sh | sh
 #   Local (dev clone):  git clone ... && cd raven && ./install.sh
 #
+# A piped run always installs the published release wheel, even from inside a
+# clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+#
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
 # is already present and only fills the gaps:
@@ -146,11 +149,32 @@ ensure_node() {
 }
 
 # --- 3. install raven ------------------------------------------------------
+# True when $1 holds a raven source checkout (its own pyproject, not a dep's).
+is_raven_source() {
+  [ -f "$1/pyproject.toml" ] && grep -q '^name = "raven"' "$1/pyproject.toml" 2>/dev/null
+}
+
 install_raven() {
   # Local mode: run from a raven source checkout -> editable install of the
-  # working tree (what a developer wants). Otherwise install from git.
-  script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-  if [ -f "$script_dir/pyproject.toml" ] && grep -q '^name = "raven"' "$script_dir/pyproject.toml" 2>/dev/null; then
+  # working tree (what a developer wants). Otherwise install the release wheel.
+  #
+  # "$0" names a real file only when this script runs as a file
+  # (./install.sh). Piped through `curl ... | sh` the script arrives on stdin,
+  # "$0" is "sh" and dirname "$0" is "." -- taking that as the source dir turns
+  # a one-line install started from inside a clone into a silent editable
+  # install of that working tree, whatever it happens to contain. So local mode
+  # requires "$0" to be a file; RAVEN_LOCAL_SRC is the explicit opt-in for a
+  # piped run.
+  script_dir=""
+  if [ -n "${RAVEN_LOCAL_SRC:-}" ]; then
+    script_dir="$(CDPATH= cd -- "$RAVEN_LOCAL_SRC" 2>/dev/null && pwd || true)"
+    [ -n "$script_dir" ] || die "RAVEN_LOCAL_SRC is not a directory: $RAVEN_LOCAL_SRC"
+    is_raven_source "$script_dir" || die "RAVEN_LOCAL_SRC is not a raven source checkout: $script_dir"
+  elif [ -f "$0" ]; then
+    script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+    is_raven_source "$script_dir" || script_dir=""
+  fi
+  if [ -n "$script_dir" ]; then
     info "Local raven source detected; editable install: $script_dir"
     # The TUI bundle must exist before first run. In a dev checkout it isn't
     # committed, so build it now if Node is available.
