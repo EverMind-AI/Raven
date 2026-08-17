@@ -1256,6 +1256,23 @@ ThirdPartySubagentConfig = Annotated[
 ]
 
 
+class PlaybookConfig(Base):
+    """Playbook matching and execution (the passive per-message funnel).
+
+    Off by default: matching adds one deterministic vocabulary scan per user
+    message plus one LLM gate call when the scan nominates candidates."""
+
+    enabled: bool = False
+    dir: str | None = None
+    """Library directory; defaults to ``<workspace>/playbooks``."""
+
+    model: str | None = None
+    """Model for the match gate; defaults to the loop's own model."""
+
+    match_draft: bool = False
+    """Let draft playbooks match too (testing); ready-only otherwise."""
+
+
 class SubagentsConfig(Base):
     """Native subagent config, including third-party agents (req5).
 
@@ -1278,6 +1295,7 @@ class Config(BaseSettings):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
+    playbook: PlaybookConfig = Field(default_factory=PlaybookConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"

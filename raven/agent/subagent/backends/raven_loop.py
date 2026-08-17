@@ -27,7 +27,12 @@ from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import build_assistant_message
 
 
-def build_subagent_prompt(agent_home: Path, work_dir: Path, tool_names: Collection[str] = ()) -> str:
+def build_subagent_prompt(
+    agent_home: Path,
+    work_dir: Path,
+    tool_names: Collection[str] = (),
+    skills_allow: Collection[str] | None = None,
+) -> str:
     """Build a focused system prompt for an in-process raven subagent.
 
     ``agent_home`` is where the agent's memory and skills live; ``work_dir`` is
@@ -48,6 +53,12 @@ def build_subagent_prompt(agent_home: Path, work_dir: Path, tool_names: Collecti
     always built next to its own registry, so no names means no tools -- unlike
     the main agent's segment builder, where a callable that fails to answer has
     to degrade to showing everything.
+
+    ``skills_allow`` narrows the skills menu on top of the tool filter:
+    ``None`` keeps the current full-catalog behaviour, ``[]`` hides the menu
+    entirely, and a list shows only the named skills. It stacks with the tool
+    filter rather than replacing it, so a whitelisted skill whose required
+    tools this sub-agent lacks is still withheld.
     """
     from raven.agent.context import ContextBuilder
     from raven.memory_engine.skill_forge import LocalSkillCatalog
@@ -70,6 +81,9 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
     catalog = LocalSkillCatalog(agent_home, start_watcher=False)
     visible = filter_by_required_tools(catalog.registry.list_all(), tool_names)
+    if skills_allow is not None:
+        allowed = set(skills_allow)
+        visible = [s for s in visible if s.name in allowed]
     skills_summary = catalog.build_skills_summary(only=visible) if visible else ""
     if skills_summary:
         parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
@@ -103,6 +117,8 @@ class RavenLoopBackend:
         brave_api_key: str | None = None,
         jina_api_key: str | None = None,
         web_proxy: str | None = None,
+        tools_allow: Collection[str] | None = None,
+        skills_allow: Collection[str] | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -115,6 +131,11 @@ class RavenLoopBackend:
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
+        # Per-role capability whitelists (playbook roles build one backend per
+        # role). None = current full set; [] = none; a list = only those.
+        # skills_allow additionally stacks with the tool-based skill filter.
+        self.tools_allow = set(tools_allow) if tools_allow is not None else None
+        self.skills_allow = skills_allow
 
     async def run(
         self,
@@ -175,6 +196,10 @@ class RavenLoopBackend:
         model = model or self.model
         # Build subagent tools (no message tool, no spawn tool).
         tools = ToolRegistry()
+
+        def allowed(name: str) -> bool:
+            return self.tools_allow is None or name in self.tools_allow
+
         # Two roots, matching the main loop: the session directory the run works
         # in, and agent home, whose absolute paths this prompt hands out.
         allowed_dirs = (workspace, self.agent_home) if self.restrict_to_workspace else ()
@@ -183,36 +208,49 @@ class RavenLoopBackend:
         # the workspace at spawn time, so its tools must fence on the directory
         # captured for this run, not on whatever the ambient workdir binding
         # holds by the time they actually execute.
-        tools.register(ReadFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
-        tools.register(WriteFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
-        tools.register(EditFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
-        tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
-        tools.register(
-            ExecTool(
-                working_dir=str(workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-                path_append=self.exec_config.path_append,
-                executor=executor,
-                extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                extra_allowed_dirs=allowed_dirs,
-                follow_binding=False,
+        if allowed("read_file"):
+            tools.register(ReadFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        if allowed("write_file"):
+            tools.register(WriteFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        if allowed("edit_file"):
+            tools.register(EditFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        if allowed("list_dir"):
+            tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        if allowed("exec"):
+            tools.register(
+                ExecTool(
+                    working_dir=str(workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                    path_append=self.exec_config.path_append,
+                    executor=executor,
+                    extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                    extra_allowed_dirs=allowed_dirs,
+                    follow_binding=False,
+                )
             )
-        )
         # Withheld without a key, same as the main loop: a sub-agent that reaches
         # for a search it cannot run reports the failure to its caller, and that
-        # text ends up in the parent turn.
-        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
-        if web_search.api_key:
-            tools.register(web_search)
-        tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
+        # text ends up in the parent turn. The whitelist stacks on top: a
+        # whitelisted web_search without a key is still withheld.
+        if allowed("web_search"):
+            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+            if web_search.api_key:
+                tools.register(web_search)
+        if allowed("web_fetch"):
+            tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         # A resumed instance brings its own history, system prompt included;
         # rebuilding the prompt here would append a second system turn.
         messages: list[dict[str, Any]] = (
             list(history)
             if history
-            else [{"role": "system", "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names)}]
+            else [
+                {
+                    "role": "system",
+                    "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names, self.skills_allow),
+                }
+            ]
         )
         messages.append({"role": "user", "content": task})
 

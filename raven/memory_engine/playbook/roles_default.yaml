@@ -1,0 +1,24 @@
+# The four built-in capability bases the playbook generator derives roles
+# from. Descriptions are what the generation LLM reads to cast roles — write
+# charters and boundaries, not personas. Users may override fields or add
+# bases via config (`playbook.roles`); see role_pool.py for merge rules.
+research:
+  description: >-
+    深度检索与事实核查：多源搜索、信源可信度判断、检索结果冲突时的裁决、
+    产出带引用的调研结论。禁止无信源断言。
+  tags: [stateful, local-files]
+code:
+  description: >-
+    仓库级代码工作：理解现有代码结构、定位改动落点、实现与单测、终端实操。
+    遵循仓库既有抽象，不新建平行体系。
+  tags: [stateful, local-files]
+data:
+  description: >-
+    数据全链路：数据发现、SQL 工作流、统计与因果判断、影响面量化。
+    结论必须可被执行比对或程序断言复核。
+  tags: [stateful, local-files]
+content:
+  description: >-
+    文本与演示类交付物：撰写、改写、去 AI 味、格式与语气约束下的成稿、自查。
+    结论先行，硬约束（字数/结构）优先于文采。
+  tags: [stateful, local-files]

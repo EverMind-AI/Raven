@@ -101,7 +101,7 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
+    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig, PlaybookConfig
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
@@ -384,6 +384,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         deliverables: "DeliverableStore | None" = None,
         router: "ModelRouter | None" = None,
+        playbook_config: "PlaybookConfig | None" = None,
         strategies: "StrategyRegistry | None" = None,
         skill_forge_config: Any = None,
         response_modifier: Callable[[str, str], str] | None = None,
@@ -661,6 +662,14 @@ class AgentLoop:
         self._debug_server: SandboxDebugServer | None = None
 
         self.router = router
+        # Playbook funnel (opt-in): matching failures must never break a turn,
+        # and a runtime that fails to build just leaves the feature off.
+        self._playbooks = None
+        if playbook_config is not None and playbook_config.enabled:
+            try:
+                self._playbooks = self._build_playbook_runtime(playbook_config)
+            except Exception:
+                logger.opt(exception=True).warning("Playbook runtime failed to build; feature disabled")
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
@@ -1043,6 +1052,46 @@ class AgentLoop:
                 ),
                 first=True,
             )
+
+    def _build_playbook_runtime(self, cfg: "PlaybookConfig"):
+        """Assemble the playbook funnel from pieces this loop already owns.
+
+        The executor gets a private SubAgentDagTool instance (never
+        registered, so no LLM-facing surface changes) wired to the same
+        manager hooks as the registered one: one dispatch gate, one quota,
+        one announce path.
+        """
+        from raven.agent.subagent_dag.tool import SubAgentDagTool
+        from raven.memory_engine.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
+
+        library_dir = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
+        dag_tool = SubAgentDagTool(
+            workspace=self.subagents.workspace,
+            third_party_subagents=self._third_party_subagents,
+            guide_skill_id=None,
+            session_dir=self.sessions.session_dir,
+            is_paused=lambda: self.subagents.paused,
+            gate=self.subagents.dispatch_gate,
+            announce=self.subagents.announce_dag_result,
+            adopt=self.subagents.adopt_background_run,
+            charge=self.subagents.charge_dag_run,
+        )
+        from raven.memory_engine.playbook import agent_roster, load_role_pool
+
+        executor = PlaybookExecutor(
+            backend_factory=self.subagents.build_role_backend,
+            dag_tool=dag_tool,
+            provider=self.provider,
+            compose_model=cfg.model,
+        )
+        executor.set_roster(agent_roster(load_role_pool()))
+        return PlaybookRuntime(
+            provider=self.provider,
+            store=PlaybookStore(library_dir),
+            executor=executor,
+            model=cfg.model,
+            include_draft=cfg.match_draft,
+        )
 
     def _dag_guide_skill_id(self) -> str | None:
         """The orchestration guide's id for the DAG tool description, or None.
@@ -3107,6 +3156,25 @@ class AgentLoop:
         # which is topic-aware (req.conversation), not just channel:chat_id.
         if (ask_tool := self.tools.get("ask_user")) and isinstance(ask_tool, AskUserTool):
             ask_tool.set_context(key)
+
+        # ── Playbook interception: one vocabulary scan per user message; a
+        # nomination costs one gate call. An actionable match replaces this
+        # whole turn -- either a dispatch receipt (the graph runs in the
+        # background and announces its own result) or the questions that
+        # stopped it; anything else passes through untouched.
+        if self._playbooks is not None and origin in (None, Origin.USER):
+            plan = await self._playbooks.consider(content, channel=channel, chat_id=chat_id, session_key=key)
+            if plan is not None:
+                # Recorded like the personalization branch above: this return
+                # skips _save_turn, and the follow-up flow depends on history
+                # holding both sides -- a param answered on the next turn only
+                # works if the model can see the question being asked, and
+                # "did that run?" only works if the receipt is on record.
+                _ts = datetime.now().isoformat()
+                session.record({"role": "user", "content": content, "timestamp": _ts})
+                session.record({"role": "assistant", "content": plan.reply, "timestamp": _ts})
+                self.sessions.save(session)
+                return (plan.reply, [])
 
         context_messages = self._context_messages_for_session(session)
         # SkillForge: Selector picks top-K. See note in the system-message
