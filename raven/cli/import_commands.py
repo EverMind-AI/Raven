@@ -97,6 +97,32 @@ class ImportRunResult:
     skill_error: str = ""
 
 
+def _require_memory_service_ready(backend: object) -> None:
+    """Refuse to import when the memory service is not actually there.
+
+    ``backend.start()`` no longer raises: a session that cannot reach EverOS
+    degrades and keeps probing, which is right for a session and wrong here.
+    An import is one deliberate batch, and running it against nothing writes
+    nothing while consuming the source list.
+
+    Backends that do not report a state -- anything other than the everos one
+    -- are left alone rather than locked out.
+    """
+    state = getattr(backend, "_state", None)
+    if state is None:
+        return
+    from raven.plugin.memory.everos.backend import ServiceState
+
+    if state is ServiceState.READY:
+        return
+    from raven.plugin.memory.everos._server import server_log_path
+
+    console.print(f"[red]Memory service is not available ({state.value}); nothing would be imported.[/red]")
+    console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")
+    console.print("[dim]Retry: raven import run[/dim]")
+    raise typer.Exit(1)
+
+
 async def _build_and_run(
     items: list[tuple[Scanner, ScanResult]],
     state: ImportState,
@@ -118,15 +144,10 @@ async def _build_and_run(
         )
         raise typer.Exit(1)
 
-    try:
-        await backend.start()
-    except Exception as e:
-        from raven.plugin.memory.everos._server import server_log_path
-
-        console.print(f"[red]Failed to start EverOS memory server: {e}[/red]")
-        console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")
-        console.print("[dim]Retry: raven import run[/dim]")
-        raise typer.Exit(1)
+    await backend.start()
+    # Asked after start rather than caught around it: start reports through the
+    # backend's state now, so an except here would never fire.
+    _require_memory_service_ready(backend)
     try:
         summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
         # Both phases below are additive and run after the EverOS pass, so a

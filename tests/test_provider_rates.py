@@ -908,3 +908,51 @@ def test_the_share_no_longer_bounds_what_a_request_asks_for(monkeypatch):
     _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
 
     assert send_max_tokens(None, "probe/roomy") == 64_000, "the model's own ceiling, unbounded"
+# --- Hyphen/dot version spellings (OpenRouter files what vendors hyphenate) ---
+
+
+_DOTTED_MODELS = [
+    {
+        "id": "anthropic/claude-sonnet-4.5",
+        "context_length": 200000,
+        "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+    },
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct",
+        "context_length": 131072,
+        "pricing": {"prompt": "0.00000004", "completion": "0.00000012"},
+    },
+]
+
+
+def test_a_hyphenated_version_finds_the_dotted_openrouter_row(monkeypatch):
+    """Raven routes Anthropic's ``claude-sonnet-4-5``; OpenRouter files the same
+    model as ``claude-sonnet-4.5``. Exact-key lookup missed, so the default model
+    Raven itself recommends reported a cost of None on every turn."""
+    _patch_openrouter(monkeypatch, lambda req: _models_response(_DOTTED_MODELS))
+
+    entry = rates._lookup_openrouter_entry("openrouter/anthropic/claude-sonnet-4-5")
+    assert entry is not None
+    assert entry["pricing"]["prompt"] == "0.000003"
+    assert _rate_cost("openrouter/anthropic/claude-sonnet-4-5", 1000, 100) is not None
+
+
+def test_only_one_boundary_is_dotted_at_a_time(monkeypatch):
+    """``llama-3-3-70b`` is ``llama-3.3-70b``, never ``llama-3.3.70b`` -- so the
+    variants are tried one digit boundary at a time rather than all at once."""
+    _patch_openrouter(monkeypatch, lambda req: _models_response(_DOTTED_MODELS))
+
+    entry = rates._lookup_openrouter_entry("openrouter/meta-llama/llama-3-3-70b-instruct")
+    assert entry is not None
+    assert entry["pricing"]["prompt"] == "0.00000004"
+    assert rates._lookup_openrouter_entry("openrouter/meta-llama/llama-3-3-70b-nope") is None
+
+
+def test_dotted_variants_are_a_fallback_not_a_rewrite():
+    """No digit boundary, nothing to try; and the exact key is always preferred,
+    so a wrong guess can only ever degrade to the None it replaced."""
+    assert rates._dotted_version_variants("openai/gpt-4o-mini") == []
+    assert rates._dotted_version_variants("anthropic/claude-sonnet-4-5") == ["anthropic/claude-sonnet-4.5"]
+    # Only digit-to-digit boundaries count: the hyphen in "x-1" joins a letter
+    # to a digit and is left alone.
+    assert rates._dotted_version_variants("x-1-2-3") == ["x-1.2-3", "x-1-2.3", "x-1.2.3"]

@@ -67,6 +67,15 @@ from raven.spine.turn import Origin
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
+# How long a turn is willing to wait on plugin-side indexing before letting the
+# write finish on its own. A budget, not a deadline: the task keeps running.
+_STORE_TURN_BUDGET_S: float = 5.0
+# Outstanding detached writes past which a turn waits for one to land, so a slow
+# memory service cannot grow an unbounded queue behind a fast typist.
+_STORE_MAX_INFLIGHT: int = 4
+# Teardown's total budget for letting those writes finish.
+_STORE_DRAIN_BUDGET_S: float = 15.0
+
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
     "Would you like me to continue with the remaining parts of the task that do not "
@@ -390,6 +399,12 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
+        # Writes that outran their turn budget and are still running. Held so
+        # teardown can drain them instead of dropping whatever was slowest.
+        self._store_inflight: set[asyncio.Task] = set()
+        # Writes refused because indexing never caught up. Reported at teardown:
+        # a dropped write is a turn the user will not be able to recall.
+        self._store_dropped = 0
 
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
@@ -1284,12 +1299,65 @@ class AgentLoop:
             return
         if not messages_slice:
             return
-        try:
-            await self.backend.store(session_key, messages_slice)
-        except Exception:
-            logger.exception(
-                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
-                session_key,
+
+        async def _store() -> None:
+            try:
+                await self.backend.store(session_key, messages_slice)  # type: ignore[union-attr]
+            except Exception:
+                logger.exception(
+                    "backend.store failed for session {}; turn data preserved in session log, "
+                    "plugin-side indexing skipped",
+                    session_key,
+                )
+
+        task = asyncio.create_task(_store())
+        self._store_inflight.add(task)
+        task.add_done_callback(self._store_inflight.discard)
+        # Deliberately not cancelled on timeout: the point is to stop *waiting*,
+        # not to abandon the write. A turn that indexes quickly still does so
+        # inline, which keeps ordering intact in the common case.
+        await asyncio.wait({task}, timeout=_STORE_TURN_BUDGET_S)
+
+        if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+            # Backpressure rather than unbounded growth: a service slow enough
+            # to accumulate this many outstanding writes is one whose queue
+            # should stop growing, not one to keep feeding.
+            #
+            # Bounded by the turn's own budget, and that bound is the whole
+            # point. Unbounded, this waited on the slowest outstanding write
+            # instead -- and since flush_every_turns defaults to 1, every
+            # interactive turn is a final flush carrying the six-minute
+            # extraction budget, so reaching the cap stalled a turn for
+            # minutes. That is the stall this method exists to remove.
+            await asyncio.wait(set(self._store_inflight), timeout=_STORE_TURN_BUDGET_S)
+            if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+                # Still saturated. The queue is what gives, not the turn: this
+                # write is dropped and said out loud at teardown, rather than
+                # held open behind writes that are already over their time.
+                task.cancel()
+                self._store_inflight.discard(task)
+                self._store_dropped += 1
+                logger.warning(
+                    "backend.store dropped for session {}: {} writes still in flight after {}s",
+                    session_key,
+                    len(self._store_inflight),
+                    _STORE_TURN_BUDGET_S,
+                )
+
+    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> None:
+        """Let detached writes finish before the process goes away.
+
+        Writes that outran their turn budget are still in flight. Exiting on top
+        of them loses exactly the turns that were slowest to index, which is a
+        silent and biased kind of data loss.
+        """
+        pending = {t for t in self._store_inflight if not t.done()}
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
+        if self._store_dropped:
+            logger.warning(
+                "{} turn(s) were not indexed: the memory service never caught up",
+                self._store_dropped,
             )
 
     def _collect_injected_skill_ids(

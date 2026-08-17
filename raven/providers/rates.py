@@ -20,6 +20,7 @@ Two questions, deliberately answered from different places:
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 import threading
 import time
@@ -402,6 +403,29 @@ def openrouter_input_modalities(model: str) -> tuple[str, ...] | None:
     return tuple(mods) if isinstance(mods, list) and mods else None
 
 
+_DIGIT_HYPHEN_DIGIT = re.compile(r"(?<=\d)-(?=\d)")
+
+
+def _dotted_version_variants(key: str) -> list[str]:
+    """Dotted spellings of a hyphenated version number, most likely first.
+
+    Vendors and OpenRouter disagree on the separator: the id Raven routes with
+    is Anthropic's ``claude-sonnet-4-5``, while OpenRouter files the same model
+    as ``claude-sonnet-4.5``. Exact-key lookup therefore missed the default
+    model Raven itself recommends, and every turn reported a cost of None.
+
+    One variant per digit-hyphen-digit boundary (``llama-3-3-70b`` must become
+    ``llama-3.3-70b``, not ``llama-3.3.70b``), then the all-boundaries form for
+    ids that really do carry two dots. Only ever consulted after the exact key
+    misses, so a wrong guess degrades to the same None it replaces.
+    """
+    spots = [m.start() for m in _DIGIT_HYPHEN_DIGIT.finditer(key)]
+    variants = [key[:i] + "." + key[i + 1 :] for i in spots]
+    if len(spots) > 1:
+        variants.append(_DIGIT_HYPHEN_DIGIT.sub(".", key))
+    return variants
+
+
 def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | None:
     """This model's row in OpenRouter's catalogue, or None.
 
@@ -422,10 +446,13 @@ def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | 
         return None
     key = model.removeprefix("openrouter/")
     table = _fetch_openrouter_models() if allow_fetch else _cache_only_openrouter_models()
-    entry = table.get(key)
-    if entry is None and "/" in key:
-        entry = table.get(key.split("/", 1)[1])
-    return entry
+    for candidate in (key, *_dotted_version_variants(key)):
+        entry = table.get(candidate)
+        if entry is None and "/" in candidate:
+            entry = table.get(candidate.split("/", 1)[1])
+        if entry is not None:
+            return entry
+    return None
 
 
 def _try_openrouter_rates(model: str) -> tuple[float, float] | None:

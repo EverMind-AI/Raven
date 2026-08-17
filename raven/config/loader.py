@@ -306,6 +306,33 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
                             legacy_key,
                         )
 
+    # Bring ``plugins.config["everos-memory"]`` onto the current shape: record
+    # which EverOS root is in use and whether raven owns it, and drop the dead
+    # ``mode`` key. Both new fields are decisions rather than derivable facts, so
+    # leaving them absent would mean re-deriving them at every call site --
+    # including the ones that decide whether writing to that root is allowed.
+    #
+    # Read-time normalisation only: this is a pure dict transform apart from one
+    # existence check, and it must stay that way. Reading everos.toml or probing
+    # a port here would put IO on every config load. The shape persists the next
+    # time anything writes the config.
+    plugins = data.get("plugins")
+    if isinstance(plugins, dict):
+        slice_ = (plugins.get("config") or {}).get("everos-memory")
+        if isinstance(slice_, dict):
+            if slice_.pop("mode", None) is not None:
+                _log.info("Migrated: dropped plugins.config.everos-memory.mode (no reader)")
+            from raven.config.update_everos import fallback_everos_root, root_is_raven_owned
+
+            if "root" not in slice_:
+                # Not ``everos_root()``: that re-reads whatever config path is
+                # globally current, which is not necessarily the file being
+                # migrated here.
+                slice_["root"] = str(fallback_everos_root())
+                _log.info("Migrated: recorded everos-memory.root = %s", slice_["root"])
+            if "owned" not in slice_:
+                slice_["owned"] = root_is_raven_owned(slice_["root"])
+
     # ── Pop extension keys before base Config validates ──────────────
     if pop_extension_keys:
         for ek in EXTENSION_KEYS:

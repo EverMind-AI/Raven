@@ -50,6 +50,7 @@ class RoutingInfo:
 @dataclass
 class FeaturesInfo:
     channels_enabled: list[str] = field(default_factory=list)
+    channels_missing_deps: list[str] = field(default_factory=list)
     skill_forge_enabled: bool = False
 
 
@@ -72,6 +73,9 @@ class MemoryInfo:
     """
 
     backend: Optional[str] = None
+    root: Optional[str] = None
+    owned: bool = True
+    address: Optional[str] = None
     server_running: bool = False
     reports_capabilities: bool = False
     configured: list[str] = field(default_factory=list)
@@ -201,8 +205,11 @@ def _gather_static_checks() -> DoctorReport:
     except Exception:
         skill_forge_on = False
 
+    from raven.channels.manager import missing_dependency_channels
+
     report.features = FeaturesInfo(
         channels_enabled=enabled,
+        channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
 
@@ -228,7 +235,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
-    from raven.config.update_everos import everos_role_configured
+    from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
     from raven.plugin.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
@@ -236,14 +243,43 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
         probe_capabilities,
     )
 
-    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
-    # Recall quality is decided by the embedding role in the user-level
-    # everos.toml: with it recall matches meaning, without it only keywords.
-    info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
+    # Which memories, and whose. Neither was reachable from any command before:
+    # the wizard printed the path once while converging and nothing showed it
+    # again, so "where are my memories" had no answer short of reading
+    # config.json by hand. This is the place that question gets asked.
+    info.owned = everos_owned()
+    info.address = configured_base_url(config)
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
     info.capabilities = dict(report.capabilities)
+
+    if info.owned:
+        info.root = str(everos_root())
+        info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+        # Recall quality is decided by the embedding role in the user-level
+        # everos.toml: with it recall matches meaning, without it only keywords.
+        info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
+        return info
+
+    # A root the user runs. Nothing here may come from the local filesystem:
+    # no root is recorded for it, so ``everos_root()`` would answer with the
+    # fallback -- a directory that is not theirs and holds none of their
+    # memories -- and the roles read out of that directory's toml would
+    # describe an install nobody is using. Reading their toml is not an option
+    # either; not touching it is the promise. What the server says about itself
+    # is the only honest source, and when it is down there is no source at all.
+    info.root = None
+    # Every section the server has an opinion about -- built or failed. Taking
+    # only the built ones made ``unbuilt`` (the failed subset of this list)
+    # structurally empty, so ``broken`` and the exit code could never fire and
+    # a server that could not build its LLM reported healthy. Raven cannot read
+    # their toml to learn what they configured, and does not need to: a section
+    # the server reports as unavailable is one it tried to build and could not.
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is not None]
+    info.retrieval = None
+    if report.reports_capabilities:
+        info.retrieval = "semantic" if report.available("embedding") is True else "keyword-only"
     return info
 
 
@@ -266,6 +302,14 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
 
     if memory.backend != "everos":
         return
+    if memory.root:
+        console.print(f"  Memories:   {memory.root}")
+    if not memory.owned:
+        console.print(
+            "  [dim]Managed by you -- Raven reads it at the address below and never writes,\n"
+            "  starts or stops it, so it does not track where on disk it keeps them.[/dim]"
+        )
+    console.print(f"  Address:    {memory.address}")
     if not memory.server_running:
         console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
         if memory.configured:
@@ -378,6 +422,11 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"  Channels:    {count} enabled  ({', '.join(features.channels_enabled)})")
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
+        if features.channels_missing_deps:
+            from raven.channels.manager import _missing_dep_hint
+
+            names = ", ".join(features.channels_missing_deps)
+            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
 
@@ -400,6 +449,8 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("  Retrieval:  semantic")
         elif memory.retrieval:
             console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
+        elif not memory.owned:
+            console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.probe is not None:
