@@ -483,3 +483,42 @@ def test_print_llm_error_renders_diagnosis_and_marks_exit(capsys: pytest.Capture
         assert agent_commands._ONE_SHOT_EXIT["code"] == 0
     finally:
         agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Non-auth categories must not print the credential fix line: a rate
+    limit or a network drop is not fixed by re-checking the key. Each gets a
+    category-apt hint instead; categories with no apt one-liner render the
+    error line alone."""
+    from raven.cli import agent_commands
+
+    cases = {
+        "rate_limit": "retry",
+        "network": "connectivity",
+        "context_overflow": "shorten",
+        "server": "retry",
+        "model_unavailable": "provider use",
+        "billing": "account",
+    }
+    try:
+        for category, expected in cases.items():
+            agent_commands._ONE_SHOT_EXIT["code"] = 0
+            content = f"Error calling LLM ({category}@openrouter): something went wrong"
+            assert agent_commands._print_llm_error(content) is True, category
+            out = capsys.readouterr().out
+            assert "raven provider test" not in out, category
+            assert "raven onboard" not in out, category
+            assert expected in out, f"{category}: missing apt hint in {out!r}"
+            assert agent_commands._ONE_SHOT_EXIT["code"] == 1, category
+
+        agent_commands._ONE_SHOT_EXIT["code"] = 0
+        assert agent_commands._print_llm_error("Error calling LLM (unknown): boom") is True
+        out = capsys.readouterr().out
+        assert "raven provider test" not in out
+        assert "Fix:" not in out
+        assert "Hint:" not in out
+        assert agent_commands._ONE_SHOT_EXIT["code"] == 1
+    finally:
+        agent_commands._ONE_SHOT_EXIT["code"] = 0

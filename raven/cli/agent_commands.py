@@ -53,6 +53,20 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
     console.print()
 
 
+# Category-apt hints for non-auth provider errors. Credential guidance would
+# mislead here: a rate limit or a network drop is not fixed by re-checking the
+# key. Categories absent from this map (invalid_request, unknown, ...) render
+# the error line alone.
+_NON_AUTH_HINTS = {
+    "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
+    "network": "Hint: network problem; check connectivity and retry.",
+    "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
+    "server": "Hint: provider-side error; retry later or switch models.",
+    "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
+    "billing": "Hint: billing or quota issue; check your provider account.",
+}
+
+
 def _print_llm_error(content: str) -> bool:
     """Render a provider error as a diagnosis + fix hint instead of a fake
     agent reply. Returns True when handled; marks the one-shot path to exit
@@ -69,10 +83,13 @@ def _print_llm_error(content: str) -> bool:
     if category == "auth":
         where = f"{provider} 401" if provider else "401"
         console.print(f"[red]Error: API key invalid ({escape(where)}).[/red]")
+        target = provider or "<name>"
+        console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
     else:
         console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
-    target = provider or "<name>"
-    console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
+        hint = _NON_AUTH_HINTS.get(category)
+        if hint:
+            console.print(hint)
     console.print()
     _ONE_SHOT_EXIT["code"] = 1
     return True
