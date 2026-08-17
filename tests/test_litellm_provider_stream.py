@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import StreamDelta
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
@@ -119,11 +119,36 @@ def test_normalize_stream_chunk_openai_shape_default() -> None:
 
 
 def test_normalize_stream_chunk_returns_none_for_empty_payload() -> None:
-    """Chunks with no content/tool_calls/usage return None — chat_stream skips them."""
+    """Chunks carrying nothing at all return None — chat_stream skips them."""
     provider = _make_provider()
-    # delta.content is None AND no tool_calls AND no usage — pure stop-marker chunk
-    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="stop")])
+    # No content, no tool_calls, no usage, and no finish_reason either.
+    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason=None)])
     assert provider._normalize_stream_chunk(chunk) is None
+
+
+def test_normalize_stream_chunk_keeps_terminal_finish_reason() -> None:
+    """A stop-marker chunk is no longer empty: finish_reason is its payload.
+
+    Upstream states why generation stopped only on this chunk. Skipping it
+    (which the emptiness check used to do, since content/tool_calls/usage are
+    all absent there) throws away the one signal distinguishing "finished"
+    from "cut off at the output ceiling".
+    """
+    provider = _make_provider()
+    for reason in ("stop", "length", "tool_calls"):
+        chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason=reason)])
+        delta = provider._normalize_stream_chunk(chunk)
+        assert delta is not None, f"terminal chunk with finish_reason={reason!r} was skipped"
+        assert delta.finish_reason == reason
+        assert delta.content is None
+
+
+def test_normalize_stream_chunk_finish_reason_absent_mid_stream() -> None:
+    """Content-bearing chunks mid-stream carry no finish_reason."""
+    provider = _make_provider()
+    delta = provider._normalize_stream_chunk(_chunk("token"))
+    assert delta is not None
+    assert delta.finish_reason is None
 
 
 @pytest.mark.asyncio
@@ -243,3 +268,228 @@ async def test_chat_stream_forwards_api_key_to_acompletion(monkeypatch: pytest.M
         pass
 
     assert captured["api_key"] == "k-main"
+
+
+# --------- generation settings reach the request body (regression) ----------
+#
+# chat_stream used to declare literal defaults (max_tokens=4096,
+# temperature=0.7, reasoning_effort=None). The agent loop calls it with
+# messages/tools/model only, so those literals silently shadowed whatever the
+# user had configured — a class of defect that is invisible in review because
+# the signature reads as perfectly reasonable. Both assertions below therefore
+# check the *outgoing request body*, not that a function was called.
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sends_configured_generation_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured generation settings reach acompletion's kwargs verbatim."""
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = _make_provider()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["max_tokens"] == 8192
+    assert captured["temperature"] == 0.1
+    assert captured["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_explicit_arguments_still_win() -> None:
+    """An explicit argument overrides the configured default."""
+    captured: dict[str, Any] = {}
+
+    class _Recorder(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs: Any) -> LLMResponse:
+            captured.update(kwargs)
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _Recorder()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], max_tokens=256):
+        pass
+
+    assert captured["max_tokens"] == 256  # explicit wins
+    assert captured["temperature"] == 0.1  # unset falls back to config
+
+
+@pytest.mark.asyncio
+async def test_base_chat_stream_fallback_sends_configured_settings() -> None:
+    """The base non-streaming fallback resolves settings the same way.
+
+    Providers without real streaming (azure / codex / custom) reach the model
+    through this default implementation. Leaving its literals in place would
+    keep them on 4096 even after the LiteLLM path is fixed.
+    """
+    captured: dict[str, Any] = {}
+
+    class _ChatOnly(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs: Any) -> LLMResponse:
+            captured.update(kwargs)
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _ChatOnly()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["max_tokens"] == 8192
+    assert captured["temperature"] == 0.1
+    assert captured["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_surfaces_upstream_finish_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The consumer sees upstream's finish_reason on the terminal delta.
+
+    Without this the loop can only guess why generation stopped, and a
+    response cut off at the output ceiling is indistinguishable from one the
+    model chose to end.
+    """
+    chunks = [
+        _chunk("par"),
+        _chunk("tial"),
+        _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="length")]),
+    ]
+
+    async def fake_acompletion(**_: Any):
+        return _fake_stream(chunks)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    out: list[StreamDelta] = []
+    async for delta in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        out.append(delta)
+
+    assert [d.content for d in out if d.content] == ["par", "tial"]
+    assert out[-1].finish_reason == "length"
+    # Mid-stream deltas stay clean so a consumer can key on "the one that has it".
+    assert [d.finish_reason for d in out[:-1]] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_upstream_length_does_not_trip_the_error_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """finish_reason now carries two unrelated meanings; they must not collide.
+
+    The agent loop treats `finish_reason == "error"` as a replayed provider
+    failure. Upstream values ride the same field, so a truncated response must
+    not be mistaken for one.
+    """
+    chunks = [_FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="length")])]
+
+    async def fake_acompletion(**_: Any):
+        return _fake_stream(chunks)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    out = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+    assert out[-1].finish_reason == "length"
+    assert out[-1].finish_reason != "error"
+    assert out[-1].error_classification is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_omits_the_ceiling_when_nobody_asked_for_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OpenAI-compatible shape treats `max_tokens` as optional, and every
+    surveyed agent leaves it out there rather than volunteering a number.
+
+    Volunteering one is what this whole branch has been paying for: the number
+    has to be right, has to match what any check compares against, and has to
+    add up with whatever the prompt was allowed to grow to. Omitted, the server
+    answers with its own limit and none of that applies.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
+    provider.generation = GenerationSettings()
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert "max_tokens" not in captured, "no ceiling was asked for and none is volunteered"
+
+
+@pytest.mark.asyncio
+async def test_no_ceiling_is_volunteered_even_where_the_api_requires_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic's Messages API does require `max_tokens` -- and LiteLLM's own
+    transformation supplies it, which is where that knowledge belongs.
+
+    Measured across all 26 rows LiteLLM files under `litellm_provider ==
+    "anthropic"`, its number and ours agree on every one, because both read the
+    same table. They can only differ on a model it does not know, and there
+    both sides are guessing from a constant; ours is not the better guess.
+
+    Deciding it here meant carrying a copy of LiteLLM's routing knowledge --
+    which vendor speaks which API -- and then keeping the copy aligned. That
+    alignment is what `wire_model_id` and three invariants existed for. The
+    surveyed agents do not have this problem because each protocol adapter owns
+    its own required fields; ours is LiteLLM, so it owns them.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-4-5")
+    provider.generation = GenerationSettings()
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert "max_tokens" not in captured, "LiteLLM's anthropic transformation fills this in"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_carries_an_explicit_pin_regardless(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that asked for a short answer gets one, on any vendor."""
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    provider = LiteLLMProvider(api_key="test-key", provider_name="openrouter", default_model="openai/gpt-4o")
+    provider.generation = GenerationSettings()
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], max_tokens=64):
+        pass
+
+    assert captured["max_tokens"] == 64

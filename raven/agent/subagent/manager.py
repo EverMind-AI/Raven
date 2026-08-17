@@ -237,7 +237,7 @@ class SubagentManager:
                         logger.debug(
                             "Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str
                         )
-                        result = await tools.execute(tool_call.name, tool_call.arguments)
+                        result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                         # The subagent's loop is an untrusted-data path too — fence its
                         # tool output like the main loop does in add_tool_result.
                         messages.append(

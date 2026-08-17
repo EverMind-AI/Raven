@@ -167,6 +167,71 @@ class ProviderHTTPError(RuntimeError):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class TruncationInfo:
+    """Where the output stopped, on a call that never finished arriving."""
+
+    at_tokens: int | None = None
+
+    def as_error(self, tool_name: str) -> str:
+        """What is known, and what is only inferred, kept apart.
+
+        Known: the turn stopped at the output limit, because the upstream said
+        so. Inferred: that this call was the cut one, which follows from
+        generation being sequential but not from anything the upstream said --
+        a turn can finish a call and then hit the limit in the prose after it.
+        Saying "this call was cut" as a fact sends a model to split up a call
+        that was whole.
+
+        The refusal is not conditional on that inference. A call that may be
+        incomplete is not dispatched either way; being wrong costs one retry.
+
+        What to do about it is the tool's, via ``Tool.truncation_hint``.
+        """
+        at = f" at the {self.at_tokens}-token output limit" if self.at_tokens else " at the output limit"
+        return (
+            f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
+            f"being written, so it may have been cut short. It was not run. Send it again."
+        )
+
+
+@dataclass(frozen=True)
+class RunMeta:
+    """What happened around a call, as opposed to what the call asks for.
+
+    Kept apart from ``arguments`` because the two travel differently: anything
+    inside that dict is serialized into the assistant message by
+    ``to_openai_tool_call``, and the loop does that before the registry sees
+    the call -- so a flag stored there is already fixed into the conversation
+    history by the time anyone strips it, and the model reads back a field it
+    never wrote.
+
+    An empty instance means "nothing worth noting", which is the normal turn.
+
+    The two fields sit at different layers on purpose. ``arguments_repaired``
+    is an observation the provider can make -- this call's JSON had to be
+    repaired to parse. ``truncation`` is the loop's conclusion drawn from it
+    plus the response-level signals. Keeping the observation separate is what
+    lets a single decision point serve both response paths: the streaming one
+    assembles its tool calls in the loop, where a provider has nothing to
+    attach a conclusion to.
+
+    No ``__bool__``: it would have to pick one field to mean "non-empty", and
+    every later field would silently fall outside it.
+    """
+
+    truncation: TruncationInfo | None = None
+    arguments_repaired: bool = False
+    #: This call was the last one of its turn. Only ever set alongside
+    #: ``arguments_repaired``, because that is the only place it means
+    #: anything: generation is sequential, so nothing arrives after a cut, and
+    #: a repair with no calls after it is the shape a cut leaves. Recorded as
+    #: the position it is rather than as a verdict -- whether the turn ran out
+    #: of room is a reading of these two facts, and it belongs in the sentence
+    #: the model reads, not in the record.
+    last_of_turn: bool = False
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
@@ -176,6 +241,7 @@ class ToolCallRequest:
     arguments: dict[str, Any]
     provider_specific_fields: dict[str, Any] | None = None
     function_provider_specific_fields: dict[str, Any] | None = None
+    run_meta: RunMeta | None = None
 
     def to_openai_tool_call(self) -> dict[str, Any]:
         """Serialize to an OpenAI-style tool_call payload."""
@@ -208,6 +274,14 @@ class LLMResponse:
     # attach a precise classification here; otherwise the retry layer fills it
     # in from the error string.
     error_classification: "ErrorClassification | None" = None
+    # Generation stopped at the output ceiling rather than because the model
+    # was done. Distinct from finish_reason: upstream does not always say so
+    # (some backends report "stop" on a truncated response), and a tool call
+    # whose arguments were cut mid-JSON is truncated no matter what the
+    # backend claims.
+    truncated: bool = False
+    # The ceiling that produced it, for the message shown to the model.
+    max_tokens: int | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -237,6 +311,45 @@ class StreamDelta:
     error_classification: ErrorClassification | None = None
 
 
+def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = None, allow_fetch: bool = True) -> int:
+    """The output ceiling a request will actually carry.
+
+    One function for both the request body and the agent loop's ceiling check.
+    Computed separately the two would drift the moment either side grew a
+    bound, and the check would stop firing without ever failing -- which is
+    the exact shape of the defect this branch exists to remove.
+
+    A pin is a call site asking for a deliberately short answer, so it wins --
+    but never above what the model accepts. Every pin in the tree today is far
+    below any real ceiling, which is exactly why the bound has to be written
+    down: the first pin that is not would be a rejected request, and nothing
+    about the call site would say why.
+
+    ``pinned`` is the per-call argument (``judge`` asks for 64, the curator for
+    2048); the settings object carries the per-provider one. The argument has
+    to arrive here rather than bypass the function, or the two ways of asking
+    for a short answer are bounded by different rules and only one of them is
+    the number truncation is judged against.
+
+    ``allow_fetch=False`` is for callers that only need a reservation and must
+    not stall on the catalogue's importing tier (~2-7s in a fresh process);
+    they get whatever is already loaded, then the fixed fallback. A caller
+    about to build a request wants the default.
+
+    The model's own ceiling is the answer, unbounded by anything else. How much
+    of the window a turn holds back for its reply is the budget's business, and
+    it reserves exactly this number: requests no longer name a ceiling, so the
+    one that applies is the model's own, and the prompt has to fit beside it.
+    """
+    from raven.providers.rates import resolve_max_output_tokens
+
+    ceiling = resolve_max_output_tokens(model, allow_fetch=allow_fetch)
+    pin = pinned if pinned is not None else getattr(generation, "max_tokens", None)
+    if pin:
+        return min(int(pin), ceiling)
+    return ceiling
+
+
 @dataclass(frozen=True)
 class GenerationSettings:
     """Default generation parameters for LLM calls.
@@ -248,7 +361,10 @@ class GenerationSettings:
     """
 
     temperature: float = 0.7
-    max_tokens: int = 4096
+    #: ``None`` means "no opinion" -- the ceiling is resolved from the model's
+    #: own metadata at request time. A number pins it, which is what an
+    #: explicit ``chat(max_tokens=...)`` at a call site wants.
+    max_tokens: int | None = None
     reasoning_effort: str | None = None
     timeout: float = 600.0
 
@@ -336,7 +452,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -362,9 +478,9 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
+        max_tokens: object = _SENTINEL,
+        temperature: object = _SENTINEL,
+        reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Non-streaming fallback: emit the full ``chat()`` response as a single
@@ -375,7 +491,24 @@ class LLMProvider(ABC):
         otherwise ``AttributeError`` there. This default makes any provider that
         implements ``chat`` usable in the streaming path — without token-level
         streaming. ``LiteLLMProvider`` overrides this with true streaming.
+
+        Generation defaults resolve from ``self.generation`` the same way
+        ``chat_with_retry`` does: literal defaults here would shadow the user's
+        configuration, since the agent loop calls this with messages/tools/model
+        only.
+
+        ``generation`` is read defensively -- a subclass that never runs this
+        ``__init__`` (thin adapters, test doubles) reaches this method with the
+        attribute missing, and a crash there would be worse than the settings
+        it is meant to restore.
         """
+        gen = getattr(self, "generation", None) or GenerationSettings()
+        if max_tokens is self._SENTINEL:
+            max_tokens = gen.max_tokens
+        if temperature is self._SENTINEL:
+            temperature = gen.temperature
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = gen.reasoning_effort
         response = await self.chat(
             messages=messages,
             tools=tools,
@@ -703,6 +836,20 @@ class LLMProvider(ABC):
         """
         return True
 
+    def wire_model_id(self, model: str) -> str:
+        """The id this provider will actually send. See ``providers.wire``.
+
+        Anyone sizing a *request* has to ask under this rather than under the
+        stored name. The catalogue files a gateway spelling as its own row with
+        its own numbers -- ``openai/gpt-4o`` answers 16384 where
+        ``openrouter/openai/gpt-4o`` answers 4096 -- so the two are different
+        questions, and only this one is about the request that went out.
+
+        Default identity: a provider that sends the stored id unchanged has
+        nothing to translate.
+        """
+        return model
+
     def emits_unparsed_reasoning(self) -> bool:
         """Whether this provider's backend may leak bare think tags into content.
 
@@ -768,16 +915,38 @@ class LLMProvider(ABC):
             # sending Anthropic's markers on to Gemini is what doubled a prompt.
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
+            # One id for both the bound below and the check further down, and
+            # the id this request goes out under rather than the stored one --
+            # a gateway spelling is its own catalogue row with its own ceiling.
+            wire_id = self.wire_model_id(current_model or "")
+            # Bounded here rather than inside each provider: a pin is per call
+            # but a ceiling is per model, so a fallback hop can change it. Left
+            # as ``None`` when nobody pinned, which is the provider's cue to
+            # resolve the model's own ceiling.
+            sent = None if max_tokens is None else send_max_tokens(self.generation, wire_id, pinned=max_tokens)
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,
                 model=current_model,
-                max_tokens=max_tokens,
+                max_tokens=sent,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
             )
             if response.finish_reason != "error":
+                # Judged here, not by the caller: this runs inside the
+                # ``llm.call`` span, and ``trace.instrument`` extracts its
+                # attributes in a ``finally`` that closes the span before the
+                # caller sees the result -- a verdict reached afterwards is
+                # recorded as ``False`` every time.
+                from raven.providers.truncation import flag_truncation
+
+                response.max_tokens, response.truncated = flag_truncation(
+                    sent=sent,
+                    finish_reason=response.finish_reason,
+                    usage=response.usage,
+                    tool_calls=response.tool_calls,
+                )
                 return response
 
             classification = response.error_classification or self.classify_error(content=response.content)

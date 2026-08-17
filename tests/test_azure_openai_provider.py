@@ -201,3 +201,38 @@ def test_an_unparseable_response_shape_renders_the_canonical_error_content() -> 
     parsed = parse_llm_error(resp.content)
     assert parsed is not None, resp.content
     assert parsed[1] == "azure_openai"
+
+
+def test_arguments_that_needed_repair_are_reported_as_such() -> None:
+    """A cut mid-arguments arrives as an unclosed blob, and json_repair closes
+    it silently -- so the parsed call looks well-formed to everything after.
+
+    Measured against a truncated `write_file` blob: every cut position that
+    loses a field leaves JSON that will not parse, which makes the repair the
+    one local, certain signal that a call did not finish arriving. It was
+    already being performed here; only the fact of it was dropped, leaving this
+    transport unable to refuse a cut-off call the way the others can.
+    """
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def response(arguments: str) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [{"id": "c1", "function": {"name": "write_file", "arguments": arguments}}],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+
+    whole = provider._parse_response(response('{"path": "a.py", "content": "done"}'))
+    assert whole.tool_calls[0].run_meta is None
+
+    cut = provider._parse_response(response('{"path": "a.py", "content": "import ran'))
+    assert cut.tool_calls[0].run_meta is not None
+    assert cut.tool_calls[0].run_meta.arguments_repaired is True
+    # Still repaired: the signal is additional, not a replacement.
+    assert cut.tool_calls[0].arguments["content"] == "import ran"

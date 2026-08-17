@@ -10,11 +10,14 @@ registry unwraps here and hands back a ``str`` with the display string attached.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.agent.tools.filesystem import WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.providers.base import RunMeta, TruncationInfo
 
 
 class _Split(Tool):
@@ -148,3 +151,319 @@ def test_tool_output_is_a_str_subclass():
     assert out.display_text == "display"
     # Attribute is always present, so callers can getattr without a default dance.
     assert ToolOutput("text").display_text is None
+
+
+# ---------------------------------------------------------------------------
+# Truncated arguments are reported as truncation, not as a missing field
+# ---------------------------------------------------------------------------
+
+
+class _NeedsPath(Tool):
+    """A tool with one required parameter, plus a record of what it received."""
+
+    def __init__(self) -> None:
+        self.received: dict | None = None
+
+    @property
+    def name(self) -> str:
+        return "write_file"
+
+    @property
+    def description(self) -> str:
+        return "writes a file"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        }
+
+    async def execute(self, **kwargs) -> str:
+        self.received = kwargs
+        return "written"
+
+
+@pytest.mark.asyncio
+async def test_truncated_arguments_reported_as_truncation() -> None:
+    """A cut-off call names the real cause instead of the missing field.
+
+    The schema is right that something is missing; it is wrong about why.
+    Telling a model that wrote a path it forgot the path sends it looking for a
+    mistake it did not make, and its most reasonable next move is to resend the
+    same oversized payload.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"_raw_arguments": '{"content": "def foo('},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=4096)),
+    )
+
+    assert "[truncated]" in out
+    assert "4096-token output limit" in out
+    assert "missing required" not in out
+    # The generic hint would still point at "try a different approach", which is
+    # the advice that produced the retry loop.
+    assert "different approach" not in out
+
+
+@pytest.mark.asyncio
+async def test_truncated_but_parseable_arguments_also_reported_as_truncation() -> None:
+    """Covers the shape where the transport closed the JSON for us.
+
+    The blob parses cleanly and simply lacks whatever the model had not reached
+    yet, so validation fails on a genuinely absent field -- indistinguishable
+    from a model error unless the truncation flag is honoured.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"content": "def foo(): ..."},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=8192)),
+    )
+
+    assert "[truncated]" in out
+    assert "missing required" not in out
+
+
+@pytest.mark.asyncio
+async def test_untruncated_invalid_arguments_keep_the_schema_message() -> None:
+    """A genuine model mistake must still read as one."""
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute("write_file", {"content": "hello"})
+
+    assert "Invalid parameters" in out
+    assert "[truncated]" not in out
+    assert "different approach" in out
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_call_is_never_dispatched() -> None:
+    """Not even when every required field happens to have arrived.
+
+    A truncated call is not a smaller version of itself; it can be a different
+    call. `mode` is optional on the real write_file, so a cut landing before it
+    falls back to "overwrite" and silently replaces everything an earlier
+    append had written -- then reports success. Validation cannot see that: the
+    call is well-formed. Only the fact that it was cut says otherwise.
+
+    The cost of being wrong is one retry, since a turn can end with a complete
+    call and be cut in the prose after it. That is cheaper than the overwrite.
+    """
+    tool = _NeedsPath()
+    reg = ToolRegistry()
+    reg.register(tool)
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "a.py", "content": "x"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=4096)),
+    )
+
+    assert tool.received is None, "a truncated call must not reach the tool"
+    assert "[truncated]" in out
+
+
+@pytest.mark.asyncio
+async def test_an_untruncated_call_still_reaches_the_tool() -> None:
+    """The refusal is keyed on truncation alone, not on anything else."""
+    tool = _NeedsPath()
+    reg = ToolRegistry()
+    reg.register(tool)
+
+    await reg.execute("write_file", {"path": "a.py", "content": "x"})
+
+    assert tool.received == {"path": "a.py", "content": "x"}
+
+
+# ---------------------------------------------------------------------------
+# The advice on a truncated call comes from the tool, not from one template
+# ---------------------------------------------------------------------------
+
+
+class _Appendable(_NeedsPath):
+    """A tool with a smaller form to fall back to."""
+
+    @property
+    def truncation_hint(self) -> str:
+        return "Send a smaller first chunk with mode=overwrite, then append the rest with mode=append."
+
+
+@pytest.mark.asyncio
+async def test_a_tools_own_recovery_advice_reaches_the_model() -> None:
+    """Observed live: the generic "send it in smaller pieces" produced thirty-two
+    iterations of the same call with the content field left out. The model had
+    worked out that it should split the file, and still did not use the append
+    mode -- it is declared in the tool schema, which a model in a retry loop
+    never re-reads. The error message is the one text it does read every turn.
+    """
+    reg = ToolRegistry()
+    reg.register(_Appendable())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "[truncated]" in out
+    assert "mode=append" in out
+
+
+@pytest.mark.asyncio
+async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
+    """And nothing more: a generic "split it up" was wrong for tools like exec,
+    whose argument is one command and has no smaller form.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "[truncated]" in out
+    assert "may have been cut short" in out
+    # No instruction at all: the facts stand, and nothing tells this tool to do
+    # something it may have no way of doing.
+    assert "smaller pieces" not in out
+    assert out.rstrip().endswith("It was not run. Send it again.")
+
+
+def test_shipped_tools_that_can_be_split_say_how() -> None:
+    """write_file and exec are the two the incident actually cycled through."""
+    from raven.agent.tools.filesystem import WriteFileTool
+    from raven.agent.tools.shell import ExecTool
+
+    write_hint = WriteFileTool(".").truncation_hint or ""
+    assert "mode=append" in write_hint
+    exec_hint = ExecTool().truncation_hint or ""
+    assert "horten the command" in exec_hint
+
+    # `truncation_hint` speaks only where the upstream confirmed the cut, so it
+    # states rather than hedges. The hedging moved to `incomplete_hint`, which
+    # is read under an "If it was the output limit:" heading -- lower-case and
+    # continuing a sentence rather than opening one.
+    for hint in (write_hint, exec_hint):
+        assert not hint.lstrip().startswith("If "), "no condition where the upstream was explicit"
+    for tool in (WriteFileTool("."), ExecTool()):
+        incomplete = tool.incomplete_hint or ""
+        assert incomplete and incomplete[0].islower(), "reads as the consequent of a condition"
+
+
+@pytest.mark.asyncio
+async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> None:
+    """It used to say "do not resend the same content", and that was wrong.
+
+    Nothing past the cut is saved: the upstream drops the unfinished key, so
+    the call that reaches the tool carries only the fields that completed, and
+    the conversation history stores that same stub. The content genuinely has
+    to come again. Observed live: the model followed the old sentence exactly
+    -- forty turns of `write_file({"path": ...})` with the content withheld.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "may have been cut short" in out
+    assert "Send it again" in out
+    assert "not resend" not in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_an_unparsed_earlier_call_is_told_it_is_bad_json() -> None:
+    """Calls arrived after it, so a cut cannot explain it -- and the advice for
+    a cut would be wrong."""
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    text = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(arguments_repaired=True)
+    )
+
+    assert "invalid arguments" in text
+    assert "well-formed arguments" in text
+    assert "mode=append" not in text, "splitting it up is not the fix here"
+
+
+@pytest.mark.asyncio
+async def test_an_ambiguous_refusal_never_asserts_that_a_cut_happened() -> None:
+    """`truncation_hint` is advice for a turn that ran out of room, so it is
+    only ever attached when the upstream said so. Here nothing did: the
+    arguments failed to parse and no call followed, which a cut explains and
+    plain malformed JSON explains equally well.
+
+    Acting on truncation advice after writing bad JSON sends a model hunting
+    for a size problem it does not have, so both readings are offered, each
+    under its own condition, and the message says outright that nothing here
+    tells them apart. Longer is acceptable; asserting is not.
+    """
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    text = await registry.execute(
+        "write_file",
+        {"path": "a.py", "content": "x"},
+        run_meta=RunMeta(arguments_repaired=True, last_of_turn=True),
+    )
+
+    assert "[incomplete arguments]" in text
+    assert "[truncated]" not in text, "that marker is the upstream's to earn"
+    assert "output token limit" in text, "the reading is named"
+    assert "tells the two apart" in text, "and disclaimed"
+    for branch in ("If it was the output limit", "If the arguments were malformed"):
+        assert branch in text, f"missing the {branch!r} branch"
+
+
+@pytest.mark.asyncio
+async def test_each_case_carries_its_own_tool_advice() -> None:
+    """A certain cut and an ambiguous one are different situations, so a tool
+    speaks to each in its own words rather than one string doing double duty."""
+    registry = ToolRegistry()
+    registry.register(WriteFileTool(workspace=Path(".")))
+
+    certain = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(truncation=TruncationInfo(at_tokens=8192))
+    )
+    ambiguous = await registry.execute(
+        "write_file", {"path": "a.py", "content": "x"}, run_meta=RunMeta(arguments_repaired=True, last_of_turn=True)
+    )
+
+    assert "[truncated]" in certain and "8192-token" in certain
+    assert "mode=append" in certain and "mode=append" in ambiguous
+    assert "If it was the output limit" not in certain, "no hedging where the upstream was explicit"
+
+
+def test_a_tool_that_speaks_to_one_case_speaks_to_both() -> None:
+    """The two hints say nearly the same thing in different frames, which is
+    exactly how they drift apart. A tool that answers one and not the other
+    leaves the ambiguous refusal with no way forward -- the case where the
+    upstream lied, which is the one this machinery exists for."""
+    from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
+    from raven.agent.tools.shell import ExecTool
+
+    tools = [
+        WriteFileTool(workspace=Path(".")),
+        ReadFileTool(workspace=Path(".")),
+        EditFileTool(workspace=Path(".")),
+        ListDirTool(workspace=Path(".")),
+        ExecTool(working_dir="."),
+    ]
+    mismatched = [type(t).__name__ for t in tools if bool(t.truncation_hint) != bool(t.incomplete_hint)]
+
+    assert not mismatched, "these answer one case and not the other: " + ", ".join(mismatched)

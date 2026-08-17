@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 from urllib.parse import urljoin
@@ -10,7 +11,14 @@ from urllib.parse import urljoin
 import httpx
 import json_repair
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest, format_llm_error
+from raven.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderHTTPError,
+    RunMeta,
+    ToolCallRequest,
+    format_llm_error,
+)
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -53,20 +61,24 @@ class AzureOpenAIProvider(LLMProvider):
             api_base += "/"
         self.api_base = api_base
 
-    def _build_chat_url(self, deployment_name: str) -> str:
-        """Build the Azure OpenAI chat completions URL.
+    def wire_model_id(self, model: str) -> str:
+        """See ``LLMProvider.wire_model_id``.
 
         A configured ``deployment`` decides; otherwise the model id names it, as
         it did before the field existed. Falling back rather than requiring the
-        field keeps working configs working -- and it is why the id may still not
-        carry a prefix in that case: whatever is here goes into the URL path.
+        field keeps working configs working -- and it is why the id may still
+        not carry a prefix in that case: whatever is here goes into the URL path.
         """
-        # Azure OpenAI URL format:
-        # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
         from raven.providers.registry import find_by_name
         from raven.providers.wire import wire_model
 
-        deployment_name = self.deployment or wire_model(deployment_name, spec=find_by_name("azure_openai"))
+        return self.deployment or wire_model(model, spec=find_by_name("azure_openai"))
+
+    def _build_chat_url(self, deployment_name: str) -> str:
+        """Build the Azure OpenAI chat completions URL."""
+        # Azure OpenAI URL format:
+        # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
+        deployment_name = self.wire_model_id(deployment_name)
 
         base_url = self.api_base
         if not base_url.endswith("/"):
@@ -99,7 +111,7 @@ class AzureOpenAIProvider(LLMProvider):
         deployment_name: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -110,8 +122,12 @@ class AzureOpenAIProvider(LLMProvider):
                 self._sanitize_empty_content(messages),
                 _AZURE_MSG_KEYS,
             ),
-            "max_completion_tokens": max(1, max_tokens),  # Azure API 2024-10-21 uses max_completion_tokens
         }
+        # Azure API 2024-10-21 uses max_completion_tokens, and treats it as
+        # optional. Only a caller's own pin ever names one; absent that, the
+        # deployment's own limit applies.
+        if max_tokens is not None:
+            payload["max_completion_tokens"] = max(1, max_tokens)
 
         if self._supports_temperature(deployment_name, reasoning_effort):
             payload["temperature"] = temperature
@@ -130,7 +146,7 @@ class AzureOpenAIProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -198,16 +214,25 @@ class AzureOpenAIProvider(LLMProvider):
             tool_calls = []
             if message.get("tool_calls"):
                 for tc in message["tool_calls"]:
-                    # Parse arguments from JSON string if needed
+                    # Parse arguments from JSON string if needed. Whether the
+                    # repair was needed travels with the call: a cut mid-blob
+                    # is closed here silently, and that repair is the one local
+                    # signal that the call never finished arriving.
                     args = tc["function"]["arguments"]
+                    repaired = False
                     if isinstance(args, str):
-                        args = json_repair.loads(args)
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = json_repair.loads(args)
+                            repaired = True
 
                     tool_calls.append(
                         ToolCallRequest(
                             id=tc["id"],
                             name=tc["function"]["name"],
                             arguments=args,
+                            run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                         )
                     )
 

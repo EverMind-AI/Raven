@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
@@ -15,11 +14,18 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
+from raven.agent.loop.failure_streak import (
+    failure_class,
+    is_hard_tool_failure,
+    loop_break_nudge,
+)
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
+    is_only_think_debris,
+    strip_think_blocks,
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
@@ -43,10 +49,18 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import (
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    RunMeta,
+    ToolCallRequest,
+    send_max_tokens,
+)
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -178,22 +192,6 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
-# Failure markers a plain retry would likely clear — these must NOT count toward
-# the tool-failure-loop streak (nudging on a 429 that self-heals is just noise).
-_TRANSIENT_FAILURE_MARKERS = (
-    "429",
-    "rate limit",
-    "timed out",
-    "timeout",
-    "no healthy upstream",
-    "502",
-    "503",
-)
-# Successful-but-empty results: the tool ran fine and just found nothing. A
-# repeated empty search is legitimate exploration, not a stuck dead call, so it
-# must NOT count toward the failure streak.
-_EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
-
 # Marks the synthetic user message that carries images a transport cannot put in
 # a tool result. Not persisted: the tool result above it already names the file
 # path, so the only thing this message would add to the transcript is a user turn
@@ -225,41 +223,6 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
         else:
             out.append(part)
     return out
-
-
-def _is_hard_tool_failure(result: object) -> bool:
-    """True for a deterministic tool failure (recurs on an identical retry).
-
-    False for success or a transient/retryable error. Used to decide whether a
-    repeated identical tool call is a stuck loop worth breaking.
-    """
-    s = str(result)
-    low = s.lower()
-    if any(m in low for m in _TRANSIENT_FAILURE_MARKERS):
-        return False
-    if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
-        return False
-    m = re.search(r"Exit code:\s*(-?\d+)", s)
-    if m:
-        return m.group(1) != "0"
-    # Real not-found failures (file / dir / path / old_text) all start with
-    # "Error:" or carry a non-zero exit code, so those are already covered; a
-    # bare "not found" scan would only risk flagging successful output that
-    # merely mentions the phrase.
-    return s.lstrip().startswith("Error") or "error:" in low[:80]
-
-
-def _loop_break_nudge(tool: str, n: int) -> str:
-    """Injected when the same tool fails deterministically N times running, so
-    the model stops repeating a dead approach instead of adapting."""
-    return (
-        f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
-        "Stop repeating it. If it is an external dependency (network/API/search), "
-        "complete what you can offline from local data and report what stayed blocked. "
-        "If it is a file or path error, re-examine the EXACT path before any retry — "
-        "do not call it again unchanged. Otherwise change approach: a different tool, "
-        "command, or strategy."
-    )
 
 
 class AgentLoop:
@@ -1079,7 +1042,29 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096)
+        # allow_fetch=False for the same reason construction passes it (see
+        # __init__): this runs per turn on the loop's own thread, and it only
+        # needs a number to reserve -- not the one a request will carry. The
+        # fallback under-reserves at worst; the importing tier costs seconds.
+        ceiling = send_max_tokens(
+            getattr(self.provider, "generation", None),
+            # The id a request will go out under, so the reservation matches the
+            # ceiling that request will carry rather than the stored name's.
+            getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
+            allow_fetch=False,
+        )
+        # The whole ceiling, not a share of it. Requests no longer name a
+        # ceiling, so the one that applies is the model's own -- whatever the
+        # vendor or LiteLLM's transformation fills in. Reserving less than that
+        # hands out a prompt the reply cannot coexist with: measured on this
+        # repo's default model, a share leaves the prompt 150000 of a 200000
+        # window against a reply allowed 64000, and the sum is refused at
+        # request time. `_emergency_shrink` only elides tool bodies, so a
+        # history grown on conversation gets no retry from that refusal.
+        #
+        # A share would be right again only if the request carried one, which
+        # is the trade the previous shape made and this one does not.
+        reserved_output = min(ceiling, self.context_window_tokens)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
@@ -1614,10 +1599,25 @@ class AgentLoop:
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
-        """Remove <think>…</think> blocks that some models embed in content."""
+        """Remove <think>…</think> blocks that some models embed in content.
+
+        Paired blocks are removed. What is left is then checked for being
+        nothing but tag debris: when a backend inlines its reasoning and the
+        turn is cut off inside it, content arrives as a lone closing tag with
+        no opener to pair against, so the substitution above finds nothing and
+        an eleven-character string reads as a real answer. Recovery is skipped
+        and the tag is what the user sees.
+
+        The check is on residue, not on vendor spellings -- it does not matter
+        which prefix a backend picked. Text that merely mentions a tag keeps
+        its other words and is returned untouched.
+        """
         if not text:
             return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+        cleaned = strip_think_blocks(text)
+        if is_only_think_debris(cleaned):
+            return None
+        return cleaned or None
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
@@ -1705,6 +1705,7 @@ class AgentLoop:
         had_error = False
         error_content: str | None = None
         error_classification: ErrorClassification | None = None
+        upstream_finish_reason: str | None = None
 
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when a TimeoutError from the per-chunk idle cap unwinds the
@@ -1726,6 +1727,8 @@ class AgentLoop:
                         if delta.usage is not None:
                             final_usage = delta.usage
                         continue
+                    if delta.finish_reason:
+                        upstream_finish_reason = delta.finish_reason
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -1758,7 +1761,17 @@ class AgentLoop:
             )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+
+        # No ceiling passed: the provider resolves its own after the loop has
+        # handed over the request, so the number this turn carried is not
+        # knowable here. Nothing is compared against it, so nothing is missing.
+        sent_max_tokens, truncated = flag_truncation(
+            finish_reason=upstream_finish_reason,
+            usage=final_usage,
+            tool_calls=tool_calls,
+        )
+
+        finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
 
         content = "".join(content_buf)
         reasoning_content = "".join(reasoning_buf) or None
@@ -1776,6 +1789,8 @@ class AgentLoop:
             finish_reason=finish_reason,
             usage=final_usage or {},
             reasoning_content=reasoning_content,
+            truncated=truncated,
+            max_tokens=sent_max_tokens,
         )
 
     @classmethod
@@ -1993,9 +2008,10 @@ class AgentLoop:
         compress_retries = 0
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
-        # Tool-failure-loop break (#1b): track consecutive same-tool hard
-        # failures across iterations; nudge once per fresh streak, bounded/turn.
-        loop_fail_tool: str | None = None
+        # Tool-failure-loop break (#1b): track consecutive hard failures of the
+        # same tool *with the same kind of error* across iterations; nudge once
+        # per fresh streak, bounded/turn.
+        loop_fail_key: tuple[str, str] | None = None
         loop_fail_streak = 0
         loop_nudges = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
@@ -2206,7 +2222,7 @@ class AgentLoop:
                         if isinstance(exec_tool, ExecTool):
                             exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -2268,13 +2284,14 @@ class AgentLoop:
                         break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(model_text):
-                        if tool_call.name == loop_fail_tool:
+                    if is_hard_tool_failure(model_text):
+                        failure_key = (tool_call.name, failure_class(model_text))
+                        if failure_key == loop_fail_key:
                             loop_fail_streak += 1
                         else:
-                            loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                            loop_fail_key, loop_fail_streak = failure_key, 1
                     else:
-                        loop_fail_tool, loop_fail_streak = None, 0
+                        loop_fail_key, loop_fail_streak = None, 0
 
                 if abort_action:
                     # A normal tool result starts another model iteration. That
@@ -2303,7 +2320,7 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
+                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak, loop_fail_key[1])
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be
@@ -3217,22 +3234,33 @@ def _merge_tool_call_fragments(
 
 
 def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
+    """Convert accumulator slots into final ToolCallRequest list.
+
+    A slot whose arguments do not parse is flagged on that call, not on the
+    turn: an unparseable blob is evidence about one call, and reducing it to
+    "something in this turn failed" would leave the loop guessing which. An
+    incomplete JSON blob is also the one piece of evidence that needs no
+    cooperation from the backend, which matters where a backend reports a
+    clean stop on a cut-off reply.
+    """
     result: list[ToolCallRequest] = []
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
+        repaired = False
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             args = {"_raw_arguments": args_text}
+            repaired = True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
+                run_meta=RunMeta(arguments_repaired=True) if repaired else None,
             )
         )
     return result

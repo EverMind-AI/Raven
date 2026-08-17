@@ -101,6 +101,20 @@ class LazyProvider(LLMProvider):
         provider -- before that there is nothing to normalize anyway."""
         return False if self._provider is None else self._provider.emits_unparsed_reasoning()
 
+    def wire_model_id(self, model: str) -> str:
+        """Forwarded, because the inner provider is the one with a wire.
+
+        Answering identity here rather than forwarding is not a missing method
+        but a wrong answer: the base class supplies one, so the caller sizes a
+        request against the stored id while the inner sends the gateway
+        spelling, and the two are separate catalogue rows.
+
+        Post-materialization like ``emits_unparsed_reasoning``, and for the same
+        reason: the truncation check that asks this runs after a call, and the
+        call is what builds the inner. Before that, no request has been sized.
+        """
+        return model if self._provider is None else self._provider.wire_model_id(model)
+
     @property
     def active_endpoint_label(self) -> str | None:
         """Which endpoint is answering, for the session footer.

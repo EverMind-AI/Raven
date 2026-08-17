@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from raven.providers import model_catalog_cache, rates
+from raven.providers.base import send_max_tokens
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.rates import (
     _FALLBACK_PRICING,
@@ -827,6 +828,86 @@ def test_allow_fetch_false_never_calls_fetch_with_a_keyword_it_may_not_accept(mo
         rates.effective_context_window("openrouter/deepseek/deepseek-v4-pro", None, allow_fetch=False)
         == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
     )
+
+
+# --- Output ceilings: a catalogue row that files a window as a ceiling ---
+
+
+def _patch_table(monkeypatch, table: dict, *, info=_litellm_miss):
+    import litellm
+
+    monkeypatch.setattr(litellm, "model_cost", table)
+    monkeypatch.setattr(litellm, "get_model_info", info)
+
+
+def test_a_row_filing_its_window_as_the_ceiling_is_not_trusted(monkeypatch):
+    """Measured on the pinned LiteLLM: 984 of 3040 rows carry
+    ``max_output_tokens >= max_input_tokens``, and one of them is the id this
+    repo documents as an example -- ``openrouter/anthropic/claude-sonnet-4.5``
+    reports 1000000 for both where Anthropic's real ceiling is 64000.
+
+    A request carrying that is refused outright, and the refusal is classified
+    ``invalid_request``: not retryable, not fallback-worthy, not compressible.
+    The turn dies. Every call, not an edge case.
+    """
+    _patch_table(monkeypatch, {"probe/big": {"max_input_tokens": 1000000, "max_output_tokens": 1000000}})
+
+    assert rates.resolve_max_output_tokens("probe/big") == rates.DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_the_same_row_shape_is_rejected_at_the_second_lookup_too(monkeypatch):
+    """The table is asked first and ``get_model_info`` second, and the bad rows
+    answer both -- the documented id reports 1000000 from either. A guard on
+    one tier alone leaves the other to hand back what it just rejected."""
+    _patch_table(monkeypatch, {}, info=lambda m: {"max_input_tokens": 1000000, "max_output_tokens": 1000000})
+
+    assert rates.resolve_max_output_tokens("probe/big") == rates.DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_a_small_suspicious_row_keeps_its_own_number(monkeypatch):
+    """The rule rejects a row only when it is at least as large as what would
+    replace it, which is what makes it safe rather than merely suspicious.
+
+    Without that second condition, 252 rows (``4096/4096`` shapes among them)
+    are raised past their real ceiling -- one refused request traded for
+    another. Here the row is equally suspect and the fallback is larger, so
+    the row stands.
+    """
+    _patch_table(monkeypatch, {"probe/small": {"max_input_tokens": 4096, "max_output_tokens": 4096}})
+
+    assert rates.resolve_max_output_tokens("probe/small") == 4096
+
+
+def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
+    """The ordinary shape, and the majority of the table."""
+    _patch_table(monkeypatch, {"probe/sane": {"max_input_tokens": 200000, "max_output_tokens": 64000}})
+
+    assert rates.resolve_max_output_tokens("probe/sane") == 64000
+
+
+def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
+    """The escape hatch for a caller that really does want a long single answer,
+    and the one the share bound points at. Bounded by the model, not the share.
+    """
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
+
+    assert send_max_tokens(None, "probe/roomy", pinned=64_000) == 64_000
+    assert send_max_tokens(None, "probe/roomy", pinned=999_999) == 64_000
+
+
+def test_the_share_no_longer_bounds_what_a_request_asks_for(monkeypatch):
+    """The share bound moves back to the budget, which is the only side that
+    needs it once requests stop volunteering a ceiling.
+
+    It existed to keep two numbers addable: the prompt was allowed to grow into
+    `window - reserved` while the request asked for the full ceiling, and the
+    sum had to fit. A request that names no ceiling has nothing to add, so the
+    reservation becomes a margin like LiteLLM's 0.75 and OpenClaw's 0.7 rather
+    than a guarantee -- which is the posture every surveyed agent takes.
+    """
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
+
+    assert send_max_tokens(None, "probe/roomy") == 64_000, "the model's own ceiling, unbounded"
 
 
 # --- Hyphen/dot version spellings (OpenRouter files what vendors hyphenate) ---

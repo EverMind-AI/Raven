@@ -35,6 +35,16 @@ from raven.providers import model_catalog_cache
 #: this many tokens of headroom rather than a number invented at the call site.
 DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 
+# Output ceiling for a model the catalogue does not know -- self-hosted
+# deployments, gateways, models newer than the table. Not a default in the
+# sense the surveyed agents use one (theirs applies to every model, mapped or
+# not); this only answers where the catalogue cannot, so it is picked for
+# breadth rather than for any single model: Claude Code defaults to 16000, the
+# Anthropic SDK suggests ~16000 non-streaming, and gpt-4o's real ceiling is
+# also 16384. Unmapped backends are OpenAI-compatible servers in practice,
+# which clamp an over-large value rather than rejecting it.
+DEFAULT_MAX_OUTPUT_TOKENS = 16384
+
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
@@ -517,8 +527,92 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
     )
 
 
+def _trustworthy_ceiling(entry: dict | None) -> int | None:
+    """A row's output ceiling, unless the row is filing a window as one.
+
+    984 of the 3040 rows in the pinned LiteLLM carry ``max_output_tokens >=
+    max_input_tokens``; measured, ``openrouter/anthropic/claude-sonnet-4.5``
+    reports 1000000 for both where Anthropic's real ceiling is 64000. A request
+    carrying that number is refused, and the refusal classifies as
+    ``invalid_request`` -- not retryable, not fallback-worthy, not compressible
+    -- so the turn dies rather than degrades.
+
+    The second condition is what makes this safe rather than merely suspicious.
+    Rejecting only rows at or above the fallback guarantees the replacement is
+    never larger than what the row claimed; without it, 252 small rows
+    (``4096/4096`` shapes) are raised past their real ceiling, trading one
+    refused request for another.
+    """
+    ceiling = _numeric(entry, "max_output_tokens", "max_tokens")
+    if not ceiling:
+        return None
+    window = _numeric(entry, "max_input_tokens")
+    if window and ceiling >= window and ceiling >= DEFAULT_MAX_OUTPUT_TOKENS:
+        return None
+    return int(ceiling)
+
+
+def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+    """The model's own output ceiling, from the same metadata as the window.
+
+    ``max_tokens`` is a legitimate fallback here in a way it is not on the
+    input side: in LiteLLM's table it *is* the output ceiling, and the two
+    agree wherever both are present.
+
+    Both tiers are filtered through ``_trustworthy_ceiling``: the rows that get
+    this wrong answer the table and ``get_model_info`` alike, so guarding one
+    would hand back exactly what the other just rejected.
+    """
+    if not allow_import and "litellm" not in sys.modules:
+        return None
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        litellm = import_litellm()
+    except Exception:
+        return None
+
+    for candidate in _candidates(model):
+        ceiling = _trustworthy_ceiling(_table_entry(candidate))
+        if ceiling:
+            return ceiling
+        if _may_prompt(candidate):
+            continue
+        try:
+            info = litellm.get_model_info(candidate)
+        except Exception:
+            continue
+        ceiling = _trustworthy_ceiling(info)
+        if ceiling:
+            return ceiling
+    return None
+
+
+def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -> int:
+    """How many output tokens to ask for. Never ``None`` -- the caller is about
+    to build a request with the result.
+
+    Table first, fixed fallback second, which is the shape LiteLLM's own
+    Anthropic path uses and for the same reason: one constant cannot fit every
+    model. Too large for a small model is a 400; too small for a large one
+    truncates silently, which is the failure this whole module's callers exist
+    to avoid. See ``DEFAULT_MAX_OUTPUT_TOKENS`` for how that fallback is
+    chosen; it only ever answers for a model the catalogue has no row for.
+    """
+    if not model:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    return _try_litellm_max_output(model, allow_import=allow_fetch) or DEFAULT_MAX_OUTPUT_TOKENS
+
+
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
     """LiteLLM's static model metadata -- offline, covers most mapped providers.
+
+    Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
+    that carry no ``max_input_tokens``. Not because the two mean the same
+    thing, but because a model's window is never smaller than what it is
+    allowed to emit, so the output ceiling is a safe lower bound -- and a lower
+    bound only over-trims, where this module's documented default (65536) would
+    over-estimate an 8k model by a factor of eight.
 
     ``allow_import=False`` answers only from a LiteLLM already sitting in
     ``sys.modules``: importing it costs ~2-7s, and a caller passing this

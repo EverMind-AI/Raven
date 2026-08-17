@@ -182,11 +182,16 @@ def _gather_static_checks() -> DoctorReport:
     paths.workspace_path = str(workspace)
     paths.workspace_exists = workspace.exists()
 
+    from raven.providers.rates import resolve_max_output_tokens
+
     defaults = config.agents.defaults
     report.routing = RoutingInfo(
         model=defaults.model,
         provider=config.get_provider_name(),
-        max_tokens=defaults.max_tokens,
+        # What a request will actually carry, resolved the same way the
+        # provider resolves it -- doctor reporting a configured number that
+        # no longer exists would be reporting a setting, not the behaviour.
+        max_tokens=resolve_max_output_tokens(defaults.model),
         context_window_tokens=defaults.context_window_tokens,
     )
 
