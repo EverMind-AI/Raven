@@ -614,7 +614,11 @@ class CronService:
     def notify_user_active(self, channel: str | None = None, to: str | None = None) -> int:
         """Reset silent_fire_count for jobs matching (channel, to) — call
         whenever a genuine user-originated message arrives so recently-
-        firing crons don't decay toward auto-disable. None matches all.
+        firing crons don't decay toward auto-disable. ``None`` on the call
+        side matches every job; a falsy channel/to on the JOB side is a
+        wildcard too — legacy pre-attribution jobs are claimable by any
+        runner, so symmetrically any user activity resets them (otherwise
+        their counter could only ever climb and unfairly auto-disable).
         Returns count of jobs whose state was reset."""
         reset = 0
         with self._locked():
@@ -623,9 +627,9 @@ class CronService:
             for j in store.jobs:
                 if not j.enabled or j.state.silent_fire_count == 0:
                     continue
-                if channel is not None and j.payload.channel != channel:
+                if channel is not None and j.payload.channel and j.payload.channel != channel:
                     continue
-                if to is not None and j.payload.to != to:
+                if to is not None and j.payload.to and j.payload.to != to:
                     continue
                 j.state.silent_fire_count = 0
                 reset += 1

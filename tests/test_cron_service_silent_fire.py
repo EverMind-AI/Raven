@@ -270,3 +270,22 @@ async def test_writeback_does_not_resurrect_store_side_disable(tmp_path):
     stored = _stored(store_path, job_id)
     assert stored["enabled"] is False, "store-side disable must survive the writeback"
     assert stored["state"]["nextRunAtMs"] is None
+
+
+async def test_reset_matches_legacy_jobs_without_channel_attribution(tmp_path):
+    """A pre-attribution job (payload.channel/to None) is claimable by any
+    runner, so any genuine user activity must reset its counter too - an
+    exact-match rule would let its count only ever climb until an unfair
+    auto-disable."""
+    store_path = tmp_path / "jobs.json"
+    svc = CronService(store_path, allowed_channels=None)
+    job = svc.add_job(
+        name="legacy",
+        schedule=CronSchedule(kind="every", every_ms=3600_000),
+        message="pre-attribution reminder",
+    )
+    svc.record_fire(job.id)
+    assert next(j for j in svc._load_store().jobs).state.silent_fire_count == 1
+
+    assert svc.notify_user_active(channel="telegram", to="tg_1") == 1
+    assert next(j for j in svc._load_store().jobs).state.silent_fire_count == 0
