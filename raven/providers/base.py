@@ -302,7 +302,7 @@ class StreamDelta:
     error_classification: ErrorClassification | None = None
 
 
-def send_max_tokens(generation: Any, model: str | None) -> int:
+def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = None, allow_fetch: bool = True) -> int:
     """The output ceiling a request will actually carry.
 
     One function for both the request body and the agent loop's ceiling check.
@@ -310,18 +310,29 @@ def send_max_tokens(generation: Any, model: str | None) -> int:
     bound, and the check would stop firing without ever failing -- which is
     the exact shape of the defect this branch exists to remove.
 
-    A pinned value is a call site asking for a deliberately short answer, so it
-    wins -- but never above what the model accepts. Every pin in the tree today
-    is far below any real ceiling, which is exactly why the bound has to be
-    written down now: the first pin that is not would be a rejected request,
-    and nothing about the call site would say why.
+    A pin is a call site asking for a deliberately short answer, so it wins --
+    but never above what the model accepts. Every pin in the tree today is far
+    below any real ceiling, which is exactly why the bound has to be written
+    down: the first pin that is not would be a rejected request, and nothing
+    about the call site would say why.
+
+    ``pinned`` is the per-call argument (``judge`` asks for 64, the curator for
+    2048); the settings object carries the per-provider one. The argument has
+    to arrive here rather than bypass the function, or the two ways of asking
+    for a short answer are bounded by different rules and only one of them is
+    the number truncation is judged against.
+
+    ``allow_fetch=False`` is for callers that only need a reservation and must
+    not stall on the catalogue's importing tier (~2-7s in a fresh process);
+    they get whatever is already loaded, then the fixed fallback. A caller
+    about to build a request wants the default.
     """
     from raven.providers.rates import resolve_max_output_tokens
 
-    ceiling = resolve_max_output_tokens(model)
-    pinned = getattr(generation, "max_tokens", None)
-    if pinned:
-        return min(int(pinned), ceiling)
+    ceiling = resolve_max_output_tokens(model, allow_fetch=allow_fetch)
+    pin = pinned if pinned is not None else getattr(generation, "max_tokens", None)
+    if pin:
+        return min(int(pin), ceiling)
     return ceiling
 
 
@@ -876,11 +887,16 @@ class LLMProvider(ABC):
             # sending Anthropic's markers on to Gemini is what doubled a prompt.
             if idx and not prompt_cache.accepts_cache_control(current_model or ""):
                 messages, tools = prompt_cache.strip(messages, tools)
+            # Bounded here rather than inside each provider: a pin is per call
+            # but a ceiling is per model, so a fallback hop can change it. Left
+            # as ``None`` when nobody pinned, which is the provider's cue to
+            # resolve the model's own ceiling.
+            sent = None if max_tokens is None else send_max_tokens(self.generation, current_model, pinned=max_tokens)
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,
                 model=current_model,
-                max_tokens=max_tokens,
+                max_tokens=sent,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 tool_choice=tool_choice,
@@ -897,6 +913,7 @@ class LLMProvider(ABC):
                 response.max_tokens, response.truncated = flag_truncation(
                     self.generation,
                     model=current_model,
+                    sent=sent,
                     finish_reason=response.finish_reason,
                     usage=response.usage,
                     tool_calls=response.tool_calls,

@@ -1020,7 +1020,11 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = send_max_tokens(getattr(self.provider, "generation", None), self.model)
+        # allow_fetch=False for the same reason construction passes it (see
+        # __init__): this runs per turn on the loop's own thread, and it only
+        # needs a number to reserve -- not the one a request will carry. The
+        # fallback under-reserves at worst; the importing tier costs seconds.
+        reserved_output = send_max_tokens(getattr(self.provider, "generation", None), self.model, allow_fetch=False)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])

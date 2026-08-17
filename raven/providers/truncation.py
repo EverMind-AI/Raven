@@ -31,10 +31,18 @@ def flag_truncation(
     finish_reason: str | None,
     usage: dict[str, Any] | None,
     tool_calls: list[ToolCallRequest],
+    sent: int | None = None,
 ) -> tuple[int, bool]:
     """Decide whether this turn was cut, and refuse the calls it puts in doubt.
 
     Returns ``(ceiling_that_was_sent, truncated)``.
+
+    ``sent`` is the ceiling the request carried, for the caller that knows it.
+    A caller that pinned one must pass it: re-deriving from ``generation``
+    answers with the model's catalogue ceiling, which a request pinned at 64
+    never reaches, and signal 2 below would sit out every call site that pins.
+    The streaming path leaves it unset because the provider resolves the
+    ceiling after the loop has handed over the request.
 
     Two things are asked, and only one of them is a guess.
 
@@ -56,7 +64,7 @@ def flag_truncation(
     evidence, wherever it sits -- see ``RunMeta.arguments_repaired``. That path
     needs no ceiling signal and makes no guess about position.
     """
-    sent_max_tokens = send_max_tokens(generation, model)
+    sent_max_tokens = sent if sent is not None else send_max_tokens(generation, model)
     output_tokens = (usage or {}).get("completion_tokens")
     hit_ceiling = isinstance(output_tokens, int) and output_tokens >= sent_max_tokens
     truncated = finish_reason == "length" or hit_ceiling

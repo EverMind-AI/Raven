@@ -550,3 +550,162 @@ def test_a_truncated_reply_with_no_tool_calls_is_still_logged() -> None:
 
     assert truncated is True
     assert any("truncated" in line for line in seen)
+
+
+# ---------------------------------------------------------------------------
+# The ceiling judged against is the one the request carried
+# ---------------------------------------------------------------------------
+
+
+class _RecordsTheCeilingItWasSent(LLMProvider):
+    """Answers with usage sitting exactly on whatever ceiling it received."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generation = GenerationSettings()
+        self.sent: list[int | None] = []
+
+    async def chat(self, messages, tools=None, model=None, max_tokens=None, **kwargs) -> LLMResponse:
+        self.sent.append(max_tokens)
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "a.py"})],
+            # A backend claiming a clean stop is the case signal 2 exists for.
+            finish_reason="tool_calls",
+            usage={"completion_tokens": max_tokens},
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_ceiling_is_what_usage_is_measured_against() -> None:
+    """Nine call sites pin `max_tokens` on `chat_with_retry` (judge pins 64,
+    the curator 2048). The request carries that pin, so the ceiling check has
+    to use it too -- recomputing from `generation` yields the catalogue value,
+    which usage never reaches, and signal 2 is dead for every one of them.
+
+    That is the drift `send_max_tokens` was written to prevent: a check that
+    stops firing without ever failing.
+    """
+    provider = _RecordsTheCeilingItWasSent()
+
+    response = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-opus-4-5",
+        max_tokens=64,
+    )
+
+    assert provider.sent == [64], "the pin is what goes out"
+    assert response.max_tokens == 64, "and what the model is told it stopped at"
+    assert response.truncated is True
+    assert response.tool_calls[0].run_meta.truncation.at_tokens == 64
+
+
+@pytest.mark.asyncio
+async def test_a_pin_above_the_model_ceiling_is_clamped_before_it_is_sent() -> None:
+    """`send_max_tokens` promises "the output ceiling a request will actually
+    carry", and bounds a pin by what the model accepts so an over-large one is
+    not a rejected request nobody can explain from the call site.
+
+    Call-site pins used to go around that function entirely, which left the
+    promise true only of the settings object.
+    """
+    provider = _RecordsTheCeilingItWasSent()
+
+    response = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="openai/gpt-4o",
+        max_tokens=999_999,
+    )
+
+    assert provider.sent == [16384], "gpt-4o accepts no more than this"
+    assert response.max_tokens == 16384
+
+
+# ---------------------------------------------------------------------------
+# Every agent loop refuses a truncated call, not just the main one
+# ---------------------------------------------------------------------------
+
+
+class _NoSandbox:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _CutWriteThenDone:
+    """A turn cut off inside `write_file`, then a turn that finishes.
+
+    `run_meta` is set here rather than derived, so the case pins what the
+    dispatch site does with the verdict, not how the verdict is reached.
+    """
+
+    def __init__(self) -> None:
+        from raven.providers.base import TruncationInfo
+
+        self.responses = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="write_file",
+                        arguments={"path": "snake.py", "content": "the last chunk\n"},
+                        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=60)),
+                    )
+                ],
+                finish_reason="length",
+            ),
+            LLMResponse(content="done", finish_reason="stop"),
+        ]
+        self.seen: list[list[dict[str, Any]]] = []
+
+    async def chat_with_retry(self, **kwargs) -> LLMResponse:
+        self.seen.append([dict(m) for m in kwargs["messages"]])
+        return self.responses.pop(0)
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_does_not_dispatch_a_truncated_call(tmp_path, monkeypatch) -> None:
+    """The verdict reaches `run_meta` here -- `chat_with_retry` sets it -- and
+    was then dropped at dispatch, because only the main loop forwarded it.
+
+    `mode` is optional on `write_file`: a cut landing before it arrives falls
+    back to overwrite and silently replaces what an earlier append wrote. This
+    is the scenario the branch prevents, at a caller it did not reach.
+    """
+    from raven.agent.subagent.manager import SubagentManager
+
+    target = tmp_path / "snake.py"
+    target.write_text("first chunk\n", encoding="utf-8")
+
+    provider = _CutWriteThenDone()
+    manager = SubagentManager(provider=provider, workspace=tmp_path, model="stub")
+    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
+
+    async def _swallow(*a: object, **k: object) -> None:
+        return None
+
+    monkeypatch.setattr(manager, "_announce_result", _swallow)
+
+    await manager._run_subagent_inner(
+        "t1",
+        "write a snake game",
+        "snake",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:s1"},
+        _NoSandbox(),
+        provider,
+        "stub",
+    )
+
+    assert target.read_text(encoding="utf-8") == "first chunk\n", "a cut-off write must not land"
+    tool_replies = [m for m in provider.seen[1] if m.get("role") == "tool"]
+    assert tool_replies, "the second turn should have seen the tool result"
+    assert "[truncated]" in str(tool_replies[-1].get("content", ""))
