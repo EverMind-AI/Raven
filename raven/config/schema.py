@@ -324,6 +324,13 @@ class CronConfig(Base):
     default_timezone: str = "Asia/Shanghai"
     """Default IANA timezone for cron expressions without explicit ``--tz``."""
 
+    notify_missed: bool = True
+    """When True, the gateway observes one-shot reminders bound to other
+    partitions (tui / cli sessions) that went past due unfired — their
+    session was closed — and surfaces each once as a system event through
+    the heartbeat wake path. Read-only observation: the foreign job itself
+    is never mutated."""
+
 
 class ModelOverlay(Base):
     """A name for a model no catalogue carries.

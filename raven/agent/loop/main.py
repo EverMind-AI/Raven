@@ -2434,25 +2434,6 @@ class AgentLoop:
             except Exception:
                 logger.exception("on_turn_complete callback failed")
 
-    async def await_pending_extractions(
-        self,
-        flush_session_id: str | None = None,
-        *,
-        wait: bool = True,
-    ) -> None:
-        """No-op retained for CLI / batch-mode call-site compatibility.
-
-        Previously this flushed the local skill-extraction buffer and
-        blocked on its in-flight tasks. That embedded pipeline was
-        removed — case-to-skill distillation now lives in the
-        :class:`MemoryBackend` plugin (``backend.store`` /
-        ``backend.feedback``), which the after-turn pipeline drives
-        directly. Kept so ``raven agent`` callers don't need changing;
-        the ``flush_session_id`` / ``wait`` knobs are inert.
-        """
-        del flush_session_id, wait
-        return None
-
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
         if self._mcp_stack:
