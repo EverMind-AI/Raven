@@ -334,8 +334,9 @@ class ModelOverlay(Base):
     their own deployment -- but it leaves no way to label several of them.
 
     Only what a person states about presentation. Token accounting is not in
-    scope here -- `agents.defaults.contextWindowTokens` / `maxTokens` already
-    hold it. What has no knob at all is a *price* for an endpoint no catalogue
+    scope here -- `agents.defaults.contextWindowTokens` holds what a person can
+    state about it, and the output ceiling resolves per model with no knob at
+    all. What has no knob either is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
     """

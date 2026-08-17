@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+import raven
 from raven.agent.loop import AgentLoop
 from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.truncation import flag_truncation
@@ -281,50 +282,82 @@ def test_no_chat_stream_override_hardcodes_a_generation_setting() -> None:
     only, and every streaming request went out at 4096 whatever was configured.
 
     `chat_stream` is the exposed one because the loop calls it directly. `chat`
-    is shielded by `chat_with_retry`, which resolves all three against
-    `self.generation` and always passes them explicitly.
+    is shielded on the loop's own path, which goes through `chat_with_retry`:
+    it resolves all three against `self.generation` and always passes them
+    explicitly. Five sites do call `provider.chat()` directly (`personalizer`,
+    `importer/hermes_user_md`); nothing is shadowed there today because each
+    passes `temperature` itself, and none passes `reasoning_effort` -- so a
+    literal on `chat` would be inert rather than wrong. That is a weaker
+    guarantee than `chat_stream`'s, which is why only the latter is asserted.
 
     All three parameters, not just the one that started this: fixing
     `max_tokens` alone on three providers left `temperature` and
     `reasoning_effort` shadowed on MiniMax, which is what a reviewer found
     after this test had already been written to check one field.
+
+    Read rather than imported, and over the whole tree rather than
+    `raven/providers`. A subclass can live anywhere -- an adapter beside the
+    code that uses it -- and importing everything to find one is not available:
+    modules under `raven/` parse argv at import time and take the process down
+    with `SystemExit`, which is not an `Exception` to skip past. Source is the
+    thing being asserted on anyway; a literal in a signature is visible in it.
     """
-    import inspect
-    import pkgutil
-    from importlib import import_module
-
-    import raven.providers as providers_pkg
-    from raven.providers.base import LLMProvider
-
-    for mod in pkgutil.iter_modules(providers_pkg.__path__):
-        try:
-            import_module(f"raven.providers.{mod.name}")
-        except Exception:
-            continue  # optional backends whose deps are absent
-
-    offenders: list[str] = []
-    for cls in _all_subclasses(LLMProvider) | {LLMProvider}:
-        # Test doubles are free to hardcode anything -- they never build a real
-        # request. Only shipped providers can shadow a user's configuration.
-        if not cls.__module__.startswith("raven."):
-            continue
-        method = cls.__dict__.get("chat_stream")
-        if method is None:
-            continue
-        params = inspect.signature(method).parameters
-        for field in ("max_tokens", "temperature", "reasoning_effort"):
-            param = params.get(field)
-            if param is None or param.default is inspect.Parameter.empty:
-                continue
-            if param.default is not LLMProvider._SENTINEL:
-                offenders.append(f"{cls.__module__}.{cls.__qualname__}.chat_stream({field}={param.default!r})")
+    offenders = [
+        f"{path}::{cls}.chat_stream({field}={default})"
+        for path, cls, field, default in _hardcoded_chat_stream_defaults(Path(raven.__file__).parent)
+    ]
 
     assert not offenders, "chat_stream defaults shadow configuration: " + "; ".join(offenders)
 
 
-def _all_subclasses(cls: type) -> set[type]:
-    direct = set(cls.__subclasses__())
-    return direct.union(*(_all_subclasses(c) for c in direct)) if direct else direct
+def _hardcoded_chat_stream_defaults(root: Path):
+    """Every `chat_stream` default in `root` that is not the shared sentinel.
+
+    Subclassing is followed by name across files: `LiteLLMProvider` is not
+    `LLMProvider`, and the providers that had the bug were two levels down.
+    A base pulled in under an alias would be missed -- no such case today, and
+    the miss is a quiet gap rather than a false accusation.
+    """
+    import ast
+
+    classes: dict[str, tuple[Path, ast.ClassDef, set[str]]] = {}
+    for path in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bases = {b.id if isinstance(b, ast.Name) else getattr(b, "attr", "") for b in node.bases}
+                classes[node.name] = (path, node, bases)
+
+    providers = {"LLMProvider"}
+    while True:
+        grown = {n for n, (_, _, bases) in classes.items() if bases & providers}
+        if grown <= providers:
+            break
+        providers |= grown
+
+    for name in sorted(providers):
+        if name not in classes:
+            continue  # LLMProvider itself, whose module defines the sentinel
+        path, node, _ = classes[name]
+        for fn in node.body:
+            if not isinstance(fn, ast.AsyncFunctionDef | ast.FunctionDef) or fn.name != "chat_stream":
+                continue
+            args = fn.args.args + fn.args.kwonlyargs
+            defaults = ([None] * (len(fn.args.args) - len(fn.args.defaults)) + list(fn.args.defaults)) + list(
+                fn.args.kw_defaults
+            )
+            for arg, default in zip(args, defaults, strict=True):
+                if arg.arg not in ("max_tokens", "temperature", "reasoning_effort") or default is None:
+                    continue
+                # The sentinel arrives as `_SENTINEL` or `LLMProvider._SENTINEL`
+                # -- anything else in this position is a literal standing in
+                # for whatever the user configured.
+                spelling = default.attr if isinstance(default, ast.Attribute) else getattr(default, "id", None)
+                if spelling != "_SENTINEL":
+                    yield path.relative_to(root.parent), name, arg.arg, ast.unparse(default)
 
 
 # ---------------------------------------------------------------------------

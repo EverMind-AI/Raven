@@ -150,12 +150,12 @@ class Tool(ABC):
     def truncation_hint(self) -> str | None:
         """What to do differently when a call to this tool arrives cut off.
 
-        The generic truncation message can only say "send less", and a model
-        reading that alone tends to send the same call with the content field
-        left out -- observed live, thirty-two iterations of it. What it needs
-        is the next action, and only the tool knows what that is: write_file
-        can be appended to, a shell command can be split into several runs,
-        and some tools have no smaller form at all.
+        The generic truncation message can only say "send less", which leaves a
+        model to guess at what smaller looks like -- and dropping the largest
+        field is one of the guesses. What it needs is the next action, and only
+        the tool knows what that is: write_file can be appended to, a shell
+        command can be split into several runs, and some tools have no smaller
+        form at all.
 
         ``None`` (the default) means the generic message stands on its own.
         """

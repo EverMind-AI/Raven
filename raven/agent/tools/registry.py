@@ -73,7 +73,7 @@ class ToolRegistry:
         #
         # The cost of being wrong here is one retry: a turn can end with a
         # complete tool call and be cut in prose that follows it, which the
-        # non-streaming path cannot tell apart (see agent/loop/truncation.py).
+        # non-streaming path cannot tell apart (see providers/truncation.py).
         # A wasted turn is cheaper than a silent overwrite.
         truncation = run_meta.truncation if run_meta else None
         if truncation:

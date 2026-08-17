@@ -183,6 +183,13 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
+# Marks the synthetic user message that carries images a transport cannot put in
+# a tool result. Not persisted: the tool result above it already names the file
+# path, so the only thing this message would add to the transcript is a user turn
+# saying "[image]" that the user never sent -- misleading on resume and in
+# session export. Deliberately a different key from ``_recovery_synthetic``:
+# that one marks empty-response recovery scaffolding, and collapsing the two
+# would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
 
