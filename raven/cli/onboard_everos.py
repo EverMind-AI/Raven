@@ -1633,6 +1633,29 @@ def _record_root(root: Any, owned: bool) -> None:
     set_plugin_config_fields("everos-memory", {"root": str(root), "owned": owned})
 
 
+def _adopt_own_root() -> None:
+    """Move to raven's own root, retracting an address that was not raven's.
+
+    A merging write cannot say "this address no longer applies", and the address
+    recorded for a server the user runs is exactly what ``_ask_managed_port``
+    falls back to when no port is recorded -- so leaving it behind parks raven's
+    own service on the user's port, one screen after promising to stop using it.
+
+    Only retracted when the record says the address is theirs. A managed port
+    the user deliberately moved to is also reachable here, and dropping that one
+    would quietly offer the shipped default again on the next run.
+    """
+    from raven.config.update import set_plugin_config_fields
+    from raven.config.update_everos import default_everos_root
+
+    theirs = _recorded_memory_slice().get("owned") is False
+    set_plugin_config_fields(
+        "everos-memory",
+        {"root": str(default_everos_root()), "owned": True},
+        remove=("base_url", "port") if theirs else (),
+    )
+
+
 def _capability_lines(base_url: str) -> list[str]:
     """One line per capability the running server actually built.
 
@@ -2086,7 +2109,6 @@ def _step4_memory(
 
     questionary = oc._require_questionary()
     from raven.cli._styles import RAVEN_STYLE
-    from raven.config.update_everos import default_everos_root
     from raven.plugin.memory.everos import _discover
 
     oc.console.print(
@@ -2110,8 +2132,9 @@ def _step4_memory(
             return None
         # An explicit handover. Recorded here rather than left to the branch that
         # builds the root, because everything downstream -- _memory_enabled(),
-        # owned_everos_root() -- has to see the new answer first.
-        _record_root(default_everos_root(), owned=True)
+        # owned_everos_root(), _ask_managed_port() -- has to see the new answer
+        # first.
+        _adopt_own_root()
 
     found = _discover.pick(_discover.discover())
 
@@ -2127,7 +2150,7 @@ def _step4_memory(
         # llm, and everos_root() itself -- has to see the new answer, and
         # _memory_enabled() returns from this function before the building
         # branch is ever reached.
-        _record_root(default_everos_root(), owned=True)
+        _adopt_own_root()
         found = None
 
     if found is not None and found.owned:

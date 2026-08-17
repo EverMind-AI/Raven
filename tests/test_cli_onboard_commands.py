@@ -1787,6 +1787,10 @@ class TestReusingAnEverosTheUserManages:
         reached: list[int] = []
         _no_writes.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
         _no_writes.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+        # Which root gets built is the subject; which port it lands on is not.
+        # Left real, the managed default decides the outcome by whether this
+        # host happens to be running an everos of its own.
+        _no_writes.setattr(onboard_everos, "_port_is_free", lambda _p: True)
 
         async def _ok(*_a: object, **_kw: object) -> None:
             return None
@@ -1803,6 +1807,9 @@ class TestReusingAnEverosTheUserManages:
         # raven has adopted the user's root and is about to overwrite it.
         assert Path(slice_["root"]) != theirs, "adopted the root the user declined to share"
         assert Path(slice_["root"]) == mine
+        # And its address is raven's, not the one carried in from theirs.
+        assert slice_["base_url"] == "http://localhost:18791"
+        assert slice_["port"] == 18791
 
     def test_a_stopped_one_is_probed_again_rather_than_started(
         self, tmp_env: Path, everos_isolated: Path, _no_writes, capsys: pytest.CaptureFixture
@@ -5939,6 +5946,104 @@ class TestAnEnabledInstallBranchesOnOwnership:
         assert slice_["owned"] is False
         assert slice_["base_url"] == "http://127.0.0.1:8000"
         assert "root" not in slice_
+
+    @pytest.mark.parametrize("recorded_port", [None, 8000])
+    def test_the_handover_does_not_inherit_their_address(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch, recorded_port: int | None
+    ) -> None:
+        """Raven's own service must not be configured on the user's port.
+
+        The screen above the handover promises raven stops using their address.
+        A merging write kept it, and ``_ask_managed_port`` reads exactly that as
+        the port raven is meant to listen on -- silently when their server is
+        stopped (the natural order: shut it down, then re-run onboard), and with
+        "already in use by something else" pointing at their own EverOS when it
+        is not. Both cases are parametrized: a reuse recorded through
+        ``_set_base_url`` leaves an explicit ``port`` behind as well as the
+        address, and the address alone is what a self-managed setup records.
+        """
+        import questionary
+
+        from raven.cli import onboard_everos
+        from raven.config import update_everos as ue
+
+        mine = tmp_env.parent / "mine"
+        monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
+        monkeypatch.setattr(ue, "legacy_everos_root", lambda: tmp_env.parent / "legacy")
+        slice_in: dict[str, Any] = {"owned": False, "base_url": "http://127.0.0.1:8000"}
+        if recorded_port is not None:
+            slice_in["port"] = recorded_port
+        tmp_env.write_text(
+            json.dumps({"memory": {"backend": "everos"}, "plugins": {"config": {"everos-memory": slice_in}}}),
+            encoding="utf-8",
+        )
+        assert onboard_everos._memory_enabled() is True
+
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        # Two screens: the ownership menu, then the source question the handover
+        # falls through into. Both answered "managed" -- the second one is the
+        # known double-ask, not the subject here.
+        answers = iter(["managed", "managed"])
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
+        monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_kw: None)
+        monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+        monkeypatch.setattr(onboard_everos, "_stop_for_reload", lambda *_a, **_kw: None)
+        # Their server is stopped, so every port looks free and nothing prompts:
+        # the port raven ends up on is whatever the record hands it.
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+
+        async def _ok(*_a: object, **_kw: object) -> None:
+            return None
+
+        monkeypatch.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ok)
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["owned"] is True
+        assert Path(slice_["root"]) == mine
+        assert slice_["port"] == 18791, "raven's own service was parked on the user's port"
+        assert slice_["base_url"] == "http://localhost:18791"
+
+    def test_a_managed_port_the_user_moved_to_survives_the_switch(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Retracting the address is about theirs, not about raven's own.
+
+        Declining to share a discovered root also reaches here, and there the
+        recorded address can be raven's own on a port the user deliberately
+        moved to. Dropping that offers 18791 again on the next run, which is the
+        silent undo ``_ask_managed_port`` exists to prevent.
+        """
+        from raven.cli import onboard_everos
+        from raven.config import update_everos as ue
+
+        mine = tmp_env.parent / "mine"
+        monkeypatch.setattr(ue, "default_everos_root", lambda: mine)
+        tmp_env.write_text(
+            json.dumps(
+                {
+                    "plugins": {
+                        "config": {
+                            "everos-memory": {
+                                "owned": True,
+                                "root": str(tmp_env.parent / "old"),
+                                "base_url": "http://localhost:20000",
+                                "port": 20000,
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        onboard_everos._adopt_own_root()
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert Path(slice_["root"]) == mine
+        assert slice_["port"] == 20000
+        assert slice_["base_url"] == "http://localhost:20000"
 
     def test_a_managed_install_still_gets_the_model_roles(
         self, tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
