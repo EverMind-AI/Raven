@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from raven.providers import model_catalog_cache, rates
+from raven.providers.base import send_max_tokens
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.rates import (
     _FALLBACK_PRICING,
@@ -882,3 +883,40 @@ def test_a_row_whose_ceiling_sits_below_its_window_is_left_alone(monkeypatch):
     _patch_table(monkeypatch, {"probe/sane": {"max_input_tokens": 200000, "max_output_tokens": 64000}})
 
     assert rates.resolve_max_output_tokens("probe/sane") == 64000
+
+
+def test_the_ceiling_a_request_carries_leaves_room_for_the_prompt(monkeypatch):
+    """The budget lets a prompt reach ``window - reserved``; the request asks
+    for ``max_tokens``. Those are one number or they are a contradiction.
+
+    Measured when they were two: a 202800-window model with a 131000 ceiling
+    granted a 152100-token prompt against a request that left 71800, so a
+    session past ~72k was refused before a token was generated -- and the
+    recovery only elides tool bodies, so a history grown on conversation gets
+    no retry at all.
+    """
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
+
+    ceiling = send_max_tokens(None, "probe/roomy")
+
+    assert ceiling == 50_000, "a quarter of the window, since the model's own ceiling is above it"
+    assert ceiling + (200_000 - ceiling) <= 200_000
+
+
+def test_a_ceiling_below_the_share_is_carried_in_full(monkeypatch):
+    """The share is a bound, not a target: asking for less than the model can
+    produce is the cost, and it is only worth paying where it buys prompt room.
+    """
+    _patch_table(monkeypatch, {"probe/modest": {"max_input_tokens": 128_000, "max_output_tokens": 16_384}})
+
+    assert send_max_tokens(None, "probe/modest") == 16_384
+
+
+def test_an_explicit_pin_is_still_the_caller_s_to_make(monkeypatch):
+    """The escape hatch for a caller that really does want a long single answer,
+    and the one the share bound points at. Bounded by the model, not the share.
+    """
+    _patch_table(monkeypatch, {"probe/roomy": {"max_input_tokens": 200_000, "max_output_tokens": 64_000}})
+
+    assert send_max_tokens(None, "probe/roomy", pinned=64_000) == 64_000
+    assert send_max_tokens(None, "probe/roomy", pinned=999_999) == 64_000

@@ -527,6 +527,12 @@ async def test_the_ceiling_comes_from_the_model_that_actually_answered() -> None
     the model it asked for. When a fallback serves the turn, that is the wrong
     ceiling: too small and a complete call reads as truncated, too large and a
     real cut goes unnoticed.
+
+    The two numbers below are both bounded by ``OUTPUT_SHARE_OF_WINDOW``, so
+    what separates them is the window as much as the ceiling: gpt-4o asks
+    16384 of its 128000, the fallback 50000 of its 200000. That the pair stays
+    distinct is what the case needs; which of the two bounds produced each is
+    not its subject.
     """
     from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse
 
@@ -540,7 +546,8 @@ async def test_the_ceiling_comes_from_the_model_that_actually_answered() -> None
             self.served.append(model or "")
             if model == "openai/gpt-4o":
                 return LLMResponse(content="", finish_reason="error", error_classification=None)
-            # 20000 tokens: over gpt-4o's 16384 ceiling, under claude's 64000
+            # 20000 tokens: over what gpt-4o would have carried, under the
+            # fallback's -- so the two models give opposite verdicts here.
             return LLMResponse(content="ok", finish_reason="stop", usage={"completion_tokens": 20000})
 
         def classify_error(self, exc=None, content=None):
@@ -559,7 +566,7 @@ async def test_the_ceiling_comes_from_the_model_that_actually_answered() -> None
     )
 
     assert provider.served == ["openai/gpt-4o", "anthropic/claude-opus-4-5"]
-    assert response.max_tokens == 64000, "the ceiling must be the fallback's, not the requested model's"
+    assert response.max_tokens == 50000, "the ceiling must be the fallback's, not the requested model's"
     assert response.truncated is False, "20000 tokens is a normal reply for the model that answered"
 
 

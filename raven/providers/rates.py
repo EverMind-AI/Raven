@@ -44,6 +44,21 @@ DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 # which clamp an over-large value rather than rejecting it.
 DEFAULT_MAX_OUTPUT_TOKENS = 16384
 
+# Most a request may claim of the context window for its own answer, so that
+# what the prompt is allowed to grow to and what the answer is allowed to use
+# still add up. Both numbers come from ``send_max_tokens`` for exactly that
+# reason: computed apart, a budget that hands out ``window - reserved`` while
+# the request asks for the model's whole ceiling grants a prompt the request
+# cannot coexist with, and the sum is refused before a token is generated.
+#
+# 0.25 rather than a derived quantity. Surveyed agents do not compute this at
+# all: LiteLLM's ``trim_messages`` gives a prompt 75% of the window and never
+# consults an output ceiling, and OpenClaw compacts at 70% on the same footing.
+# The cost is a model that can genuinely emit more than a quarter of its window
+# in one answer -- claude-opus-4-5 asks 50000 of its 64000 -- for which an
+# explicit ``pinned=`` is the caller's escape hatch.
+OUTPUT_SHARE_OF_WINDOW = 0.25
+
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.

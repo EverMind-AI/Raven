@@ -87,10 +87,15 @@ def test_a_ceiling_below_the_share_is_reserved_in_full(workspace, monkeypatch) -
 
 def test_the_share_is_named_rather_than_spelled_at_the_call_site(workspace, monkeypatch) -> None:
     """It is an inherited judgement, not a derived quantity -- the next reader
-    has to be able to find where it came from and what it trades off."""
-    assert 0 < agent_main._OUTPUT_RESERVATION_SHARE < 1
+    has to be able to find where it came from and what it trades off.
 
-    monkeypatch.setattr(agent_main, "_OUTPUT_RESERVATION_SHARE", 0.5)
+    It lives beside the catalogue constants rather than here, because the
+    request carries the same bound: `send_max_tokens` applies it, and this
+    reservation has to be the number the request will actually use.
+    """
+    assert 0 < agent_main.OUTPUT_SHARE_OF_WINDOW < 1
+
+    monkeypatch.setattr(agent_main, "OUTPUT_SHARE_OF_WINDOW", 0.5)
     budget = _loop(workspace, window=200_000, ceiling=200_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 100_000

@@ -58,7 +58,7 @@ from raven.providers.base import (
     send_max_tokens,
 )
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.rates import OUTPUT_SHARE_OF_WINDOW, effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
@@ -191,22 +191,6 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # that one marks empty-response recovery scaffolding, and collapsing the two
 # would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
-
-# Ceiling on how much of the context window a turn holds back for its answer.
-# The model's own output ceiling is the other bound, and the smaller wins.
-#
-# Needed because that ceiling stopped being a small configured number and became
-# whatever the catalogue reports: on a row where it equals the window, reserving
-# it leaves nothing for history at all, and an honest 131000 on a 202800 window
-# still spends two thirds of the window on an answer the turn probably will not
-# produce. An absolute number cannot serve both a 4k model and a 1M one, so the
-# bound is a share.
-#
-# 0.25 is LiteLLM's: `trim_messages` gives a prompt 75% of the window and never
-# consults an output ceiling at all. Inherited rather than derived -- a turn
-# that really does spend its whole ceiling on one answer is the case this
-# under-reserves for, and compaction is what absorbs that.
-_OUTPUT_RESERVATION_SHARE = 0.25
 
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
@@ -1054,9 +1038,12 @@ class AgentLoop:
             getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
             allow_fetch=False,
         )
-        # See _OUTPUT_RESERVATION_SHARE: a cap, not a target, so a model whose
-        # ceiling is already below the share reserves only what it can use.
-        reserved_output = min(ceiling, int(self.context_window_tokens * _OUTPUT_RESERVATION_SHARE))
+        # `send_max_tokens` has already applied the share against the model's
+        # own window, so this is the same number the request will carry -- which
+        # is the point: the prompt grows into what this leaves. The second bound
+        # is for a configured window smaller than the model's real one, where a
+        # share of the larger could exceed the smaller outright.
+        reserved_output = min(ceiling, int(self.context_window_tokens * OUTPUT_SHARE_OF_WINDOW))
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])

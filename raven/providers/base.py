@@ -326,13 +326,23 @@ def send_max_tokens(generation: Any, model: str | None, *, pinned: int | None = 
     not stall on the catalogue's importing tier (~2-7s in a fresh process);
     they get whatever is already loaded, then the fixed fallback. A caller
     about to build a request wants the default.
+
+    Absent a pin, the answer is also bounded by ``OUTPUT_SHARE_OF_WINDOW``.
+    That bound is what keeps the prompt and the answer addable: the agent
+    loop's budget reserves this very number and lets a prompt grow into the
+    rest, so a request asking for the model's whole ceiling instead would be
+    granted a prompt it cannot coexist with. A pin skips the share on purpose
+    -- a caller asking for a long answer has said so.
     """
-    from raven.providers.rates import resolve_max_output_tokens
+    from raven.providers.rates import OUTPUT_SHARE_OF_WINDOW, resolve_context_window, resolve_max_output_tokens
 
     ceiling = resolve_max_output_tokens(model, allow_fetch=allow_fetch)
     pin = pinned if pinned is not None else getattr(generation, "max_tokens", None)
     if pin:
         return min(int(pin), ceiling)
+    window = resolve_context_window(model or "", allow_fetch=allow_fetch)
+    if window:
+        return min(ceiling, int(window * OUTPUT_SHARE_OF_WINDOW))
     return ceiling
 
 
