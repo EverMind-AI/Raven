@@ -575,6 +575,35 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
+        return await self._execute(nodes, background)
+
+    async def run_with_roles(
+        self,
+        nodes: list[dict],
+        *,
+        roles: dict[str, Any],
+        role_capabilities: dict[str, AgentCapabilities],
+        background: bool = True,
+    ) -> str:
+        """Run a graph whose nodes dispatch to caller-built backends.
+
+        The playbook executor's entry: ``roles`` maps a role name to a backend
+        instance built for this run (whitelisted tools/skills), merged over the
+        configured roster for the roster check and the dispatch map alike. Not
+        LLM-facing — the tool schema and ``execute`` are unchanged, so a model
+        (or injected text) cannot smuggle backends in through a tool call.
+        """
+        return await self._execute(nodes, background, extra_subagents=roles, extra_capabilities=role_capabilities)
+
+    async def _execute(
+        self,
+        nodes: list[dict],
+        background: bool,
+        extra_subagents: dict[str, Any] | None = None,
+        extra_capabilities: dict[str, AgentCapabilities] | None = None,
+    ) -> str:
+        subagents = {**self._subagents, **(extra_subagents or {})}
+        capabilities = {**self._capabilities, **(extra_capabilities or {})}
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
         # sub-agent dispatches.
@@ -591,13 +620,13 @@ class SubAgentDagTool(Tool):
         try:
             spec = parse_dag_spec({"nodes": nodes})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
-            validate_capabilities(spec, self._capabilities)
+            validate_capabilities(spec, capabilities)
             # ``run_dag`` checks the roster too, but it does so inside the run --
             # which a backgrounded call has already returned from. Checked here
             # as well so a misspelled name is still a refusal the model can fix
             # in the same turn, not an announcement a turn later.
             for node in spec.nodes:
-                if self._subagents.get(node.subagent) is None:
+                if subagents.get(node.subagent) is None:
                     raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -619,9 +648,11 @@ class SubAgentDagTool(Tool):
         self._cancels[run_id] = cancel
 
         if not background:
-            return await self._run(spec, run_id, cancel, origin, dirs, call_id)
+            return await self._run(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
 
-        task = asyncio.create_task(self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id))
+        task = asyncio.create_task(
+            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
+        )
         self._runs[run_id] = task
         task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
         if self._adopt is not None:
@@ -642,9 +673,10 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         dirs: _RunDirs,
         call_id: str | None,
+        subagents: dict[str, Any] | None = None,
     ) -> None:
         """Run a backgrounded graph, then send its summary back as a turn."""
-        result = await self._run(spec, run_id, cancel, origin, dirs, call_id)
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
             # with every unfinished node skipped, but announcing that would
@@ -700,13 +732,14 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         dirs: _RunDirs,
         call_id: str | None,
+        subagents: dict[str, Any] | None = None,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
         emit = self._emitter(origin.conversation, call_id)
         try:
             result = await run_dag(
                 spec,
-                subagents=self._subagents,
+                subagents=subagents if subagents is not None else self._subagents,
                 backend=self._backend,
                 workdir=dirs.workdir,
                 run_root=dirs.run_root,

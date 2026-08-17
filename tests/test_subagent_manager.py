@@ -602,3 +602,88 @@ async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
 
     assert response.finish_reason != "error"
     assert captured["api_key"] == "k-main"
+
+
+from raven.providers.base import LLMProvider, LLMResponse  # noqa: E402
+
+
+class _WhitelistStubProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        return LLMResponse(content="done", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+async def test_raven_loop_backend_tools_allow_filters_the_registry(tmp_path, monkeypatch):
+    """A per-role whitelist decides what gets registered at all: a withheld
+    tool never reaches the registry, so it never appears in the LLM's tools
+    field -- restriction by absence, not by instruction."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.tools.registry import ToolRegistry
+
+    registered: list[list[str]] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):
+        real(self, tool)
+        registered[-1].append(tool.name)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+
+    async def _names(**kw) -> list[str]:
+        registered.append([])
+        backend = RavenLoopBackend(provider=_WhitelistStubProvider(), model="stub", agent_home=tmp_path, **kw)
+        await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+        return registered[-1]
+
+    full = await _names()
+    only_read = await _names(tools_allow=["read_file"])
+    none_at_all = await _names(tools_allow=[])
+
+    assert {"read_file", "write_file", "exec", "web_fetch"} <= set(full)
+    assert only_read == ["read_file"]
+    assert none_at_all == []
+
+
+def test_build_subagent_prompt_skills_allow_narrows_the_menu(tmp_path):
+    """None keeps the full catalog, [] hides the menu, a list shows only the
+    named skills."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    default = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"])
+    named = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"], skills_allow=["weather"])
+    hidden = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"], skills_allow=[])
+
+    assert "weather" in default
+    assert "weather" in named
+    assert "weather" not in hidden
+
+
+def test_build_subagent_prompt_skills_allow_stacks_with_the_tool_filter(tmp_path):
+    """Whitelisting a skill does not smuggle it past the requires.tools gate:
+    a skill whose procedure needs a tool this backend lacks stays hidden even
+    when named."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(
+        tmp_path,
+        tmp_path / "s",
+        ["read_file"],
+        skills_allow=["subagent-dag-orchestration", "weather"],
+    )
+
+    assert "subagent-dag-orchestration" not in prompt
+    assert "weather" in prompt

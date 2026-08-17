@@ -498,6 +498,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             # Gates run_subagent_dag: AgentLoop registers it only when the roster
             # is non-empty, since its nodes dispatch to these agents.
             third_party_subagents=config.subagents.third_party,
+            playbook_config=config.playbook,
             # TUI is always a multi-turn interactive session.
             interactive=True,
         )

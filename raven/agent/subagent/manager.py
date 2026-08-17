@@ -142,7 +142,22 @@ class SubagentManager:
         # Pluggable per-spawn execution backend. Default is an in-process raven
         # loop; third-party backends (CLI claude/codex, OpenAI-API mirothinker;
         # req5) register in ``_backends`` keyed by agent name.
-        self._raven_backend = RavenLoopBackend(
+        self._raven_backend = self.build_role_backend()
+        self._backends: dict[str, SubagentBackend] = {}
+        # (name, description, stateful) of configured third-party agents, for
+        # the spawn tool's description so the main agent knows what it can
+        # dispatch to.
+        self._third_party_meta: list[tuple[str, str, bool]] = []
+        self.set_third_party_subagents(third_party_subagents or [])
+
+    def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
+        """A raven-loop backend, optionally capability-narrowed for one role.
+
+        ``build`` is duck-typed (the playbook executor's RoleBuildSpec): only
+        ``tools_allow`` / ``skills_allow`` are read, so this module does not
+        import playbook types. With no argument it returns the default
+        full-capability backend the manager itself dispatches spawns to."""
+        return RavenLoopBackend(
             provider=self.provider,
             model=self.model,
             agent_home=self.workspace,
@@ -151,13 +166,9 @@ class SubagentManager:
             brave_api_key=self.brave_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
+            tools_allow=getattr(build, "tools_allow", None),
+            skills_allow=getattr(build, "skills_allow", None),
         )
-        self._backends: dict[str, SubagentBackend] = {}
-        # (name, description, stateful) of configured third-party agents, for
-        # the spawn tool's description so the main agent knows what it can
-        # dispatch to.
-        self._third_party_meta: list[tuple[str, str, bool]] = []
-        self.set_third_party_subagents(third_party_subagents or [])
 
     def set_third_party_subagents(self, configs: list) -> None:
         """(Re)build the third-party backend registry from config. Hot-appliable

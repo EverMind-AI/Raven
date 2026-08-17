@@ -512,6 +512,25 @@ replays pieces or just deletes a config stanza.
 _Avoid_: "manifest" -- that is the plugin's own declaration; a ledger is the record of one
 install of it.
 
+**Playbook** (`memory_engine/playbook/`):
+A task-family-level orchestration template a `PlaybookGenerator` derives from one
+user input: role configs cast from the four capability bases (research / code /
+data / content) plus either an explicit step graph (`mode="dag"`, emitted only
+when the user's input itself spells the steps out — faithful transcription, never
+invented) or orchestration principles for the runtime main agent (`mode="prompt"`,
+the default). Persisted as a skill-shaped SKILL.md (contract in a fenced yaml
+block) so the skill_local registry indexes it. Generation is one forced tool call
+plus a bounded validation-repair loop; `status` starts at `draft` and open
+`blocking_questions` pin it there. Discovery is a two-stage funnel: `triggers`
+(a compile-time-expanded, generic-word-filtered keyword/phrase vocabulary,
+substring-matched per message at zero cost) nominates candidates, and one
+LLM gate call judges intent, extracts runtime-input values and adjudicates
+between overlapping candidates — any gate failure resolves to no match, so
+the conversation falls through untouched.
+_Avoid_: conflating with a Skill (a playbook is a structured skill subtype — the
+runtime-enforced form of the same flow knowledge) and with the sub-agent DAG run
+(`run_subagent_dag` executes a graph once; a playbook stores one for reuse).
+
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
 
