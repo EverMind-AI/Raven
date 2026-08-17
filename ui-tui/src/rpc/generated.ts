@@ -40,6 +40,7 @@ export type DagSnapshotNodeStatus = 'pending' | 'running' | 'completed' | 'faile
 export type TurnEvent =
   | MessageStartEvent
   | EpisodeStartEvent
+  | NoticeEvent
   | TokenDeltaEvent
   | ThinkingDeltaEvent
   | ToolStartEvent
@@ -48,6 +49,7 @@ export type TurnEvent =
   | MessageCompleteEvent
   | ErrorEvent
   | CronDeliveredEvent
+  | SubagentDeliveredEvent
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
   | DagRunCompletedEvent;
@@ -182,6 +184,12 @@ export interface TranscriptMessage {
   timestamp?: string;
   reasoning_content?: string;
   tool_calls?: TranscriptToolCall[];
+  /**
+   * A file tool's unified diff of the change it made, on its role='tool' entry.
+   */
+  diff?: string;
+  turn_ended?: TranscriptTurnEnded;
+  notice?: TranscriptNotice;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -194,6 +202,32 @@ export interface TranscriptToolCall {
    * JSON-encoded arguments; re-serialized when stored as an object.
    */
   arguments: string;
+}
+/**
+ * Why a turn's transcript stops where it does.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptTurnEnded".
+ */
+export interface TranscriptTurnEnded {
+  /**
+   * 'cancelled' (a person stopped it) or 'failed'.
+   */
+  status: string;
+  reason?: string;
+}
+/**
+ * Marks an assistant entry the runtime wrote rather than the model.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptNotice".
+ */
+export interface TranscriptNotice {
+  /**
+   * Which runtime decision this reports; `action_blocked` today.
+   */
+  kind: string;
+  detail?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -233,6 +267,34 @@ export interface ExtToolRow {
    * Owning MCP server, or null for a built-in tool.
    */
   mcp_server?: string;
+  needs?: ToolSetupNeed;
+}
+/**
+ * Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.
+ */
+export interface ToolSetupNeed {
+  /**
+   * Dotted config key that unlocks the tool.
+   */
+  setting: string;
+  /**
+   * Environment variable accepted instead.
+   */
+  env?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ToolSetupNeed".
+ */
+export interface ToolSetupNeed1 {
+  /**
+   * Dotted config key that unlocks the tool.
+   */
+  setting: string;
+  /**
+   * Environment variable accepted instead.
+   */
+  env?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -334,6 +396,20 @@ export interface EverosSection {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelField".
+ */
+export interface ChannelField {
+  key: string;
+  label: string;
+  required: boolean;
+  secret: boolean;
+  /**
+   * Whether a value is stored; the value itself never rides the wire.
+   */
+  set: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ChannelStatusRow".
  */
 export interface ChannelStatusRow {
@@ -344,6 +420,10 @@ export interface ChannelStatusRow {
    * Required fields still empty.
    */
   missing: string[];
+  /**
+   * Every field the channel takes, so a client can render its configure form.
+   */
+  fields?: ChannelField[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -526,6 +606,10 @@ export interface SessionListItem {
    */
   started_at: number;
   title: string;
+  /**
+   * User pinned this session to the top of the picker.
+   */
+  pinned?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -583,6 +667,64 @@ export interface SkillInfo {
   pinned: boolean;
   description: string;
   tags: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentCall".
+ */
+export interface SubagentCall {
+  /**
+   * A spawn's call id, or '<run_id>/<node>' for a graph node. Opaque to a client: a spawn row opens through subagent.context and a dag row through dag.node, which is what kind is for.
+   */
+  id: string;
+  /**
+   * spawn | dag. Which delegation path made this, and so how it is opened.
+   */
+  kind?: string;
+  /**
+   * dag rows only: the graph run this node belongs to.
+   */
+  run_id?: string;
+  /**
+   * dag rows only: the node's id inside that run.
+   */
+  node?: string;
+  /**
+   * What it was asked, in short.
+   */
+  label: string;
+  /**
+   * run | ok | error | cancelled | queued | skipped. The last two only occur for graph nodes.
+   */
+  status: string;
+  /**
+   * The external agent that ran it, or null for a raven subagent.
+   */
+  agent?: string;
+  /**
+   * The handle sharing one stateful agent session, if any.
+   */
+  instance?: string;
+  /**
+   * ISO 8601; the record stores epoch millis.
+   */
+  started_at?: string;
+  /**
+   * Absent while it is still running.
+   */
+  ended_at?: string;
+  /**
+   * What was asked, plus the answer once there is one.
+   */
+  message_count: number;
+  /**
+   * Input plus output tokens this run spent. Null, not zero, when the transport that ran it cannot report usage -- the cli lane never can.
+   */
+  tokens?: number;
+  /**
+   * How many tools it called. Null where the transport has no per-step visibility.
+   */
+  tool_call_count?: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -862,6 +1004,10 @@ export interface MessageStartEvent {
    */
   payload: {
     turn_id: string;
+    /**
+     * The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end.
+     */
+    content?: string;
     target?: DirectTarget;
   };
 }
@@ -873,6 +1019,27 @@ export interface EpisodeStartEvent {
   type: 'episode.start';
   payload: {
     index: number;
+  };
+}
+/**
+ * Prose the runtime wrote, not the model.
+ *
+ * It must not arrive as `token.delta`: that buffer is the model's voice, so the text would render as the answer -- glued to whatever the model narrated just before it, carrying the answer's copy and branch actions, and stuck in English whatever language the turn was in.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "NoticeEvent".
+ */
+export interface NoticeEvent {
+  type: 'notice';
+  payload: {
+    /**
+     * Which runtime decision this reports; `action_blocked` today.
+     */
+    kind: string;
+    /**
+     * The blocking tool's own first line, when it gave one.
+     */
+    detail?: string;
   };
 }
 /**
@@ -935,6 +1102,10 @@ export interface ToolCompleteEvent {
     metadata?: {
       [k: string]: JsonValue;
     };
+    /**
+     * Unified diff of what the call changed on disk, when the tool could produce one.
+     */
+    diff?: string;
   };
 }
 /**
@@ -974,6 +1145,27 @@ export interface CronDeliveredEvent {
     name: string;
     text: string;
     fired_at: string;
+  };
+}
+/**
+ * A delegated run's result re-entered its conversation here. The injection itself is invisible on the wire -- the next frame a client sees is an assistant turn nobody visibly asked. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentDeliveredEvent".
+ */
+export interface SubagentDeliveredEvent {
+  type: 'subagent.delivered';
+  payload: {
+    kind: 'spawn' | 'dag';
+    /**
+     * The spawn's display label, or the dag's run_id.
+     */
+    label: string;
+    status: 'ok' | 'error';
+    /**
+     * Set for kind=dag, so a client can open the run.
+     */
+    run_id?: string;
   };
 }
 /**
@@ -1030,6 +1222,15 @@ export interface DagNodeDetail {
   output_file?: string;
   output_chars: number;
   output_truncated: boolean;
+  /**
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.
+   */
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  /**
+   * Why the node failed. A failed node has no output, so without this it reads as unanswered.
+   */
+  error?: string;
+  messages?: TranscriptMessage[];
 }
 /**
  * A run_subagent_dag call accepted a graph. Carries the whole topology so a client can lay the graph out before any node reports.
@@ -1238,6 +1439,32 @@ export interface SessionTitleResult {
   session_key: string;
   /**
    * True when the title is held in memory for a lazy (never-saved) session and lands with the session's first save.
+   */
+  pending: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionPinParams".
+ */
+export interface SessionPinParams {
+  /**
+   * Full session_key.
+   */
+  session_id: string;
+  /**
+   * True pins the session to the top of the picker; False unpins.
+   */
+  pinned: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionPinResult".
+ */
+export interface SessionPinResult {
+  pinned: boolean;
+  session_key: string;
+  /**
+   * True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save.
    */
   pending: boolean;
 }
@@ -1663,6 +1890,61 @@ export interface ConfigSetResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentListParams".
+ */
+export interface SubagentListParams {
+  /**
+   * Absent or unknown is an empty list, not an error.
+   */
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentListResult".
+ */
+export interface SubagentListResult {
+  items: SubagentCall[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentContextParams".
+ */
+export interface SubagentContextParams {
+  id: string;
+  /**
+   * A call is addressed by conversation and call, never by call alone.
+   */
+  session_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentContextResult".
+ */
+export interface SubagentContextResult {
+  id: string;
+  messages: TranscriptMessage[];
+  status?: string;
+  label?: string;
+  agent?: string;
+  started_at?: string;
+  ended_at?: string;
+  /**
+   * What it did between the question and the answer, in order. Empty where the transport that ran it has no per-step visibility.
+   */
+  tool_calls?: string[];
+  /**
+   * Input plus output; null when usage was not reported.
+   */
+  tokens?: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  /**
+   * How much reasoning it emitted, where the transport reports it separately from the answer.
+   */
+  thought_chars?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SubagentsListParams".
  */
 export interface SubagentsListParams {
@@ -1857,6 +2139,10 @@ export interface SystemHelloResult {
     default_channel: string;
     default_session_key: string;
   };
+  /**
+   * The gateway host's OS family, so a client can word host-side actions (Finder vs Explorer).
+   */
+  platform?: 'mac' | 'windows' | 'linux';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1875,7 +2161,12 @@ export interface SystemPingResult {
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SystemVersionParams".
  */
-export interface SystemVersionParams {}
+export interface SystemVersionParams {
+  /**
+   * Fetch the latest release now instead of answering from the daily cache.
+   */
+  check?: boolean;
+}
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SystemVersionResult".
@@ -2023,6 +2314,7 @@ export interface DagNodeParams {
   run_id: string;
   node: string;
   max_output_chars?: number;
+  session_key?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2589,19 +2881,50 @@ export interface ChannelsStatusResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsConfigureParams".
+ */
+export interface ChannelsConfigureParams {
+  name: string;
+  /**
+   * Field-path -> value patch; blank strings are skipped, never written.
+   */
+  fields?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Connect or disconnect the channel; omitted leaves its current state alone.
+   */
+  enabled?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ChannelsConfigureResult".
+ */
+export interface ChannelsConfigureResult {
+  applied: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsListParams".
  */
 export interface FsListParams {
   /**
-   * Workspace-relative; the root when omitted.
+   * Root-relative; the root when omitted.
    */
   path?: string;
+  /**
+   * Session key whose working directory roots the listing; the policy default when omitted.
+   */
+  session?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FsListResult".
  */
 export interface FsListResult {
+  /**
+   * Absolute working directory the listing is rooted at.
+   */
   root: string;
   path: string;
   /**
@@ -2616,6 +2939,7 @@ export interface FsListResult {
 export interface FsReadParams {
   path: string;
   max_bytes?: number;
+  session?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2639,6 +2963,7 @@ export interface FsReadResult {
 export interface FsUploadParams {
   name: string;
   content_b64: string;
+  session?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2651,6 +2976,24 @@ export interface FsUploadResult {
   path: string;
   abs_path: string;
   size: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsRevealParams".
+ */
+export interface FsRevealParams {
+  /**
+   * Absolute, or relative to the session's working directory.
+   */
+  path: string;
+  session?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsRevealResult".
+ */
+export interface FsRevealResult {
+  ok: true;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

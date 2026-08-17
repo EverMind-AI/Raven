@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -468,6 +469,21 @@ class UpgradePlan:
     target: ToolInstallTarget
 
 
+def fetch_latest_for_channel() -> tuple[ReleaseInfo, Callable[[str], tuple[int, ...]]]:
+    """The newest build this install should see, and the ordering to judge it by.
+
+    Imported lazily because ``beta_channel`` imports this module for its release
+    type. Its comparison reads a plain ``X.Y.Z`` too, so the beta channel can
+    keep using it after a tester's build catches up with a stable one.
+    """
+    from raven.cli import beta_channel
+
+    chan = beta_channel.channel()
+    if chan is None:
+        return _fetch_latest_release(), _version_key
+    return beta_channel.fetch_latest(chan), beta_channel.release_key
+
+
 def plan_upgrade() -> UpgradePlan:
     """Resolve what an upgrade would install, or raise ``UpgradeError`` with why.
 
@@ -475,8 +491,8 @@ def plan_upgrade() -> UpgradePlan:
     run it in a thread.
     """
     current_version = _current_version()
-    release = _fetch_latest_release()
-    if _version_key(current_version) >= _version_key(release.version):
+    release, version_key = fetch_latest_for_channel()
+    if version_key(current_version) >= version_key(release.version):
         raise UpgradeError(f"Raven {current_version} is already up to date")
     if _is_editable_install():
         raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
@@ -539,15 +555,21 @@ def register(app: typer.Typer) -> None:
         check: bool = typer.Option(
             False,
             "--check",
-            help="Check for a newer stable Raven release without installing it.",
+            help="Check for a newer Raven build without installing it.",
         ),
     ) -> None:
-        """Check for and install the latest stable Raven release."""
+        """Check for and install the newest Raven build this install is entitled to.
+
+        Stable by default; an install that joined the beta channel gets its
+        newest beta instead. The failure path of the served page's one-click
+        update tells the reader to run this, so it has to follow the same
+        channel that offered them the update.
+        """
         try:
             current_version = _current_version()
-            release = _fetch_latest_release()
-            current_key = _version_key(current_version)
-            latest_key = _version_key(release.version)
+            release, version_key = fetch_latest_for_channel()
+            current_key = version_key(current_version)
+            latest_key = version_key(release.version)
 
             if current_key == latest_key:
                 console.print(f"Raven {current_version} is up to date.")

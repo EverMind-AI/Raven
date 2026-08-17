@@ -159,8 +159,11 @@ async def test_tool_start_carries_blocking_false_for_a_plain_tool(workspace) -> 
 
 
 async def test_tool_complete_truncated_flag(workspace) -> None:
-    tool = _FakeTool("grep", result="X" * 500)
-    agent = _make_agent(workspace, _tool_then_final("grep", "X" * 500), tool)
+    from raven.agent.loop.main import _TOOL_PREVIEW_MAX_CHARS
+
+    over = "X" * (_TOOL_PREVIEW_MAX_CHARS + 100)
+    tool = _FakeTool("grep", result=over)
+    agent = _make_agent(workspace, _tool_then_final("grep", over), tool)
     events: list[tuple[str, dict]] = []
 
     async def on_tool_event(phase: str, info: dict) -> None:
@@ -172,7 +175,7 @@ async def test_tool_complete_truncated_flag(workspace) -> None:
     )
     complete = [i for p, i in events if p == "complete"][0]
     assert complete["truncated"] is True
-    assert len(complete["result_preview"]) <= 200
+    assert len(complete["result_preview"]) <= _TOOL_PREVIEW_MAX_CHARS
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +318,64 @@ async def test_tool_complete_wire_payload_carries_metadata() -> None:
     complete = [f for f in emitted if f["type"] == "tool.complete"]
     assert complete, f"expected a tool.complete frame, got {emitted}"
     assert complete[0]["payload"]["metadata"] == {"raven_delivery": {"files": [], "invalid": []}}
+
+
+# ---------------------------------------------------------------------------
+# The diff a write reports, and the one hop it has to make by hand.
+# ---------------------------------------------------------------------------
+
+
+async def test_tool_complete_carries_the_diff_a_write_produced(workspace) -> None:
+    """The hop that was missing: the registry attaches the diff to the result,
+    and only this event reaches a UI.
+
+    Every other layer of this was built -- the tool produced a diff, the event
+    declared a field for it, the outlet forwarded that field, the wire schema
+    named it -- and nothing copied the one to the other, so the panel's Diff tab
+    was empty for every whole-file write.
+    """
+    from raven.agent.tools.filesystem import WriteFileTool
+
+    target = workspace / "letter.md"
+    target.write_text("before\n", encoding="utf-8")
+    agent = _make_agent(
+        workspace,
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c-write",
+                        name="write_file",
+                        arguments={"path": str(target), "content": "after\n"},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="final", finish_reason="stop"),
+        ],
+        WriteFileTool(workspace=workspace),
+    )
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "x"}], on_tool_event=on_tool_event)
+
+    complete = [info for phase, info in events if phase == "complete"][0]
+    assert complete["diff"] is not None, "the diff never left the registry"
+    assert "-before" in complete["diff"] and "+after" in complete["diff"], complete["diff"]
+
+
+async def test_tool_complete_diff_is_absent_for_a_tool_that_changes_nothing(workspace) -> None:
+    """A field present on every event is a field a client stops checking."""
+    agent = _make_agent(workspace, _tool_then_final("grep"), _FakeTool("grep"))
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "x"}], on_tool_event=on_tool_event)
+
+    assert [info for phase, info in events if phase == "complete"][0]["diff"] is None

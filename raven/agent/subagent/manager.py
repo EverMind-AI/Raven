@@ -12,6 +12,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent import workdir
+from raven.agent.subagent import activity
 from raven.agent.subagent.backends import (
     ABORTED_ACTION_RESULT,
     AgentMeta,
@@ -100,6 +101,12 @@ class SubagentManager:
         # set_submit before any announce; the result re-injection submits a
         # SUBAGENT-origin turn.
         self._submit = None
+        # Optional client-facing sink, same late-bound pattern. The injection
+        # above is invisible on the wire -- the next thing a client sees is an
+        # assistant turn nobody asked, so a page cannot say WHERE a delegated
+        # result re-entered the conversation. This announces that seam as its
+        # own event; without a sink the announce is merely unmarked, not broken.
+        self._delivery_sink = None
         self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
@@ -637,54 +644,84 @@ class SubagentManager:
                 "working_directory": str(effective_workspace),
             },
         )
-        try:
-            await _write_spawn_status(session_key, agent, handle, "running")
-            backend = self._resolve_backend(agent)
-            # The same message list a direct chat to this handle would carry.
-            # Without it an agent the roster advertises as stateful started every
-            # spawn from empty and wrote nothing back, so reusing a handle read
-            # as the sub-agent having forgotten the earlier turns.
-            #
-            # Only when the caller named an `instance`. A plain spawn's handle is
-            # a fresh task id, so a transcript written under it is addressable by
-            # nobody and reclaimed by nothing -- pure growth on disk for a
-            # conversation that has no second turn by construction.
-            state = self.instance_state(session_key or "", agent, handle) if origin.get("instance") else None
-            state_kwargs: dict[str, Any] = (
-                {"history": state.load(), "on_messages": state.save} if state is not None else {}
-            )
-            final_result = await backend.run(
-                task,
-                task_id=task_id,
-                workspace=effective_workspace,
-                executor=executor,
-                session_key=session_key,
-                instance=origin.get("instance"),
-                provider=provider,
-                model=model,
-                **state_kwargs,
-            )
-            await _write_spawn_status(session_key, agent, handle, "completed")
-            record.finish(status="completed", output=final_result)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
-        except asyncio.CancelledError:
-            await _write_spawn_status(session_key, agent, handle, "cancelled")
-            record.finish(status="cancelled")
-            raise
-        except SubagentActionAbortedError:
-            await _write_spawn_status(session_key, agent, handle, "failed")
-            logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
-            record.finish(status="aborted", output=ABORTED_ACTION_RESULT)
-            await self._announce_result(task_id, label, task, ABORTED_ACTION_RESULT, origin, "error")
-        except Exception as e:
-            await _write_spawn_status(session_key, agent, handle, "failed")
-            error_msg = f"Error: {str(e)}"
-            logger.error("Subagent [{}] failed: {}", task_id, e)
-            record.finish(status="failed", error=error_msg)
-            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+        # Opened here rather than inside a backend, because this is what writes
+        # the record: a backend publishes into whatever is collecting, and
+        # publishing into nothing is a no-op. Every exit below therefore has the
+        # tool calls and token cost the run got as far as producing -- a failed
+        # run's are the ones worth keeping. Keyed into the live index by the
+        # record's own directory name, so `subagent.context` can serve the run
+        # while it is still in flight.
+        with activity.collecting(live_key=record.dir.name) as did:
+            try:
+                await _write_spawn_status(session_key, agent, handle, "running")
+                backend = self._resolve_backend(agent)
+                # The same message list a direct chat to this handle would carry.
+                # Without it an agent the roster advertises as stateful started every
+                # spawn from empty and wrote nothing back, so reusing a handle read
+                # as the sub-agent having forgotten the earlier turns.
+                #
+                # Only when the caller named an `instance`. A plain spawn's handle is
+                # a fresh task id, so a transcript written under it is addressable by
+                # nobody and reclaimed by nothing -- pure growth on disk for a
+                # conversation that has no second turn by construction.
+                state = self.instance_state(session_key or "", agent, handle) if origin.get("instance") else None
+                state_kwargs: dict[str, Any] = (
+                    {"history": state.load(), "on_messages": state.save} if state is not None else {}
+                )
+                final_result = await backend.run(
+                    task,
+                    task_id=task_id,
+                    workspace=effective_workspace,
+                    executor=executor,
+                    session_key=session_key,
+                    instance=origin.get("instance"),
+                    provider=provider,
+                    model=model,
+                    **state_kwargs,
+                )
+                await _write_spawn_status(session_key, agent, handle, "completed")
+                record.finish(status="completed", output=final_result, activity=did)
+                await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            except asyncio.CancelledError:
+                await _write_spawn_status(session_key, agent, handle, "cancelled")
+                record.finish(status="cancelled", activity=did)
+                raise
+            except SubagentActionAbortedError:
+                await _write_spawn_status(session_key, agent, handle, "failed")
+                logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
+                record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
+                await self._announce_result(task_id, label, task, ABORTED_ACTION_RESULT, origin, "error")
+            except Exception as e:
+                await _write_spawn_status(session_key, agent, handle, "failed")
+                error_msg = f"Error: {str(e)}"
+                logger.error("Subagent [{}] failed: {}", task_id, e)
+                record.finish(status="failed", error=error_msg, activity=did)
+                await self._announce_result(task_id, label, task, error_msg, origin, "error")
 
     def set_submit(self, submit) -> None:
         self._submit = submit
+
+    def set_delivery_sink(self, sink) -> None:
+        """Late-bind where ``subagent.delivered`` events go.
+
+        ``sink`` is an async callable ``(conversation, event_dict)``. It marks
+        the seam a delegated result re-enters its conversation at, so a client
+        can draw that seam instead of showing an unprompted assistant turn.
+        """
+        self._delivery_sink = sink
+
+    def _emit_delivered(self, origin: dict[str, Any], payload: dict[str, Any]) -> None:
+        """Fire-and-forget: a client that cannot hear this loses a marker, and
+        the announce it marks must not fail with it."""
+        sink = self._delivery_sink
+        if sink is None:
+            return
+        try:
+            asyncio.get_running_loop().create_task(
+                sink(origin["session_key"], {"type": "subagent.delivered", "payload": payload})
+            )
+        except RuntimeError:
+            pass  # no loop (sync CLI path): nothing is listening anyway
 
     async def _announce_result(
         self,
@@ -719,6 +756,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
         assert self._submit is not None
         self._inject(announce_content, origin)
+        self._emit_delivered(origin, {"kind": "spawn", "label": label, "status": status})
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
     async def announce_dag_result(self, run_id: str, summary: str, origin: dict[str, str]) -> None:
@@ -743,6 +781,9 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
         self._inject(wrap_untrusted(summary, source="subagent"), origin)
+        # The graph's own tally names the outcome; "ok" here only means the run
+        # came back at all, and the marker's job is placement, not verdict.
+        self._emit_delivered(origin, {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id})
         logger.debug("DAG run [{}] announced result to {}", run_id, origin["session_key"])
 
     def _inject(self, content: str, origin: dict[str, str]) -> None:

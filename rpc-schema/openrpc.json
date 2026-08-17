@@ -259,6 +259,45 @@
       "errors": []
     },
     {
+      "name": "session.pin",
+      "summary": "Pin or unpin a session in the picker; the flag persists in session metadata.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key."
+          }
+        },
+        {
+          "name": "pinned",
+          "required": true,
+          "schema": {
+            "type": "boolean",
+            "description": "True pins the session to the top of the picker; False unpins."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionPinResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pinned", "session_key", "pending"],
+          "properties": {
+            "pinned": { "type": "boolean" },
+            "session_key": { "type": "string" },
+            "pending": {
+              "type": "boolean",
+              "description": "True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "session.clear",
       "summary": "Wipe a session's messages in place, keeping the same session_id.",
       "params": [
@@ -1066,6 +1105,78 @@
       ]
     },
     {
+      "name": "subagent.list",
+      "summary": "List the background calls one conversation handed off, newest first.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": { "type": "string", "description": "Absent or unknown is an empty list, not an error." }
+        }
+      ],
+      "result": {
+        "name": "SubagentListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["items"],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SubagentCall" }
+            }
+          }
+        }
+      },
+      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+    },
+    {
+      "name": "subagent.context",
+      "summary": "One handed-off call's transcript, in the shape session.resume returns.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": { "type": "string", "description": "A call is addressed by conversation and call, never by call alone." }
+        }
+      ],
+      "result": {
+        "name": "SubagentContextResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "messages"],
+          "properties": {
+            "id": { "type": "string" },
+            "messages": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/TranscriptMessage" }
+            },
+            "status": { "type": "string" },
+            "label": { "type": "string" },
+            "agent": { "type": "string" },
+            "started_at": { "type": "string" },
+            "ended_at": { "type": "string" },
+            "tool_calls": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "What it did between the question and the answer, in order. Empty where the transport that ran it has no per-step visibility."
+            },
+            "tokens": { "type": "integer", "description": "Input plus output; null when usage was not reported." },
+            "tokens_in": { "type": "integer" },
+            "tokens_out": { "type": "integer" },
+            "thought_chars": { "type": "integer", "description": "How much reasoning it emitted, where the transport reports it separately from the answer." }
+          }
+        }
+      },
+      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+    },
+    {
       "name": "subagents.list",
       "summary": "List every configured and preset-installable sub-agent as one overlay row set.",
       "params": [
@@ -1453,6 +1564,11 @@
                 },
                 "default_session_key": { "type": "string" }
               }
+            },
+            "platform": {
+              "type": "string",
+              "enum": ["mac", "windows", "linux"],
+              "description": "The gateway host's OS family, so a client can word host-side actions (Finder vs Explorer)."
             }
           }
         }
@@ -1485,7 +1601,16 @@
     {
       "name": "system.version",
       "summary": "Report server / schema / package versions.",
-      "params": [],
+      "params": [
+        {
+          "name": "check",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Fetch the latest release now instead of answering from the daily cache."
+          }
+        }
+      ],
       "result": {
         "name": "SystemVersionResult",
         "schema": {
@@ -1794,6 +1919,12 @@
           "required": false,
           "schema": { "type": "integer" },
           "description": "Head of the output to return; the file itself is uncapped. Defaults to 20000."
+        },
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": { "type": "string" },
+          "description": "Which conversation's run to read, as dag.get already takes. A run directory lives inside its session."
         }
       ],
       "result": {
@@ -3001,15 +3132,70 @@
       }
     },
     {
+      "name": "channels.configure",
+      "summary": "Patch one channel's credential fields, and connect or disconnect it.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Field-path -> value patch; blank strings are skipped, never written."
+          }
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "Connect or disconnect the channel; omitted leaves its current state alone."
+          }
+        }
+      ],
+      "result": {
+        "name": "ChannelsConfigureResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "fs.list",
-      "summary": "List one workspace directory.",
+      "summary": "List one working-directory folder.",
       "params": [
         {
           "name": "path",
           "required": false,
           "schema": {
             "type": "string",
-            "description": "Workspace-relative; the root when omitted."
+            "description": "Root-relative; the root when omitted."
+          }
+        },
+        {
+          "name": "session",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Session key whose working directory roots the listing; the policy default when omitted."
           }
         }
       ],
@@ -3019,7 +3205,8 @@
           "additionalProperties": false,
           "properties": {
             "root": {
-              "type": "string"
+              "type": "string",
+              "description": "Absolute working directory the listing is rooted at."
             },
             "path": {
               "type": "string"
@@ -3043,7 +3230,7 @@
     },
     {
       "name": "fs.read",
-      "summary": "Read one workspace file, capped.",
+      "summary": "Read one working-directory file, capped.",
       "params": [
         {
           "name": "path",
@@ -3057,6 +3244,13 @@
           "required": false,
           "schema": {
             "type": "integer"
+          }
+        },
+        {
+          "name": "session",
+          "required": false,
+          "schema": {
+            "type": "string"
           }
         }
       ],
@@ -3088,7 +3282,7 @@
     },
     {
       "name": "fs.upload",
-      "summary": "Store an uploaded file in the workspace and return its path.",
+      "summary": "Store an uploaded file in the working directory and return its path.",
       "params": [
         {
           "name": "name",
@@ -3100,6 +3294,13 @@
         {
           "name": "content_b64",
           "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session",
+          "required": false,
           "schema": {
             "type": "string"
           }
@@ -3125,6 +3326,43 @@
             "path",
             "abs_path",
             "size"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "fs.reveal",
+      "summary": "Show one file in the gateway host's file manager, selected.",
+      "params": [
+        {
+          "name": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Absolute, or relative to the session's working directory."
+          }
+        },
+        {
+          "name": "session",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "FsRevealResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
           ],
           "type": "object"
         }
@@ -4866,10 +5104,54 @@
               "$ref": "#/components/schemas/TranscriptToolCall"
             },
             "type": "array"
+          },
+          "diff": {
+            "description": "A file tool's unified diff of the change it made, on its role='tool' entry.",
+            "type": "string"
+          },
+          "turn_ended": {
+            "$ref": "#/components/schemas/TranscriptTurnEnded"
+          },
+          "notice": {
+            "$ref": "#/components/schemas/TranscriptNotice"
           }
         },
         "required": [
           "role"
+        ],
+        "type": "object"
+      },
+      "TranscriptNotice": {
+        "additionalProperties": false,
+        "description": "Marks an assistant entry the runtime wrote rather than the model.",
+        "properties": {
+          "kind": {
+            "description": "Which runtime decision this reports; `action_blocked` today.",
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "TranscriptTurnEnded": {
+        "additionalProperties": false,
+        "description": "Why a turn's transcript stops where it does.",
+        "properties": {
+          "status": {
+            "description": "'cancelled' (a person stopped it) or 'failed'.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
         ],
         "type": "object"
       },
@@ -4970,12 +5252,33 @@
           "mcp_server": {
             "type": "string",
             "description": "Owning MCP server, or null for a built-in tool."
+          },
+          "needs": {
+            "description": "Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.",
+            "$ref": "#/components/schemas/ToolSetupNeed"
           }
         },
         "required": [
           "name",
           "description",
           "enabled"
+        ],
+        "type": "object"
+      },
+      "ToolSetupNeed": {
+        "additionalProperties": false,
+        "properties": {
+          "setting": {
+            "type": "string",
+            "description": "Dotted config key that unlocks the tool."
+          },
+          "env": {
+            "type": "string",
+            "description": "Environment variable accepted instead."
+          }
+        },
+        "required": [
+          "setting"
         ],
         "type": "object"
       },
@@ -5206,6 +5509,35 @@
         ],
         "type": "object"
       },
+      "ChannelField": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "set": {
+            "description": "Whether a value is stored; the value itself never rides the wire.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "required",
+          "secret",
+          "set"
+        ],
+        "type": "object"
+      },
       "ChannelStatusRow": {
         "additionalProperties": false,
         "properties": {
@@ -5222,6 +5554,13 @@
             "description": "Required fields still empty.",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "description": "Every field the channel takes, so a client can render its configure form.",
+            "items": {
+              "$ref": "#/components/schemas/ChannelField"
             },
             "type": "array"
           }
@@ -5608,7 +5947,11 @@
             "type": "number",
             "description": "Unix timestamp derived from created_at."
           },
-          "title": { "type": "string" }
+          "title": { "type": "string" },
+          "pinned": {
+            "type": "boolean",
+            "description": "User pinned this session to the top of the picker."
+          }
         }
       },
       "SessionMessage": {
@@ -5684,7 +6027,27 @@
           }
         }
       },
-      "SubagentRow": {
+      "SubagentCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "status", "message_count"],
+      "properties": {
+        "id": { "type": "string", "description": "A spawn's call id, or '<run_id>/<node>' for a graph node. Opaque to a client: a spawn row opens through subagent.context and a dag row through dag.node, which is what kind is for." },
+        "kind": { "type": "string", "description": "spawn | dag. Which delegation path made this, and so how it is opened." },
+        "run_id": { "type": "string", "description": "dag rows only: the graph run this node belongs to." },
+        "node": { "type": "string", "description": "dag rows only: the node's id inside that run." },
+        "label": { "type": "string", "description": "What it was asked, in short." },
+        "status": { "type": "string", "description": "run | ok | error | cancelled | queued | skipped. The last two only occur for graph nodes." },
+        "agent": { "type": "string", "description": "The external agent that ran it, or null for a raven subagent." },
+        "instance": { "type": "string", "description": "The handle sharing one stateful agent session, if any." },
+        "started_at": { "type": "string", "description": "ISO 8601; the record stores epoch millis." },
+        "ended_at": { "type": "string", "description": "Absent while it is still running." },
+        "message_count": { "type": "integer", "description": "What was asked, plus the answer once there is one." },
+        "tokens": { "type": "integer", "description": "Input plus output tokens this run spent. Null, not zero, when the transport that ran it cannot report usage -- the cli lane never can." },
+        "tool_call_count": { "type": "integer", "description": "How many tools it called. Null where the transport has no per-step visibility." }
+      }
+    },
+    "SubagentRow": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -5946,6 +6309,11 @@
             "required": ["turn_id"],
             "properties": {
               "turn_id": { "type": "string" },
+              "content": {
+                "type": "string",
+                "default": "",
+                "description": "The message that started the turn. Present so a client that did not send it can draw the question: the user entry reaches the transcript only at turn end."
+              },
               "target": { "$ref": "#/components/schemas/DirectTarget" }
             }
           }
@@ -5963,6 +6331,31 @@
             "required": ["index"],
             "properties": {
               "index": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "NoticeEvent": {
+        "description": "Prose the runtime wrote, not the model.\n\nIt must not arrive as `token.delta`: that buffer is the model's voice, so the text would render as the answer -- glued to whatever the model narrated just before it, carrying the answer's copy and branch actions, and stuck in English whatever language the turn was in.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "notice" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "Which runtime decision this reports; `action_blocked` today."
+              },
+              "detail": {
+                "type": "string",
+                "default": "",
+                "description": "The blocking tool's own first line, when it gave one."
+              }
             }
           }
         }
@@ -6056,6 +6449,10 @@
               "metadata": {
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+              },
+              "diff": {
+                "type": "string",
+                "description": "Unified diff of what the call changed on disk, when the tool could produce one."
               }
             }
           }
@@ -6117,6 +6514,26 @@
               "name": { "type": "string" },
               "text": { "type": "string" },
               "fired_at": { "type": "string" }
+            }
+          }
+        }
+      },
+      "SubagentDeliveredEvent": {
+        "description": "A delegated run's result re-entered its conversation here. The injection itself is invisible on the wire -- the next frame a client sees is an assistant turn nobody visibly asked. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "subagent.delivered" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "label", "status"],
+            "properties": {
+              "kind": { "type": "string", "enum": ["spawn", "dag"] },
+              "label": { "description": "The spawn's display label, or the dag's run_id.", "type": "string" },
+              "status": { "type": "string", "enum": ["ok", "error"] },
+              "run_id": { "description": "Set for kind=dag, so a client can open the run.", "type": "string" }
             }
           }
         }
@@ -6196,7 +6613,19 @@
           "output": { "type": "string" },
           "output_file": { "type": "string" },
           "output_chars": { "type": "integer" },
-          "output_truncated": { "type": "boolean" }
+          "output_truncated": { "type": "boolean" },
+          "status": {
+            "description": "This node's own last recorded status; null when the run has written no manifest yet.",
+            "$ref": "#/components/schemas/DagNodeStatus"
+          },
+          "error": {
+            "description": "Why the node failed. A failed node has no output, so without this it reads as unanswered.",
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/TranscriptMessage" }
+          }
         }
       },
       "DagRunStartedEvent": {
@@ -6307,6 +6736,7 @@
         "oneOf": [
           { "$ref": "#/components/schemas/MessageStartEvent" },
           { "$ref": "#/components/schemas/EpisodeStartEvent" },
+          { "$ref": "#/components/schemas/NoticeEvent" },
           { "$ref": "#/components/schemas/TokenDeltaEvent" },
           { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
           { "$ref": "#/components/schemas/ToolStartEvent" },
@@ -6315,6 +6745,7 @@
           { "$ref": "#/components/schemas/MessageCompleteEvent" },
           { "$ref": "#/components/schemas/ErrorEvent" },
           { "$ref": "#/components/schemas/CronDeliveredEvent" },
+          { "$ref": "#/components/schemas/SubagentDeliveredEvent" },
           { "$ref": "#/components/schemas/DagRunStartedEvent" },
           { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
           { "$ref": "#/components/schemas/DagRunCompletedEvent" }
@@ -6324,6 +6755,7 @@
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
+            "notice": "#/components/schemas/NoticeEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",
             "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
             "tool.start": "#/components/schemas/ToolStartEvent",
@@ -6332,6 +6764,7 @@
             "message.complete": "#/components/schemas/MessageCompleteEvent",
             "error": "#/components/schemas/ErrorEvent",
             "cron.delivered": "#/components/schemas/CronDeliveredEvent",
+            "subagent.delivered": "#/components/schemas/SubagentDeliveredEvent",
             "dag.run_started": "#/components/schemas/DagRunStartedEvent",
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
             "dag.run_completed": "#/components/schemas/DagRunCompletedEvent"

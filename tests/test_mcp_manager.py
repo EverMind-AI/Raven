@@ -396,3 +396,15 @@ async def test_cancelling_a_connect_stops_the_handshake_too():
         await _asyncio.sleep(0.3)  # long enough for an uncancelled handshake to land
 
     assert not reg.has("mcp_srv_late"), "the shielded handshake outlived its cancelled connect"
+
+
+def test_the_auth_park_bound_outlasts_the_oauth_flow_it_waits_on() -> None:
+    """The watchdog's exemption must never expire before the flow it exists to
+    wait for. These lived in two modules as unrelated literals, and raising the
+    flow timeout to 900 left the exemption at 420 -- so the watchdog cancelled
+    every authorization at seven minutes while the page counted down fifteen.
+    """
+    from raven.agent.tools import mcp_manager
+    from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT
+
+    assert mcp_manager._AUTH_PARK_MAX > OAUTH_FLOW_TIMEOUT

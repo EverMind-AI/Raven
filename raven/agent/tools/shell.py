@@ -67,8 +67,13 @@ class ExecTool(Tool):
     ):
         self.timeout = timeout
         self.working_dir = working_dir
+        # `rm` is absent here on purpose: the policy classifies it from tokens
+        # (`_matches_recursive_delete` hard-denies a recursive one, everything
+        # else goes to approval). A regexp here cannot tell `rm -rf /` from
+        # `rm -f a.py b.json`, and denying both means the agent cannot clean up
+        # after itself -- with no prompt offered, because hard deny outranks
+        # approval.
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
             r"\bdel\s+/[fq]\b",  # del /f, del /q
             r"\brmdir\s+/s\b",  # rmdir /s
             r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)

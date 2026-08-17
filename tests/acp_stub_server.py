@@ -34,6 +34,8 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      shape measured on codex-acp when a turn is torn down part-way: a
                      reply that reads finished and is not.
 - ``silent``       - reads and never answers, for the timeout path.
+- ``mute``         - answers ``initialize``, then closes stdout and sleeps with
+                     the process alive: the connection is dead, the pid is not.
 
 Requests before ``initialize`` are refused, deliberately. A permissive stub is
 what let a real bug through once already: two of the three live servers answer a
@@ -196,6 +198,11 @@ def handle_prompt(request_id, params) -> None:
 
 
 def main() -> None:
+    if MODE == "abort":
+        # Dies before speaking, with the reason on stderr only -- the npx shape
+        # where the adapter's install/startup fails.
+        print("stub: cannot start, the registry is unreachable", file=sys.stderr, flush=True)
+        sys.exit(3)
     if MODE == "noisy":
         sys.stdout.write("[plugins] stub diagnostics on stdout\n")
         sys.stdout.flush()
@@ -227,6 +234,20 @@ def main() -> None:
                 global _INITIALIZED
                 _INITIALIZED = True
                 ok(request_id, CAPABILITIES)
+                if MODE == "mute":
+                    # The pathological shape behind one real outage: the server
+                    # stops speaking (stdout closes) while the PROCESS lives on
+                    # -- an npx wrapper waiting on a dead child looks exactly
+                    # like this. The stderr line is the only account of why.
+                    # os.close(1), not sys.stdout.close(): only the raw close
+                    # actually drops the pipe's write end.
+                    print("stub: worker died after the handshake", file=sys.stderr, flush=True)
+                    sys.stdout.flush()
+                    os.close(1)
+                    import time
+
+                    time.sleep(60)
+                    return
         elif not _INITIALIZED:
             err(request_id, -32603, "Internal error: no initialize was received on this connection")
         elif method == "session/new":

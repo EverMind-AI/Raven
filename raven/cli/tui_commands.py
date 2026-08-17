@@ -45,6 +45,10 @@ _PACKAGED_DIST_ENTRY = Path(__file__).resolve().parent.parent / "ui-tui" / "dist
 
 _MIN_NODE_VERSION = (22, 0, 0)
 
+TERMINAL_SURFACE = "tui"
+"""What this host calls itself in a trace. See ``raven.tracing.set_surface``."""
+
+
 #: Read by the TUI when it launches a raven command of its own (``provider
 #: login``, ``onboard``). Named here because the child must be this install.
 _RAVEN_BIN_ENV = "RAVEN_BIN"
@@ -568,6 +572,13 @@ async def _run_rpc_server_until_done(
     Returns True if handshake succeeded (system.hello was received within the
     deadline); False if it timed out.
     """
+    # Declared before anything can emit a span. The terminal and the served page
+    # share one channel on purpose, so a trace needs this to say which of them
+    # produced it (see raven.tracing.set_surface).
+    from raven.tracing import set_surface
+
+    set_surface(TERMINAL_SURFACE)
+
     # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
     from raven.rpc.approval_broker import ApprovalBroker
@@ -642,6 +653,9 @@ async def _run_rpc_server_until_done(
         # draw the graph. Goes through the loop (not the tool) so a DAG tool
         # registered later by a mid-session config apply inherits the sink too.
         agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
+        # And the seam a delegated result re-enters the conversation at, so the
+        # announce's reply does not arrive as an assistant turn nobody asked.
+        agent_loop.subagents.set_delivery_sink(emitter.emit)
 
     def _agent_loop_factory():
         if agent_loop is not None:

@@ -52,6 +52,16 @@ _AUTH_PAGE = """<!DOCTYPE html>
 
 _COOKIE_NAME = "raven_session"
 
+_COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60
+"""How long a browser keeps the session cookie.
+
+Without a max-age this is a *session* cookie: it dies when the browser closes,
+so quitting the browser signed the user out of a gateway that never went
+anywhere. Thirty days is long enough that a person running raven daily never
+meets the sign-in again, and short enough to be an expiry rather than a
+permanent grant -- the server side is durable now (see
+``serve_commands.adopt_stored_cookie``), so nothing else bounds this."""
+
 
 class WsGateway:
     """Owns the session token, one-time nonces, and the live WS connection set."""
@@ -178,6 +188,7 @@ class WsGateway:
             httponly=True,
             samesite="Strict",
             path="/",
+            max_age=_COOKIE_MAX_AGE_S,
         )
         return resp
 

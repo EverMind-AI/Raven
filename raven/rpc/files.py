@@ -94,6 +94,37 @@ def _raven_state_roots() -> tuple[Path, ...]:
     return tuple(dict.fromkeys(roots))
 
 
+def in_state_dir(resolved: Path, workspace: str | Path) -> bool:
+    """Whether ``resolved`` is inside raven's state directory and not exempt.
+
+    One fence, not one per surface. The viewer, ``fs.reveal`` and the ``fs.*``
+    panel all have to answer alike for a given file: two of them refusing while
+    the one that renders bytes allowed it is how ``serve.json`` reached the page.
+
+    The workspace subtree is exempt, because the default workspace lives *at*
+    ``~/.raven/workspace`` -- without the carve-out the fence denies every file
+    the agent itself wrote. The state directory's secrets (``config.json``,
+    ``oauth/``, ``serve.json``) are all siblings of the workspace, never inside
+    it. Only the workspace-nested-in-home layout earns the exemption: a home
+    that itself sits inside the workspace, or IS the workspace, would otherwise
+    ride it and expose ``serve.json`` through it.
+
+    Two roots rather than one, because two are in use and they do not always
+    agree: ``RAVEN_HOME`` moves ``serve.json`` and the runtime dir, while the
+    credential store hangs off ``get_config_path().parent``. Unset they are the
+    same directory; set, a fence anchored on either one leaves the other's OAuth
+    tokens as ordinary paths.
+    """
+    ws = Path(workspace).resolve()
+    for home in _raven_state_roots():
+        if resolved != home and home not in resolved.parents:
+            continue
+        inside_workspace = home in ws.parents and (resolved == ws or ws in resolved.parents)
+        if not inside_workspace:
+            return True
+    return False
+
+
 def resolve_readable(raw: str) -> Path:
     """Resolve a viewer request to a real file, or raise.
 
@@ -125,11 +156,10 @@ def resolve_readable(raw: str) -> Path:
     # -- refusing either way, but by crashing rather than by deciding.
     allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
     resolved = _resolve_path(raw.strip(), workspace, allowed)
-    # After _resolve_path, so a symlink pointing into a state dir is caught by
+    # After _resolve_path, so a symlink pointing into the state dir is caught by
     # where it lands rather than by how it was spelled.
-    for home in _raven_state_roots():
-        if resolved == home or home in resolved.parents:
-            raise PermissionError(f"{resolved} is inside raven's state directory")
+    if in_state_dir(resolved, workspace):
+        raise PermissionError(f"{resolved} is inside raven's state directory")
     if not resolved.exists():
         raise FileNotFoundError(str(resolved))
     if not resolved.is_file():

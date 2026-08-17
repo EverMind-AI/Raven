@@ -158,7 +158,17 @@ class AcpClient:
 
     @property
     def alive(self) -> bool:
-        return not self._closed and self._proc.returncode is None
+        """Whether this connection can still answer a request.
+
+        The read loop is part of the check, not just the process: an agent whose
+        stdout has closed can linger as a live pid (an ``npx`` wrapper waiting on
+        a dead child does), and a connection nobody is reading answers nothing.
+        Without this the pool would hand that connection out forever, failing
+        every task in milliseconds while the process table says all is well.
+        """
+        if self._closed or self._proc.returncode is not None:
+            return False
+        return self._reader_task is None or not self._reader_task.done()
 
     async def close(self) -> None:
         """Kill the whole process group and stop reading. Idempotent."""
@@ -235,7 +245,7 @@ class AcpClient:
         :class:`AcpTimeoutError` on budget expiry, :class:`AcpConnectionError` if
         the connection is gone.
         """
-        if self._closed or self._proc.returncode is not None:
+        if not self.alive:
             raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
         self._next_id += 1
         request_id = self._next_id
@@ -296,6 +306,19 @@ class AcpClient:
             # EOF or a dead loop means no answer is ever coming for anything
             # still in flight. Failing them here is what stops a caller from
             # awaiting a future nobody will resolve.
+            if not self._closed:
+                # A dying child closes stdout a beat before it is reaped and
+                # before its last stderr lines are read, so composing the
+                # message immediately reports "exit None; stderr: <empty>" for
+                # a process that has both -- a diagnostic that points nowhere.
+                # Bounded waits: a wrapper that keeps stderr open forever must
+                # not park every in-flight caller behind it.
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), timeout=1.5)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    pass
+                if self._stderr_task is not None and not self._stderr_task.done():
+                    await asyncio.wait({self._stderr_task}, timeout=0.5)
             self._fail_pending(
                 AcpConnectionError(
                     f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "

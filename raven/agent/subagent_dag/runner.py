@@ -11,6 +11,7 @@ through a plain ``ProgressPublisher`` callback (no spine, no scheduler).
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.subagent import activity
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
@@ -28,6 +30,7 @@ from raven.agent.subagent_dag._store import (
     SessionNodes,
     index_guard,
     make_run_id,
+    node_live_key,
     read_session_nodes,
 )
 
@@ -200,6 +203,7 @@ async def run_dag(
     prompt_written: set[str] = set()
     node_started_at: dict[str, int] = {}
     node_ended_at: dict[str, int] = {}
+    node_activity: dict[str, dict] = {}
     gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
 
     deps: dict[str, list[str]] = {nid: graph_deps(node, by_id) for nid, node in by_id.items()}
@@ -284,6 +288,7 @@ async def run_dag(
                         prompt_written=prompt_written,
                         node_started_at=node_started_at,
                         node_ended_at=node_ended_at,
+                        node_activity=node_activity,
                         semaphore=gate,
                         progress_publisher=progress_publisher,
                         state_for=state_for,
@@ -304,6 +309,7 @@ async def run_dag(
             dependents,
             node_started_at,
             node_ended_at,
+            node_activity,
             store,
             session_key,
         )
@@ -427,6 +433,7 @@ async def _run_group(
     prompt_written: set[str],
     node_started_at: dict[str, int],
     node_ended_at: dict[str, int],
+    node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -449,11 +456,31 @@ async def _run_group(
             prompt_written=prompt_written,
             node_started_at=node_started_at,
             node_ended_at=node_ended_at,
+            node_activity=node_activity,
             semaphore=semaphore,
             state_for=state_for,
             progress_publisher=progress_publisher,
             session_key=session_key,
         )
+
+
+async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any) -> None:
+    """Persist what the node did on the way, one message per line.
+
+    Its own file rather than a manifest field: the manifest is re-read on every
+    poll of the graph, and only an opened node reads this. Failing to write it
+    must not fail the node -- the account of a run is worth less than the run.
+    """
+    messages = getattr(did, "transcript", None)
+    if not isinstance(messages, list) or not messages:
+        return
+    try:
+        await store.write_text(
+            store.transcript_path(node_id),
+            "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages),
+        )
+    except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
+        logger.warning("DAG node {} transcript could not be written: {}", node_id, exc)
 
 
 async def _run_node(
@@ -472,6 +499,7 @@ async def _run_node(
     prompt_written: set[str],
     node_started_at: dict[str, int],
     node_ended_at: dict[str, int],
+    node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -480,6 +508,7 @@ async def _run_node(
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
         started_at_ms = _now_ms()
+        did = None
         node_started_at[node.id] = started_at_ms
         await _emit(
             progress_publisher,
@@ -513,15 +542,26 @@ async def _run_node(
             state_kwargs = (
                 {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
             )
-            result = await agent_backend.run(
-                prompt,
-                task_id=node.id,
-                workspace=Path(workdir),
-                executor=sandbox,
-                session_key=session_key,
-                instance=node.instance,
-                **state_kwargs,
-            )
+            # Collected around the dispatch, exactly as a spawn does it: the
+            # backend publishes into whatever is open, so a node gets the same
+            # account of its tool calls and token cost that a spawned call gets,
+            # with no backend knowing which of the two paths ran it. Keyed into
+            # the live index for the same reason a spawn is: nothing of a node
+            # reaches disk until it ends, so without this a panel watching a
+            # node in flight has only its prompt to show.
+            with activity.collecting(live_key=node_live_key(store.run_id, node.id)) as did:
+                try:
+                    result = await agent_backend.run(
+                        prompt,
+                        task_id=node.id,
+                        workspace=Path(workdir),
+                        executor=sandbox,
+                        session_key=session_key,
+                        instance=node.instance,
+                        **state_kwargs,
+                    )
+                finally:
+                    node_activity[node.id] = did.as_meta()
             await store.write_text(output_path, result or "")
             status[node.id] = "completed"
             output_paths[node.id] = output_path
@@ -529,6 +569,7 @@ async def _run_node(
             logger.opt(exception=True).warning("DAG node {} failed: {}", node.id, exc)
             status[node.id] = "failed"
             errors[node.id] = str(exc)
+        await _write_node_transcript(store, node.id, did)
         ended_at_ms = _now_ms()
         node_ended_at[node.id] = ended_at_ms
         await _emit(
@@ -555,6 +596,7 @@ async def _finalize(
     dependents: dict[str, list[str]],
     node_started_at: dict[str, int],
     node_ended_at: dict[str, int],
+    node_activity: dict[str, dict],
     store: DagRunStore,
     session_key: str | None = None,
 ) -> DagRunResult:
@@ -601,6 +643,9 @@ async def _finalize(
             "prompt_file": prompt_file,
             "output_file": output_file,
             "error": errors.get(nid),
+            # What the node did on the way, on the same terms a spawned call
+            # records it: absent keys mean the transport could not say, not zero.
+            **node_activity.get(nid, {}),
         }
 
     if session_key:

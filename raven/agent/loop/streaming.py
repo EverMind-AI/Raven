@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
 from raven.providers.base import ErrorClassification, LLMResponse, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
 
@@ -239,7 +240,9 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
-            args = {"_raw_arguments": args_text}
+            # Kept rather than dropped so the registry can quote the text back;
+            # it is the only evidence of what the model actually emitted.
+            args = {RAW_ARGUMENTS_KEY: args_text}
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",

@@ -39,6 +39,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from raven.agent.tools.mcp import connect_mcp_server, resolve_transport
+from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT
 from raven.agent.tools.registry import ToolRegistry
 from raven.sandbox import SandboxInitError
 
@@ -51,9 +52,13 @@ _ERROR_MAX = 300
 # does not count against it (see _handshake_watchdog).
 _HANDSHAKE_TIMEOUT = 90.0
 # How long a server may stay exempt from that bound because it is parked at the
-# browser-authorization step. Longer than the OAuth flow's own timeout, so a real
-# flow always resolves first and only a leaked one hits this.
-_AUTH_PARK_MAX = 420.0
+# browser-authorization step. Derived, not chosen: it has to outlast the OAuth
+# flow's own timeout so a real flow always resolves first and only a leaked one
+# hits this. Written as a literal it silently inverted when the flow timeout was
+# raised, and the watchdog started cancelling authorizations the page had just
+# promised the reader another eight minutes for.
+_AUTH_PARK_GRACE = 120.0
+_AUTH_PARK_MAX = OAUTH_FLOW_TIMEOUT + _AUTH_PARK_GRACE
 
 
 @dataclass
@@ -163,7 +168,9 @@ class MCPConnectionManager:
                 # a retry button pressed twice costs two servers, not one.
                 return self._snapshot(conn)
             conn, epoch = await self._begin_connect_locked(name, cfg)
-        return await self._run_connect(conn, epoch, executor_provider)
+        # This is the explicit retry entry point (plug.auth / install), so an
+        # OAuth server reached from here may take the browser.
+        return await self._run_connect(conn, epoch, executor_provider, interactive=True)
 
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         """Detach one server. ``drop=True`` forgets the record entirely
@@ -250,8 +257,14 @@ class MCPConnectionManager:
         self._set_state(conn, "connecting")
         return conn, epoch
 
-    async def _run_connect(self, conn: MCPConnection, epoch: object, executor_provider) -> dict:
-        """The unlocked half of a connect attempt: handshake, then commit."""
+    async def _run_connect(
+        self, conn: MCPConnection, epoch: object, executor_provider, *, interactive: bool = False
+    ) -> dict:
+        """The unlocked half of a connect attempt: handshake, then commit.
+
+        ``interactive`` travels to the OAuth seam and nowhere else: it decides
+        whether this attempt may open a browser, not what it connects to.
+        """
         name, cfg = conn.name, conn.config
         stack = AsyncExitStack()
         await stack.__aenter__()
@@ -269,7 +282,7 @@ class MCPConnectionManager:
                     self._registry,
                     stack,
                     executor=executor,
-                    http_auth=await self._auth_for(name, cfg),
+                    http_auth=await self._auth_for(name, cfg, interactive=interactive),
                 ),
             )
         except SandboxInitError as e:
@@ -430,13 +443,13 @@ class MCPConnectionManager:
 
     # ── OAuth seam ─────────────────────────────────────────────────
 
-    async def _auth_for(self, name: str, cfg: Any):
+    async def _auth_for(self, name: str, cfg: Any, *, interactive: bool = False):
         """httpx.Auth for this server's HTTP transport; None = no auth."""
         if getattr(cfg, "auth", "none") != "oauth":
             return None
         from raven.agent.tools.mcp_oauth import provider_for
 
-        return await provider_for(name, cfg, notify=self.on_oauth_event)
+        return await provider_for(name, cfg, notify=self.on_oauth_event, interactive=interactive)
 
     @staticmethod
     def _is_auth_error(exc: BaseException) -> bool:

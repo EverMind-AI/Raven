@@ -11,6 +11,7 @@ LLM provider; here we keep things small + focused.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -147,6 +148,48 @@ class TestDispatcher:
         )
         # Verify the adapter was hit (so we know exception came from store).
         assert len(b.store_calls) == 1
+
+    async def test_a_run_of_failures_is_announced_once_and_cleared_on_recovery(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Swallowing is right; staying silent forever is not.
+
+        A backend that fails every turn is indistinguishable from a working one:
+        the only trace is a log nobody reads, so writes and recalls can be dead
+        for days while replies look normal. The streak turns that into one
+        announcement, and one retraction when it comes back.
+        """
+        b = _FakeBackend()
+        b.store_raises = RuntimeError("everos unreachable")
+        agent = _make_loop(tmp_path, backend=b)
+        events: list[tuple[str, dict]] = []
+
+        async def sink(method: str, params: dict) -> None:
+            events.append((method, params))
+
+        agent.set_mcp_event_sink(sink)
+
+        msg = [{"role": "user", "content": "x"}]
+        for _ in range(agent._MEMORY_FAILURES_BEFORE_ALARM + 2):
+            await agent._dispatch_backend_store("s", msg)
+        # The sink is fired off as a task; let it run before reading.
+        await asyncio.sleep(0)
+
+        # Announced when the streak reaches the threshold, and only then: a
+        # banner that re-fires every turn is noise, not news.
+        alarms = [p for m, p in events if m == "memory.health"]
+        assert len(alarms) == 1
+        assert alarms[0]["ok"] is False
+        assert "everos unreachable" in alarms[0]["error"]
+
+        b.store_raises = None
+        await agent._dispatch_backend_store("s", msg)
+        await asyncio.sleep(0)
+        recovered = [p for m, p in events if m == "memory.health"]
+        assert len(recovered) == 2
+        assert recovered[1]["ok"] is True
+        assert agent._memory_fail_streak == 0
 
 
 # ---------------------------------------------------------------------------

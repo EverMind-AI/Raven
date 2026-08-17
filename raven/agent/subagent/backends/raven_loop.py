@@ -14,6 +14,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.subagent import activity
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, SubagentActionAbortedError
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
@@ -240,6 +241,11 @@ class RavenLoopBackend:
                     on_token_delta=on_delta,
                     **generation_kwargs(provider),
                 )
+            # Per iteration, because that is how the cost accrues: this loop calls
+            # the model once per round and the run's cost is their sum, unlike an
+            # ACP agent's one cumulative report for the whole turn. Both arms
+            # land here -- a streamed reply costs the same as a waited-for one.
+            activity.note_usage(response.usage)
             if response.has_tool_calls:
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages.append(
@@ -253,6 +259,10 @@ class RavenLoopBackend:
                 for tool_call in response.tool_calls:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
+                    # Before the call, not after: a tool that raises is still
+                    # something the sub-agent did, and it is the one a reader
+                    # asking "what happened" most needs to see.
+                    activity.note_tool_call(tool_call.name)
                     result = await tools.execute(tool_call.name, tool_call.arguments)
                     # The subagent's loop is an untrusted-data path too — fence its
                     # tool output like the main loop does in add_tool_result.

@@ -69,7 +69,7 @@ async def test_flow_redirect_then_callback_resolution(monkeypatch):
     monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
 
     events: list[tuple[str, dict]] = []
-    flow = _Flow("srv", lambda ev, p: events.append((ev, p)))
+    flow = _Flow("srv", lambda ev, p: events.append((ev, p)), interactive=True)
     auth_url = "https://as.example/authorize?client_id=cid&state=st-123&code_challenge=x"
     await flow.redirect(auth_url)
     assert opened == [auth_url]
@@ -83,6 +83,150 @@ async def test_flow_redirect_then_callback_resolution(monkeypatch):
     code, state = await task
     assert (code, state) == ("authcode-9", "st-123")
     assert ("oauth.done", {"server": "srv", "ok": True}) in events
+
+
+async def test_the_callback_endpoint_is_stable_across_gateway_ports(monkeypatch):
+    """The redirect URI must not follow the gateway's port.
+
+    It is part of the registration the authorization server keeps, and the
+    gateway's port moves (``pick_port`` probes forward when the preferred one
+    is taken). A moved redirect makes ``get_client_info`` refuse the stored
+    registration, which re-runs dynamic client registration -- and the new
+    client cannot use the tokens minted for the old one, so a plugin the user
+    already authorized asks to be authorized again.
+    """
+    monkeypatch.setattr(mcp_oauth, "_callback_base", None)
+    monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
+
+    started: list[int] = []
+
+    class _Site:
+        def __init__(self, _runner, _host, port):
+            self._port = port
+
+        async def start(self):
+            started.append(self._port)
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        async def setup(self):
+            return None
+
+    monkeypatch.setattr("aiohttp.web.TCPSite", _Site)
+    monkeypatch.setattr("aiohttp.web.AppRunner", _Runner)
+
+    uri = await mcp_oauth._ensure_callback_endpoint()
+
+    # The fixed port, not an ephemeral one -- an ephemeral port is a new
+    # registration on every process start.
+    assert started == [mcp_oauth.CALLBACK_PORT]
+    assert uri == f"http://127.0.0.1:{mcp_oauth.CALLBACK_PORT}/oauth/callback"
+
+
+async def test_a_taken_port_moves_to_the_next_one_and_stays_there(monkeypatch):
+    """One fixed port is only stable until something else takes it.
+
+    That is not hypothetical: the first port chosen for this was already held
+    by a long-running process on the author's machine, so every launch fell
+    back to an ephemeral port and re-registered -- the exact bug the fixed port
+    was added to prevent, restored and now silent. The ladder is deterministic,
+    so whatever answers today answers tomorrow.
+    """
+    monkeypatch.setattr(mcp_oauth, "_callback_base", None)
+    monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
+
+    taken = {mcp_oauth.CALLBACK_PORT, mcp_oauth.CALLBACK_PORT + 1}
+    started: list[int] = []
+
+    class _Site:
+        def __init__(self, _runner, _host, port):
+            self._port = port
+
+        async def start(self):
+            if self._port in taken:
+                raise OSError("address in use")
+            started.append(self._port)
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        async def setup(self):
+            return None
+
+    monkeypatch.setattr("aiohttp.web.TCPSite", _Site)
+    monkeypatch.setattr("aiohttp.web.AppRunner", _Runner)
+
+    uri = await mcp_oauth._ensure_callback_endpoint()
+
+    landed = mcp_oauth.CALLBACK_PORT + 2
+    assert started == [landed]
+    assert uri == f"http://127.0.0.1:{landed}/oauth/callback"
+    # Not 0: an ephemeral port would re-register on every start.
+    assert 0 not in started
+
+
+async def test_only_an_exhausted_ladder_falls_back_to_an_ephemeral_port(monkeypatch):
+    monkeypatch.setattr(mcp_oauth, "_callback_base", None)
+    monkeypatch.setattr(mcp_oauth, "_fallback_runner", None)
+
+    started: list[int] = []
+
+    class _Site:
+        def __init__(self, _runner, _host, port):
+            self._port = port
+
+        async def start(self):
+            if self._port != 0:
+                raise OSError("address in use")
+            started.append(self._port)
+            self._server = type(
+                "S", (), {"sockets": [type("K", (), {"getsockname": lambda _s: ("127.0.0.1", 49999)})()]}
+            )()
+
+    class _Runner:
+        def __init__(self, _app):
+            pass
+
+        async def setup(self):
+            return None
+
+    monkeypatch.setattr("aiohttp.web.TCPSite", _Site)
+    monkeypatch.setattr("aiohttp.web.AppRunner", _Runner)
+
+    uri = await mcp_oauth._ensure_callback_endpoint()
+
+    assert started == [0]
+    assert uri == "http://127.0.0.1:49999/oauth/callback"
+
+
+async def test_background_flow_publishes_the_url_without_opening_a_browser(monkeypatch):
+    """A connect nobody asked for must not take the screen.
+
+    The lazy per-turn connect and a config reload both reach this code, so an
+    unconditional ``webbrowser.open`` meant typing a message could raise a
+    third-party sign-in page. The URL still goes out on ``oauth.pending`` --
+    the page offers it, and the reader decides.
+    """
+    import webbrowser
+
+    opened: list[str] = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
+
+    events: list[tuple[str, dict]] = []
+    flow = _Flow("srv", lambda ev, p: events.append((ev, p)))  # interactive defaults to False
+    auth_url = "https://as.example/authorize?client_id=cid&state=bg-1&code_challenge=x"
+    await flow.redirect(auth_url)
+
+    assert opened == []
+    assert events[0][0] == "oauth.pending"
+    assert events[0][1]["url"] == auth_url
+    assert events[0][1]["interactive"] is False
+    # The pending registration still happened, so a callback can still resolve it.
+    matched, _ = resolve_callback({"state": "bg-1", "code": "c"})
+    assert matched
 
 
 async def test_callback_unknown_state_rejected():

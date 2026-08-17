@@ -23,6 +23,10 @@ class NoticeKind(StrEnum):
     TOOL_HINT = "tool_hint"
     INJECTED = "injected"
     DELIVERY_FAILED = "delivery_failed"
+    # The runtime ended the turn on a safety decision. Unlike the kinds above,
+    # this one replaces the answer rather than accompanying it, so an outlet
+    # that renders nothing else should still render this.
+    ACTION_BLOCKED = "action_blocked"
 
 
 class ToolPhase(StrEnum):
@@ -79,6 +83,10 @@ class ToolEvent:
     # COMPLETE only: opt-in structured payload from Tool.take_metadata (e.g. a
     # deliver_files manifest). Outlets that do not understand a key ignore it.
     metadata: dict[str, Any] | None = None
+    # COMPLETE only: unified diff of what the call changed on disk, when the
+    # tool could produce one (see ToolResult.diff). For an outlet that renders
+    # the change; never shown to the model.
+    diff: str | None = None
 
 
 @dataclass(frozen=True)

@@ -171,13 +171,19 @@ def _stamp(record: Any, started_at_ms: int) -> None:
 
 
 async def test_history_orders_by_start_not_by_directory_name(tmp_path: Path) -> None:
-    """Two turns inside one second get the same name stamp and a random suffix."""
+    """The directory name and the recorded start can disagree, and the start wins.
+
+    Ids mint monotonically, so the name follows creation order: the record made
+    first sorts first however its suffix compares. Stamping them the other way
+    round is what makes this discriminating -- sorted by name these come back
+    "second", "first".
+    """
     session_dir = tmp_path / "sessions" / "s1"
     later = _record(session_dir, "A", "h", task_id="zzz", task="second", output=None)
     earlier = _record(session_dir, "A", "h", task_id="aaa", task="first", output=None)
     _stamp(later, 2000)
     _stamp(earlier, 1000)
-    assert later.dir.name > earlier.dir.name
+    assert later.dir.name < earlier.dir.name
 
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir

@@ -2223,3 +2223,89 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
         await run_dag(
             parse_dag_spec({"nodes": [{"id": "seed", "subagent": "x", "prompt_template": "again"}]}), **common
         )
+
+
+# --- what a node did on the way ------------------------------------------
+#
+# A node's account of itself used to end at the manifest's counters: the panel
+# could say it called nine tools and never say which, and a node still running
+# had nothing on disk at all. Both are the same seam a spawned call already
+# uses -- the difference was only that the runner never opened it.
+
+
+class _PublishingExec(_FakeExec):
+    """A backend that reports its turn, the way the acp lane does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_live: list[object] = []
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+        from raven.agent.subagent_dag._store import node_live_key
+
+        self.seen_live.append(activity.live(node_live_key(self.run_id, kw["task_id"])))
+        activity.note_transcript([{"role": "tool", "name": "read", "content": "file body"}])
+        return await super().run(task, **kw)
+
+
+async def test_a_node_writes_down_its_own_transcript() -> None:
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
+    exec_ = _PublishingExec()
+    exec_.run_id = ""
+    backend = _InMemBackend()
+
+    result = await run_dag(
+        spec,
+        subagents={"x": exec_},
+        backend=backend,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+    )
+
+    written = backend.files[f"/hist/mas_dag/{result.run_id}/a.transcript.jsonl"].decode()
+    assert '"name": "read"' in written
+
+
+async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
+    """The transcript file is written when the node ends, and a reader watching
+    a node that is still going needs an answer before then."""
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
+    exec_ = _PublishingExec()
+    backend = _InMemBackend()
+
+    # The run id is minted inside run_dag, so the backend cannot know it in
+    # advance -- it is read back out of the store the runner writes to.
+    import raven.agent.subagent_dag.runner as runner_mod
+
+    mint = runner_mod.make_run_id
+    minted: list[str] = []
+
+    def _mint() -> str:
+        minted.append(mint())
+        exec_.run_id = minted[-1]
+        return minted[-1]
+
+    runner_mod.make_run_id = _mint
+    try:
+        await run_dag(spec, subagents={"x": exec_}, backend=backend, workdir="/w", run_root="/hist/mas_dag")
+    finally:
+        runner_mod.make_run_id = mint
+
+    assert exec_.seen_live and exec_.seen_live[0] is not None
+
+
+async def test_the_live_index_does_not_outlive_the_node() -> None:
+    from raven.agent.subagent import activity
+    from raven.agent.subagent_dag._store import node_live_key
+
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
+    result = await run_dag(
+        spec,
+        subagents={"x": _FakeExec()},
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+    )
+
+    assert activity.live(node_live_key(result.run_id, "a")) is None

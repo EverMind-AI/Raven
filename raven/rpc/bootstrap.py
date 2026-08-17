@@ -80,6 +80,10 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
         # The TUI path wires this too. Without it a DAG run streams nothing
         # while it works, which reads as a hang rather than as progress.
         agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
+        # The seam a delegated result re-enters its conversation at. Same
+        # emitter, same routing; without it the announce's reply arrives as an
+        # assistant turn nobody visibly asked.
+        agent_loop.subagents.set_delivery_sink(emitter.emit)
 
         # Per-server MCP events, broadcast rather than conversation-scoped: a
         # server connecting is not part of anybody's turn. Clients already listen

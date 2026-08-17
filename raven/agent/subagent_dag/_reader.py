@@ -25,7 +25,10 @@ from typing import Any
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
 # are re-checked before being joined into a path. Without this a crafted id
 # would walk out of the run dir and read arbitrary files.
-_RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
+# The six optional digits are the microseconds `history_stamp` added so two
+# runs minted in one second keep their order. Both forms are accepted: run
+# dirs written before that change are still on disk and still readable.
+_RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}(?:[0-9]{6})?Z-[0-9a-f]{8}$")
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -154,6 +157,13 @@ async def read_node(
 
     Either field is ``None`` when its file does not exist: a node that never ran
     has no prompt, and a failed one has no output.
+
+    Which is exactly why the manifest is read here too. "Failed and therefore no
+    output" and "still running and no output yet" produce the same three fields,
+    and a reader shown only those sees a node that was asked something and never
+    answered -- the failure, and its reason, were on disk the whole time and
+    only the run-level reader ever looked. ``status`` and ``error`` come along
+    so one node can account for itself.
     """
     rdir = run_dir_of(backend, root, run_id)
     _check_node_id(node_id)
@@ -161,6 +171,8 @@ async def read_node(
     output_file = backend.join_path(rdir, f"{node_id}.out.md")
     prompt = await _read_text(backend, prompt_file)
     output = await _read_text(backend, output_file)
+    manifest = await _read_json(backend, backend.join_path(rdir, "manifest.json"))
+    entry = manifest.get(node_id) or {} if isinstance(manifest, dict) else {}
     total = len(output) if output is not None else 0
     truncated = total > max_output_chars
     if output is not None and truncated:
@@ -174,7 +186,35 @@ async def read_node(
         "output_file": output_file if output is not None else None,
         "output_chars": total,
         "output_truncated": truncated,
+        "status": entry.get("status") if isinstance(entry, dict) else None,
+        "error": entry.get("error") if isinstance(entry, dict) else None,
+        "transcript": await _read_transcript(backend, backend.join_path(rdir, f"{node_id}.transcript.jsonl")),
     }
+
+
+async def _read_transcript(backend: Any, path: str) -> list[dict]:
+    """The node's own turns, or an empty list when the lane could not see any.
+
+    Empty rather than absent for the lane with no per-step visibility: a caller
+    draws the prompt and the answer either way, and the two spellings of
+    "nothing here" would only invite one of them to be handled and not the
+    other. One bad line is skipped rather than losing the rest -- the file is
+    appended to while a run is still going.
+    """
+    raw = await _read_text(backend, path)
+    if not raw:
+        return []
+    entries: list[dict] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(entry, dict) and entry.get("role"):
+            entries.append(entry)
+    return entries
 
 
 __all__ = ["DagReadError", "read_node", "read_run", "run_dir_of"]

@@ -39,9 +39,16 @@ from urllib.parse import parse_qs, urlparse
 import portalocker
 from loguru import logger
 
-OAUTH_FLOW_TIMEOUT = 300.0
+OAUTH_FLOW_TIMEOUT = 900.0
 """How long a browser authorization may stay pending before the connect
-fails into ``auth_required``. Mirrors the SDK provider's own default."""
+fails into ``auth_required``.
+
+Fifteen minutes rather than the SDK provider's five. The clock starts when the
+browser opens, and a first authorization is not one click: the user may have no
+account with the provider yet, may be signed out, may have to pick a workspace,
+and may be reading the scope list. Five minutes expired *mid-consent* often
+enough to be the ordinary outcome rather than the exceptional one, and what it
+costs to be wrong in this direction is one parked connect nobody is waiting on."""
 
 _CALLBACK_PATH = "/oauth/callback"
 
@@ -64,8 +71,12 @@ _PENDING: dict[str, tuple[str, asyncio.Future]] = {}
 
 
 def set_callback_base(base_url: str) -> None:
-    """Declare the running HTTP origin that serves ``/oauth/callback``
-    (``raven serve`` calls this once its port is bound)."""
+    """Declare the running HTTP origin that serves ``/oauth/callback``.
+
+    No longer called by ``raven serve``: see :data:`CALLBACK_PORT` for why the
+    redirect must not follow a port that moves. Kept for a host that genuinely
+    owns a fixed origin and wants the callback on it.
+    """
     global _callback_base
     _callback_base = base_url.rstrip("/")
 
@@ -74,9 +85,39 @@ def redirect_uri() -> str | None:
     return f"{_callback_base}{_CALLBACK_PATH}" if _callback_base else None
 
 
+CALLBACK_PORT = int(os.environ.get("RAVEN_OAUTH_CALLBACK_PORT") or 18860)
+"""First choice of loopback port for the OAuth redirect.
+
+The redirect URI is part of the registration an authorization server stores, so
+it has to survive restarts -- and it used to be the gateway's own port, which
+does not: ``serve`` probes forward when its preferred port is taken, and
+``FileTokenStorage.get_client_info`` correctly refuses a registration whose
+redirect no longer matches. The consequence was silent and expensive: a port
+change re-ran dynamic client registration, the new client could not use the
+tokens minted for the old one, and a plugin the user had already authorized
+asked to be authorized again -- opening a browser to do it.
+
+A dedicated port, unrelated to whatever the page is served on, keeps one
+registration valid for the life of the install."""
+
+CALLBACK_PORT_TRIES = 8
+"""How many consecutive ports to try before giving up on a stable one.
+
+A single fixed port is only stable until something else claims it, and then the
+ephemeral fallback re-registers on every start -- the very bug the fixed port
+exists to prevent, back again and now silent. This happened immediately: the
+first port picked was already held by a long-running process on the author's
+machine. Walking a short deterministic ladder instead means a collision costs
+one re-registration rather than one per launch, because the port that answers
+today answers tomorrow too."""
+
+
 async def _ensure_callback_endpoint() -> str:
-    """Return the redirect URI, self-hosting a loopback listener when no
-    gateway declared one (TUI / CLI processes have no HTTP server)."""
+    """Return the redirect URI, self-hosting the loopback listener on first use.
+
+    Every process does this -- gateway, TUI and CLI alike -- so the registered
+    redirect is the same string whatever raven is running as.
+    """
     global _callback_base, _fallback_runner
     if _callback_base:
         return f"{_callback_base}{_CALLBACK_PATH}"
@@ -96,12 +137,36 @@ async def _ensure_callback_endpoint() -> str:
     app.router.add_get(_CALLBACK_PATH, _handler)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001 — aiohttp has no public accessor
+    port = None
+    for candidate in range(CALLBACK_PORT, CALLBACK_PORT + CALLBACK_PORT_TRIES):
+        try:
+            site = web.TCPSite(runner, "127.0.0.1", candidate)
+            await site.start()
+        except OSError:
+            continue
+        port = candidate
+        if candidate != CALLBACK_PORT:
+            # Worth saying: the ladder is deterministic, so this stays true on
+            # the next launch -- but it explains the one re-authorization the
+            # move costs, and names the port to free if that is unwanted.
+            logger.info("MCP OAuth: callback port {} is taken; using {} instead", CALLBACK_PORT, candidate)
+        break
+    if port is None:
+        # Every candidate is held. An ephemeral port still completes the flow
+        # that is running now; it only costs this registration its stability,
+        # which beats failing the authorization outright.
+        logger.warning(
+            "MCP OAuth: ports {}-{} are all taken; falling back to an ephemeral one, "
+            "which will force a re-registration on every start until one frees up",
+            CALLBACK_PORT,
+            CALLBACK_PORT + CALLBACK_PORT_TRIES - 1,
+        )
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001 — aiohttp has no public accessor
     _fallback_runner = runner
     _callback_base = f"http://127.0.0.1:{port}"
-    logger.info("MCP OAuth: fallback callback listener on {}", _callback_base)
+    logger.info("MCP OAuth: callback listener on {}", _callback_base)
     return f"{_callback_base}{_CALLBACK_PATH}"
 
 
@@ -255,11 +320,24 @@ class FileTokenStorage:
 
 
 class _Flow:
-    """redirect/callback handler pair for ONE connect attempt."""
+    """redirect/callback handler pair for ONE connect attempt.
 
-    def __init__(self, server: str, notify: Callable[[str, dict], None] | None) -> None:
+    ``interactive`` is whether a person asked for this connect. Only an explicit
+    one (``plug.install`` / ``plug.auth``) may take over the browser; a
+    background connect -- the lazy one every turn runs, a config reload -- still
+    mints the URL and publishes it, but leaves the opening to the user.
+    """
+
+    def __init__(
+        self,
+        server: str,
+        notify: Callable[[str, dict], None] | None,
+        *,
+        interactive: bool = False,
+    ) -> None:
         self._server = server
         self._notify = notify
+        self._interactive = interactive
         self._state: str | None = None
 
     def _emit(self, event: str, payload: dict) -> None:
@@ -278,7 +356,28 @@ class _Flow:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         _PENDING[state] = (self._server, fut)
         self._state = state
-        self._emit("oauth.pending", {"server": self._server, "url": auth_url})
+        # The deadline travels with the invitation. A page that knows only "an
+        # authorization is pending" cannot tell a flow still worth finishing
+        # from one that expired, and shows the same thing for both.
+        self._emit(
+            "oauth.pending",
+            {
+                "server": self._server,
+                "url": auth_url,
+                "expires_in": OAUTH_FLOW_TIMEOUT,
+                "interactive": self._interactive,
+            },
+        )
+        if not self._interactive:
+            # Nobody asked. Taking the screen for a third-party sign-in the user
+            # did not initiate is disproportionate, and on a gateway the host
+            # running this is not even the machine they are sitting at. The URL
+            # went out on the event above; the page offers it, they choose.
+            logger.info(
+                "MCP OAuth: '{}' needs authorization; not opening a browser for a background connect",
+                self._server,
+            )
+            return
         import webbrowser
 
         try:
@@ -318,18 +417,28 @@ def auth_wait_servers() -> set[str]:
     return {server for server, _ in _PENDING.values()}
 
 
-async def provider_for(server: str, cfg: Any, notify: Callable[[str, dict], None] | None = None):
+async def provider_for(
+    server: str,
+    cfg: Any,
+    notify: Callable[[str, dict], None] | None = None,
+    *,
+    interactive: bool = False,
+):
     """Build the SDK's OAuth provider for one server (an ``httpx.Auth``).
 
     Async because a process without a gateway (TUI/CLI) self-hosts the
     loopback callback listener on first use — the redirect URI must be
     final before the provider is built (DCR registers it).
+
+    ``interactive`` says a person asked for this connect, and is the only thing
+    that permits opening a browser. It defaults to False so a path that forgets
+    to pass it is quiet rather than intrusive.
     """
     from mcp.client.auth import OAuthClientProvider
     from mcp.shared.auth import OAuthClientMetadata
 
     uri = redirect_uri() or await _ensure_callback_endpoint()
-    flow = _Flow(server, notify)
+    flow = _Flow(server, notify, interactive=interactive)
     return OAuthClientProvider(
         server_url=cfg.url,
         client_metadata=OAuthClientMetadata(

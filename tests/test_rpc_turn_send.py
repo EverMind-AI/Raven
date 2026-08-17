@@ -422,6 +422,25 @@ async def test_a_broken_config_drops_attachments_without_failing_the_turn(tmp_pa
     assert scheduler.submitted[0].media == ()
 
 
+async def test_message_start_carries_the_question_that_opened_the_turn() -> None:
+    """A window that did not send the turn has no other way to learn it.
+
+    The user entry reaches the transcript only when the turn ends, so a second
+    window -- or a shared link opened mid-turn -- saw an answer streaming under
+    no question at all.
+    """
+    emitter = FakeEmitter()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "render this log for me"},
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={},
+    )
+
+    assert emitter.emitted[0][1]["payload"]["content"] == "render this log for me"
+
+
 # ---------------------------------------------------------------------------
 # Direct chat: addressing one sub-agent instance instead of the main agent
 # ---------------------------------------------------------------------------
@@ -489,7 +508,12 @@ async def test_a_main_agent_message_start_carries_no_target_key() -> None:
     )
 
     start = next(e for _k, e in emitter.emitted if e["type"] == "message.start")
-    assert start["payload"] == {"turn_id": start["payload"]["turn_id"]}
+    # Absence is the assertion, not the payload's exact shape: this event also
+    # carries the question that opened the turn, for a window that did not send
+    # it. Pinning the whole dict here would fail on any later addition without
+    # saying anything about the tag.
+    assert "target" not in start["payload"]
+    assert start["payload"]["turn_id"]
 
 
 async def test_the_target_map_is_bound_for_the_outlet_to_read() -> None:

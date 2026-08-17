@@ -30,6 +30,11 @@ class ToolResult:
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
+
+    ``diff`` is a unified diff of what the call changed on disk, for a UI that
+    renders the change itself. Only a writing tool can produce it -- by the time
+    anyone else looks, the content it replaced is gone -- and it never reaches
+    the model, so ``model_text`` still has to say what happened on its own.
     """
 
     model_text: str
@@ -37,6 +42,7 @@ class ToolResult:
     retryable: bool = True
     abort_action: bool = False
     blocks: list[ContentPart] | None = None
+    diff: str | None = None
 
 
 class ToolOutput(str):
@@ -57,6 +63,7 @@ class ToolOutput(str):
     retryable: bool
     abort_action: bool
     blocks: list[ContentPart] | None
+    diff: str | None
 
     def __new__(
         cls,
@@ -66,12 +73,14 @@ class ToolOutput(str):
         retryable: bool = True,
         abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
+        diff: str | None = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
         out.abort_action = abort_action
         out.blocks = blocks
+        out.diff = diff
         return out
 
 

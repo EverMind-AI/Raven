@@ -36,11 +36,14 @@ def test_usage_is_frozen_with_three_int_fields():
 def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     # tool_hint is a distinct kind so an outlet can gate it on send_tool_hints
     # separately from progress (send_progress), as the bus path did.
+    # action_blocked is the one kind that REPLACES the answer rather than
+    # accompanying it, which is why an outlet that drops the rest still shows it.
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
         "injected",
         "delivery_failed",
+        "action_blocked",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"

@@ -61,6 +61,7 @@ from raven.rpc.methods.shell import register_shell_methods
 from raven.rpc.methods.skillhub import register_skillhub_methods
 from raven.rpc.methods.skills import register_skills_methods
 from raven.rpc.methods.slash_routing import register_slash_routing_methods
+from raven.rpc.methods.subagent import register_subagent_methods
 from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
 from raven.rpc.methods.terminal import register_terminal_methods
@@ -154,6 +155,7 @@ def register_aligned_methods_except_system(
     register_setup_methods(dispatcher)
     register_reload_methods(dispatcher)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_subagent_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
@@ -255,6 +257,7 @@ __all__ = [
     "register_setup_methods",
     "register_reload_methods",
     "register_config_methods",
+    "register_subagent_methods",
     "register_subagents_methods",
     "register_instance_methods",
     "register_dag_methods",

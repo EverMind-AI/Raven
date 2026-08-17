@@ -7,6 +7,11 @@ from typing import Any
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.tracing import semconv, trace
 
+# Where the agent loop parks a tool call's arguments when they do not parse as
+# JSON. Named here, next to the only code that must recognise it, so the two
+# ends cannot drift into reporting a parse failure as a missing field.
+RAW_ARGUMENTS_KEY = "_raw_arguments"
+
 
 class ToolRegistry:
     """
@@ -111,6 +116,21 @@ class ToolRegistry:
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
+        # A call whose arguments would not parse arrives carrying the raw text
+        # instead of fields. Falling through to schema validation reports the
+        # fields as MISSING, which is a lie the caller acts on: it reads "you
+        # forgot `path`", re-sends the same malformed JSON with the same field
+        # in it, and loops -- eighteen calls in one observed session, the model
+        # eventually theorising about `_raw_arguments`, a key that only exists
+        # because we put it there. Say what actually happened instead.
+        if RAW_ARGUMENTS_KEY in params:
+            raw = str(params.get(RAW_ARGUMENTS_KEY) or "")
+            return (
+                f"Error: The arguments for tool '{name}' were not valid JSON, so none of them were read. "
+                f"Re-send the call with a well-formed JSON object. Received: {raw[:400]}"
+                + ("..." if len(raw) > 400 else "")
+            )
+
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
@@ -134,10 +154,12 @@ class ToolRegistry:
                 model_text, display_text = result.model_text, result.display_text
                 retryable, abort_action = result.retryable, result.abort_action
                 blocks = result.blocks
+                diff = result.diff
             else:
                 model_text, display_text = str(result), None
                 retryable, abort_action = True, False
                 blocks = None
+                diff = None
 
             if model_text.startswith("Error"):
                 # ``Error:`` describes presentation, not retry semantics.
@@ -160,6 +182,7 @@ class ToolRegistry:
                 retryable=retryable,
                 abort_action=abort_action,
                 blocks=blocks,
+                diff=diff,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
