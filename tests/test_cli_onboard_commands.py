@@ -1750,7 +1750,9 @@ class TestReusingAnEverosTheUserManages:
         # Two screens: decline the reuse, then answer the keep/reconfigure menu
         # the way an existing install would. A single stubbed answer let "own"
         # stand in for both and slipped past the branch under test.
-        answers = iter(["own", "keep"])
+        # Reaching the managed path from a recorded self-managed install is now
+        # an answer of its own ("managed"), not a side effect of reconfiguring.
+        answers = iter(["managed", "own", "keep"])
         _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer(next(answers)))
         reached: list[int] = []
         _no_writes.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
@@ -5810,3 +5812,132 @@ class TestIntentAndAddressAreDifferentQuestions:
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
 
         assert onboard_everos._ask_managed_port(Path("/r")) == 1995
+
+
+class TestAnEnabledInstallBranchesOnOwnership:
+    """The two paths stay two paths after they are configured.
+
+    The enabled menu did not look at ``owned``, so a self-managed install got
+    the managed one: Keep or Reconfigure, and Reconfigure is the only plausible
+    button for "change the address of my own server". It walked the four model
+    roles -- raven writing into a root it owns, which by definition it does not
+    here -- and ended with raven's own root recorded, ``owned`` flipped to true
+    and the user's address replaced, none of it confirmed.
+
+    Configuring models is not an action that exists for a server the user runs.
+    The only one that does is changing where it is.
+    """
+
+    @staticmethod
+    def _self_managed(tmp_env: Path) -> None:
+        tmp_env.write_text(
+            json.dumps(
+                {
+                    "memory": {"backend": "everos"},
+                    "plugins": {"config": {"everos-memory": {"owned": False, "base_url": "http://127.0.0.1:8000"}}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_reconfigure_never_reaches_the_model_roles(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        self._self_managed(tmp_env)
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("redo"))
+        monkeypatch.setattr(
+            onboard_everos,
+            "_config_everos_role",
+            lambda **_kw: pytest.fail("walked a self-managed install through the model roles"),
+        )
+        monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: True)
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    def test_ownership_and_address_survive(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Nothing may flip owned or record a root behind this menu."""
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        self._self_managed(tmp_env)
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["owned"] is False
+        assert slice_["base_url"] == "http://127.0.0.1:8000"
+        assert "root" not in slice_
+
+    def test_a_managed_install_still_gets_the_model_roles(
+        self, tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The managed menu is unchanged; only the unowned one is new."""
+        import inspect
+
+        from raven.cli import onboard_everos
+
+        src = inspect.getsource(onboard_everos._step4_memory)
+        assert "_enabled_unowned_menu" in src, "the enabled branch does not consult ownership"
+
+
+class TestDiscoveryCannotOverrideRecordedOwnership:
+    """A recorded `owned: false` is a decision; a root on disk is not.
+
+    discover() adds raven's own roots with owned=True unconditionally, so a
+    self-managed install that still has an abandoned raven root lying around --
+    the normal shape after switching -- had pick() return that root, and the
+    owned branch recorded it and flipped ownership before any menu was shown.
+    The user is silently moved off their own server by a directory they stopped
+    using.
+    """
+
+    def test_a_leftover_raven_root_does_not_reclaim_a_self_managed_install(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import questionary
+
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos import _discover
+
+        tmp_env.write_text(
+            json.dumps(
+                {
+                    "memory": {"backend": "everos"},
+                    "plugins": {"config": {"everos-memory": {"owned": False, "base_url": "http://127.0.0.1:8000"}}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # An abandoned managed root, configured and therefore pickable.
+        leftover = _discover.RootState(
+            root=Path("/leftover/everos"),
+            # As discovery marks raven's own roots: unconditionally owned.
+            owned=True,
+            configured=True,
+            declared_url="http://localhost:18791",
+            alive=False,
+            lock_held=False,
+        )
+        monkeypatch.setattr(_discover_mod, "discover", lambda: [leftover])
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: leftover)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+        monkeypatch.setattr(
+            onboard_everos,
+            "_converge_owned_root",
+            lambda _s: pytest.fail("converged a root a self-managed install does not use"),
+        )
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["owned"] is False
+        assert slice_["base_url"] == "http://127.0.0.1:8000"
+        assert "root" not in slice_
