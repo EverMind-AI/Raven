@@ -42,6 +42,7 @@ from agentscope.event import (
 )
 from agentscope.message import ToolResultState
 from agentscope.state import AgentState
+from raven_kb_retrieval import KnowledgeRetriever
 
 try:  # aiohttp is the WS client (present in the ravenx env)
     import aiohttp
@@ -282,9 +283,15 @@ class RavenGatewayAgent:
 
     timeout_seconds = 900.0
 
-    def __init__(self, *, name="Raven", state=None, model=None, **_ignore):
+    def __init__(self, *, name="Raven", state=None, model=None, middlewares=None, **_ignore):
         self.name = name or "Raven"
         self.state = state or AgentState()
+        # `middlewares` used to fall into `_ignore` with everything else, which
+        # silently dropped the session's knowledge bases: ChatService resolves
+        # them, builds a RAGMiddleware and passes it here, and nothing said that
+        # it landed nowhere. See raven_kb_retrieval for why the middleware
+        # cannot simply be run as-is over this transport.
+        self._retriever = KnowledgeRetriever.from_middlewares(middlewares)
 
     async def _publish_custom(self, name: str | None, value: dict | None) -> None:
         """Publish a CustomEvent on the message bus (live) so it reaches the
@@ -332,7 +339,10 @@ class RavenGatewayAgent:
             client = await GatewayClient.shared()
             queue = await client.subscribe(session_key)
             _drop_stale_turn_events(queue)
-            await client.send_turn(session_key, _extract_text(inputs))
+            turn = _extract_text(inputs)
+            if self._retriever is not None:
+                turn = await self._retriever.augment(turn)
+            await client.send_turn(session_key, turn)
         except Exception as exc:  # connection / submit failure
             tb = uuid.uuid4().hex
             yield TextBlockStartEvent(reply_id=reply_id, block_id=tb)

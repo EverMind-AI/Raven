@@ -77,11 +77,13 @@ class _FakeGatewayClient:
         self._queue = queue
         self._feed = feed
         self.task: asyncio.Task | None = None
+        self.sent: list[str] = []
 
     async def subscribe(self, session_key: str) -> asyncio.Queue:
         return self._queue
 
     async def send_turn(self, session_key: str, content: str) -> str:
+        self.sent.append(content)
         self.task = asyncio.get_running_loop().create_task(self._pump())
         return "turn-1"
 
@@ -92,10 +94,12 @@ class _FakeGatewayClient:
             self._queue.put_nowait(event)
 
 
-def _drive(feed, *, seed=(), idle: float = _IDLE):
+def _drive(feed, *, seed=(), idle: float = _IDLE, retriever=None, sent=None):
     """Run one reply_stream turn against a scripted feed.
 
     ``seed`` pre-fills the queue as if a previous turn had left events behind.
+    ``retriever`` replaces the agent's, and ``sent`` is a list the turn text
+    handed to the gateway is appended to.
     Returns ``(event_class_names, concatenated_deltas, published_customs)``.
     """
 
@@ -111,6 +115,8 @@ def _drive(feed, *, seed=(), idle: float = _IDLE):
         original = rga.GatewayClient.shared
         rga.GatewayClient.shared = _shared
         agent = RavenGatewayAgent(state=SimpleNamespace(session_id="s1"))
+        if retriever is not None:
+            agent._retriever = retriever
         agent.timeout_seconds = idle
         customs: list[tuple] = []
 
@@ -122,6 +128,8 @@ def _drive(feed, *, seed=(), idle: float = _IDLE):
             out = [event async for event in agent.reply_stream(None)]
         finally:
             rga.GatewayClient.shared = original
+            if sent is not None:
+                sent.extend(client.sent)
             if client.task is not None and not client.task.done():
                 client.task.cancel()
         names = [type(event).__name__ for event in out]
@@ -191,3 +199,46 @@ def test_a_stale_turn_tail_does_not_bleed_into_the_next_turn():
     assert "fresh" in text
     assert customs == [("dag_run_completed", {"run_id": "r1"})]
     assert names[-1] == "ReplyEndEvent"
+
+
+# --------------------------------------------------------------- knowledge bases
+
+
+def test_the_sessions_knowledge_bases_reach_the_agent():
+    """The defect this wiring fixes was silent: ChatService resolved the session's
+    knowledge bases, built a RAGMiddleware and passed it in, and the signature
+    absorbed it with everything else it did not recognise. Documents were indexed
+    and searchable and no turn could see any of it, with nothing reporting a
+    problem. Asserting the retriever gets built is what makes that loud."""
+    from agentscope.middleware import RAGMiddleware
+
+    middleware = RAGMiddleware(
+        knowledge_bases=[SimpleNamespace(name="kb")],
+        parameters=RAGMiddleware.Parameters(),
+    )
+
+    agent = RavenGatewayAgent(state=SimpleNamespace(session_id="s1"), middlewares=[middleware])
+
+    assert agent._retriever is not None, "the middleware was accepted and then dropped"
+
+
+def test_no_knowledge_base_means_no_retriever():
+    """The common case has to stay free of retrieval work."""
+    agent = RavenGatewayAgent(state=SimpleNamespace(session_id="s1"), middlewares=[])
+
+    assert agent._retriever is None
+
+
+def test_the_retrieved_context_reaches_the_gateway():
+    """Building the retriever is half of it; the turn actually sent has to be the
+    augmented one. Both halves failed independently in a mutation pass."""
+
+    class _Retriever:
+        async def augment(self, text: str) -> str:
+            return f"[1] (source: kb > s)\ncontext\n\n{text}"
+
+    sent: list[str] = []
+    _drive([(0, _DONE)], retriever=_Retriever(), sent=sent)
+
+    assert sent, "the turn never reached the gateway"
+    assert sent[0].startswith("[1] (source: kb > s)"), sent[0]
