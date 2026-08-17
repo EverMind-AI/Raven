@@ -63,7 +63,9 @@ class TurnUsageSummary:
         parts = [f"{_fmt_tokens(in_tokens)} in / {_fmt_tokens(out_tokens)} out tokens"]
         cost = (total.estimated_cost_usd or 0.0) - (base.estimated_cost_usd or 0.0)
         if cost > 0:
-            parts.append("$" + f"{cost:.4f}".rstrip("0").rstrip("."))
+            # Below the 4-decimal render floor a real cost would round to "$0"
+            # and read as a free call; show the floor instead of a lie.
+            parts.append("<$0.0001" if cost < 0.0001 else "$" + f"{cost:.4f}".rstrip("0").rstrip("."))
         if self._started is not None:
             parts.append(f"{time.monotonic() - self._started:.1f}s")
         return " · ".join(parts)
@@ -103,7 +105,9 @@ def _build_turn_summary(agent_loop: Any) -> TurnUsageSummary | None:
 def _render_summary_line(line: str) -> None:
     from rich.console import Console
 
-    Console().print(f"[dim]↳ {line}[/dim]")
+    # Two-space indent matches the render_notice progress lines in
+    # agent_commands, so the summary sits in the same visual column.
+    Console().print(f"  [dim]↳ {line}[/dim]")
 
 
 class CliOutlet:
