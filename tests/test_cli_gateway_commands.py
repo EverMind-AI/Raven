@@ -135,60 +135,47 @@ def test_gateway_log_config_overrides_parse() -> None:
 
 
 def test_gateway_channels_excludes_tui_when_no_im_enabled() -> None:
-    # The gateway does not claim ephemeral "tui" cron jobs — those fire in the
-    # TUI process, so a TUI-set reminder is never forwarded to an IM channel.
-    from unittest.mock import MagicMock
+    # The gateway does not claim "tui" cron jobs — those fire in the TUI
+    # process, so a TUI-set reminder is never forwarded to an IM channel.
+    from types import SimpleNamespace
 
     from raven.cli.gateway_commands import _build_gateway_channels
+    from raven.config.schema import ChannelsConfig
 
-    cfg = MagicMock()
-    for name in (
-        "whatsapp",
-        "telegram",
-        "discord",
-        "feishu",
-        "mochat",
-        "dingtalk",
-        "email",
-        "slack",
-        "qq",
-        "matrix",
-        "wecom",
-        "weixin",
-    ):
-        ch = MagicMock()
-        ch.enabled = False
-        setattr(cfg.channels, name, ch)
+    cfg = SimpleNamespace(channels=ChannelsConfig())
     assert _build_gateway_channels(cfg) == set()  # no IM enabled, and no "tui"
 
 
 def test_gateway_channels_excludes_tui_alongside_enabled_im() -> None:
-    from unittest.mock import MagicMock
+    from types import SimpleNamespace
 
     from raven.cli.gateway_commands import _build_gateway_channels
+    from raven.config.schema import ChannelsConfig
 
-    cfg = MagicMock()
-    for name in (
-        "whatsapp",
-        "telegram",
-        "discord",
-        "feishu",
-        "mochat",
-        "dingtalk",
-        "email",
-        "slack",
-        "qq",
-        "matrix",
-        "wecom",
-        "weixin",
-    ):
-        ch = MagicMock()
-        ch.enabled = name == "telegram"
-        setattr(cfg.channels, name, ch)
+    cfg = SimpleNamespace(channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}))
     result = _build_gateway_channels(cfg)
+    assert result == {"telegram"}
     assert "tui" not in result
-    assert "telegram" in result
-    assert "discord" not in result
+
+
+def test_gateway_channels_derived_from_config_model_fields() -> None:
+    # The partition is derived from the channels config model, not a
+    # hardcoded list: every field with a truthy .enabled participates.
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _build_gateway_channels
+    from raven.config.schema import ChannelsConfig
+
+    cfg = SimpleNamespace(
+        channels=ChannelsConfig.model_validate(
+            {
+                "telegram": {"enabled": True},
+                "feishu": {"enabled": True},
+                "weixin": {"enabled": False},
+            }
+        )
+    )
+    assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:

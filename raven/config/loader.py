@@ -251,6 +251,21 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
                     legacy_key,
                 )
 
+    # Strip retired cron keys so stale config entries don't linger silently
+    # (schema models default to extra='ignore', so they would load — this
+    # strip exists for the one-time migration log, not to prevent a crash).
+    # forward_channels died with trigger-time delivery routing
+    # (fire-at-origin binds the target at creation).
+    cron = data.get("cron") if isinstance(data, dict) else None
+    if isinstance(cron, dict):
+        for legacy_key in ("forward_channels", "forwardChannels"):
+            if legacy_key in cron:
+                cron.pop(legacy_key)
+                _log.info(
+                    "Migrated: dropped cron.%s (retired field)",
+                    legacy_key,
+                )
+
     # Nest the legacy top-level ``skillRouter`` / ``skill_router`` block
     # into ``skillForge.router`` — the router is now a SkillForge sub-block,
     # not a sibling top-level key. Explicit ``skillForge.router`` wins.
