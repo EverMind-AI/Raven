@@ -5452,25 +5452,27 @@ class TestTheManagedPortIsOfferedNotImposed:
             onboard_everos, "_prompt_text", lambda *a, **kw: pytest.fail("asked about a port that was free")
         )
 
-        assert onboard_everos._ask_managed_port() == 18791
+        assert onboard_everos._ask_managed_port(Path("/r")) == 18791
 
     def test_a_typed_port_is_recorded_as_the_target(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
 
-        assert onboard_everos._ask_managed_port() == 20000
+        assert onboard_everos._ask_managed_port(Path("/r")) == 20000
 
     def test_nonsense_falls_back_to_the_default(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import onboard_everos
 
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "not-a-port")
 
-        assert onboard_everos._ask_managed_port() == 18791
+        assert onboard_everos._ask_managed_port(Path("/r")) == 18791
 
     def test_an_already_recorded_port_is_the_offered_default(
         self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
@@ -5484,6 +5486,7 @@ class TestTheManagedPortIsOfferedNotImposed:
             encoding="utf-8",
         )
         monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
         seen: list[str] = []
 
         def _spy(_label, **kw):
@@ -5492,7 +5495,7 @@ class TestTheManagedPortIsOfferedNotImposed:
 
         monkeypatch.setattr(onboard_everos, "_prompt_text", _spy)
 
-        assert onboard_everos._ask_managed_port() == 20000
+        assert onboard_everos._ask_managed_port(Path("/r")) == 20000
         assert seen == ["20000"]
 
     def test_the_build_path_asks(self) -> None:
@@ -5700,3 +5703,59 @@ class TestSkippingIsQuiet:
         assert "长期记忆保持关闭" not in after
         assert "stays off until" not in after
         assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
+
+
+class TestReconfiguringRestartsOurOwnService:
+    """Rewriting the models has to reach the process that reads them.
+
+    EverOS builds its LLM client in the API lifespan, at startup, so a server
+    already running keeps the models it booted with. Reconfiguring therefore
+    wrote new models to disk and left them inert: the wizard's closing
+    `ensure_everos_server` finds the address answering and returns, and the
+    user's change silently takes effect at some unrelated restart.
+    """
+
+    def test_our_own_port_is_not_reported_as_taken(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The occupancy check is a bind test, so a service we started and are
+        about to restart into looks exactly like a stranger squatting."""
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos._server import LockHolder
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"port": 31995, "root": "/r"}}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(
+            onboard_everos,
+            "_lock_holder",
+            lambda _root: LockHolder(pid=1, cmdline="everos server start --root /r", port=31995),
+        )
+        monkeypatch.setattr(
+            onboard_everos, "_prompt_text", lambda *a, **kw: pytest.fail("asked about a port that is ours")
+        )
+
+        assert onboard_everos._ask_managed_port(Path("/r")) == 31995
+
+    def test_a_stranger_on_the_port_still_asks(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "19999")
+
+        assert onboard_everos._ask_managed_port(Path("/r")) == 19999
+
+    def test_the_running_service_is_stopped_before_the_restart(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        stopped: list[str] = []
+        monkeypatch.setattr(onboard_everos, "_stop_for_reload", lambda root: stopped.append(str(root)) or True)
+        assert "_stop_for_reload" in __import__("inspect").getsource(onboard_everos._step4_memory)
+
+    def test_stop_for_reload_is_a_noop_when_nothing_runs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        monkeypatch.setattr(onboard_everos, "_lock_holder", lambda _root: None)
+        assert onboard_everos._stop_for_reload(Path("/r")) is False

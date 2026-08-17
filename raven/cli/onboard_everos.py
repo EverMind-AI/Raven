@@ -11,6 +11,7 @@ whichever module a caller patches through.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -1340,6 +1341,51 @@ def _same_address(a: str | None, b: str | None) -> bool:
     return ha in _LOOPBACK_NAMES and hb in _LOOPBACK_NAMES
 
 
+def _lock_holder(root: Path | str):
+    """The process serving ``root``, or None. Indirected so callers can stub it."""
+    from raven.plugin.memory.everos._server import lock_holder
+
+    return lock_holder(root)
+
+
+def _stop_for_reload(root: Path | str) -> bool:
+    """Stop our own server for ``root`` so a rewritten config is actually read.
+
+    EverOS builds its LLM client in the API lifespan, at startup, so a process
+    already running keeps the models it booted with. Without this the wizard
+    wrote new models to disk and the closing ``ensure_everos_server`` found the
+    address answering and returned -- the reconfiguration was inert until some
+    unrelated restart, with nothing on screen saying so.
+
+    Not a decision to put to the user: they asked to reconfigure and filled in
+    the models a moment ago, and applying them is what that means. Only a server
+    raven can identify as serving this root is touched.
+    """
+    from raven.plugin.memory.everos._server import StopOutcome, stop_recorded_server
+
+    holder = _lock_holder(root)
+    if holder is None:
+        return False
+    oc.console.print(
+        oc._t(
+            "  [dim]Restarting the service so it picks up the new configuration...[/dim]",
+            "  [dim]正在重启服务以加载新配置...[/dim]",
+        )
+    )
+    outcome = stop_recorded_server(root)
+    if outcome is not StopOutcome.STOPPED:
+        oc.console.print(
+            oc._t(
+                f"  [yellow]! Could not restart it ({outcome.value}); the new models take effect "
+                "the next time it starts.[/yellow]",
+                f"  [yellow]⚠ 未能重启（{outcome.value}），新模型将在它下次启动时生效。[/yellow]",
+            ),
+            highlight=False,
+        )
+        return False
+    return True
+
+
 def _port_is_free(port: int) -> bool:
     """Whether a local TCP port can still be bound."""
     import socket
@@ -1353,7 +1399,7 @@ def _port_is_free(port: int) -> bool:
     return True
 
 
-def _ask_managed_port() -> int:
+def _ask_managed_port(root: Path | str) -> int:
     """Where a raven-managed server should listen.
 
     Silent while the intended port is free, which is nearly always. 18791 is a
@@ -1370,6 +1416,12 @@ def _ask_managed_port() -> int:
 
     current = urlparse(_configured_target_url()).port or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
     if _port_is_free(current):
+        return int(current)
+    # A bind test cannot tell a stranger from our own service. When the holder
+    # of this root's lock is the thing listening there, the port is not taken --
+    # it is ours, and the step is about to restart into it.
+    holder = _lock_holder(root)
+    if holder is not None and holder.port == current:
         return int(current)
     oc.console.print(
         oc._t(
@@ -2080,7 +2132,7 @@ def _step4_memory(
     # would be a decision almost nobody has to make; the case that had no way
     # forward is the occupied one, where the start simply failed and the wizard
     # had nowhere to send the user.
-    _set_base_url(f"http://localhost:{_ask_managed_port()}")
+    _set_base_url(f"http://localhost:{_ask_managed_port(root)}")
 
     # Configure required models FIRST, then flip the backend on — so a Ctrl+C
     # mid-configuration leaves backend at its prior (disabled) value rather
@@ -2120,6 +2172,10 @@ def _step4_memory(
     # everos elsewhere reports on a server nobody uses -- and then spawns a
     # second instance that cannot hold the OME lock.
     base_url = configured_base_url(load_raven_config())
+
+    # The models were just written; a process already running booted with the
+    # old ones and will not re-read them.
+    _stop_for_reload(root)
 
     oc.console.print()
     oc.console.print(
