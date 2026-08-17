@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-import time
 import uuid
 import weakref
 from collections.abc import AsyncIterator
@@ -191,13 +190,28 @@ async def read_session_nodes(backend: Any, root: str) -> SessionNodes:
 def make_run_id() -> str:
     """Build a unique, sortable run id.
 
+    Shares ``history_stamp`` with ``make_call_id`` so the two id shapes stay
+    comparable: the panel sorts spawns and graph runs into one list by id, and
+    a second-accurate stamp on either side would reshuffle ties on every poll.
+
     Returns:
         `str`:
             ``"<UTC timestamp>-<8 hex>"``, e.g.
-            ``"20260717T031500Z-1a2b3c4d"``.
+            ``"20260717T031500123456Z-1a2b3c4d"``.
     """
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    return f"{stamp}-{uuid.uuid4().hex[:8]}"
+    from raven.agent.subagent_history import history_stamp
+
+    return f"{history_stamp()}-{uuid.uuid4().hex[:8]}"
+
+
+def node_live_key(run_id: str, node_id: str) -> str:
+    """The live-index key a node's activity is collected under.
+
+    Shared with the reader rather than spelled out on both sides: a spawn keys
+    its activity by the record directory's name, and a node has no such
+    directory, so the two namespaces are kept apart by this prefix.
+    """
+    return f"dag:{run_id}:{node_id}"
 
 
 class DagRunStore:
@@ -266,6 +280,19 @@ class DagRunStore:
                 ``<run_dir>/<node_id>.out.md``.
         """
         return output_path_in(self._backend, self._root, self.run_id, node_id)
+
+    def transcript_path(self, node_id: str) -> str:
+        """Path of a node's own transcript file.
+
+        Args:
+            node_id (`str`):
+                The node id.
+
+        Returns:
+            `str`:
+                ``<run_dir>/<node_id>.transcript.jsonl``.
+        """
+        return self._backend.join_path(self.run_dir, f"{node_id}.transcript.jsonl")
 
     async def init(self, graph_json: str, node_ids: list[str] | None = None) -> None:
         """Create the run dir (implicitly) and persist ``graph.json``.

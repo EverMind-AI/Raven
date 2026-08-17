@@ -195,10 +195,41 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "description": (getattr(tool, "description", "") or "")[:200],
                     "enabled": True,
                     "mcp_server": tool_owner.get(name),
+                    "needs": None,
                 }
             )
+        tools.extend(_gated_tools({t["name"] for t in tools}))
 
     return {"skills": skills, "plugins": plugins, "tools": tools, "mcp": mcp}
+
+
+# Tools the loop withholds from the model until a key exists, and the config
+# key that unlocks each. Withholding is right -- offered without a key, the
+# model reaches for it and relays a failure naming a config path to whoever is
+# on the other end of a channel -- but the same decision also erased them from
+# the user's view, so the feature looked deleted rather than unconfigured.
+_KEY_GATED_TOOLS: tuple[tuple[str, str, str], ...] = (("web_search", "tools.web.search.apiKey", "SERPER_API_KEY"),)
+
+
+def _gated_tools(registered: set[str]) -> list[dict]:
+    """Rows for key-gated tools that are not registered, so the page can offer
+    the field instead of showing nothing at all."""
+    rows: list[dict] = []
+    for name, setting, env in _KEY_GATED_TOOLS:
+        if name in registered:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "description": "",
+                # Not enabled, and not a lie either: the model genuinely cannot
+                # call it. The page reads `needs` to draw the setup affordance.
+                "enabled": False,
+                "mcp_server": None,
+                "needs": {"setting": setting, "env": env},
+            }
+        )
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +636,12 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     models: dict[str, dict[str, Any]] = {}
     total = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cost_usd": 0.0}
-    tel_dir = Path.home() / ".raven" / "telemetry"
+    # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
+    # both used to hardcode ~/.raven, which held together only until RAVEN_HOME
+    # moved one of them.
+    from raven.config.loader import raven_home
+
+    tel_dir = raven_home() / "telemetry"
     today = date.today()
     for i in range(days):
         p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
@@ -775,13 +811,36 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
         model = getattr(config.channels, name, None)
         enabled = bool(getattr(model, "enabled", False))
         missing: list[str] = []
+        # Every field the channel takes, so a client can render its configure
+        # form instead of naming the gaps and sending the user to a terminal.
+        # Values never ride along -- only whether one is set -- because the row
+        # crosses the wire on every status poll and secrets among them.
+        fields: list[dict] = []
         try:
             for field, spec in channel_field_specs(name).items():
-                if not spec.get("required"):
+                if field == "enabled":
                     continue
-                current = getattr(model, field, None)
-                if current in (None, "", []):
+                # A walk, not one getattr: three of the twelve channels spec
+                # nested keys (`dm.policy`, `mention.require_in_groups`), and a
+                # flat lookup returns None for those -- so a configured slack DM
+                # policy drew as an empty box in the configure form, forever.
+                current: Any = model
+                for part in field.split("."):
+                    current = getattr(current, part, None)
+                    if current is None:
+                        break
+                is_set = current not in (None, "", []) and current != spec.get("default")
+                if spec.get("required") and current in (None, "", []):
                     missing.append(field)
+                fields.append(
+                    {
+                        "key": field,
+                        "label": str(spec.get("description") or field),
+                        "required": bool(spec.get("required")),
+                        "secret": bool(spec.get("is_secret")),
+                        "set": bool(is_set),
+                    }
+                )
         except Exception:
             pass
         items.append(
@@ -790,6 +849,7 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
                 "enabled": enabled,
                 "configured": not missing,
                 "missing": missing,
+                "fields": fields,
             }
         )
 
@@ -805,6 +865,63 @@ async def channels_status(params: dict, *, agent_loop_factory=None) -> dict:
     return {"channels": items, "gateway_running": gateway_running}
 
 
+async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
+    """Patch one channel's credential fields, validated against its schema.
+
+    The dedicated writer, not a widening of ``settings.set``: field names are
+    checked against the channel's own spec map here, so an arbitrary dotted
+    path can never ride a credential write into the rest of the config.
+    Empty-string values are skipped rather than written -- the form sends every
+    box it showed, and a blank one means "left as is", not "erase".
+    """
+    from raven.config.update_channels import (
+        _channel_names,
+        channel_field_specs,
+        disable_channel,
+        enable_channel,
+        set_channel_fields,
+    )
+
+    name = str(params.get("name") or "")
+    if name not in _channel_names():
+        raise ConfigValidationError(f"unknown channel: {name}")
+    raw = params.get("fields")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigValidationError("fields must be an object")
+    enabled = params.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ConfigValidationError("enabled must be a boolean")
+    if not raw and enabled is None:
+        raise ConfigValidationError("nothing to apply: give fields, enabled, or both")
+    specs = channel_field_specs(name)
+    payload: dict[str, Any] = {}
+    for key, value in raw.items():
+        # `enabled` is not a credential and does not travel in the patch: it is
+        # its own argument, routed through the enable/disable writers.
+        if key == "enabled" or key not in specs:
+            raise ConfigValidationError(f"unknown field for channel {name}: {key}")
+        if isinstance(value, str) and not value.strip():
+            continue
+        payload[key] = value
+    if not payload and enabled is None:
+        return {"applied": False}
+    try:
+        # Credentials first, then the switch, so a channel is never left on
+        # without the values it was turned on for.
+        if enabled is True:
+            enable_channel(name, payload or None)
+        else:
+            if payload:
+                set_channel_fields(name, payload)
+            if enabled is False:
+                disable_channel(name)
+    except Exception as e:
+        raise ConfigValidationError(str(e)) from None
+    return {"applied": True}
+
+
 # ---------------------------------------------------------------------------
 # fs.*
 # ---------------------------------------------------------------------------
@@ -813,7 +930,23 @@ _FS_MAX_ENTRIES = 500
 _FS_DEFAULT_MAX_BYTES = 200_000
 
 
-def _workspace_root(loop) -> Path:
+def _workspace_root(loop, session_key: str = "") -> Path:
+    """The directory the page's file panel is rooted at.
+
+    The working directory the session's turns run in, not agent home: home is
+    ``~/.raven/workspace`` by default, which holds the agent's own memory and
+    is not where a launch-directory turn reads or writes anything. Resolved
+    per session because a session can be pinned to its own directory (the
+    persisted ``workdir`` override); an empty key falls through to the
+    resolver's policy default, which for the gateway is the launch directory.
+    """
+    if loop is not None:
+        peek = getattr(loop, "peek_session_workdir", None)
+        if peek is not None:
+            try:
+                return Path(peek(session_key)).resolve()
+            except ValueError:
+                pass
     ws = getattr(loop, "workspace", None) if loop is not None else None
     if ws:
         return Path(ws).resolve()
@@ -823,14 +956,35 @@ def _workspace_root(loop) -> Path:
 
 
 def _resolve_inside(root: Path, rel: str) -> Path:
+    """Resolve ``rel`` under ``root``, refusing anything outside it -- or inside
+    raven's own state directory.
+
+    Containment alone was enough while the root was agent home, a *sibling* of
+    the state dir. It is not now: the root is the session's working directory,
+    which under the launch-directory policy is wherever the gateway was started
+    from. Started in the reader's home -- the ordinary place to type a command
+    -- the state dir sits *under* the root, and `fs.list` even un-hides it. That
+    hands the page ``serve.json``, whose token mints unlimited nonces and so
+    outlives the cookie, and ``config.json`` with the provider keys.
+
+    The same fence the viewer and `fs.reveal` apply -- literally the same
+    function, because a second copy of it drifted immediately: the first one
+    here lacked the workspace carve-out, so with the root at the default
+    ``~/.raven/workspace`` it refused every file the agent had written, which is
+    this bug mirrored.
+    """
+    from raven.rpc.files import in_state_dir
+
     p = (root / rel.lstrip("/")).resolve()
     if p != root and root not in p.parents:
         raise ConfigValidationError("path escapes workspace")
+    if in_state_dir(p, root):
+        raise ConfigValidationError(f"{p} is inside raven's state directory")
     return p
 
 
 async def fs_list(params: dict, *, agent_loop_factory=None) -> dict:
-    root = _workspace_root(_safe_loop(agent_loop_factory))
+    root = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or ""))
     rel = str(params.get("path") or "")
     target = _resolve_inside(root, rel)
     if not target.is_dir():
@@ -841,7 +995,12 @@ async def fs_list(params: dict, *, agent_loop_factory=None) -> dict:
     except OSError as e:
         raise ConfigValidationError(str(e)) from None
     for child in children[:_FS_MAX_ENTRIES]:
-        if child.name.startswith(".") and child.name not in (".raven",):
+        # Hidden entries stay hidden. `.raven` used to be the one exception,
+        # from when the root was agent home and the state dir was elsewhere;
+        # under the launch-directory policy it can be a child of the root, and
+        # every path inside it is now refused -- so listing it offers a folder
+        # that answers nothing.
+        if child.name.startswith("."):
             continue
         try:
             entries.append(
@@ -876,7 +1035,7 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     """
     import base64
 
-    root = _workspace_root(_safe_loop(agent_loop_factory))
+    root = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or ""))
     raw = params.get("content_b64") or ""
     try:
         data = base64.b64decode(raw, validate=True)
@@ -907,8 +1066,46 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     }
 
 
+async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
+    """Show one file in the host's file manager, selected.
+
+    The gateway's host is where the file lives, so the reveal happens there --
+    for the localhost page that is the reader's own desktop, which is the whole
+    use. Fenced exactly like the viewer (``resolve_readable``): a path the page
+    may not render is not one it may pop a Finder window on either.
+    """
+    import subprocess
+    import sys
+
+    from raven.rpc.files import resolve_readable
+
+    raw = str(params.get("path") or "").strip()
+    if not raw:
+        raise ConfigValidationError("path is required")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
+    try:
+        target = resolve_readable(str(p))
+    except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
+        raise ConfigValidationError(str(e)) from None
+    if sys.platform == "darwin":
+        argv = ["open", "-R", str(target)]
+    elif sys.platform.startswith("win"):
+        argv = ["explorer", f"/select,{target}"]
+    else:
+        # No cross-desktop "select this file" verb exists, so the containing
+        # folder is the best any Linux file manager can be asked for.
+        argv = ["xdg-open", str(target.parent)]
+    try:
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise ConfigValidationError(f"reveal failed: {e}") from None
+    return {"ok": True}
+
+
 async def fs_read(params: dict, *, agent_loop_factory=None) -> dict:
-    root = _workspace_root(_safe_loop(agent_loop_factory))
+    root = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or ""))
     rel = str(params.get("path") or "")
     target = _resolve_inside(root, rel)
     if not target.is_file():
@@ -968,9 +1165,11 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.everos", bind(settings_everos))
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
     dispatcher.register("channels.status", bind(channels_status))
+    dispatcher.register("channels.configure", bind(channels_configure))
     dispatcher.register("fs.list", bind(fs_list))
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
+    dispatcher.register("fs.reveal", bind(fs_reveal))
 
 
 __all__ = ["register_console_methods"]

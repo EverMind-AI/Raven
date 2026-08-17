@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files ci clean
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files beta ci clean
 
 PYTHON ?= python3
 PYTHON_LINT_TARGETS ?= raven tests scripts
@@ -16,6 +16,7 @@ help:
 	@echo "  check-commits  Validate Conventional Commit subjects"
 	@echo "  check-pr-title Validate the PR title in PR_TITLE"
 	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
+	@echo "  beta           Build this checkout and publish it to the beta channel"
 	@echo "  ci             Run the local CI gate"
 	@echo "  clean          Remove generated caches and build output"
 
@@ -72,6 +73,9 @@ check-pr-title:
 
 check-large-files:
 	PYTHONPATH=. uv run --extra dev python scripts/check_large_files.py $(COMMIT_RANGE)
+
+beta:
+	PYTHONPATH=. uv run python scripts/publish_beta.py $(BETA_ARGS)
 
 ci: lint test build
 

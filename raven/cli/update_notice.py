@@ -5,7 +5,8 @@ cwd/branch label when the session init bundle carries ``update_available`` /
 ``update_command`` (see ``ui-tui/src/components/appChrome.tsx``); this module
 is what fills those in.
 
-The live check hits the GitHub releases API, which is too slow to run on the
+The live check hits the GitHub releases API -- or the beta channel's registry,
+on an install that joined it -- which is too slow to run on the
 session-create hot path, so we keep a small cache in the runtime cache dir and
 refresh it in a daemon thread at most once a day. A launch therefore shows the
 notice based on the *cached* latest version; the first launch after a release
@@ -65,14 +66,26 @@ def _release_prefix(value: str) -> str:
     return ".".join(parts) if len(parts) == 3 else raw
 
 
-def _version_key(value: str) -> tuple[int, int, int] | None:
+def _version_key(value: str) -> tuple[int, ...] | None:
     """Parse ``1.2.3`` / ``v1.2.3`` / ``1.2.3rc1``, ``None`` when unparseable.
 
     ``upgrade_commands._version_key`` is the single source of truth for the
     grammar; it raises for anything it cannot read, which here just means
     "show no notice".
+
+    On the beta channel the suffix is the whole point -- ``0.1.12b1`` and
+    ``0.1.12b2`` are two different builds -- so that channel's ordering reads
+    the version whole instead of reducing it to the release it builds on.
     """
+    from raven.cli import beta_channel
     from raven.cli.upgrade_commands import UpgradeError
+
+    if beta_channel.is_active():
+        try:
+            return beta_channel.release_key(value)
+        except UpgradeError:
+            return None
+
     from raven.cli.upgrade_commands import _version_key as strict_key
 
     try:
@@ -111,9 +124,9 @@ def _refresh() -> None:
     keep = previous if isinstance(previous, str) else None
 
     try:
-        from raven.cli.upgrade_commands import _fetch_latest_release
+        from raven.cli.upgrade_commands import fetch_latest_for_channel
 
-        release = _fetch_latest_release()
+        release, _ = fetch_latest_for_channel()
         _write_cache(release.version, now=time.time())
     except Exception:
         # Offline, rate-limited, or the latest release is a draft/prerelease.
@@ -157,6 +170,25 @@ def _upgrade_command_works() -> bool:
     except Exception:
         # A malformed uv receipt raises UpgradeError; treat unknown as "no".
         return False
+
+
+def check_for_update(current_version: str) -> str | None:
+    """Fetch the latest release right now and name it if it is newer. Blocking.
+
+    The cached path above trades freshness for startup speed: the notice shows
+    one launch late. A resident gateway has no next launch to lean on, so its
+    periodic announcer calls this instead -- one live fetch, the same cache
+    written (a tab opened later still benefits), and the same silences: opted
+    out, an install that cannot upgrade, or nothing newer all answer ``None``.
+    """
+    if _disabled() or not _upgrade_command_works():
+        return None
+    _refresh()
+    if update_notice(current_version) is None:
+        return None
+    cache = _read_cache() or {}
+    latest = cache.get("latest_version")
+    return latest if isinstance(latest, str) else None
 
 
 def update_notice(current_version: str) -> tuple[bool, str] | None:

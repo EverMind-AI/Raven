@@ -17,6 +17,36 @@ SCHEMA_VERSION = "audit.span.v1"
 FRAMEWORK = "raven"
 
 _store: TraceStore | None = None
+_surface: str | None = None
+
+
+def set_surface(name: str | None) -> None:
+    """Declare which front end this process serves, for every span it writes.
+
+    A process-wide fact, not a per-turn one: ``raven tui`` runs one RPC server
+    over a pipe to its own child and ``raven serve`` runs one WebSocket app, so a
+    process serves exactly one front end for as long as it lives. Threading this
+    through every turn would be plumbing for a value that cannot change, and it
+    would ride ``Source.extras`` into hook metadata, where it does not belong.
+
+    It exists because the terminal and the served page share the ``tui`` channel
+    deliberately -- one session pool, so the same person sees the same
+    conversations from either -- which leaves ``channel.id`` unable to tell a
+    trace from one apart from a trace from the other. This is the dimension that
+    can. Passing None clears it.
+    """
+    global _surface
+    _surface = name or None
+
+
+def surface_for(channel: str | None) -> str | None:
+    """What to stamp: the declared surface, else the channel the turn ran on.
+
+    Falling back rather than emitting nothing keeps the attribute populated for
+    every host that never declares one -- the gateway's channels (``qq``, ``web``,
+    ``cli``) already name the front end, and there is nothing to disambiguate.
+    """
+    return _surface or channel
 
 
 def _get_store() -> TraceStore:
@@ -57,6 +87,9 @@ def build_span(
         "session.key": session_key,
         "channel": channel,
         "channel.id": channel,
+        # Which front end produced this, where the channel cannot say: the
+        # terminal and the served page share one channel on purpose.
+        "surface": surface_for(channel),
         "chat_id": chat_id,
         "audit.schema_version": SCHEMA_VERSION,
     }

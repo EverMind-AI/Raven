@@ -28,8 +28,10 @@ mints itself, so nothing here is attacker-controlled.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,35 @@ _SPAWN_DIRNAME = "spawn"
 _DAG_DIRNAME = "mas_dag"
 
 
+_STAMP_LOCK = threading.Lock()
+_LAST_STAMP_US = 0
+
+
+def history_stamp() -> str:
+    """A UTC stamp that is strictly increasing within this process.
+
+    ``<stamp>-<suffix>`` ids are sorted lexicographically by every reader of
+    this tree, and the suffix carries no order at all -- it is a task id or
+    random hex. So the stamp is the whole ordering, and a stamp only accurate
+    to the second made two calls in one second sort by random hex: the panel
+    reshuffled them on every poll, and the listing test that asserts newest
+    first failed about one run in six.
+
+    Microseconds are not enough on their own -- two spawns land in the same
+    microsecond often enough to tie -- so a tie (or a clock that steps back)
+    takes the next microsecond instead. That keeps ids ordered by the order
+    they were minted in, which is what the readers actually mean by newest.
+    """
+    global _LAST_STAMP_US
+    with _STAMP_LOCK:
+        now = int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+        if now <= _LAST_STAMP_US:
+            now = _LAST_STAMP_US + 1
+        _LAST_STAMP_US = now
+    whole = datetime.fromtimestamp(now // 1_000_000, tz=timezone.utc)
+    return f"{whole.strftime('%Y%m%dT%H%M%S')}{now % 1_000_000:06d}Z"
+
+
 def make_call_id(task_id: str | None = None) -> str:
     """A sortable id for one ``spawn`` call: ``<UTC timestamp>-<8 hex>``.
 
@@ -50,8 +81,7 @@ def make_call_id(task_id: str | None = None) -> str:
     (``Subagent [<task_id>] ...``), so a directory can be tied back to the log
     lines for that run; a caller without one gets a fresh suffix.
     """
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    return f"{stamp}-{safe_path_segment(task_id) if task_id else uuid.uuid4().hex[:8]}"
+    return f"{history_stamp()}-{safe_path_segment(task_id) if task_id else uuid.uuid4().hex[:8]}"
 
 
 def session_history_root(session_dir: Path) -> Path:
@@ -112,8 +142,26 @@ class SpawnRecord:
             logger.warning("Subagent [{}] history could not be opened at {}: {}", task_id, record.dir, exc)
         return record
 
-    def finish(self, *, status: str, output: str | None = None, error: str | None = None) -> None:
-        """Record the outcome. ``output`` and ``error`` are written as files."""
+    def finish(
+        self,
+        *,
+        status: str,
+        output: str | None = None,
+        error: str | None = None,
+        activity: Any = None,
+    ) -> None:
+        """Record the outcome. ``output`` and ``error`` are written as files.
+
+        ``activity`` is a :class:`~raven.agent.subagent.activity.RunActivity` when
+        the backend that ran this had anything to say about *how* it got there --
+        which tools it called, what it cost. Merged into ``meta.json`` rather than
+        given a file of its own: it is a handful of scalars and a short list, and a
+        reader already opens meta.json for every row it draws.
+
+        Typed loosely on purpose. The record is written from the manager and read
+        by the RPC layer, and neither should have to import the other's module to
+        pass a bag of counters through.
+        """
         try:
             if not self.dir.is_dir():
                 return
@@ -123,6 +171,17 @@ class SpawnRecord:
                 (self.dir / "error.md").write_text(error, encoding="utf-8")
             meta = self._read_meta()
             meta.update(status=status, ended_at_ms=int(time.time() * 1000))
+            if activity is not None:
+                meta.update(getattr(activity, "as_meta", dict)() or {})
+                # The run's own transcript, one provider-shaped message per
+                # line. Its own file, not meta.json: the panel polls meta on
+                # every redraw, and only the opened record reads this.
+                transcript = getattr(activity, "transcript", None)
+                if isinstance(transcript, list) and transcript:
+                    (self.dir / "transcript.jsonl").write_text(
+                        "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in transcript),
+                        encoding="utf-8",
+                    )
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Subagent history at {} could not be finished: {}", self.dir, exc)

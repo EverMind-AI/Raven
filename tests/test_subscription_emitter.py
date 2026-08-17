@@ -269,6 +269,179 @@ async def test_closed_subscription_does_not_receive_new_events(
 
 
 # ---------------------------------------------------------------------------
+# replay of a turn in flight
+# ---------------------------------------------------------------------------
+
+
+def _events_for(send_frame_mock: AsyncMock, sub_id: str) -> list[dict]:
+    """Only the events that went to one subscription, in order."""
+    out = []
+    for call in send_frame_mock.call_args_list:
+        frame = call.args[0] if call.args else call.kwargs.get("frame")
+        if frame and frame.get("method") == "event" and frame["params"]["subscription_id"] == sub_id:
+            out.append(frame["params"]["event"])
+    return out
+
+
+def _start(turn_id: str = "t1", content: str = "render this log"):
+    return {"type": "message.start", "payload": {"turn_id": turn_id, "content": content}}
+
+
+def _tok(text: str):
+    return {"type": "token.delta", "payload": {"text": text}}
+
+
+class TestReplayOfATurnInFlight:
+    """A window opened mid-turn used to show nothing until the turn ended.
+
+    ``session.resume`` reads the transcript, and a turn is written to it only
+    once it finishes -- so a second window, or a shared link, sat on an empty
+    stage while the answer was streaming into the first one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_late_subscriber_is_handed_what_already_streamed(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("Hel"))
+        await emitter.emit("s1", _tok("lo"))
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        got = _events_for(send_frame, late)
+        assert got[0] == _start()
+        # Merged on the way into the buffer, so the reader gets the text whole.
+        assert "".join(e["payload"]["text"] for e in got if e["type"] == "token.delta") == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_the_seam_neither_repeats_nor_drops(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """The whole point of the buffer is this join.
+
+        Replay it twice and the answer stutters; miss the join and a word
+        vanishes from the middle of a sentence.
+        """
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("before "))
+        late = await emitter.register("s1")
+        await emitter.emit("s1", _tok("after"))
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        got = _events_for(send_frame, late)
+        text = "".join(e["payload"]["text"] for e in got if e["type"] == "token.delta")
+        assert text == "before after"
+        assert [e["type"] for e in got].count("message.start") == 1
+
+    @pytest.mark.asyncio
+    async def test_a_subscriber_present_all_along_sees_each_event_once(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """Recording must not double-deliver to the subscriptions already open."""
+        early = await emitter.register("s1")
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("one"))
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        got = _events_for(send_frame, early)
+        assert [e["type"] for e in got] == ["message.start", "token.delta"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_replayed_once_the_turn_is_over(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """After the turn lands, the transcript on disk is the record. Replaying
+        on top of what ``session.resume`` returns would draw it twice."""
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("done"))
+        await emitter.emit("s1", {"type": "message.complete", "payload": {"turn_id": "t1", "usage": {}}})
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        assert _events_for(send_frame, late) == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_turn_also_stops_the_replay(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("half"))
+        await emitter.emit("s1", {"type": "error", "payload": {"code": -32000, "message": "turn_failed"}})
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        assert _events_for(send_frame, late) == []
+
+    @pytest.mark.asyncio
+    async def test_a_new_turn_replaces_the_previous_buffer(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        await emitter.emit("s1", _start("t1", "first"))
+        await emitter.emit("s1", _tok("old"))
+        await emitter.emit("s1", _start("t2", "second"))
+        await emitter.emit("s1", _tok("new"))
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        got = _events_for(send_frame, late)
+        assert got[0]["payload"]["turn_id"] == "t2"
+        assert "".join(e["payload"]["text"] for e in got if e["type"] == "token.delta") == "new"
+
+    @pytest.mark.asyncio
+    async def test_the_buffer_is_bounded_and_keeps_the_head_and_the_tail(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """A long turn must not grow without limit, and the replay must stay
+        smaller than one queue -- overflowing it would kill the very
+        subscription the replay exists to serve."""
+        from raven.rpc.subscriptions import REPLAY_CAPACITY
+
+        await emitter.emit("s1", _start())
+        for i in range(REPLAY_CAPACITY * 2):
+            # Non-mergeable, so each one is its own buffered event.
+            await emitter.emit("s1", {"type": "tool.start", "payload": {"tool_call_id": str(i), "name": "exec"}})
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 4)
+
+        got = _events_for(send_frame, late)
+        assert len(got) <= REPLAY_CAPACITY < QUEUE_CAPACITY
+        # The turn opener survives, so the client has a turn to render into.
+        assert got[0]["type"] == "message.start"
+        # And the most recent call survives, because that is what is on screen.
+        assert got[-1]["payload"]["tool_call_id"] == str(REPLAY_CAPACITY * 2 - 1)
+
+    @pytest.mark.asyncio
+    async def test_closing_the_session_drops_the_buffer(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("x"))
+        await emitter.close_session("s1")
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        assert _events_for(send_frame, late) == []
+
+    @pytest.mark.asyncio
+    async def test_another_session_is_not_replayed_into_this_one(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        await emitter.emit("s1", _start())
+        await emitter.emit("s1", _tok("mine"))
+
+        late = await emitter.register("s2")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        assert _events_for(send_frame, late) == []
+
+
 # Coalescing must not lose a direct-chat tag
 # ---------------------------------------------------------------------------
 

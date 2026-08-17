@@ -189,8 +189,10 @@ class _FakeUpgrade:
     def __init__(self, fetch) -> None:
         self._fetch = fetch
 
-    def _fetch_latest_release(self):  # noqa: D102 - test double
-        return self._fetch()
+    def fetch_latest_for_channel(self):  # noqa: D102 - test double
+        # The real one answers with the ordering to judge the release by; the
+        # refresh only stores a version string, so the second half goes unused.
+        return self._fetch(), self._version_key
 
     def _version_key(self, value):  # noqa: D102 - test double
         raise RuntimeError(value)
@@ -221,3 +223,48 @@ def test_upgrade_command_works_treats_a_probe_failure_as_no(monkeypatch) -> None
 
     monkeypatch.setattr(upgrade, "_is_uv_tool_install", _boom)
     assert un._upgrade_command_works() is False
+
+
+# ---------------------------------------------------------------------------
+# check_for_update: the resident gateway's live check
+
+
+def _speaking_fake(version: str) -> _FakeUpgrade:
+    """A fake whose ordering works, unlike the default one built to raise.
+
+    check_for_update compares versions after its fetch, so a fake that raises
+    on comparison silences the very answer under test.
+    """
+    fake = _FakeUpgrade(lambda: _Release(version))
+    fake._version_key = lambda value: tuple(int(part) for part in value.lstrip("v").split("."))
+    return fake
+
+
+def test_check_for_update_names_the_newer_build(cache, monkeypatch):
+    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _speaking_fake("0.3.0"))
+    monkeypatch.setattr(un, "_upgrade_command_works", lambda: True)
+
+    assert un.check_for_update("0.2.0") == "0.3.0"
+    # And it wrote the cache a later launch reads.
+    assert json.loads(cache.read_text(encoding="utf-8"))["latest_version"] == "0.3.0"
+
+
+def test_check_for_update_is_silent_when_current_is_the_latest(cache, monkeypatch):
+    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _speaking_fake("0.3.0"))
+    monkeypatch.setattr(un, "_upgrade_command_works", lambda: True)
+
+    assert un.check_for_update("0.3.0") is None
+
+
+def test_check_for_update_respects_the_opt_out(cache, monkeypatch):
+    monkeypatch.setenv("RAVEN_NO_UPDATE_CHECK", "1")
+    fetched = {"n": 0}
+
+    def _fetch():
+        fetched["n"] += 1
+        return _Release("0.9.9")
+
+    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(_fetch))
+
+    assert un.check_for_update("0.1.0") is None
+    assert fetched["n"] == 0, "opting out must skip the fetch, not just the answer"

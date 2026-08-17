@@ -233,6 +233,31 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
     assert excinfo.value.data["reason"] == "not_upgradable"
 
 
+async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.MonkeyPatch):
+    """uv removes the old environment before writing the new one, so a check
+    landing in that window finds no metadata for `raven`. Reported as a generic
+    check failure it reads as a broken install, and the reader starts a second
+    upgrade into the same gap."""
+    import asyncio
+    import importlib.metadata as md
+
+    from raven.cli import upgrade_commands
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+
+    def mid_replacement() -> None:
+        raise md.PackageNotFoundError("raven")
+
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", mid_replacement)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+    assert excinfo.value.data["reason"] == "in_progress"
+
+
 async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.MonkeyPatch, tmp_path):
     import asyncio
 
@@ -318,3 +343,20 @@ async def test_hello_reports_the_channel_it_was_registered_with() -> None:
         "default_channel": "web",
         "default_session_key": "web:default",
     }
+
+
+async def test_version_check_true_fetches_before_answering(monkeypatch) -> None:
+    """The button labelled "check for updates" must ask about now, not about the
+    last daily poll -- a tester clicks it seconds after being told a build was
+    published, and a cached "up to date" there reads as a broken channel."""
+    from raven.cli import update_notice
+    from raven.rpc.methods import system as system_mod
+
+    fetched = {"n": 0}
+    monkeypatch.setattr(update_notice, "check_for_update", lambda current: fetched.__setitem__("n", fetched["n"] + 1))
+
+    await system_mod.system_version({})
+    assert fetched["n"] == 0, "the plain call must stay off the network"
+
+    await system_mod.system_version({"check": True})
+    assert fetched["n"] == 1

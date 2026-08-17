@@ -144,10 +144,21 @@ function authFail() {
   const bar = mk('div', 'topfail');
   if (askShellReauth()) {
     bar.textContent = T('gui.auth.retry');
-  } else {
-    bar.textContent = T(SHELL ? 'gui.auth.dead_app' : 'gui.auth.dead');
+    document.body.appendChild(bar);
+    return;
   }
+  bar.textContent = T(SHELL ? 'gui.auth.dead_app' : 'gui.auth.checking');
   document.body.appendChild(bar);
+  if (SHELL) return;
+  /* "Not authenticated OR the service stopped" made the reader guess between
+     two causes with opposite fixes -- and a restarted `serve` mints a fresh
+     cookie, so the common case is a live service that no longer knows this
+     tab. /health is unauthenticated precisely so it can answer this: it
+     replies to a browser holding a cookie the gateway has already forgotten. */
+  fetch('/health', { cache: 'no-store' })
+    .then((r) => r.ok && r.json())
+    .then((j) => { bar.textContent = T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead'); })
+    .catch(() => { bar.textContent = T('gui.auth.dead'); });
 }
 
 /* Anything that breaks after the socket is up is NOT an auth failure. Blaming
@@ -226,6 +237,7 @@ function rowFrom(it) {
       || T('gui.sess.fallback_title', { id: String(it.id).split(':').pop().slice(0, 15) }),
     last: it.preview ? it.preview.slice(0, 60) : T('gui.sess.n_messages', { n: it.message_count }),
     when, g, at, run: null, live: true, from: cron ? 'cron' : undefined,
+    pin: !!it.pinned,
   };
 }
 
@@ -298,6 +310,24 @@ function callIndex(messages) {
 /* The turn's own clock is gone by the time it is restored (nothing stores how
    long a call took), so a restored fold header says only that the work
    happened -- see collapseTurn(null). Wall-clock stamps do survive. */
+/* Raven's own words, drawn as Raven's own words. The runtime writes this text
+   in English and hands it over as a KIND, so the sentence is chosen here, in
+   the reader's language -- the old canned string was pushed down the token
+   stream and arrived as the model's answer, in English, in whatever paragraph
+   the model happened to be mid-way through. */
+function noticeRow(kind, detail) {
+  const box = mk('div', 'rnote in');
+  const hd = mk('div', 'hd');
+  hd.appendChild(ico('M12 8.5v4M12 16h.01M10.3 3.9 2.6 17.2A1.6 1.6 0 0 0 4 19.6h16a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z'));
+  hd.appendChild(mk('span', '', T('gui.notice.by_raven')));
+  box.appendChild(hd);
+  /* An unknown kind still gets a row: a client one release behind the runtime
+     should say something happened rather than drop it on the floor. */
+  box.appendChild(mk('div', 'tx', T('gui.notice.' + kind, null, kind)));
+  if (detail) box.appendChild(mk('div', 'why', detail));
+  return box;
+}
+
 function renderHistory(messages) {
   /* Drawing somebody else's run into the panel says nothing about whether
      THIS conversation has started, so the new-task state stays as it was. */
@@ -327,6 +357,31 @@ function renderHistory(messages) {
     if (m.role === 'user' && m.text && m.text.trim()) {
       sealTools(); turnAt = msOf(m.timestamp); ask(m.text, stamp(m.timestamp)); return;
     }
+    if (m.role === 'assistant' && m.notice) {
+      /* Stored as an assistant message because the MODEL has to read it on the
+         next turn -- but a reader must not, or the reload contradicts the live
+         view about who said it. */
+      sealTools();
+      const endAt = msOf(m.timestamp);
+      collapseTurn(turnAt && endAt && endAt - turnAt >= 1000 ? dur(endAt - turnAt) : null);
+      stageBox().appendChild(noticeRow(m.notice.kind || '', m.notice.detail || ''));
+      return;
+    }
+    if (m.role === 'assistant' && m.turn_ended) {
+      /* The closing marker of a turn that was stopped or died: everything the
+         turn streamed is already drawn above; this renders the same note the
+         live stop shows, instead of the marker's model-facing text. */
+      sealTools();
+      const endAt = msOf(m.timestamp);
+      collapseTurn(turnAt && endAt && endAt - turnAt >= 1000 ? dur(endAt - turnAt) : null);
+      const r = mk('div', 'act in');
+      const note = m.turn_ended.status === 'cancelled'
+        ? T('gui.halted')
+        : T('gui.turn_died', { e: firstErrLine(m.turn_ended.reason || '') || '' });
+      r.append(mk('span', 'g'), mk('span', 'arg', note));
+      stageBox().appendChild(r);
+      return;
+    }
     if (m.role === 'assistant') {
       const thought = String(m.reasoning_content || '').trim();
       const text = String(m.text || '').trim();
@@ -347,9 +402,9 @@ function renderHistory(messages) {
         sealTools();
         const endAt = msOf(m.timestamp);
         /* Sessions written before the turn-start stamp landed have the whole
-           turn on one clock read, so the span floors at 1s: the turn did
-           complete, and "1s" reads better than a bare header. */
-        collapseTurn(turnAt && endAt ? dur(Math.max(endAt - turnAt, 1000)) : null);
+           turn on one clock read. A sub-second gap is that artifact, not a
+           measurement -- show the bare header rather than a fake "1s". */
+        collapseTurn(turnAt && endAt && endAt - turnAt >= 1000 ? dur(endAt - turnAt) : null);
         const body = answerBlock(text, stamp(m.timestamp));
         body.innerHTML = md(text);
       } else if (thought) {
@@ -370,9 +425,16 @@ function renderHistory(messages) {
       /* The result names the call it answers, so the row can carry the target
          it was given -- and an edit's arguments still yield its diff. */
       const hit = calls.get(String(m.tool_call_id || '')) || {};
-      const h = toolRun.tool(hit.name || m.name || 'tool', hit.args || null, null);
+      /* An ACP transcript puts a human title where a tool name goes, so the
+         program becomes the verb and the command becomes the argument -- the
+         same shape every other call in this transcript already has. A raven
+         tool name has no colon and comes back unchanged. */
+      const parts = callParts(hit.name || m.name || 'tool');
+      const h = toolRun.tool(parts.name, hit.args || null, parts.display || null);
       const preview = cleanPreview(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n');
-      h.done(okOf(m.name || '', preview), preview, 0);
+      /* The stored diff is the live event's diff, written down: same argument,
+         same numbered rows after a reload as before it. */
+      h.done(okOf(m.name || '', preview), preview, 0, m.diff);
     }
   });
   sealTools();
@@ -442,8 +504,14 @@ const turnDur = () => {
 
 function onEvent(ev) {
   const p = ev.payload || {};
-  markLive(ev.type !== 'message.start');
   if (ev.type === 'message.start') {
+    /* Read BEFORE busy is set, because `busy` is exactly the discriminator:
+       the window that sent this turn set it locally and has already drawn the
+       question, while a window that is only watching has not. Drawing it here
+       is what makes a turn in flight legible to a second window (or a shared
+       link) -- the user entry is not written to the transcript until the turn
+       ends, so this event is the only place the question exists yet. */
+    if (!busy && p.content) ask(p.content);
     busy = true; goState(); drawMeter();
     WS.turn += 1;
   } else if (ev.type === 'episode.start') {
@@ -451,6 +519,18 @@ function onEvent(ev) {
     flushSay();
     live.st = newStep(); live.steps.push(live.st); live.sawEpisode = true;
     raw.push('episode.start');
+  } else if (ev.type === 'notice') {
+    killStatus();
+    /* Seals the open step first: this ends the turn, so the streamed prose
+       above stays where it was said instead of being adopted by whatever
+       comes next. */
+    if (live.st) { live.st.seal(); live.st = null; }
+    flushSay();
+    const host = stageBox();
+    /* Before the live glyph, like every other row that lands mid-turn -- after
+       it the notice would sit under the spinner still claiming to be working. */
+    host.insertBefore(noticeRow(p.kind || '', p.detail || ''), host.querySelector(':scope > .turnlive'));
+    down();
   } else if (ev.type === 'thinking.delta') {
     killStatus();
     const st = ensureStep();
@@ -492,11 +572,52 @@ function onEvent(ev) {
     finishTurn(p.usage || {});
   } else if (ev.type === 'error') {
     killStatus();
+    /* A cancelled turn is the one "error" a person asked for. The stop button
+       already finalised this stage; the event still matters when the cancel
+       came from ANOTHER client on the same session -- and either way it is the
+       server saying the engine is free, which is what the queue waits on. */
+    if (p.reason === 'cancelled_by_client') {
+      if (busy) softStop();
+      if (!cancelInFlight) setTimeout(drainQueue, 400);
+      return;
+    }
     busy = false;
-    errLine(p.message || 'error', p.detail || p.reason || '');
+    /* A turn that died upstream (a provider timeout, a rate limit) is the one
+       error worth offering to re-run, and re-running means the message that
+       started it -- not a fresh guess at what the user wanted. */
+    errLine(p.message || 'error', p.detail || p.reason || '', lastAsk ? () => send(lastAsk) : null);
     goState(); drawMeter(); drawList();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
+  } else if (ev.type === 'subagent.delivered') {
+    /* The seam a delegated result re-enters the conversation at. The next
+       thing to stream is the main agent retelling that result, and without
+       this row it reads as raven speaking unprompted -- the reader deserves
+       the "because" one line above the effect. Placed at the tail of the flow
+       (before the live glyph), which is exactly where the injection happened
+       in time; clicking it opens the run the result came from. */
+    const row = mk('div', 'sdlv' + (p.status === 'error' ? ' err' : ''));
+    row.appendChild(ico('M5 5v5a4 4 0 0 0 4 4h9M14 10l4 4-4 4', 'ic'));
+    const isDag = p.kind === 'dag';
+    const b = mk('button', 'nm', isDag ? T('gui.deleg.dag_title') : p.label);
+    b.onclick = () => {
+      if (isDag && p.run_id) {
+        const d = dagFor();
+        const first = d && d.run_id === p.run_id ? d.order[d.order.length - 1] : null;
+        if (first) { dagOpenNode(p.run_id, { id: first }); return; }
+      }
+      if (!isDag && delegOpenSpawn) { delegOpenSpawn('', p.label); return; }
+      setWs(true, 'agents');
+    };
+    row.appendChild(b);
+    row.appendChild(mk('span', 'tx',
+      T(p.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered')));
+    const stage = $('#stage');
+    if (stage) {
+      const lr = stage.querySelector(':scope > .turnlive');
+      stage.insertBefore(row, lr || null);
+      down();
+    }
   } else if (ev.type === 'cron.started') {
     // Mark (or seed) the job's row so the rail shows the run while it works;
     // the session file may not exist until the turn ends, hence the seed.
@@ -518,6 +639,58 @@ function onEvent(ev) {
     if (s) { s.status = p.ok ? 'done' : 'err'; touchSession(s.id); }
     refreshList();
     if ($('#cronPage').dataset.open === 'true') reloadCronPage();
+  } else if (ev.type === 'dag.run_started') {
+    /* The trail's delegation card paints the same events as the sheet below:
+       one feed call per branch, before the sheet's own bookkeeping. */
+    dagFlowFeed(ev.type, p);
+    /* The graph arrives whole, before any node runs -- the server validates the
+       whole thing or refuses it -- so the map is drawable from the first event
+       and only the colours move after that.
+
+       Filed under the conversation it belongs to. onEvent only ever runs for the
+       open session (another session's frames are buffered by rpc.notify.event
+       and replayed by restoreTurn, with `cur` restored first), so the current
+       key is the owning key on both paths. */
+    DAGS.set(sheetSession(), {
+      run_id: p.run_id,
+      session: sheetSession(),
+      order: (p.nodes || []).map((n) => n.id),
+      nodes: new Map((p.nodes || []).map((n) => [n.id, {
+        id: n.id, subagent: n.subagent, instance: n.instance || null,
+        depends_on: n.depends_on || [], status: 'pending', started_at: null, ended_at: null,
+      }])),
+      summary: null, done: false, folded: false,
+    });
+    drawDag();
+  } else if (ev.type === 'dag.node_updated') {
+    dagFlowFeed(ev.type, p);
+    const d = dagFor();
+    if (d && d.run_id === p.run_id) {
+      const n = d.nodes.get(p.node);
+      if (n) {
+        n.status = p.status;
+        n.started_at = p.started_at || n.started_at;
+        n.ended_at = p.ended_at || n.ended_at;
+        dagTouch(d);
+      }
+    }
+  } else if (ev.type === 'dag.run_completed') {
+    dagFlowFeed(ev.type, p);
+    const d = dagFor();
+    if (d && d.run_id === p.run_id) {
+      /* Each file's status is the run's own last word on that node: a node the
+         registry never got an update for (a run interrupted mid-flight) would
+         otherwise sit at `running` forever. */
+      (p.files || []).forEach((f) => {
+        const n = d.nodes.get(f.node);
+        if (n) { n.status = f.status; n.ended_at = n.ended_at || Date.now(); }
+      });
+      d.summary = p.summary || null;
+      d.dir = p.dir || null;
+      d.done = true;
+      d.folded = true;
+      dagTouch(d);
+    }
   }
 }
 
@@ -540,6 +713,9 @@ function finishTurn(usage) {
   /* Final answer gets the answer block (copy / retry actions); the streamed
      step prose is replaced by it so the text does not appear twice. */
   if (live.st && live.say.trim()) {
+    /* Read before the step can be removed: the answer belongs where the prose
+       was streaming, not at the bottom of whatever arrived since. */
+    const anchor = live.st.step.nextSibling;
     live.st.say.innerHTML = '';
     live.st.hasSay = false;
     if (!live.st.hasThink && !live.st.calls.length) {
@@ -548,7 +724,7 @@ function finishTurn(usage) {
     }
     /* The footer carries when the answer landed; how long it took is on the
        turn's fold header. */
-    const body = answerBlock(live.say, stamp(Date.now()));
+    const body = answerBlock(live.say, stamp(Date.now()), anchor);
     body.innerHTML = md(live.say);
   }
   foldSilentRuns(live.steps);
@@ -588,18 +764,31 @@ function titleFromFirstMessage(text) {
   rpc.call('session.title', { session_id: s.id, title: t }).catch(() => {});
 }
 
+/* A refused persist must not stay quiet. The row moves optimistically, but a
+   pin the server never accepted looks identical to one it did until the page
+   is reloaded and the group is simply gone -- which is exactly how an older
+   resident gateway, with no session.pin to call at all, presents itself. Put
+   the row back and say so. */
+pinPersist = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
+  .catch((e) => {
+    const s = sess(id);
+    if (s) { s.pin = !pinned; drawList(); }
+    toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+  });
+
 async function refreshList() {
   try {
     const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
     const rows = (r.sessions || []).map(rowFrom);
     const curRow = sess(cur);
     if (curRow && !rows.find((x) => x.id === cur)) rows.unshift(curRow);
-    // Client-side row state survives the reload: pins, and the running dot
-    // set by cron.started (cleared by cron.finished, not by a list refresh).
+    // Pins come back from the server now (session metadata), so a refresh must
+    // NOT overlay the old in-memory flag: that would resurrect an unpin. The
+    // running dot is still client state -- set by cron.started, cleared by
+    // cron.finished, not by a list refresh.
     SESS.forEach((old) => {
       const nx = rows.find((x) => x.id === old.id);
       if (!nx) return;
-      if (old.pin) nx.pin = true;
       if (old.status) nx.status = old.status;
     });
     SESS = rows;
@@ -625,6 +814,9 @@ const PARK_EVENT_CAP = 4000;
    parked-restore branch would immediately hand it back as the new
    session's content (the "switching still shows the old session" bug). */
 let turnOwner = null;
+/* The message a retry would re-send. Held here rather than read back off the
+   last `.ask` bubble, which is markup and may belong to another session. */
+let lastAsk = '';
 
 function parkTurn() {
   if (!turnOwner || !busy) return;
@@ -636,6 +828,11 @@ function parkTurn() {
     turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
       sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
     busy, use, tl, raw, lastRun, q,
+    /* The live clock's anchor. It is module state in base.html, and the away
+       session's idle drawTurnLive zeroes it -- without carrying it here, a
+       turn ten minutes in read "2s" after a round trip through another
+       session. */
+    liveT0,
     ws: { changes: WS.changes, cmds: WS.cmds, urls: WS.urls, file: WS.file, turn: WS.turn, unseen: WS.unseen },
     wsTab, wsPicked,
     events: [], overflow: false,
@@ -649,6 +846,9 @@ function restoreTurn(pk) {
   pk.nodes.forEach((n) => stage.appendChild(n));
   Object.assign(live, pk.turn);
   busy = pk.busy; use = pk.use; tl = pk.tl; raw = pk.raw; lastRun = pk.lastRun; q = pk.q;
+  /* Before drawMeter below: its drawTurnLive keeps a non-zero anchor, so the
+     clock resumes from the turn's real start rather than from the switch. */
+  liveT0 = pk.liveT0 || 0;
   Object.assign(WS, pk.ws);
   wsTab = pk.wsTab; wsPicked = pk.wsPicked;
   const s = sess(cur);
@@ -673,8 +873,10 @@ rpc.notify.event = (params) => {
     const s = sess(sid);
     // This branch only ever runs for a session the reader is NOT looking at
     // (a parked turn), so a clean finish is news: hold the row on 'done'
-    // until they open it. openSession is what clears it.
-    if (s) { s.status = ev.type === 'error' ? 'err' : 'done'; touchSession(sid); }
+    // until they open it. openSession is what clears it. A cancel is a stop
+    // somebody chose, not a failure -- no red dot for doing what was asked.
+    const cancelled = ev.type === 'error' && (ev.payload || {}).reason === 'cancelled_by_client';
+    if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(sid); }
   }
 };
 
@@ -690,7 +892,12 @@ rpc.notify['confirm.request'] = (p) => {
 const SKIP_ANSWER = () => T('gui.clarify.skipped_msg');
 
 rpc.notify['clarify.request'] = (p) => {
-  document.querySelectorAll('.csheet').forEach((n) => n.remove());
+  /* The server names the conversation it is asking on behalf of, which is not
+     always the one on screen: a question can arrive for a turn the reader
+     stepped away from. Its own answer beats "wherever the reader happens to
+     be", and the fallback is only for a frame that predates the field. */
+  const owner = p.conversation_id || sheetSession();
+  sheetDropClass('csheet', owner);
   const sheet = mk('div', 'csheet');
   sheet.setAttribute('role', 'dialog');
   sheet.setAttribute('aria-label', T('gui.clarify.aria'));
@@ -768,7 +975,9 @@ rpc.notify['clarify.request'] = (p) => {
 
   // Number keys pick an option while focus is outside the input.
   const onKey = (e) => {
-    if (document.activeElement === inp || composing(e)) return;
+    // Parked with another conversation, this sheet is still on the document's
+    // keydown; only the mounted one may be answered by number.
+    if (!sheet.isConnected || document.activeElement === inp || composing(e)) return;
     const n = Number(e.key);
     if (n >= 1 && n <= choices.length) { e.preventDefault(); done(choices[n - 1]); }
     if (n === choices.length + 1) { e.preventDefault(); setFold(false); inp.focus(); }
@@ -784,14 +993,14 @@ rpc.notify['clarify.request'] = (p) => {
   function cleanup() {
     document.removeEventListener('keydown', onKey, true);
     if (ro) ro.disconnect();
-    sheet.remove();
-    dockLift();
+    sheetRemove(sheet);
   }
 
-  ($('#ta').closest('.dock-in') || document.body).appendChild(sheet);
-  dockLift();
+  sheetAdd(sheet, owner);
   if (ro) ro.observe(sheet);
-  inp.focus();
+  // Only when the question is the one on screen: focusing a field inside a
+  // detached element steals the caret out of the composer the reader is using.
+  if (sheet.isConnected) inp.focus();
 };
 
 /* ---- overrides ----------------------------------------------------- */
@@ -859,6 +1068,7 @@ function startDraft() {
   parkDraft(); loadDraft('new');
   resetView();
   draft = true; cur = null;
+  sheetsSync();
   $('#title').textContent = T('gui.new_task');
   pitch(); drawList(); ta.focus();
 }
@@ -869,6 +1079,11 @@ openSession = async function (s) {
   // may still be streaming, and a stale live.subId would paint its events
   // into the newly opened stage. Route them to the parked buffer instead.
   live.subId = null;
+  /* Twice, deliberately. The rail sets `cur` before calling this, so syncing
+     here takes the last conversation's sheets down at once rather than leaving
+     them over the composer for as long as session.resume takes; the sync below
+     is the one that runs when `cur` was not settled yet (the reconnect path). */
+  sheetsSync();
   parkDraft(); loadDraft(s.id);
   draft = false;
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
@@ -890,6 +1105,10 @@ openSession = async function (s) {
   if (pk) {
     parkedTurns.delete(s.id);
     cur = s.id;
+    // With `cur` settled: hand this conversation back the sheets it was raised
+    // with, and take away the ones the last conversation was still holding.
+    sheetsSync();
+    drawDag();
     live.subId = subBySession[s.id] || null;
     restoreTurn(pk);
     if (!live.subId) await subscribe(s.id);
@@ -899,6 +1118,8 @@ openSession = async function (s) {
     const r = await rpc.call('session.resume', { session_id: s.id, session_key: s.id });
     if (r.session_id && r.session_id !== s.id) { s.id = r.session_id; if (cur !== s.id) cur = s.id; }
     cur = s.id;
+    sheetsSync();
+    drawDag();
     /* resume hands back the canonical id, so the row rendered from the listed
        id no longer matches `cur` -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
@@ -945,6 +1166,9 @@ send = function (text) {
   }
   if (busy) { q.push(text); drawQ(); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
+  /* What a retry re-sends. Recorded after the attachment note is folded in, so
+     the second attempt carries the same message as the first. */
+  lastAsk = text;
   ask(text);
   busy = true; use = null; tl = []; raw = [];
   resetTurnState();
@@ -952,7 +1176,8 @@ send = function (text) {
   const failed = (e) => {
     killStatus();
     busy = false;
-    errLine(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)));
+    errLine(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)),
+      () => send(text));
     goState(); drawMeter();
   };
   if (!draft) {
@@ -979,14 +1204,46 @@ send = function (text) {
   })().catch(failed);
 };
 
-halt = function () {
-  rpc.call('turn.cancel', { session_key: cur }).catch(() => {});
+/* A stop is not a failure: everything already streamed stays on the stage, and
+   the only new line is the note that a person asked for the stop. Shared by
+   the button and by the cancelled event another client can cause. */
+function softStop() {
   killStatus();
+  stopSayPaint();
+  if (live.st) live.st.seal();
+  collapseTurn(turnDur());
   stop_(); busy = false;
   const r = mk('div', 'act in');
   r.append(mk('span', 'g'), mk('span', 'arg', T('gui.halted')));
   $('#stage').appendChild(r);
+  resetTurnState();
   drawMeter(); goState(); drawList(); down();
+}
+
+/* Queued messages were waiting for the engine, and a stop is the engine coming
+   free -- so the queue drains into it, same as after a finished turn. */
+function drainQueue() {
+  if (busy || !q.length) return;
+  const nx = q.shift();
+  drawQ();
+  send(nx);
+}
+
+/* True between our own turn.cancel and its response. The cancelled EVENT is
+   emitted mid-cancel, before the server has fully unwound the turn -- a drain
+   fired off the event raced the dying turn into a -32003 refusal (observed).
+   Our own cancel drains off the response instead, which the server sends only
+   after the turn is provably gone; the event-side drain stays for a cancel
+   made by another client on the same session. */
+let cancelInFlight = false;
+
+halt = function () {
+  const owner = cur;
+  cancelInFlight = true;
+  rpc.call('turn.cancel', { session_key: cur })
+    .then(() => { cancelInFlight = false; if (cur === owner) drainQueue(); },
+      () => { cancelInFlight = false; });
+  softStop();
 };
 
 removeSession = function (s) {
@@ -995,6 +1252,10 @@ removeSession = function (s) {
       await rpc.call('session.delete', { session_id: s.id });
       dropDraft(s.id);
       parkedTurns.delete(s.id);
+      // A deleted conversation's pending question has nothing left to answer,
+      // and its graph nothing left to describe.
+      sheetsForget(s.id);
+      DAGS.delete(s.id);
       SESS = SESS.filter((x) => x.id !== s.id);
       if (cur === s.id && SESS[0]) { cur = SESS[0].id; openSession(SESS[0]); }
       drawList();
@@ -1064,7 +1325,15 @@ function mkToolRow(t) {
   const id = t.name;
   const o = { id, name: toolLabel(id), group: TOOL_GROUP_OF(id),
     reach: TOOL_GROUP_OF(id) === 'net' ? 'net' : 'local',
-    danger: TOOL_DANGER.has(id), one: t.description || '' };
+    danger: TOOL_DANGER.has(id), one: t.description || '',
+    /* Present but withheld for want of a key. The row exists so the reader
+       learns the tool exists and what it wants -- before this, a key-gated
+       tool was simply absent, which reads as removed. */
+    needs: t.needs || null };
+  if (t.needs) {
+    o.on = false;
+    return o;
+  }
   Object.defineProperty(o, 'on', {
     get: () => !disabledToolsLive.includes(id),
     set: (v) => {
@@ -1191,8 +1460,6 @@ openCron = async function () {
   try { await loadCrons(); cronLoaded = true; } catch (e) { toast(`加载失败：${e.message || e}`); }
   drawCron(); drawCronBdg();
 };
-$('#cronBtn').onclick = openCron;
-
 const reloadCronPage = () => loadCrons().then(() => { drawCron(); drawCronBdg(); }).catch(() => {});
 
 runNow = function (j) {
@@ -1341,8 +1608,15 @@ async function loadChannels() {
   CHANNELS.forEach((c) => {
     const s = byName[c.id];
     if (!s) return;
-    c.who = s.enabled ? (s.configured ? T('gui.conn.connected_ok') : T('gui.conn.missing', { fields: s.missing.join(', ') }))
-      : s.configured ? '' : T('gui.conn.unconfigured', { fields: s.missing.join(', ') });
+    /* No prose state line: the LED and the switch say on/off, and a missing
+       credential says 未配置 through c.missing. `who` is reserved for a real
+       identity (the account the channel signs in as), which no backend
+       supplies yet -- so live rows keep their sub line empty. */
+    c.who = '';
+    /* The schema-declared field list rides the status row; the page's
+       configure form is drawn from it, so the form and the config can't drift. */
+    c.fields = s.fields || [];
+    c.missing = s.missing || [];
     c._on = s.enabled;
     if (!c._live) {
       c._live = true;
@@ -1361,6 +1635,23 @@ async function loadChannels() {
 }
 let gatewayRunningLive = false;
 
+/* Credentials and the switch travel together, and the server applies them in
+   that order, so a channel is never on without the values it was turned on
+   for. `enable` used to be a local `c.on = true` that `loadChannels()` then
+   overwrote from the server -- which made connect a no-op that looked like it
+   worked, and disconnect a no-op with nothing to show for it at all. */
+connApply = async (c, patch, enable) => {
+  try {
+    const fields = patch && Object.keys(patch).length ? patch : {};
+    await rpc.call('channels.configure', { name: c.id, fields, enabled: !!enable });
+    if (Object.keys(fields).length) toast(T('gui.conn.saved_x', { name: chanName(c) }));
+    await loadChannels();
+  } catch (e) {
+    toast(`保存失败：${(e.data && e.data.detail) || e.message || e}`);
+  }
+  drawConn();
+};
+
 let chanLoaded = false;
 openConn = async function () {
   showPage('connPage');
@@ -1372,7 +1663,6 @@ openConn = async function () {
     toast('已启用的入口还没在收消息 — 重新打开 Raven App 即可生效');
   }
 };
-$('#connBtn').onclick = openConn;
 
 /* -- settings --------------------------------------------------------- */
 /* No standing notice banners: a config gap belongs in the settings page, not
@@ -1537,7 +1827,7 @@ applyLang = async function (next, { persist } = {}) {
    the markup. Cheap enough to run wholesale on a language flip. */
 function redrawAll() {
   drawList();
-  drawAcct();
+  drawFoot();
   drawCapsBadge();
   setModelLabel();
   drawPerm();
@@ -1925,7 +2215,9 @@ checkUpdate = async (btn) => {
   const was = btn.textContent;
   btn.textContent = T('gui.set.checking'); btn.disabled = true;
   try {
-    const v = await rpc.call('system.version', {});
+    /* check:true = fetch now, not the daily cache: the button says 检查更新,
+       and a person who just clicked it is asking about now. */
+    const v = await rpc.call('system.version', { check: true });
     if (v.raven_version) APP_VERSION = v.raven_version;
     if (v.update_available) {
       showUpNote('ver', v.latest_version);
@@ -2485,6 +2777,33 @@ let pmDrawer = null;        // { kind: 'market'|'inst', id } while the drawer sh
 let pmForm = false;         // drawer: apikey form unfolded
 let pmConfirm = false;      // drawer: stdio run-locally confirm unfolded
 const pmAuthWait = Object.create(null);  // server -> auth url while the browser round-trip is pending
+const pmAuthEnd = Object.create(null);   // server -> epoch ms the authorization window closes at
+let pmAuthClock = null;
+
+const pmAuthLeft = (id) => {
+  const end = pmAuthEnd[id];
+  if (!end) return '';
+  const s = Math.max(0, Math.round((end - Date.now()) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
+/* Writes the remaining time into whatever is showing it, rather than redrawing
+   the panel once a second: a countdown that rebuilds its own surroundings would
+   drop the focus and the scroll of a reader who is mid-decision. */
+function pmAuthTick(on) {
+  if (on && !pmAuthClock) {
+    pmAuthClock = setInterval(() => {
+      const live = Object.keys(pmAuthEnd);
+      if (!live.length) { pmAuthTick(false); return; }
+      document.querySelectorAll('[data-authcd]').forEach((el) => {
+        el.textContent = pmAuthLeft(el.dataset.authcd);
+      });
+    }, 1000);
+  } else if (!on && pmAuthClock && !Object.keys(pmAuthEnd).length) {
+    clearInterval(pmAuthClock);
+    pmAuthClock = null;
+  }
+}
 /* Installs whose authentication hasn't been proven yet. An auth plugin only
    counts as installed once its connection authenticates: while an id is in
    here the entry stays out of every "installed" surface, and the pending
@@ -2676,8 +2995,15 @@ function pmProgRender(body) {
     body.appendChild(mk('div', 'pnote', T('gui.plug.auth_fail_rm', { name: pg.name })));
     if (pg.err) body.appendChild(mk('div', 'perr', pg.err));
   } else if (authPhase) {
-    body.appendChild(mk('div', 'pnote',
-      T(pmAuthWait[pg.id] ? 'gui.plug.prog_auth_hint' : 'gui.plug.prog_auth_soon', { host: pg.host })));
+    const note = mk('div', 'pnote',
+      T(pmAuthWait[pg.id] ? 'gui.plug.prog_auth_hint' : 'gui.plug.prog_auth_soon', { host: pg.host }));
+    if (pmAuthEnd[pg.id]) {
+      note.append(' ', mk('span', 'pcd', T('gui.plug.auth_left') + ' '));
+      const cd = mk('span', 'pcd b', pmAuthLeft(pg.id));
+      cd.dataset.authcd = pg.id;
+      note.lastChild.appendChild(cd);
+    }
+    body.appendChild(note);
   } else if (pg.mode === 'oauth') {
     body.appendChild(mk('div', 'pnote', T('gui.plug.prog_auth_soon', { host: pg.host })));
   }
@@ -2774,13 +3100,16 @@ function pmArm(btn, fn) {
 
 /* A pending install failed authentication: the plugin never counted as
    installed, so undo the disk transaction and put the market card back. */
-function pmPendingFail(name) {
+function pmPendingFail(name, why) {
   if (!pmPending.has(name)) return;
   pmPending.delete(name);
   delete pmAuthWait[name];
   const it = pmItems.find((x) => x.id === name);
   if (it) it.installed = false;
-  if (pmProg && pmProg.id === name) pmProgFail('');
+  /* The cause travels with the failure. A rollback that only says "removed"
+     reads as raven losing the plugin; "the authorization window closed" tells
+     the reader what to do differently on the retry. */
+  if (pmProg && pmProg.id === name) pmProgFail(why || '');
   if (!pmProgShows(name)) toast(T('gui.plug.auth_fail_rm', { name: it ? it.name : name }));
   rpc.call('plug.remove', { name }).then(loadExt).catch(() => {}).then(pmRedraw);
 }
@@ -2816,6 +3145,13 @@ function pmAuth(name) {
 
 /* ── events from the gateway ─────────────────────────────────────── */
 
+/* The gateway announces a newer build the moment its periodic check finds one,
+   so a tab that has been open for days hears about it without a reload. Same
+   banner as the boot-time system.version path. */
+rpc.notify['system.update_available'] = (p) => {
+  if (p && p.latest_version) showUpNote('ver', p.latest_version);
+};
+
 let pmExtSoon = null;
 rpc.notify['mcp.status'] = (p) => {
   // A settled status for the busy server means nothing is processing any
@@ -2839,7 +3175,7 @@ rpc.notify['mcp.status'] = (p) => {
     } else if ((p.state === 'auth_required' || p.state === 'error') && !inFlight) {
       // While the install RPC is in flight the backend rolls back itself
       // and the call rejects; acting here too would remove twice.
-      pmPendingFail(p.name);
+      pmPendingFail(p.name, p.error || '');
       return;
     }
   }
@@ -2855,25 +3191,49 @@ rpc.notify['mcp.status'] = (p) => {
   pmRedraw();
 };
 
+/* Long-term memory stopped writing, or started again. Broadcast like the other
+   per-server events, because a backend that cannot store is not part of any one
+   conversation's turn. */
+rpc.notify['memory.health'] = (p) => {
+  memFault = p && p.ok === false ? (p.error || T('gui.mem.down')) : null;
+  drawBanner();
+};
+
 rpc.notify['oauth.pending'] = (p) => {
   pmAuthWait[p.server] = p.url;
+  /* The window has an end, so the page shows one. Without it the sheet sits on
+     "waiting for authorization" with nothing to distinguish a flow still worth
+     finishing from one that expired minutes ago -- and the reader only learns
+     which it was when the install disappears. */
+  if (p.expires_in) pmAuthEnd[p.server] = Date.now() + Number(p.expires_in) * 1000;
+  pmAuthTick(true);
   if (pmProg && pmProg.id === p.server) pmProgStep(2);
-  if (!pmProgShows(p.server)) toast(T('gui.plug.auth_opened', { host: pmHost(p.url) }));
+  /* A background connect found this server unauthorized; nobody asked for it,
+     and the host deliberately did not open a browser. Say so where the reader
+     can act on it, rather than reporting a page that never opened. The rows
+     already grow a "reopen" button off pmAuthWait, which is now the way in. */
+  if (!pmProgShows(p.server)) {
+    toast(T(p.interactive === false ? 'gui.plug.auth_needed' : 'gui.plug.auth_opened',
+      { host: pmHost(p.url), name: p.server }));
+  }
   pmRedraw();
 };
 
 rpc.notify['oauth.done'] = (p) => {
   delete pmAuthWait[p.server];
+  delete pmAuthEnd[p.server];
+  pmAuthTick(false);
   if (p.ok && pmProg && pmProg.id === p.server) pmProgStep(3);
   if (!p.ok) {
+    const why = p.error === 'timeout' ? T('gui.plug.auth_expired') : (p.error || '');
     // A failed authorization on a pending install rolls the install back;
     // on an already-installed server (re-auth) it just reports. While the
     // install RPC is in flight the backend rolls back itself.
     if (pmPending.has(p.server)) {
-      if (pmBusy !== p.server) pmPendingFail(p.server);
+      if (pmBusy !== p.server) pmPendingFail(p.server, why);
       return;
     }
-    toast(T('gui.plug.auth_fail', { name: p.server }));
+    toast(why || T('gui.plug.auth_fail', { name: p.server }));
   }
   pmRedraw();
 };
@@ -3859,6 +4219,36 @@ wsPathOf = (s) => {
 };
 pathOpen = (rel) => showFile(rel);
 
+/* An explicit markdown link is the author handing something over, so the live
+   resolver is broader than the bare-span one above: absolute paths, ~ paths
+   and workspace-relative shapes all count, extension decides file-or-folder.
+   file:// is stripped rather than rejected -- models write it out of habit. */
+linkTargetOf = (u) => {
+  let t = String(u).trim().replace(/^file:\/\//, '');
+  if (!t || /\s|[<>"']/.test(t)) return null;
+  const dirMark = /\/$/.test(t);
+  t = t.replace(/\/+$/, '');
+  if (!/\//.test(t)) return null;
+  /* Segments take any non-separator character: deliverables are routinely
+     named in the user's language (HANDOFF-开发交接.md), and \w-only segments
+     silently dropped every one of those back to plain text. */
+  const shaped = /^(?:\/|~\/)/.test(t) || /^[^\s/\\]+(?:\/[^\s/\\]+)+$/.test(t);
+  if (!shaped) return null;
+  return { p: t, dir: dirMark || !/\.\w{1,8}$/.test(t) };
+};
+
+/* Open a folder where folders live: the file tab's tree, unfolded down to it.
+   The root listing is fetched first because tree entries are root-relative and
+   the root is only learned from fs.list's answer. */
+dirOpen = (p) => {
+  wsPicked = true;
+  if (!wsOpen) setWs(true, 'file'); else { wsTab = 'file'; drawWs(); }
+  ftFetch('').then(() => {
+    const rel = relToRoot(p);
+    ftReveal(rel != null ? rel : String(p).replace(/^\/+/, ''), true);
+  }).catch(() => {});
+};
+
 /* The viewer reads over HTTP rather than through fs.read: an image or a PDF
    needs a URL a tag can point at, and the endpoint resolves exactly what the
    agent may read, so a file outside the workspace opens too. */
@@ -3879,10 +4269,12 @@ function fileKind(p) {
   if (ext === 'pdf') return 'pdf';
   if (ext === 'html' || ext === 'htm') return 'html';
   if (ext === 'csv' || ext === 'tsv') return 'csv';
+  if (ext === 'json') return 'json';
+  if (ext === 'diff' || ext === 'patch') return 'diff';
   if (TEXT_EXT.has(ext)) return 'code';
   return 'bin';
 }
-const RENDERED = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1 };
+const RENDERED = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1 };
 
 async function showFile(p) {
   const kind = fileKind(p);
@@ -3980,14 +4372,94 @@ function fileBody(f) {
     v.appendChild(csvTable(f.text, /\.tsv$/i.test(f.path)));
     return v;
   }
+  if (f.kind === 'json' && !asSource) {
+    const tree = jsonTree(f.text);
+    /* A file that does not parse is still a file: fall through to the plain
+       numbered lines rather than showing an error for something readable. */
+    if (tree) { v.appendChild(tree); return v; }
+  }
   const code = mk('div', 'code');
   f.text.split('\n').forEach((line, i) => {
-    const row = mk('div', 'ln');
+    const row = mk('div', 'ln' + (f.kind === 'diff' ? diffLineCls(line) : ''));
     row.append(mk('i', null, String(i + 1)), mk('span', null, line || ' '));
     code.appendChild(row);
   });
   v.appendChild(code);
   return v;
+}
+
+/* A patch is one of the few formats whose lines carry their meaning in the
+   first character; without colour it reads as noise with plus signs. */
+function diffLineCls(line) {
+  if (/^(\+\+\+|---)/.test(line)) return ' dmeta';
+  if (line[0] === '+') return ' dadd';
+  if (line[0] === '-') return ' ddel';
+  if (line.startsWith('@@')) return ' dhunk';
+  if (/^(diff |index |new file|deleted file|similarity |rename |Binary )/.test(line)) return ' dmeta';
+  return '';
+}
+
+/* ── json: a foldable tree ────────────────────────────────────────────
+   Native <details> does the folding, so there is no open-state to manage and
+   the keyboard works for free. A node budget keeps a machine-dumped megabyte
+   from freezing the tab: past it, the rest of a container is summarised and
+   the source toggle is the way to read that far. */
+const JSON_NODE_BUDGET = 4000;
+
+function jsonTree(text) {
+  if (text.length > 2 * 1024 * 1024) return null;
+  let val;
+  try { val = JSON.parse(text); } catch { return null; }
+  const box = mk('div', 'jsonv');
+  const state = { left: JSON_NODE_BUDGET };
+  box.appendChild(jsonNode(val, null, state, 0));
+  return box;
+}
+
+const jsonLeaf = (v) => {
+  const s = mk('span', 'jv ' + (v === null ? 'jnull' : typeof v === 'string' ? 'jstr'
+    : typeof v === 'number' ? 'jnum' : 'jbool'));
+  s.textContent = v === null ? 'null' : typeof v === 'string' ? JSON.stringify(v) : String(v);
+  return s;
+};
+
+function jsonNode(v, key, state, depth) {
+  state.left -= 1;
+  const keySpan = () => {
+    const k = mk('span', 'jk');
+    k.textContent = typeof key === 'number' ? String(key) : JSON.stringify(key);
+    return k;
+  };
+  if (v === null || typeof v !== 'object') {
+    const row = mk('div', 'jrow');
+    if (key !== null) { row.appendChild(keySpan()); row.appendChild(mk('span', 'jc', ':')); }
+    row.appendChild(jsonLeaf(v));
+    return row;
+  }
+  const isArr = Array.isArray(v);
+  const entries = isArr ? v.map((x, i) => [i, x]) : Object.entries(v);
+  const d = document.createElement('details');
+  d.className = 'jnode';
+  /* The first two levels open by default: that is the shape of the file. Below
+     that the reader opens what they are looking for. */
+  if (depth < 2) d.open = true;
+  const sum = document.createElement('summary');
+  if (key !== null) { sum.appendChild(keySpan()); sum.appendChild(mk('span', 'jc', ':')); }
+  sum.appendChild(mk('span', 'jb', isArr ? '[' : '{'));
+  sum.appendChild(mk('span', 'jn', T('gui.ws.json_items', { n: String(entries.length) })));
+  sum.appendChild(mk('span', 'jb', isArr ? ']' : '}'));
+  d.appendChild(sum);
+  const kids = mk('div', 'jkids');
+  for (const [k, child] of entries) {
+    if (state.left <= 0) {
+      kids.appendChild(mk('div', 'jrow jmore', T('gui.ws.json_capped')));
+      break;
+    }
+    kids.appendChild(jsonNode(child, k, state, depth + 1));
+  }
+  if (!entries.length) kids.appendChild(mk('div', 'jrow jmore', isArr ? '[]' : '{}'));
+  d.appendChild(kids);
+  return d;
 }
 
 /* ── file tree ────────────────────────────────────────────────────────
@@ -3996,7 +4468,7 @@ function fileBody(f) {
    Listings are fetched per folder on first open and kept -- fs.list is a round
    trip, and a tree that re-fetched on every keystroke would flicker. */
 const FT = { open: new Set(['']), kids: new Map(), q: '', w: 208, hide: false,
-  list: null, run: 0, crawling: false, capped: false };
+  list: null, run: 0, crawling: false, capped: false, root: '' };
 const FTW_KEY = 'raven.gui.ftw';
 try { FT.w = Math.max(150, Math.min(460, parseFloat(localStorage.getItem(FTW_KEY)) || FT.w)); } catch {}
 
@@ -4005,7 +4477,16 @@ try { FT.w = Math.max(150, Math.min(460, parseFloat(localStorage.getItem(FTW_KEY
 function ftReset() {
   FT.open = new Set(['']); FT.kids.clear();
   FT.q = ''; FT.run += 1; FT.crawling = false; FT.capped = false;
+  FT.root = '';
 }
+
+/* Tree entries are root-relative; the viewer and the reveal RPC take real
+   paths, so the join happens at the moment a row leaves the tree. */
+const ftAbs = (full) => (FT.root ? `${FT.root}/${full}` : full);
+const relToRoot = (p) => {
+  const s = String(p || '');
+  return FT.root && s.startsWith(FT.root + '/') ? s.slice(FT.root.length + 1) : null;
+};
 
 /* A different session is a different workspace state: keep no listing that was
    read before the switch. */
@@ -4019,8 +4500,11 @@ const ftPending = new Map();
 function ftFetch(dir) {
   if (FT.kids.has(dir)) return Promise.resolve(FT.kids.get(dir));
   if (ftPending.has(dir)) return ftPending.get(dir);
-  const p = rpc.call('fs.list', { path: dir })
+  const p = rpc.call('fs.list', { path: dir, session: cur || '' })
     .then((r) => {
+      /* The root rides on every answer: it is the session's working directory,
+         which the server resolves and this side has no way to guess. */
+      if (r.root) FT.root = r.root;
       /* Directories first, each group alphabetical -- the order every file
          manager has trained people to expect. */
       const kids = [...r.entries].sort((a, b) =>
@@ -4189,12 +4673,12 @@ function ftResults(box) {
     row.onclick = () => {
       if (e.dir) { ftReveal(full, true); return; }
       ftOpenTo(full);
-      showFile(full);
+      showFile(ftAbs(full));
     };
-    ctxMenu(row, () => (e.dir ? [] : [{ label: T('gui.ws.open'), fn: () => { ftOpenTo(full); showFile(full); } }])
+    ctxMenu(row, () => (e.dir ? [] : [{ label: T('gui.ws.open'), fn: () => { ftOpenTo(full); showFile(ftAbs(full)); } }])
       .concat([
         { label: T('gui.ws.reveal'), fn: () => ftReveal(full, e.dir) },
-        { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(full, T('gui.ws.copy_path')) },
+        { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(ftAbs(full), T('gui.ws.copy_path')) },
         { label: T('gui.ws.copy_name'), fn: () => copyToClip(e.name, T('gui.ws.copied_name')) },
       ]));
     box.appendChild(row);
@@ -4219,7 +4703,7 @@ function ftRows(box, dir, depth) {
   kids.forEach((e) => {
     const full = ftJoin(dir, e.name);
     const open = e.dir && FT.open.has(full);
-    const row = mk('button', 'ftrow' + (!e.dir && WS.file && WS.file.path === full ? ' on' : ''));
+    const row = mk('button', 'ftrow' + (!e.dir && WS.file && WS.file.path === ftAbs(full) ? ' on' : ''));
     row.dataset.p = full;
     row.style.paddingLeft = (10 + depth * 13) + 'px';
     if (depth) {
@@ -4245,12 +4729,12 @@ function ftRows(box, dir, depth) {
       if (FT.open.has(full)) FT.open.delete(full); else { FT.open.add(full); ftLoad(full); }
       ftDraw();
     };
-    row.onclick = () => { if (e.dir) flip(); else showFile(full); };
+    row.onclick = () => { if (e.dir) flip(); else showFile(ftAbs(full)); };
     ctxMenu(row, () => (e.dir
       ? [{ label: T(open ? 'gui.ws.dir_collapse' : 'gui.ws.dir_expand'), fn: flip }]
-      : [{ label: T('gui.ws.open'), fn: () => showFile(full) }]
+      : [{ label: T('gui.ws.open'), fn: () => showFile(ftAbs(full)) }]
     ).concat([
-      { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(full, T('gui.ws.copy_path')) },
+      { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(ftAbs(full), T('gui.ws.copy_path')) },
       { label: T('gui.ws.copy_name'), fn: () => copyToClip(e.name, T('gui.ws.copied_name')) },
     ]));
     box.appendChild(row);
@@ -4393,10 +4877,10 @@ drawWsFile = function (box) {
   /* One bar across the whole view, and the folder in it is what opens and shuts
      the tree -- the control belongs next to the path it is about. */
   const bar = mk('div', 'fbar');
-  const tog = mk('button', 'ghost-ic ftog');
+  const tog = mk('button', 'ghost-ic ftog tipdn');
   tog.innerHTML = FT_ICO.folder;
-  tog.title = T(FT.hide ? 'gui.ws.tree_show' : 'gui.ws.tree_hide');
-  tog.setAttribute('aria-label', tog.title);
+  tog.dataset.tip = T(FT.hide ? 'gui.ws.tree_show' : 'gui.ws.tree_hide');
+  tog.setAttribute('aria-label', tog.dataset.tip);
   tog.setAttribute('aria-pressed', String(!FT.hide));
   tog.onclick = () => { FT.hide = !FT.hide; drawWs(); };
   bar.appendChild(tog);
@@ -4404,12 +4888,22 @@ drawWsFile = function (box) {
     const nm = fbarPath(f.path);
     ctxMenu(nm, () => [
       { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(f.path, T('gui.ws.copy_path')) },
-      { label: T('gui.ws.reveal'), fn: () => ftReveal(relToWorkspace(f.path) || f.path, false) },
+      { label: T('gui.ws.reveal'), fn: () => ftReveal(relToRoot(f.path) || relToWorkspace(f.path) || f.path, false) },
     ]);
     bar.appendChild(nm);
+    /* Copy rides right behind the path it copies -- an icon at the far end of
+       the bar read as a generic control for the whole view, not for this line. */
+    const cp = mk('button', 'ghost-ic fcopy tipdn');
+    cp.appendChild(ico(ICO.doc));
+    cp.dataset.tip = T('gui.ws.copy_path_do');
+    cp.setAttribute('aria-label', T('gui.ws.copy_path_do'));
+    cp.onclick = () => navigator.clipboard && navigator.clipboard.writeText(f.path)
+      .then(() => toast(T('gui.ws.copy_path')), () => {});
+    bar.appendChild(cp);
   } else {
     bar.appendChild(mk('span', 'nm', T('gui.ws.file_none')));
   }
+  bar.appendChild(mk('span', 'fsp'));
 
   const row = mk('div', 'frow');
   row.appendChild(ftPane());
@@ -4443,20 +4937,23 @@ drawWsFile = function (box) {
      keeps an artifact off this origin is not negotiable. So the frame stays,
      and this is the way out when the host draws nothing in it. */
   if (f.kind === 'pdf' || f.kind === 'html') {
-    const ext = mk('button', 'ghost-ic');
+    const ext = mk('button', 'ghost-ic tipdn');
     ext.appendChild(ico(ICO.ext));
-    ext.title = T('gui.ws.file_newtab');
+    ext.dataset.tip = T('gui.ws.file_newtab');
     ext.setAttribute('aria-label', T('gui.ws.file_newtab'));
     ext.onclick = () => window.open(fileURL(f.path), '_blank', 'noopener');
     bar.appendChild(ext);
   }
-  const cp = mk('button', 'ghost-ic');
-  cp.appendChild(ico(ICO.doc));
-  cp.title = T('gui.ws.copy_path_do');
-  cp.setAttribute('aria-label', T('gui.ws.copy_path_do'));
-  cp.onclick = () => navigator.clipboard && navigator.clipboard.writeText(f.path)
-    .then(() => toast(T('gui.ws.copy_path')), () => {});
-  bar.appendChild(cp);
+  /* The host-side action lives at the end of the bar: it opens a window on the
+     gateway's own desktop, worded for that machine's file manager. */
+  const rv = mk('button', 'ghost-ic tipdn');
+  rv.appendChild(ico(ICO.reveal));
+  rv.dataset.tip = T(HOST_PLATFORM === 'mac' ? 'gui.ws.reveal_finder'
+    : HOST_PLATFORM === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder');
+  rv.setAttribute('aria-label', rv.dataset.tip);
+  rv.onclick = () => rpc.call('fs.reveal', { path: f.path, session: cur || '' })
+    .then(() => {}, (e) => toast((e && e.message) || String(e)));
+  bar.appendChild(rv);
   /* No close: picking another file replaces this one, and an empty pane is not
      a state anyone asks for. */
   const body = mk('div', 'fbody');
@@ -4468,7 +4965,7 @@ drawWsFile = function (box) {
 };
 
 wsShortPath = function (p) {
-  const rel = relToWorkspace(p);
+  const rel = relToRoot(p) || relToWorkspace(p);
   return rel || String(p).replace(/^\/Users\/[^/]+\//, '~/');
 };
 
@@ -4540,7 +5037,7 @@ function addFiles(fileList) {
       /* Keep the bytes for display only: an image renders as itself in the
          composer, and once uploaded, keyed by path, in the sent bubble. */
       if (/^image\//.test(file.type || '')) entry.url = dataUrl;
-      rpc.call('fs.upload', { name: file.name, content_b64: b64 })
+      rpc.call('fs.upload', { name: file.name, content_b64: b64, session: cur || '' })
         .then((r) => {
           entry.path = r.path; entry.size = r.size; entry.uploading = false;
           if (entry.url) ATT_IMG.set(r.path, entry.url);
@@ -4588,7 +5085,7 @@ function addFiles(fileList) {
 }
 
 /* -- real session actions: branch / clear ---------------------------- */
-answerBlock = function (text, meta) {
+answerBlock = function (text, meta, anchor) {
   const box = mk('div', 'answer in');
   const body = mk('div', 'prose');
   const acts = mk('div', 'acts');
@@ -4612,19 +5109,26 @@ answerBlock = function (text, meta) {
     navigator.clipboard && navigator.clipboard.writeText(text);
     flash(copy, T('gui.answer.copied'));
   });
-  add(T('gui.answer.branch'), '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/>'
-    + '<circle cx="17" cy="8" r="2.2"/><path d="M7 8.2v7.6"/>'
-    + '<path d="M17 10.2v1.3a3.5 3.5 0 0 1-3.5 3.5H10"/>', () => {
-    rpc.call('session.branch', { session_id: cur })
-      .then((r) => {
-        if (!r.session_id) { toast('这个会话还没有内容，无法分叉'); return; }
-        const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
-          last: T('gui.sess.branched'), when: T('gui.sess.just_now'), g: '今天', run: null, live: true };
-        SESS.unshift(s); cur = s.id; drawList(); openSession(s);
-        toast(`已分叉，带上了 ${r.message_count || 0} 条消息`);
-      })
-      .catch((e) => toast(`分叉失败：${e.message || e}`));
-  });
+  /* Branching acts on `cur` -- the OPEN conversation -- so inside a sub-agent
+     transcript (stageHost points the renderer at the panel) the button would
+     fork the parent session while claiming to fork the run. A run has no
+     session to fork; the row shows its clock instead, which the record kept. */
+  const canBranch = !stageHost;
+  if (canBranch) {
+    add(T('gui.answer.branch'), '<circle cx="7" cy="6" r="2.2"/><circle cx="7" cy="18" r="2.2"/>'
+      + '<circle cx="17" cy="8" r="2.2"/><path d="M7 8.2v7.6"/>'
+      + '<path d="M17 10.2v1.3a3.5 3.5 0 0 1-3.5 3.5H10"/>', () => {
+      rpc.call('session.branch', { session_id: cur })
+        .then((r) => {
+          if (!r.session_id) { toast('这个会话还没有内容，无法分叉'); return; }
+          const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
+            last: T('gui.sess.branched'), when: T('gui.sess.just_now'), g: '今天', run: null, live: true };
+          SESS.unshift(s); cur = s.id; drawList(); openSession(s);
+          toast(`已分叉，带上了 ${r.message_count || 0} 条消息`);
+        })
+        .catch((e) => toast(`分叉失败：${e.message || e}`));
+    });
+  }
   // Copy and branch only — the footer stays a quiet two-icon row per the
   // maintainer's explicit call. Undo/regenerate live in session commands.
   const foot = mk('div', 'ansfoot');
@@ -4635,10 +5139,14 @@ answerBlock = function (text, meta) {
      copying a quote is what a selection is for. */
   ctxMenu(box, () => [
     { label: T('gui.answer.copy'), fn: () => copyToClip(text, T('gui.answer.copied')) },
-    { label: T('gui.answer.branch'), fn: () => acts.children[1].click() },
-  ]);
+  ].concat(canBranch ? [{ label: T('gui.answer.branch'), fn: () => acts.children[1].click() }] : []));
   box.append(body, foot);
-  stageBox().appendChild(box);
+  /* `anchor` is where the streamed prose stood. Appending instead was a real
+     reordering: anything that landed mid-turn -- a delegated result's delivery
+     row, a runtime notice -- was drawn at the tail while the text was still
+     streaming, and then the finished answer jumped BELOW it, so the page
+     claimed the result came back before the model said it was dispatching one. */
+  stageBox().insertBefore(box, anchor || null);
   return body;
 };
 
@@ -4692,16 +5200,14 @@ window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
 (async () => {
   if (!(await rpc.connect())) return;
   try {
-    await rpc.call('system.hello', { client_version: '0.1.0' });
+    const hello = await rpc.call('system.hello', { client_version: '0.1.0' });
+    if (hello && hello.platform) HOST_PLATFORM = hello.platform;
     // Before the first paint of anything data-driven: config.language decides
     // what every label below says.
     await loadLang();
     const v = await rpc.call('system.version', {});
     if (v.raven_version) APP_VERSION = v.raven_version;
-    // The foot row and the account panel are one drawing; the build number is
-    // one of the two facts it shows, so it lands by redrawing, not by poking
-    // a span whose meaning depends on the sign-in state.
-    drawAcct();
+    drawFoot();
     /* Absent until system.version carries them; the row simply stays hidden,
        so an older server degrades to no notice rather than a broken one. */
     if (v.update_available) showUpNote('ver', v.latest_version);
@@ -4753,6 +5259,7 @@ window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
       if (r) delete r.dataset.counts;
     });
     watchForUpdates();
+    resumeUpgrade();
   } catch (e) {
     bootFail(e);
   }
@@ -4799,10 +5306,28 @@ function upShade() {
   const title = mk('span', 't');
   hd.append(pip, title);
   const sub = mk('div', 'sub');
-  card.append(hd, sub);
+  const el = mk('div', 'el');
+  el.hidden = true;
+  card.append(hd, sub, el);
   shade.appendChild(card);
   document.body.appendChild(shade);
+  let clockTimer = null;
+  const stopClock = () => { if (clockTimer) { clearInterval(clockTimer); clockTimer = null; } };
   return {
+    /* An install with no visible progress reads as a hang, and this one can
+       run for minutes. A running count is the honest signal available: the
+       helper reports nothing back until it relaunches serve. */
+    clock(t0) {
+      stopClock();
+      el.hidden = false;
+      const paint = () => {
+        const s = Math.max(0, Math.round((Date.now() - t0) / 1000));
+        const mm = Math.floor(s / 60);
+        el.textContent = T('gui.upg.elapsed', { t: `${mm}:${String(s % 60).padStart(2, '0')}` });
+      };
+      paint();
+      clockTimer = setInterval(paint, 1000);
+    },
     say(text, detail) {
       title.textContent = text;
       sub.textContent = detail || '';
@@ -4810,6 +5335,8 @@ function upShade() {
     /* A failure must leave the reader a way forward, so it always ends with the
        command they can run themselves. */
     fail(text, detail) {
+      stopClock();
+      el.hidden = true;
       pip.style.animation = 'none';
       pip.style.background = 'var(--clay)';
       title.textContent = text;
@@ -4828,7 +5355,37 @@ function upShade() {
   };
 }
 
+/* An upgrade outlives the page that started it: serve exits, a detached helper
+   installs, and what comes back is a fresh load. The marker is how any load
+   tells "an upgrade is running" from "no upgrade has been asked for" -- without
+   it, a second click starts a second upgrade against a half-removed install,
+   and the reader is shown the raw failure of a doomed call. */
+const UPG_KEY = 'raven.upgrade';
+const UPG_CEILING_MS = 1200000;
+/* Past this, stop implying it is nearly done and say what is taking so long. */
+const UPG_PATIENCE_MS = 90000;
+
+function upMark(to) {
+  try { localStorage.setItem(UPG_KEY, JSON.stringify({ to: to || null, t0: Date.now() })); } catch { /* private mode */ }
+}
+
+function upMarkRead() {
+  try {
+    const m = JSON.parse(localStorage.getItem(UPG_KEY) || 'null');
+    if (!m || !m.t0 || Date.now() - m.t0 > UPG_CEILING_MS) return null;
+    return m;
+  } catch { return null; }
+}
+
+function upMarkClear() {
+  try { localStorage.removeItem(UPG_KEY); } catch { /* private mode */ }
+}
+
 function askUpgrade() {
+  /* Already running: re-enter the progress dialog rather than offering to
+     start it again. Closing that dialog must not strand the reader. */
+  const running = upMarkRead();
+  if (running) { watchUpgrade(upShade(), running.t0); return; }
   if (busy) {
     confirmAsk(T('gui.upg.title'), T('gui.upg.body_busy'), T('gui.upg.close'), () => {});
     return;
@@ -4836,6 +5393,13 @@ function askUpgrade() {
   confirmAsk(T('gui.upg.title'),
     T('gui.upg.body', { from: `v${APP_VERSION || '?'}`, to: `v${upLatest || '?'}` }),
     T('gui.upg.go'), runUpgrade);
+}
+
+/* Called at boot: a page that loads while an install is in flight re-attaches
+   to it, instead of coming up as if nothing were happening. */
+function resumeUpgrade() {
+  const running = upMarkRead();
+  if (running) watchUpgrade(upShade(), running.t0);
 }
 
 /* `system.upgrade` hands the install to a detached helper and then lets serve
@@ -4849,13 +5413,43 @@ async function runUpgrade() {
   try {
     await rpc.call('system.upgrade', {});
   } catch (e) {
+    /* The server saw an install already in flight. That is the dialog the
+       reader wanted, not an error -- adopt the run instead of reporting it. */
+    if (e.data && e.data.reason === 'in_progress') {
+      upMark(upLatest);
+      watchUpgrade(shade);
+      return;
+    }
+    upMarkClear();
     shade.fail(T('gui.upg.failed'), (e.data && e.data.detail) || e.message || String(e));
     return;
   }
+  upMark(upLatest);
+  watchUpgrade(shade);
+}
+
+/* Poll until serve answers again, then reload -- the new dist needs one anyway,
+   and the cookie survives because the relaunched server reuses the session
+   token. The ceiling is 20 minutes because a first upgrade resolves and
+   byte-compiles every dependency: one measured cold run took nine. The old
+   three-minute ceiling declared failure over a install that was still running,
+   which is what taught the reader to click upgrade a second time. */
+function watchUpgrade(shade, since) {
+  const t0 = since || Date.now();
   shade.say(T('gui.upg.waiting'));
-  const t0 = Date.now();
+  shade.clock(t0);
+  let saidLong = false;
   const tick = async () => {
-    if (Date.now() - t0 > 180000) { shade.fail(T('gui.upg.failed'), ''); return; }
+    const waited = Date.now() - t0;
+    if (waited > UPG_CEILING_MS) {
+      upMarkClear();
+      shade.fail(T('gui.upg.failed'), T('gui.upg.gave_up'));
+      return;
+    }
+    if (waited > UPG_PATIENCE_MS && !saidLong) {
+      saidLong = true;
+      shade.say(T('gui.upg.waiting'), T('gui.upg.waiting_long'));
+    }
     let r = null;
     try {
       r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
@@ -4863,8 +5457,9 @@ async function runUpgrade() {
       setTimeout(tick, 1500);
       return;
     }
-    if (r.status === 401 || r.status === 403) { shade.fail(T('gui.upg.reauth'), ''); return; }
+    if (r.status === 401 || r.status === 403) { upMarkClear(); shade.fail(T('gui.upg.reauth'), ''); return; }
     if (!r.ok) { setTimeout(tick, 1500); return; }
+    upMarkClear();
     shade.say(T('gui.upg.done'));
     setTimeout(() => window.location.reload(), 600);
   };
@@ -5632,6 +6227,11 @@ document.addEventListener('click', (e) => {
    conversation can never surface here. */
 let agentsBusy = false;
 let agentsAt = 0;
+/* One fingerprint per drawn list, for the same reason the detail keeps one: the
+   poll answers every few seconds whether or not anything moved, and drawWs()
+   wipes the panel body to rebuild it. Redrawing an unchanged list is a list that
+   flickers on a timer and loses the reader's scroll every time. */
+let agentsDrawn = '';
 agentsLoad = () => {
   /* The panel asks on each redraw and a fresh answer causes one; the floor
      keeps that from spinning, and doubles as the poll's rate limit. */
@@ -5650,25 +6250,127 @@ agentsLoad = () => {
       AGENTS = (r && r.items) || [];
       const dot = $('#wsAgentRun');
       if (dot) dot.hidden = !AGENTS.some((a) => a.status === 'run');
-      if (wsOpen && wsTab === 'agents' && !agentOpen) drawWs();
+      /* Keyed by conversation as well as content, so switching between two
+         sessions that have listed the same thing still repaints. */
+      const drawn = `${asked}|${JSON.stringify(AGENTS)}`;
+      if (drawn === agentsDrawn) return;
+      agentsDrawn = drawn;
+      if (wsOpen && wsTab === 'agents' && !agentOpen && !dagNode) drawWs();
     })
     .catch((e) => { rpcGone('subagent', e); /* an empty list is not a broken one */ })
     .then(() => { agentsBusy = false; agentsAt = Date.now(); });
 };
 
+/* One fingerprint per drawn detail: the poll repaints only when the answer
+   actually changed, because a redraw every tick reads as flicker and eats any
+   text selection the reader had. */
+/* What has already been drawn for the open run. `drawn` counts *messages*, not
+   nodes: a poll appends the ones that arrived since the last, and never touches
+   what is on screen. Rebuilding the whole transcript every five seconds -- which
+   is what a running record's poll used to do -- tore out whatever the reader was
+   in the middle of, closed every fold they had opened, and dropped the selection.
+   The scroll survived it and nothing else did. */
+const agentDrawn = { key: null, drawn: 0, status: null };
+
+function agentPaint(box, r, opts) {
+  const msgs = (r && r.messages) || [];
+  const running = r && r.status === 'run';
+  const key = (opts && opts.key) || `sp:${agentOpen}`;
+  const fresh = agentDrawn.key !== key;
+  if (fresh) { box.innerHTML = ''; agentDrawn.key = key; agentDrawn.drawn = 0; }
+  agentDrawn.status = r && r.status;
+
+  /* An answer being streamed is held back until it settles: drawing it is what
+     would force a redraw of it a moment later, and it is why an answer in
+     flight carries no footer here, exactly as a live turn in the transcript
+     carries none until it settles.
+     Only an *assistant* message though. A user prompt is never rewritten, and
+     for most of a run it is the only message there is -- holding it back drew
+     the working glyph over an empty panel, so a reader watching a run could
+     not tell which run they were watching. */
+  const last = msgs[msgs.length - 1];
+  const streaming = running && last && last.role === 'assistant';
+  const commit = streaming ? msgs.length - 1 : msgs.length;
+  const tail = msgs.slice(agentDrawn.drawn, commit);
+
+  const sc = box;
+  const atEnd = sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4;
+  const top = sc.scrollTop;
+
+  /* The working glyph is the tail of the box, so it is kept aside while
+     messages are appended and put back after -- kept, not rebuilt: re-creating
+     it restarts its CSS animation, and this paint runs on every poll, so a
+     fresh glyph each time is a glyph that never finishes a cycle. The turn's
+     own live row learned this first; see `drawTurnLive`. */
+  const glyph = box.querySelector(':scope > .sarun');
+  const empty = box.querySelector(':scope > .wsempty');
+  if (empty) empty.remove();
+
+  /* What it did, between what was asked and what came back -- only for the
+     lanes whose record holds call names and nothing else; a real transcript
+     carries its own rows. It is a whole-record shape, so it is drawn once, on
+     the first paint. */
+  const did = fresh ? agentFlatCalls(r) : [];
+  if (tail.length || did.length) {
+    /* The one line that makes this a subagent view rather than a second
+       renderer: point the transcript's write target at this box, draw with
+       the ordinary one, then put it back. Synchronous, so no live event can
+       land in between. */
+    const prev = stageHost;
+    stageHost = box;
+    try {
+      if (did.length) {
+        renderHistory(tail.filter((m) => m && m.role === 'user'));
+        agentDidStep(did);
+        renderHistory(tail.filter((m) => !(m && m.role === 'user')));
+        agentFoldTime(box, r);
+      } else {
+        renderHistory(tail);
+      }
+    } finally { stageHost = prev; }
+    agentDrawn.drawn = commit;
+  }
+
+  if (running) {
+    /* The glyph alone, as the reader's own turn wears it. The word beside it
+       ("Working") named the one thing the moving glyph already says, in a panel
+       whose header carries the status too -- three ways of saying running, and
+       the only one that survives a glance is the movement. */
+    let w = glyph;
+    if (!w) {
+      w = mk('div', 'act in sarun');
+      w.append(workGlyph());
+    }
+    if (box.lastElementChild !== w) box.appendChild(w);
+  } else if (glyph) {
+    glyph.remove();
+  }
+  if (!box.childElementCount) {
+    box.appendChild(mk('div', 'wsempty', (opts && opts.empty) || T('gui.ws.agents_none')));
+  }
+  box.scrollTop = atEnd ? box.scrollHeight : top;
+}
+
 agentRender = (box, id) => {
-  rpc.call('subagent.context', { id })
+  /* Which panel asked. The header below is reached through the document rather
+     than through `box`, so an answer for a run the reader has already left
+     would find whichever header is open now and rename it. The rest of this
+     callback is safe on its own -- it writes into a detached box -- but a
+     write to the live document has to know it is still the right document. */
+  const epoch = wsEpoch;
+  /* A call is addressed by conversation and call, not by call alone: its record
+     lives inside that conversation's own directory. */
+  agentDrawn.key = null;
+  rpc.call('subagent.context', { id, session_id: cur })
     .then((r) => {
-      const msgs = (r && r.messages) || [];
-      box.innerHTML = '';
-      /* The one line that makes this a subagent view rather than a second
-         renderer: point the transcript's write target at this box, draw with
-         the ordinary one, then put it back. Synchronous, so no live event can
-         land in between. */
-      const prev = stageHost;
-      stageHost = box;
-      try { renderHistory(msgs); } finally { stageHost = prev; }
-      if (!msgs.length) box.appendChild(mk('div', 'wsempty', T('gui.ws.agents_none')));
+      if (wsStale(epoch)) return;
+      /* The header drew from the listed row. Opened without one -- a reopened
+         panel, a run that has aged out of the list -- it fell back to raven's
+         own sub-agent, which would quietly mislabel an openclaw run. The answer
+         carries the truth, so correct it on arrival. */
+      const who = document.querySelector('.sahd .trow .who');
+      if (who && r) who.textContent = (r.agent || 'raven');
+      agentPaint(box, r);
     })
     .catch((e) => {
       box.innerHTML = '';
@@ -5676,32 +6378,39 @@ agentRender = (box, id) => {
     });
 };
 
-/* A run in flight has to move on screen without being reopened. The detail
-   keeps its scroll position across the repaint -- a transcript that jumps to
-   the top every few seconds cannot be read. */
+/* A run in flight has to move on screen without being reopened, and its header
+   has to change the moment the run does -- a detail page still saying "working"
+   over a run the list already knows failed is the panel lying. */
 setInterval(() => {
   if (!wsOpen || wsTab !== 'agents') return;
-  if (!agentOpen) { agentsLoad(); return; }
-  const it = AGENTS.find((a) => a.id === agentOpen);
-  if (!it || it.status !== 'run') return;
-  const sc = document.querySelector('.satx');
-  const top = sc ? sc.scrollTop : 0;
-  const atEnd = sc ? sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4 : false;
+  if (!agentOpen && !dagNode) { agentsLoad(); return; }
   agentsAt = 0;
   agentsLoad();
+  /* A graph node is a row like any other now, so the same rule applies. It is
+     found by (run, node) rather than by id because that is how the list
+     addresses it. */
+  const it = dagNode
+    ? AGENTS.find((a) => a.kind === 'dag' && a.run_id === dagNode.run_id && a.node === dagNode.node)
+    : AGENTS.find((a) => a.id === agentOpen);
+  const stNow = it ? it.status : null;
+  if (agentDrawn.status && stNow && agentDrawn.status !== stNow) {
+    /* Status flipped under an open page: redraw the whole view once, so the
+       header mark and the transcript land on the final state together. */
+    agentDrawn.status = stNow;
+    drawWs();
+    return;
+  }
+  if (!it || it.status !== 'run') return;
   const box = document.querySelector('.satx');
   if (!box) return;
-  rpc.call('subagent.context', { id: agentOpen })
+  if (dagNode) { dagNodePaint(box, dagNode); return; }
+  rpc.call('subagent.context', { id: agentOpen, session_id: cur })
     .then((r) => {
       if (!document.body.contains(box)) return;
-      box.innerHTML = '';
-      const prev = stageHost;
-      stageHost = box;
-      try { renderHistory((r && r.messages) || []); } finally { stageHost = prev; }
-      box.scrollTop = atEnd ? box.scrollHeight : top;
+      agentPaint(box, r);
     })
     .catch(() => {});
-}, 5000);
+}, 2000);
 
 /* Leaving the browser view -- another tab, another session, the panel shut --
    must drop the watch, and every one of those paths repaints the panel. */
@@ -5831,5 +6540,449 @@ xaAct = async function (op, row, args) {
   }
   await xaFetch(false);
 };
+
+/* ── the dag sheet: what a `run_subagent_dag` call is orchestrating ────────
+   The transcript only ever shows this call as one tool row with a clamped
+   result, and the three `dag.*` events that describe the graph arrived here and
+   were dropped on the floor. They are the whole picture of the work, so they get
+   the same place the clarify sheet gets: above the composer, on the turn being
+   worked on rather than buried in the scrollback. */
+const DAGS = new Map();  // session key -> the graph that conversation is running
+const dagFor = (key) => DAGS.get(key || sheetSession()) || null;
+
+/* Wider and taller than the first pass: the box now carries a status mark as
+   well as the node's id, the agent under it and a clock, and 108x38 had them
+   touching each other. GAP_X leaves 46px of edge between columns, which is
+   enough for a curve to read as a curve rather than as a kink. */
+const DAG_GAP_X = 182;
+const DAG_GAP_Y = 60;
+const DAG_W = 136;
+const DAG_H = 44;
+const DAG_PAD = 10;
+
+/* Depth by longest path, which is what puts a node in the column after the last
+   thing it waits for. Memoised, and guarded against a cycle it should never see:
+   the server rejects a cyclic graph before running it, but a panel that hangs is
+   a worse way to find that out than a panel that draws something odd. */
+function dagDepths(nodes) {
+  const by = new Map(nodes.map((n) => [n.id, n]));
+  const depth = new Map();
+  const walking = new Set();
+  const of = (id) => {
+    if (depth.has(id)) return depth.get(id);
+    const n = by.get(id);
+    const deps = (n && n.depends_on) || [];
+    if (!n || !deps.length || walking.has(id)) { depth.set(id, 0); return 0; }
+    walking.add(id);
+    let d = 0;
+    deps.forEach((p) => { if (by.has(p)) d = Math.max(d, of(p) + 1); });
+    walking.delete(id);
+    depth.set(id, d);
+    return d;
+  };
+  nodes.forEach((n) => of(n.id));
+  return depth;
+}
+
+/* One sentence for a reader who does not want to read a graph: how much work,
+   how deep, who is doing it, and whether anything actually runs side by side. */
+function dagGist(d) {
+  const nodes = d.order.map((id) => d.nodes.get(id));
+  const depth = dagDepths(nodes);
+  const layers = new Map();
+  nodes.forEach((n) => {
+    const k = depth.get(n.id) || 0;
+    layers.set(k, (layers.get(k) || 0) + 1);
+  });
+  const widest = Math.max(...layers.values(), 1);
+  const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))];
+  const bits = [T('gui.dag.count').replace('{n}', String(nodes.length)).replace('{d}', String(layers.size))];
+  bits.push(widest > 1 ? T('gui.dag.parallel').replace('{n}', String(widest)) : T('gui.dag.serial'));
+  if (agents.length) bits.push(agents.join(' · '));
+  return bits.join(' · ');
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs, cls) {
+  const e = document.createElementNS(SVG_NS, tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, String(v)));
+  if (cls) e.setAttribute('class', cls);
+  return e;
+}
+
+/* The one mark a node wears, and the whole of how status is drawn. It used to be
+   the box's own stroke colour plus a pulse of the entire node's opacity: with
+   nothing but colour to go by, a reader had to already know the palette, and a
+   node fading in and out as a whole read as an error rather than as work. Colour
+   stays, quietly, on the border; this is what a reader actually looks at.
+
+   Running is the same three bars the turn's own row and a sub-agent row wear
+   (workGlyphSvg), which is the point -- one glyph for work in progress, whatever
+   is doing the work. */
+function dagMark(status, cx, cy) {
+  if (status === 'running') return workGlyphSvg(cx - 5, cy + 4);
+  if (status === 'completed') return svgEl('path', { d: `M${cx - 5} ${cy}l3.6 3.8 6.4 -7.6` }, 'mk ok');
+  if (status === 'failed') return svgEl('path', { d: `M${cx - 4} ${cy - 4}l8 8M${cx + 4} ${cy - 4}l-8 8` }, 'mk bad');
+  if (status === 'skipped' || status === 'interrupted') {
+    return svgEl('path', { d: `M${cx - 4.5} ${cy}h9` }, 'mk skip');
+  }
+  return svgEl('circle', { cx, cy, r: 3.6 }, 'mk wait');
+}
+
+/* Column x, row y, and the sizes that follow from them. Each column is centred
+   on the graph's own midline rather than stacked from the top: a fan-out into
+   three and a fan-in back to one then reads as the diamond it is, instead of a
+   staircase whose single nodes sit against the ceiling with their edges cutting
+   diagonally down. */
+function dagLayout(nodes) {
+  const depth = dagDepths(nodes);
+  const cols = new Map();
+  nodes.forEach((n) => {
+    const c = depth.get(n.id) || 0;
+    if (!cols.has(c)) cols.set(c, []);
+    cols.get(c).push(n);
+  });
+  const tallest = Math.max(...[...cols.values()].map((c) => c.length), 1);
+  const height = DAG_PAD * 2 + tallest * DAG_H + (tallest - 1) * (DAG_GAP_Y - DAG_H);
+  const width = DAG_PAD * 2 + (cols.size - 1) * DAG_GAP_X + DAG_W;
+  const at = new Map();
+  cols.forEach((column, c) => {
+    const span = column.length * DAG_H + (column.length - 1) * (DAG_GAP_Y - DAG_H);
+    const top = (height - span) / 2;
+    column.forEach((n, i) => {
+      at.set(n.id, { x: DAG_PAD + c * DAG_GAP_X, y: top + i * DAG_GAP_Y });
+    });
+  });
+  return { at, width, height };
+}
+
+function dagSvg(d) {
+  const nodes = d.order.map((id) => d.nodes.get(id)).filter(Boolean);
+  const { at, width, height } = dagLayout(nodes);
+  const svg = svgEl('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
+
+  /* Edges first so a box always sits on top of the line reaching it. An edge out
+     of a node that has not finished is drawn faint: what has actually flowed
+     through the graph so far is the thing a reader is trying to see. */
+  nodes.forEach((n) => {
+    (n.depends_on || []).forEach((pid) => {
+      const a = at.get(pid);
+      const b = at.get(n.id);
+      if (!a || !b) return;
+      const x1 = a.x + DAG_W;
+      const y1 = a.y + DAG_H / 2;
+      const x2 = b.x - 5;
+      const y2 = b.y + DAG_H / 2;
+      const mid = (x1 + x2) / 2;
+      const done = (d.nodes.get(pid) || {}).status === 'completed';
+      // Which node this edge leaves, so a later status change can darken it in
+      // place instead of costing the graph a redraw.
+      svg.appendChild(svgEl(
+        'path',
+        { d: `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`, 'data-from': pid },
+        'edge' + (done ? ' flowed' : ''),
+      ));
+      // The head, drawn separately: a marker-end would inherit the path's own
+      // stroke width and end up heavier than the line it caps.
+      svg.appendChild(svgEl(
+        'path',
+        { d: `M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`, 'data-from': pid },
+        'tip' + (done ? ' flowed' : ''),
+      ));
+    });
+  });
+
+  d.els = new Map();
+  nodes.forEach((n) => {
+    const p = at.get(n.id);
+    const g = svgEl('g', { transform: `translate(${p.x} ${p.y})`, role: 'button', tabindex: '0' }, 'nd');
+    g.dataset.st = n.status || 'pending';
+    g.dataset.node = n.id;
+    if (dagNode && dagNode.run_id === d.run_id && dagNode.node === n.id) g.dataset.sel = '1';
+    g.appendChild(svgEl('rect', { width: DAG_W, height: DAG_H, rx: 9 }));
+    const mark = dagMark(n.status, 17, DAG_H / 2);
+    g.appendChild(mark);
+    const id = svgEl('text', { x: 31, y: 19 }, 'id');
+    id.textContent = n.id;
+    const ag = svgEl('text', { x: 31, y: 32 }, 'ag');
+    ag.textContent = n.subagent + (n.instance ? ' @' + n.instance : '');
+    // Always present, even while empty: the clock below writes into it every
+    // second, and a node that starts running must not have to be redrawn to
+    // grow somewhere to put its time.
+    const tm = svgEl('text', { x: DAG_W - 11, y: 19, 'text-anchor': 'end' }, 'tm');
+    tm.textContent = dagTook(n);
+    g.append(id, ag, tm);
+    d.els.set(n.id, { g, tm, mark });
+    const open = () => dagOpenNode(d.run_id, n);
+    g.onclick = open;
+    g.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    // The graph is a map, not a table: what a node is and who is running it are
+    // in the box, and how long is on the title for the one being pointed at.
+    const title = svgEl('title');
+    title.textContent = `${n.id} · ${n.subagent}${n.instance ? ' @' + n.instance : ''}`;
+    g.appendChild(title);
+    svg.appendChild(g);
+  });
+  return svg;
+}
+
+function dagTook(n) {
+  if (!n.started_at) return '';
+  const end = n.ended_at || Date.now();
+  return dur(Math.max(end - n.started_at, 1000));
+}
+
+/* ── the clock on a running node ──────────────────────────────────────────
+   Only two events ever arrive for a node: it started, and it ended. Between
+   them nothing is sent, so a number drawn once sat frozen for exactly the
+   interval a reader is watching it for -- a node that took four minutes showed
+   "1.0s" for all four of them and then jumped.
+
+   One interval for the whole panel, holding no state of its own: it re-reads the
+   graph each second and stops itself as soon as nothing is running, so a
+   finished run leaves no timer behind. */
+let dagTicker = null;
+
+function dagStopClock() {
+  if (dagTicker) { clearInterval(dagTicker); dagTicker = null; }
+}
+
+function dagStartClock(d) {
+  dagStopClock();
+  const anyRunning = () => [...d.nodes.values()].some((n) => n.status === 'running');
+  if (!anyRunning()) return;
+  dagTicker = setInterval(() => {
+    if (!anyRunning()) { dagStopClock(); return; }
+    d.nodes.forEach((n) => {
+      if (n.status !== 'running') return;
+      const slot = d.els && d.els.get(n.id);
+      if (slot) slot.tm.textContent = dagTook(n);
+    });
+  }, 1000);
+}
+
+function drawDag() {
+  const key = sheetSession();
+  sheetDropClass('dsheet', key);
+  dagStopClock();
+  const d = dagFor(key);
+  if (!d) return;
+
+  const sheet = mk('div', 'dsheet');
+  sheet.setAttribute('role', 'group');
+  sheet.setAttribute('aria-label', T('gui.dag.aria'));
+  sheet.dataset.fold = String(!!d.folded);
+
+  const head = mk('div', 'hd');
+  head.appendChild(mk('span', 'ttl', T('gui.dag.title')));
+  const gist = mk('div', d.done ? 'sum' : 'gist', d.done ? dagSummary(d) : dagGist(d));
+  head.appendChild(gist);
+  d.gist = gist;
+
+  const fold = mk('button', 'ic tipdn');
+  fold.appendChild(ico('M6.5 10 12 15.5 17.5 10', 'cv'));
+  const setFold = (v) => {
+    d.folded = v;
+    sheet.dataset.fold = String(v);
+    const lb = T(v ? 'gui.dag.unfold' : 'gui.dag.fold');
+    fold.dataset.tip = lb;
+    fold.setAttribute('aria-label', lb);
+  };
+  fold.onclick = () => setFold(!d.folded);
+  /* The one writer of the fold, so an in-place update folds through the same
+     three writes the button does rather than setting the flag and leaving the
+     sheet showing the opposite. */
+  d.setFold = setFold;
+
+  const x = mk('button', 'ic tipdn');
+  x.appendChild(ico('M7 7l10 10M17 7 7 17'));
+  x.dataset.tip = T('gui.dag.close');
+  x.setAttribute('aria-label', T('gui.dag.close'));
+  x.onclick = () => { DAGS.delete(key); drawDag(); };
+
+  head.append(fold, x);
+  sheet.appendChild(head);
+  setFold(!!d.folded);
+
+  const canvas = mk('div', 'canvas');
+  canvas.appendChild(dagSvg(d));
+  sheet.appendChild(canvas);
+
+  sheetAdd(sheet, key);
+  /* Text can only be measured once it is rendered, so the id fit runs after
+     the sheet is in the document: a long node id used to run under the clock
+     in its own corner. The clock's column is reserved whether or not a time
+     is showing yet -- a node that starts running must not need a re-fit. */
+  sheet.querySelectorAll('.nd .id').forEach((el) => {
+    const max = DAG_W - 31 - 40;
+    let s = el.textContent;
+    while (s.length > 1 && el.getComputedTextLength() > max) {
+      s = s.slice(0, -1);
+      el.textContent = s + '…';
+    }
+  });
+  d.sheet = sheet;
+  dagStartClock(d);
+}
+
+/* ── keeping a drawn sheet current, without drawing it again ──────────────
+   Every `dag.*` event used to land on drawDag, which drops the sheet and builds
+   a new one: a five-node run rebuilt it twelve times, and each rebuild slid it
+   back in from the bottom, reset the canvas scroll on a graph wider than the
+   pane, and dropped whatever the reader had focused. Nothing about a node
+   update needs a new sheet -- the layout is fixed at run_started, since the
+   server sends the whole graph before any node runs, and only colours, marks,
+   times and the one-line gist move after that. So they move, and the sheet
+   stays where it is. Falls back to a full draw when there is no live sheet to
+   touch (first event, or a reader who closed and reopened the page). */
+const dagLive = (d) => !!(d && d.sheet && d.els && document.body.contains(d.sheet));
+
+function dagTouch(d) {
+  if (!dagLive(d)) { drawDag(); return; }
+  if (d.setFold && d.sheet.dataset.fold !== String(!!d.folded)) d.setFold(!!d.folded);
+  if (d.gist) {
+    d.gist.className = d.done ? 'sum' : 'gist';
+    d.gist.textContent = d.done ? dagSummary(d) : dagGist(d);
+  }
+  d.nodes.forEach((n) => {
+    const slot = d.els.get(n.id);
+    if (!slot) return;
+    const st = n.status || 'pending';
+    if (slot.g.dataset.st !== st) {
+      slot.g.dataset.st = st;
+      const next = dagMark(n.status, 17, DAG_H / 2);
+      slot.mark.replaceWith(next);
+      slot.mark = next;
+    }
+    slot.tm.textContent = dagTook(n);
+  });
+  /* Edges darken as their source completes, and that is a class on a path
+     rather than a shape, so it can be reapplied without a relayout. */
+  const done = new Set();
+  d.nodes.forEach((n) => { if (n.status === 'completed') done.add(n.id); });
+  d.sheet.querySelectorAll('.edge, .tip').forEach((el) => {
+    const from = el.dataset.from;
+    if (from) el.classList.toggle('flowed', done.has(from));
+  });
+  dagStartClock(d);
+}
+
+/* The selection is one attribute on one node; moving it does not need the
+   graph rebuilt around it. */
+function dagSelect(d) {
+  if (!dagLive(d)) return;
+  d.els.forEach((slot, id) => {
+    const on = dagNode && dagNode.run_id === d.run_id && dagNode.node === id;
+    if (on) slot.g.dataset.sel = '1';
+    else delete slot.g.dataset.sel;
+  });
+}
+
+function dagSummary(d) {
+  const s = d.summary || {};
+  const bits = [T('gui.dag.done').replace('{n}', String(s.completed || 0)).replace('{t}', String(s.total || d.order.length))];
+  if (s.failed) bits.push(T('gui.dag.failed').replace('{n}', String(s.failed)));
+  if (s.skipped) bits.push(T('gui.dag.skipped').replace('{n}', String(s.skipped)));
+  return bits.join(' · ');
+}
+
+/* A node opens where a sub-agent's work already lives, rather than growing a
+   second transcript view inside the sheet: same panel, same renderer, and the
+   sheet stays the map rather than becoming the territory. */
+function dagOpenNode(runId, n) {
+  dagNode = { run_id: runId, node: n.id, agent: n.subagent, label: n.id };
+  agentOpen = null;
+  if (!wsOpen) setWs(true);
+  wsPick('agents');
+  drawWs();
+  /* The sheet marks the node whose transcript is open. Moving one attribute,
+     not rebuilding the graph: every click used to drop the sheet and animate a
+     new one in, so picking a second node to compare against the first meant
+     watching the first one leave. */
+  dagSelect(dagFor());
+}
+/* The trail's dag card opens a node through the same reader. */
+delegOpenNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
+
+/* Per-node status for a card whose events are long gone: `dag.get` reads the
+   run back off disk, reconciled against the registry, so a graph reopened from
+   history shows what actually happened rather than a row of pending dots. */
+delegReadDag = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
+  .then((r) => ((r && r.run && r.run.files) || []).map((f) => ({ node: f.node, status: f.status })));
+
+/* "View in workspace" on a spawn row: open the panel on the run's own record,
+   not just on the list. The list may not have caught the new run yet, so a
+   couple of short retries cover the gap between the call and its row. */
+delegOpenSpawn = (agent, label) => {
+  setWs(true, 'agents');
+  const match = () => AGENTS.find((x) => x.kind !== 'dag'
+    && (!label || plainTitle(x.label) === plainTitle(label))
+    && (!agent || (x.agent || 'raven') === (agent || 'raven')));
+  const attempt = (n) => {
+    const it = match();
+    if (it) { agentOpenRow(it); return; }
+    if (n >= 4) return;
+    agentsAt = 0; agentsLoad();
+    setTimeout(() => attempt(n + 1), 700);
+  };
+  attempt(0);
+};
+
+/* One dag node's own transcript: what it was asked, what it did on the way, and
+   what it answered. Painted by the same function a spawned call's transcript is,
+   so the two kinds of delegated work read the same way and only one of them has
+   to be kept append-only -- a node polled while it runs used to be torn down and
+   rebuilt on every tick, which closed every fold the reader had opened. */
+function dagNodePaint(box, it) {
+  const row = AGENTS.find((a) => a.kind === 'dag' && a.run_id === it.run_id && a.node === it.node);
+  return rpc.call('dag.node', { run_id: it.run_id, node: it.node, session_key: cur })
+    .then((r) => {
+      if (!document.body.contains(box)) return;
+      const n = (r && r.node) || {};
+      agentPaint(
+        box,
+        { messages: n.messages || [], status: row ? row.status : null },
+        { key: `dag:${it.run_id}:${it.node}`, empty: T('gui.dag.node_empty') },
+      );
+      /* Said plainly rather than left to a reader wondering where the rest went:
+         the file on disk is whole, this is its head. Once, not once per poll. */
+      if (n.output_truncated && !box.querySelector(':scope > .wsnote')) {
+        box.appendChild(mk('div', 'wsnote', T('gui.dag.truncated')));
+      }
+    })
+    .catch((e) => {
+      if (!document.body.contains(box)) return;
+      agentDrawn.key = null;
+      box.innerHTML = '';
+      box.appendChild(mk('div', 'wsempty', (e && e.message) || String(e)));
+    });
+}
+
+dagNodeRender = (box, it) => {
+  /* A reopened panel draws into a new box, so the paint has to start over even
+     though the node it is drawing has not changed. */
+  agentDrawn.key = null;
+  dagNodePaint(box, it);
+};
+
+/* Dev-only hook, beside __clarify and __approve and for the same reason: the
+   graph is only reachable by configuring third-party sub-agents and spending a
+   multi-agent run, which is too long a loop to design a layout in.
+   `window.__dag()` feeds the same three events the server sends. */
+window.__dag = (ev) => onEvent(ev && ev.type ? ev : {
+  type: 'dag.run_started',
+  payload: {
+    run_id: '20260812T120000Z-deadbeef',
+    nodes: [
+      { id: 'survey', subagent: 'Researcher', depends_on: [] },
+      { id: 'read_a', subagent: 'Researcher', depends_on: ['survey'] },
+      { id: 'read_b', subagent: 'Coder', depends_on: ['survey'] },
+      { id: 'read_c', subagent: 'Coder', instance: 'w2', depends_on: ['survey'] },
+      { id: 'merge', subagent: 'Writer', depends_on: ['read_a', 'read_b', 'read_c'] },
+      { id: 'review', subagent: 'Critic', depends_on: ['merge'] },
+    ],
+  },
+});
 
 })();

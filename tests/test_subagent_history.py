@@ -130,6 +130,42 @@ def test_spawn_record_survives_an_unwritable_root(tmp_path: Path) -> None:
     assert not record.dir.exists()
 
 
+# ---------------------------------------------------------------------------
+# ids carry the ordering, because nothing else does
+# ---------------------------------------------------------------------------
+
+
+def test_ids_minted_in_the_same_instant_still_sort_in_mint_order() -> None:
+    """Readers sort `<stamp>-<suffix>` lexicographically and the suffix is a
+    task id or random hex, so the stamp is the whole ordering.
+
+    The suffixes here are deliberately reverse-ordered: with a stamp accurate
+    only to the second -- or to the microsecond, which two spawns tie on often
+    enough -- the older call sorts first, the panel reshuffles on every poll,
+    and the listing test that asserts newest-first fails intermittently.
+    """
+    from raven.agent.subagent_history import make_call_id
+
+    first = make_call_id("efd70c2c")
+    second = make_call_id("a8f2a07a")
+
+    assert first < second, f"{first} was minted first and must sort first"
+    assert sorted([first, second], reverse=True) == [second, first]
+
+
+def test_a_run_id_orders_against_a_call_id() -> None:
+    """The panel sorts spawns and graph runs into one list, so the two id
+    shapes have to be comparable -- a second-accurate stamp on either side
+    reshuffles ties across both."""
+    from raven.agent.subagent_dag._store import make_run_id
+    from raven.agent.subagent_history import make_call_id
+
+    call = make_call_id("aaaa1111")
+    run = make_run_id()
+
+    assert call < run, f"{call} was minted before {run} and must sort before it"
+
+
 def test_direct_record_lands_under_the_instance(tmp_path: Path) -> None:
     from raven.agent.subagent.direct_chat import DirectChatRecord, direct_root
 

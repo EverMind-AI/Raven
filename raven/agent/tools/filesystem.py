@@ -9,6 +9,32 @@ from raven.agent import workdir
 from raven.agent.tools.base import Tool, ToolResult
 from raven.utils.helpers import detect_image_mime
 
+_DIFF_MAX_LINES = 400
+
+
+def _unified(before: str, after: str, name: str) -> str | None:
+    """Unified diff of one write, or None when there is nothing useful to show.
+
+    A UI cannot reconstruct this later: by the time the call is reported, the
+    content it replaced is already overwritten. A rewrite too large to render is
+    dropped whole rather than truncated -- half a diff reads as a smaller change
+    than the one that happened.
+    """
+    if before == after:
+        return None
+    out = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=name,
+            tofile=name,
+            lineterm="",
+        )
+    )
+    if not out or len(out) > _DIFF_MAX_LINES:
+        return None
+    return "\n".join(out)
+
 
 def _resolve_path(
     path: str,
@@ -246,9 +272,21 @@ class WriteFileTool(_FsTool):
     async def execute(self, path: str, content: str, **kwargs: Any) -> str:
         try:
             fp = self._resolve(path)
+            # Read before writing: a whole-file write carries no record of what
+            # it replaced, so a panel handed only the arguments draws every line
+            # of an overwrite as an addition.
+            before = ""
+            if fp.is_file():
+                try:
+                    before = fp.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    before = ""
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content)} bytes to {fp}"
+            return ToolResult(
+                f"Successfully wrote {len(content)} bytes to {fp}",
+                diff=_unified(before, content, str(fp)),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -349,7 +387,13 @@ class EditFileTool(_FsTool):
                 new_content = new_content.replace("\n", "\r\n")
 
             fp.write_bytes(new_content.encode("utf-8"))
-            return f"Successfully edited {fp}"
+            return ToolResult(
+                f"Successfully edited {fp}",
+                # Compared line-for-line rather than passing the two snippets:
+                # `replace_all` can change several places at once, and the
+                # arguments alone do not say where.
+                diff=_unified(content, new_content.replace("\r\n", "\n"), str(fp)),
+            )
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:

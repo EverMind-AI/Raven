@@ -281,10 +281,39 @@ async def test_outlet_deliver_tool_event_to_tool_start_and_complete():
             "tui:c1",
             {
                 "type": "tool.complete",
-                "payload": {"tool_call_id": "t1", "result_preview": "ok", "truncated": False, "metadata": None},
+                "payload": {
+                    "tool_call_id": "t1",
+                    "result_preview": "ok",
+                    "truncated": False,
+                    "metadata": None,
+                    "diff": None,
+                },
             },
         ),
     ]
+
+
+async def test_outlet_deliver_tool_complete_forwards_the_diff():
+    """The outlet's half of the write-diff chain.
+
+    The page reads this field off tool.complete and prefers it over the guess it
+    made from the arguments at tool.start, because a whole-file write's previous
+    content survives nowhere else.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            diff="--- a\n+++ b\n-before\n+after",
+            conversation_id="tui:c1",
+        )
+    )
+
+    assert emitter.emitted[0][1]["payload"]["diff"] == "--- a\n+++ b\n-before\n+after"
 
 
 async def test_outlet_deliver_tool_start_forwards_blocking():
@@ -314,14 +343,48 @@ async def test_outlet_deliver_text_to_token_delta():
     assert emitter.emitted == [("tui:c1", {"type": "token.delta", "payload": {"text": "please clarify"}})]
 
 
-async def test_outlet_deliver_eats_notice_and_media():
+async def test_outlet_deliver_eats_chatty_notices_and_media():
+    # Progress and tool-hint notices exist for channels that cannot draw a tool
+    # row. This client draws every call, so forwarding them narrates the same
+    # work twice.
     emitter = FakeEmitter()
     outlet = RpcOutlet("tui", emitter)
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", conversation_id="tui:c1"))
+    await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT, detail="reading", conversation_id="tui:c1"))
     await outlet.deliver(
         MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1")
     )
-    assert emitter.emitted == []  # no wire event for either today
+    assert emitter.emitted == []  # no wire event for these today
+
+
+async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
+    """The one notice that replaces the answer instead of accompanying it.
+
+    Pushed as ``token.delta`` -- which is how it used to reach the client -- it
+    lands in the buffer holding the model's own prose, so it renders as the
+    model's answer: run together with whatever the model narrated just before
+    it, wearing the answer's copy and branch actions, and in English no matter
+    what language the conversation is in.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        Notice(
+            kind=NoticeKind.ACTION_BLOCKED,
+            detail="Error: Command blocked by safety guard",
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "notice",
+                "payload": {"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+            },
+        )
+    ]
+    assert not any(ev["type"] == "token.delta" for _, ev in emitter.emitted)
 
 
 async def test_outlet_emits_token_delta_on_a_chunk():

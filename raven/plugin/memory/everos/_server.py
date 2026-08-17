@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,6 +16,11 @@ from raven.config.paths import get_data_dir, get_logs_dir
 from raven.utils.portable_lock import LockTimeoutError, file_lock
 
 _POLL_INTERVAL = 0.5
+
+_API_PROBE_PATH = "/api/v2/memory/search"
+"""One route off the prefix the backend client uses (see ``backend.py``). Kept
+beside the client's own constant in spirit: if that prefix ever moves, this is
+the other place that has to move with it, or the handshake stops handshaking."""
 
 
 DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
@@ -36,6 +43,27 @@ def _probe_health(base_url: str) -> bool:
         return False
 
 
+def _speaks_our_api(base_url: str) -> bool:
+    """Whether the server on ``base_url`` serves the prefix our client uses.
+
+    ``/health`` answers on every EverOS version, so it proves the port is alive
+    and nothing more. An older server passes it and then 404s every call the
+    client makes -- which is silent: a store failure is swallowed per turn, so
+    the pairing can run for days looking healthy while nothing is written and
+    nothing is recalled.
+
+    Probed with a deliberately empty body: a served route rejects that with 422
+    (or 400), a missing one answers 404. Either way no memory is written.
+    """
+    import httpx
+
+    try:
+        r = httpx.post(f"{base_url}{_API_PROBE_PATH}", json={}, timeout=3.0)
+    except Exception:  # noqa: BLE001 — an unreachable server is handled by the health probe
+        return False
+    return r.status_code != 404
+
+
 def _lock_path() -> Path:
     return get_data_dir() / "everos-server.lock"
 
@@ -50,6 +78,22 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
+def _everos_executable() -> str | None:
+    """The EverOS server binary to launch, or None when there is none.
+
+    Our own environment first, ``PATH`` second. EverOS is a pinned dependency of
+    raven, so the server we start has to be that copy: ``uv tool install`` links
+    only the named package's entry points, which means a clean machine has no
+    ``everos`` on PATH at all, and a machine that does have one got it from some
+    other install whose version need not match the client here. Both readings of
+    ``which`` were wrong -- one refuses to start, the other starts a stranger.
+    """
+    local = Path(sys.executable).parent / ("everos.exe" if os.name == "nt" else "everos")
+    if local.exists():
+        return str(local)
+    return shutil.which("everos")
+
+
 def _start_server_if_unlocked(port: str) -> bool:
     """Try to acquire the startup lock and launch the server.
 
@@ -57,9 +101,13 @@ def _start_server_if_unlocked(port: str) -> bool:
     was already held (another process is spawning).  Uses the cross-
     platform ``portable_lock`` so Windows does not crash on import.
     """
-    everos = shutil.which("everos")
+    everos = _everos_executable()
     if not everos:
-        raise RuntimeError("everos not found. Please install the everos CLI.")
+        raise RuntimeError(
+            "no everos executable found beside this interpreter or on PATH. "
+            "EverOS is a raven dependency, so this usually means the installation "
+            "is incomplete -- reinstalling raven should restore it."
+        )
 
     try:
         with file_lock(_lock_path(), blocking=False):
@@ -85,8 +133,16 @@ async def ensure_everos_server(
     timeout: float = 30.0,
 ) -> None:
     if await asyncio.to_thread(_probe_health, base_url):
-        logger.info("everos server already running at {}", base_url)
-        return
+        if await asyncio.to_thread(_speaks_our_api, base_url):
+            logger.info("everos server already running at {}", base_url)
+            return
+        # Alive, ours by address, and unable to serve us. Adopting it is what
+        # makes the failure silent, so refuse instead and say which port.
+        raise RuntimeError(
+            f"an EverOS server is running at {base_url} but does not serve "
+            f"{_API_PROBE_PATH}, so it is too old for this raven. Stop it and let "
+            f"raven start its own, or upgrade that server to match."
+        )
 
     port = _extract_port(base_url)
     await asyncio.to_thread(_start_server_if_unlocked, port)

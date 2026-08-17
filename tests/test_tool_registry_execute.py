@@ -148,3 +148,66 @@ def test_tool_output_is_a_str_subclass():
     assert out.display_text == "display"
     # Attribute is always present, so callers can getattr without a default dance.
     assert ToolOutput("text").display_text is None
+
+
+class _NeedsPath(Tool):
+    @property
+    def name(self) -> str:
+        return "write_file"
+
+    @property
+    def description(self) -> str:
+        return "needs path and content"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        }
+
+    async def execute(self, **kwargs) -> str:
+        return "wrote it"
+
+
+class TestUnparsableArguments:
+    """A call whose arguments were not JSON must be told so.
+
+    The loop parks the raw text under ``_raw_arguments`` when ``json.loads``
+    fails. Reported through schema validation that reads as "missing required
+    path" -- and a caller told it forgot a field it did send re-sends the same
+    malformed JSON forever. One observed session burned eighteen tool calls in
+    this loop and the model ended up reasoning about ``_raw_arguments``, an
+    internal key it only ever saw because we invented it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_error_names_the_parse_failure_not_a_missing_field(self):
+        reg = _registry(_NeedsPath())
+
+        result = await reg.execute("write_file", {"_raw_arguments": '{"path": "a.py", "content": "x'})
+
+        assert "not valid JSON" in result
+        assert "missing required" not in result
+        # The raw text comes back so the caller can see what it actually sent.
+        assert '{"path": "a.py"' in result
+        # And the internal key never appears in what the caller is asked to fix.
+        assert "_raw_arguments" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_missing_field_still_reports_as_missing(self):
+        reg = _registry(_NeedsPath())
+
+        result = await reg.execute("write_file", {"path": "a.py"})
+
+        assert "missing required content" in result
+
+    @pytest.mark.asyncio
+    async def test_a_long_argument_blob_is_capped(self):
+        reg = _registry(_NeedsPath())
+
+        result = await reg.execute("write_file", {"_raw_arguments": "x" * 5000})
+
+        assert result.endswith("...")
+        assert len(result) < 1000

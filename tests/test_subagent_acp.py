@@ -367,6 +367,31 @@ async def test_probe_reports_a_missing_launcher() -> None:
     assert "not on the login shell PATH" in result.detail
 
 
+async def test_an_explicit_test_retries_past_a_stale_recorded_failure(tmp_path: Path, monkeypatch) -> None:
+    """The regression that made one slow first launch permanent.
+
+    A failed verify (e.g. npx downloading the adapter past the ready timeout)
+    records a ``missing`` snapshot; the probe then reports that snapshot, and a
+    test that trusted the probe returned the stale verdict in milliseconds
+    without ever reconnecting. An explicit test is a request for a fresh
+    verdict, so it must connect live and overwrite the recorded failure.
+    """
+    from raven.agent.subagent.probe import run_test
+
+    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    cfg = stub_config("a")
+    stale = await verify_agent(stub_config("a", mode="silent", ready_timeout_ms=1000))
+    assert stale.status == "missing"
+    SnapshotStore(path=tmp_path / "caps.json").record(
+        CapabilitySnapshot(**{**stale.__dict__, "agent": "a", "fingerprint": snapshot_fingerprint(cfg)})
+    )
+    assert (await probe_one(cfg, source="config")).status == "missing"
+
+    result = await run_test(cfg, source="config")
+    assert result.ok, result.detail
+    assert (await probe_one(cfg, source="config")).status == "ready"
+
+
 # ---- dispatch --------------------------------------------------------------
 
 
@@ -374,6 +399,53 @@ async def test_dispatch_returns_the_agents_answer(tmp_path: Path) -> None:
     backend = build_third_party_backend(stub_config("a"))
     reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
     assert reply == "pong"
+
+
+async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
+    """The acp lane can see every step, so the record keeps them.
+
+    Provider-shaped on purpose: one assistant message per tool call wearing the
+    thought that preceded it, then a role=tool result matched by call id --
+    the exact shape session.resume stores, so one renderer draws both.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a"))
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert did.transcript, "the acp backend must publish its transcript"
+    call = next(m for m in did.transcript if m.get("tool_calls"))
+    assert call["role"] == "assistant"
+    assert call["reasoning_content"] == "thinking"
+    assert call["tool_calls"][0]["function"]["name"] == "read_file src/a.py"
+    result = next(m for m in did.transcript if m.get("role") == "tool")
+    assert result["tool_call_id"] == "t1"
+
+
+async def test_the_collector_serves_a_timestamped_partial_while_in_flight() -> None:
+    """A watching panel reads the run as it happens: every rendered message
+    carries the wall clock of the event that opened it, and the in-flight shape
+    appends whatever answer text has streamed so far -- which the settled shape
+    must NOT carry, because the record keeps the answer in out.md."""
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read x"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "half an ans"}})
+
+    live = col.messages(in_flight=True)
+    assert live[-1] == {"role": "assistant", "content": "half an ans", "timestamp": live[-1]["timestamp"]}
+    assert all(m.get("timestamp") for m in live), f"unstamped message in {live}"
+
+    settled = col.messages()
+    assert all(m.get("content") != "half an ans" for m in settled), "the answer belongs to out.md, not the transcript"
 
 
 async def test_dispatch_accepts_the_managers_full_keyword_set(tmp_path: Path) -> None:
@@ -1094,6 +1166,144 @@ async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> Non
         await task
 
     assert not launched[0].alive, "the agent process is still running after a cancelled connect"
+
+
+async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() -> None:
+    """The outage shape measured on a live npx adapter: the worker dies, the
+    wrapper pid lives on, and `returncode is None` said "alive" forever -- so
+    the pool re-issued the same dead connection and every later task failed in
+    milliseconds. A closed read loop is a dead connection, whatever ps says.
+    """
+    from raven.agent.acp.protocol import AcpConnectionError
+
+    cfg = stub_config("mute", mode="mute")
+    first = await get_pool().acquire(name="mute", command=cfg.command, env=dict(cfg.env))
+    # The stub answered `initialize` and closed stdout; wait for the read loop
+    # to notice rather than racing it.
+    for _ in range(100):
+        if not first.alive:
+            break
+        await asyncio.sleep(0.05)
+    assert not first.alive, "a connection nobody can read from must not read as alive"
+    with pytest.raises(AcpConnectionError):
+        await first.client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=5)
+
+    second = await get_pool().acquire(name="mute", command=cfg.command, env=dict(cfg.env))
+    assert second is not first, "the pool handed out the dead connection again"
+    assert second.alive
+
+
+async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None:
+    """`exit None; stderr tail: <empty>` was the whole diagnostic for a child
+    that had both an exit code and a written reason: EOF races the reap and the
+    stderr drain. The read loop now waits for them before composing the error.
+    """
+    from raven.agent.acp import protocol as acp_protocol
+    from raven.agent.acp.client import AcpClient
+    from raven.agent.acp.protocol import AcpConnectionError
+
+    cfg = stub_config("abort", mode="abort")
+    client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
+    try:
+        with pytest.raises(AcpConnectionError) as excinfo:
+            await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
+        assert "exit 3" in str(excinfo.value), f"the real exit code is missing: {excinfo.value}"
+        assert "registry is unreachable" in str(excinfo.value), f"the stderr reason is missing: {excinfo.value}"
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
+# the live republish has to reach the run it belongs to, and only that one
+# ---------------------------------------------------------------------------
+
+_LIVE_UPDATE = {"update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "pong"}]}}
+
+
+async def _reader_loop(queue: "asyncio.Queue") -> None:
+    """Stands in for the connection's read loop: one long-lived task, created
+    when the connection is opened and therefore carrying the context as it was
+    *then*, dispatching every later update."""
+    while True:
+        item = await queue.get()
+        if item is None:
+            return
+        col, method, params = item
+        await col(method, params)
+
+
+async def test_a_live_republish_reaches_the_run_it_belongs_to() -> None:
+    """The read loop is created by `pool.acquire()`, before any run opens its
+    collection, and a task copies the context at creation -- so publishing
+    through the ambient variable from there reached nothing at all on a warm
+    connection, while the on-disk record stayed fine."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    queue: asyncio.Queue = asyncio.Queue()
+    reader = asyncio.create_task(_reader_loop(queue))  # created OUTSIDE any run
+    try:
+        with activity.collecting("run") as run:
+            col = _TurnCollector()
+            await queue.put((col, "session/update", _LIVE_UPDATE))
+            await asyncio.sleep(0.05)
+
+            assert run.transcript, "the live view saw nothing while the run was in flight"
+    finally:
+        await queue.put(None)
+        await reader
+
+
+async def test_one_runs_steps_do_not_land_on_another_runs_record() -> None:
+    """Two spawns sharing one pooled connection is what the pool is for. Read
+    through the ambient variable, the second run's collector published onto
+    whichever run was current when the connection opened -- so a reader watching
+    run A was shown run B's tool calls."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    queue: asyncio.Queue = asyncio.Queue()
+    with activity.collecting("run-a") as run_a:
+        # A opens the connection, so the read loop carries A's context.
+        reader = asyncio.create_task(_reader_loop(queue))
+        _TurnCollector()
+        try:
+            with activity.collecting("run-b") as run_b:
+                col_b = _TurnCollector()
+                await queue.put((col_b, "session/update", _LIVE_UPDATE))
+                await asyncio.sleep(0.05)
+
+                assert run_b.transcript, "B's own live view must have B's steps"
+            assert not run_a.transcript, "B's steps must not appear on A's record"
+        finally:
+            await queue.put(None)
+            await reader
+
+
+class TestBackendDispatchSignature:
+    """Every backend must accept what ``SubagentManager`` unconditionally sends.
+
+    The manager passes ``provider=`` and ``model=`` to whichever backend it
+    resolved, so a backend missing them raises ``TypeError`` before the run
+    starts -- the agent never launches, and the user sees a failed task with a
+    dispatch error where its output should be. The base protocol declares both,
+    but a Protocol is not enforced at runtime and three of the four backends
+    grew the parameters while the fourth did not, so nothing caught it.
+    """
+
+    def test_every_backend_accepts_the_arguments_the_manager_sends(self) -> None:
+        import inspect
+
+        from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
+        from raven.agent.subagent.backends.cli_agent import CliAgentBackend
+        from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
+        from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+        sent = {"task_id", "workspace", "executor", "session_key", "instance", "provider", "model"}
+        for backend in (AcpAgentBackend, CliAgentBackend, OpenAIApiBackend, RavenLoopBackend):
+            params = inspect.signature(backend.run).parameters
+            missing = sent - set(params)
+            assert not missing, f"{backend.__name__}.run() cannot accept {sorted(missing)}"
 
 
 # ---- choosing a permission option -----------------------------------------

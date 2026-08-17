@@ -33,6 +33,7 @@ import type {
 } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
+import { t } from '../i18n/index.js'
 import { argPreview } from '../lib/toolArgs.js'
 import {
   appendDirectDelta,
@@ -263,6 +264,26 @@ const dispatch = (
         const { name, text, fired_at } = event.payload
         const tag = fired_at ? `${name} @ ${fired_at}` : name
         sys(`─── ⏰ ${tag} ───\n${text}\n${'─'.repeat(40)}`)
+      }
+      return
+    }
+    case 'notice': {
+      // Runtime prose, not the model's: never merged into the streamed answer.
+      // The sentence is picked here so it follows the reader's locale, with
+      // the blocking tool's own first line underneath when one was given.
+      if (sys) {
+        const said = t(`gui.notice.${event.payload.kind}`, event.payload.kind)
+        const detail = event.payload.detail
+        sys(detail ? `${said}\n${detail}` : said)
+      }
+      return
+    }
+    case 'subagent.delivered': {
+      // The seam where a delegated run's result re-entered the turn; without
+      // it the retelling that follows reads as the model speaking unprompted.
+      if (sys) {
+        const key = event.payload.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered'
+        sys(`↩ ${event.payload.label} — ${t(key, key)}`)
       }
       return
     }

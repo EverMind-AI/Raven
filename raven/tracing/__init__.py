@@ -14,8 +14,9 @@ config. Spans land at ``~/.raven/traces/logs/audit-spans.log`` (override with
 from __future__ import annotations
 
 from . import config, trace
+from .spans import set_surface
 
-__all__ = ["enabled", "trace"]
+__all__ = ["enabled", "set_surface", "trace"]
 
 
 def enabled() -> bool:

@@ -220,6 +220,13 @@ class StubResult(_Strict):
 
 class MessageStartPayload(_Strict):
     turn_id: str
+    content: str = Field(
+        "",
+        description=(
+            "The message that started the turn. Present so a client that did not send it "
+            "can draw the question: the user entry reaches the transcript only at turn end."
+        ),
+    )
     target: DirectTarget | None = None
     """Which conversation this event belongs to; null is the main agent.
 
@@ -243,6 +250,24 @@ class EpisodeStartPayload(_Strict):
 class EpisodeStartEvent(_Strict):
     type: Literal["episode.start"]
     payload: EpisodeStartPayload
+
+
+class NoticePayload(_Strict):
+    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
+    detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
+
+
+class NoticeEvent(_Strict):
+    """Prose the runtime wrote, not the model.
+
+    It must not arrive as `token.delta`: that buffer is the model's voice, so
+    the text would render as the answer -- glued to whatever the model narrated
+    just before it, carrying the answer's copy and branch actions, and stuck in
+    English whatever language the turn was in.
+    """
+
+    type: Literal["notice"]
+    payload: NoticePayload
 
 
 class TokenDeltaPayload(_Strict):
@@ -291,6 +316,14 @@ class ToolCompletePayload(_Strict):
     result_preview: str
     truncated: bool
     metadata: dict[str, JsonValue] | None = None
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified diff of what the call changed on disk, when the tool could produce one. "
+            "The only record of what a whole-file write replaced: the arguments carry the new "
+            "content and nothing else, so a client without this draws an overwrite as all additions."
+        ),
+    )
 
 
 class ToolCompleteEvent(_Strict):
@@ -332,6 +365,27 @@ class CronDeliveredPayload(_Strict):
 class CronDeliveredEvent(_Strict):
     type: Literal["cron.delivered"]
     payload: CronDeliveredPayload
+
+
+class SubagentDeliveredPayload(_Strict):
+    kind: Literal["spawn", "dag"]
+    label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
+    status: Literal["ok", "error"]
+    run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
+
+
+class SubagentDeliveredEvent(_Strict):
+    """A delegated run's result re-entered its conversation here.
+
+    The injection itself is invisible on the wire -- the next frame a client
+    sees is an assistant turn nobody visibly asked. This event marks the seam,
+    emitted just after the result is submitted to the main loop, so a client
+    can say "this reply is the sub-agent's result coming back" at the exact
+    point in the flow where that is true.
+    """
+
+    type: Literal["subagent.delivered"]
+    payload: SubagentDeliveredPayload
 
 
 DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped"]
@@ -443,6 +497,21 @@ class DagNodeDetail(_Strict):
     output_file: str | None = None
     output_chars: int
     output_truncated: bool
+    status: DagNodeStatus | None = Field(
+        default=None,
+        description="This node's own last recorded status; null when the run has written no manifest yet.",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Why the node failed. A failed node has no output, so without this it reads as unanswered.",
+    )
+    messages: list["TranscriptMessage"] = Field(
+        default_factory=list,
+        description=(
+            "What the node was asked, what it did on the way where the transport could see it, "
+            "and what it answered -- the shape subagent.context returns, so one renderer draws both."
+        ),
+    )
 
 
 class DagGetParams(_Strict):
@@ -458,6 +527,14 @@ class DagNodeParams(_Strict):
     run_id: str
     node: str
     max_output_chars: int | None = None
+    session_key: str | None = Field(
+        default=None,
+        description=(
+            "Which conversation's run to read, as `dag.get` already takes. The handler has "
+            "always read it; a run directory lives inside its session, so a caller that omits "
+            "it is asking the server to guess."
+        ),
+    )
 
 
 class DagNodeResult(_Strict):
@@ -468,6 +545,7 @@ TurnEvent = Annotated[
     Union[
         MessageStartEvent,
         EpisodeStartEvent,
+        NoticeEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -476,6 +554,7 @@ TurnEvent = Annotated[
         MessageCompleteEvent,
         ErrorEvent,
         CronDeliveredEvent,
+        SubagentDeliveredEvent,
         DagRunStartedEvent,
         DagNodeUpdatedEvent,
         DagRunCompletedEvent,
@@ -498,6 +577,7 @@ class SessionListItem(_Strict):
     source: str | None = None
     started_at: float = Field(..., description="Unix timestamp from created_at.")
     title: str
+    pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
 
 
 class SessionListParams(_Strict):
@@ -586,6 +666,21 @@ class SessionTitleResult(_Strict):
     """
 
     title: str | None = None
+    session_key: str
+    pending: bool
+
+
+class SessionPinParams(_Strict):
+    session_id: str = Field(..., description="Full session_key.")
+    pinned: bool = Field(..., description="True pins the session to the top of the picker; False unpins.")
+
+
+class SessionPinResult(_Strict):
+    """pending=True means the flag is held in memory for a lazy (never-saved)
+    session and lands with the session's first save — same contract as
+    session.title."""
+
+    pinned: bool
     session_key: str
     pending: bool
 
@@ -945,6 +1040,10 @@ class SystemHelloResult(_Strict):
     server_version: str
     server_capabilities: list[str]
     session: SystemHelloSession
+    platform: Literal["mac", "windows", "linux"] = Field(
+        default="linux",
+        description="The gateway host's OS family, so a client can word host-side actions (Finder vs Explorer).",
+    )
 
 
 class SystemPingParams(_Strict):
@@ -957,7 +1056,13 @@ class SystemPingResult(_Strict):
 
 
 class SystemVersionParams(_Strict):
-    pass
+    check: bool = Field(
+        default=False,
+        description=(
+            "Fetch the latest release now instead of answering from the daily cache. "
+            "For the explicit check button: a person who just asked deserves a live answer."
+        ),
+    )
 
 
 class SystemVersionResult(_Strict):
@@ -1129,6 +1234,116 @@ class ToolsConfigureParams(_Strict):
 
 
 ToolsConfigureResult = StubResult
+
+
+# ---------------------------------------------------------------------------
+# subagent.* -- the background calls one conversation handed off
+#
+# Singular, and directly above the plural `subagents.*` that configures which
+# external agents exist, because the two names are one keystroke apart and mean
+# different things. These two read the on-disk record the delegation paths leave
+# in the session's own directory -- a `spawn` call, and every node of a graph run.
+# The graph is still read through `dag.*`, which has the structure this flat list
+# does not; the list's job is "which agents worked on this conversation", and
+# answering it with only half of them was worse than a little duplication.
+# ---------------------------------------------------------------------------
+
+
+class SubagentCall(_Strict):
+    """One handed-off unit of work, as a row in the panel that lists them."""
+
+    id: str = Field(
+        ...,
+        description=(
+            "A spawn's call id, or '<run_id>/<node>' for a graph node. Opaque to a client: a spawn row is "
+            "opened through subagent.context and a dag row through dag.node, which is what `kind` is for."
+        ),
+    )
+    kind: str = Field(
+        default="spawn",
+        description="spawn | dag. Which of the two delegation paths made this, and so how it is opened.",
+    )
+    run_id: str | None = Field(default=None, description="dag rows only: the graph run this node belongs to.")
+    node: str | None = Field(default=None, description="dag rows only: the node's id inside that run.")
+    label: str = Field(..., description="What it was asked, in short. The prompt's first line when unlabelled.")
+    status: str = Field(
+        ...,
+        description=(
+            "run | ok | error | cancelled | queued | skipped. An aborted call reads as error: it answered, "
+            "but not with the work. A spawn record with no readable status is derived from its files -- an "
+            "answer on disk means it ended. `queued` and `skipped` only occur for graph nodes."
+        ),
+    )
+    agent: str | None = Field(default=None, description="The external agent that ran it, or null for a raven subagent.")
+    instance: str | None = Field(default=None, description="The handle sharing one stateful agent session, if any.")
+    started_at: str | None = Field(default=None, description="ISO 8601; the record stores epoch millis.")
+    ended_at: str | None = Field(default=None, description="Absent while it is still running.")
+    message_count: int = Field(..., description="What was asked, plus the answer once there is one.")
+    tokens: int | None = Field(
+        default=None,
+        description=(
+            "Input plus output tokens this run spent. Null, not zero, when the transport that ran it cannot "
+            "report usage -- the cli lane never can, and a zero there would be a claim about the agent."
+        ),
+    )
+    tool_call_count: int | None = Field(
+        default=None,
+        description="How many tools it called. Null where the transport has no per-step visibility.",
+    )
+
+
+class SubagentListParams(_Strict):
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "Whose calls to list. Absent or unknown is an empty list, not an error: the record lives inside "
+            "one conversation's directory, so there is no cross-session listing to give."
+        ),
+    )
+
+
+class SubagentListResult(_Strict):
+    items: list[SubagentCall] = Field(..., description="Newest first.")
+
+
+class SubagentContextParams(_Strict):
+    id: str = Field(..., description="The call id from subagent.list.")
+    session_id: str = Field(
+        ...,
+        description="Required with the id: a call is addressed by conversation and call, never by call alone.",
+    )
+
+
+class SubagentContextResult(_Strict):
+    """The same wire shape ``session.resume`` returns, so one renderer draws both."""
+
+    id: str
+    messages: list["TranscriptMessage"] = Field(
+        ...,
+        description=(
+            "What was asked, the run's own recorded turns where the transport could see them "
+            "(acp records thoughts, tool calls and results; cli cannot), and what came back."
+        ),
+    )
+    status: str | None = None
+    label: str | None = None
+    agent: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    tool_calls: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What it did between the question and the answer, in order. Empty where the transport that ran it "
+            "has no per-step visibility -- which is a property of the transport, not a quiet run."
+        ),
+    )
+    tokens: int | None = Field(default=None, description="Input plus output; null when usage was not reported.")
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    thought_chars: int = Field(
+        default=0,
+        description="How much reasoning it emitted, where the transport reports it separately from the answer.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1526,6 +1741,20 @@ class SessionInitInfo(_Strict):
     )
 
 
+class TranscriptTurnEnded(_Strict):
+    """Why a turn's transcript stops where it does."""
+
+    status: str = Field(..., description="'cancelled' (a person stopped it) or 'failed'.")
+    reason: str | None = None
+
+
+class TranscriptNotice(_Strict):
+    """Marks an assistant entry the runtime wrote rather than the model."""
+
+    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
+    detail: str | None = None
+
+
 class TranscriptToolCall(_Strict):
     id: str
     name: str
@@ -1543,6 +1772,22 @@ class TranscriptMessage(_Strict):
     timestamp: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[TranscriptToolCall] | None = None
+    diff: str | None = Field(
+        default=None,
+        description="A file tool's unified diff of the change it made, on its role='tool' entry.",
+    )
+    turn_ended: TranscriptTurnEnded | None = Field(
+        default=None,
+        description="Present on the closing entry of a turn that was cancelled or died: why the transcript stops.",
+    )
+    notice: TranscriptNotice | None = Field(
+        default=None,
+        description=(
+            "Present on an assistant entry the runtime wrote. The model reads `text`, "
+            "but a reader must not: render the notice, or a reload attributes runtime "
+            "prose to the model that a live view showed as its own row."
+        ),
+    )
 
 
 class SessionCloseParams(_Strict):
@@ -1625,11 +1870,23 @@ class ExtPluginRow(_Strict):
     bundled: bool
 
 
+class ToolSetupNeed(_Strict):
+    setting: str = Field(..., description="Dotted config key that unlocks the tool.")
+    env: str | None = Field(default=None, description="Environment variable accepted instead.")
+
+
 class ExtToolRow(_Strict):
     name: str
     description: str
     enabled: bool
     mcp_server: str | None = Field(default=None, description="Owning MCP server, or null for a built-in tool.")
+    needs: ToolSetupNeed | None = Field(
+        default=None,
+        description=(
+            "Set when the tool exists but is withheld for want of a key. The model cannot call it; "
+            "the row is here so the page can offer the field instead of the tool simply being absent."
+        ),
+    )
 
 
 class ExtListParams(_Strict):
@@ -1820,11 +2077,23 @@ class SettingsEverosSetResult(_Strict):
     applied: bool
 
 
+class ChannelField(_Strict):
+    key: str
+    label: str
+    required: bool
+    secret: bool
+    set: bool = Field(..., description="Whether a value is stored; the value itself never rides the wire.")
+
+
 class ChannelStatusRow(_Strict):
     name: str
     enabled: bool
     configured: bool
     missing: list[str] = Field(..., description="Required fields still empty.")
+    fields: list[ChannelField] = Field(
+        default_factory=list,
+        description="Every field the channel takes, so a client can render its configure form.",
+    )
 
 
 class ChannelsStatusParams(_Strict):
@@ -1836,6 +2105,21 @@ class ChannelsStatusResult(_Strict):
     gateway_running: bool
 
 
+class ChannelsConfigureParams(_Strict):
+    name: str
+    fields: dict[str, JsonValue] = Field(
+        default_factory=dict, description="Field-path -> value patch; blank strings are skipped, never written."
+    )
+    enabled: bool | None = Field(
+        default=None,
+        description="Connect or disconnect the channel; omitted leaves its current state alone.",
+    )
+
+
+class ChannelsConfigureResult(_Strict):
+    applied: bool
+
+
 class FsEntry(_Strict):
     name: str
     dir: bool
@@ -1843,11 +2127,15 @@ class FsEntry(_Strict):
 
 
 class FsListParams(_Strict):
-    path: str | None = Field(default=None, description="Workspace-relative; the root when omitted.")
+    path: str | None = Field(default=None, description="Root-relative; the root when omitted.")
+    session: str | None = Field(
+        default=None,
+        description="Session key whose working directory roots the listing; the policy default when omitted.",
+    )
 
 
 class FsListResult(_Strict):
-    root: str
+    root: str = Field(..., description="Absolute working directory the listing is rooted at.")
     path: str
     entries: list[FsEntry] = Field(..., description="Directories first, dotfiles omitted, capped at 500.")
 
@@ -1855,6 +2143,7 @@ class FsListResult(_Strict):
 class FsReadParams(_Strict):
     path: str
     max_bytes: int | None = None
+    session: str | None = None
 
 
 class FsReadResult(_Strict):
@@ -1866,12 +2155,22 @@ class FsReadResult(_Strict):
 class FsUploadParams(_Strict):
     name: str
     content_b64: str
+    session: str | None = None
 
 
 class FsUploadResult(_Strict):
     path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
     abs_path: str
     size: int
+
+
+class FsRevealParams(_Strict):
+    path: str = Field(..., description="Absolute, or relative to the session's working directory.")
+    session: str | None = None
+
+
+class FsRevealResult(_Strict):
+    ok: Literal[True]
 
 
 # ---------------------------------------------------------------------------
@@ -2273,6 +2572,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.delete": (SessionDeleteParams, SessionDeleteResult),
     "session.most_recent": (SessionMostRecentParams, SessionMostRecentResult),
     "session.title": (SessionTitleParams, SessionTitleResult),
+    "session.pin": (SessionPinParams, SessionPinResult),
     "session.clear": (SessionClearParams, SessionClearResult),
     "session.undo": (SessionUndoParams, SessionUndoResult),
     "session.export": (SessionExportParams, SessionExportResult),
@@ -2295,9 +2595,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
     "channels.status": (ChannelsStatusParams, ChannelsStatusResult),
+    "channels.configure": (ChannelsConfigureParams, ChannelsConfigureResult),
     "fs.list": (FsListParams, FsListResult),
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
+    "fs.reveal": (FsRevealParams, FsRevealResult),
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
@@ -2336,6 +2638,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
+    # subagent.* -- handed-off calls (singular; not the plural below)
+    "subagent.list": (SubagentListParams, SubagentListResult),
+    "subagent.context": (SubagentContextParams, SubagentContextResult),
     # subagents.*
     "subagents.list": (SubagentsListParams, SubagentsListResult),
     "subagents.add": (SubagentsAddParams, SubagentsAddResult),
@@ -2427,6 +2732,8 @@ __all__ = [
     "SessionExportResult",
     "MessageStartEvent",
     "EpisodeStartEvent",
+    "NoticeEvent",
+    "NoticePayload",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",
     "ToolStartEvent",

@@ -26,6 +26,8 @@ from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
     EpisodeStart,
+    Notice,
+    NoticeKind,
     Origin,
     OriginPools,
     Reasoning,
@@ -206,9 +208,10 @@ class RpcOutlet:
     (-> token.delta), and the discrete deliverables via ``deliver`` (Reasoning ->
     thinking.delta, ToolEvent -> tool.start / tool.complete, a non-streamed Text
     -> a token.delta). The turn's completion (``message.complete``) and failure
-    (``error``) are emitted by the sink after the render barrier. Notice and
-    MediaOut are eaten — the wire protocol has no event for them and no client
-    shows per-turn progress or tool media today (a known gap, deferred)."""
+    (``error``) are emitted by the sink after the render barrier. A Notice the
+    runtime raised about the turn itself (``action_blocked``) rides ``notice``;
+    progress and tool-hint notices are eaten, as is MediaOut — no client shows
+    per-turn progress or tool media today (a known gap, deferred)."""
 
     def __init__(
         self,
@@ -284,6 +287,7 @@ class RpcOutlet:
                             "result_preview": out.result_preview,
                             "truncated": out.truncated,
                             "metadata": out.metadata,
+                            "diff": out.diff,
                         },
                     },
                 )
@@ -296,13 +300,23 @@ class RpcOutlet:
                     self._subscription(cid),
                     {"type": "token.delta", "payload": self._tagged({"text": out.content}, cid)},
                 )
+        elif isinstance(out, Notice):
+            # Only the kinds that describe what the RUNTIME did to the turn go
+            # on the wire. Progress and tool-hint notices exist for text-only
+            # channels that cannot draw a tool row; this client draws every call
+            # already, so forwarding them would narrate the same work twice.
+            if out.kind is NoticeKind.ACTION_BLOCKED:
+                await self._emitter.emit(
+                    self._subscription(cid),
+                    {"type": "notice", "payload": {"kind": out.kind.value, "detail": out.detail or ""}},
+                )
         elif isinstance(out, EpisodeStart):
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.
             await self._emitter.emit(
                 self._subscription(cid), {"type": "episode.start", "payload": {"index": out.index}}
             )
-        # Notice / MediaOut: eaten (no wire event today).
+        # MediaOut: eaten (no wire event today).
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
         if done:

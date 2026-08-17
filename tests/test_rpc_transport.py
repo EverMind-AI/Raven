@@ -338,3 +338,42 @@ def test_an_ordinary_file_outside_the_workspace_still_reads_when_unrestricted(
     monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(tmp_path, restrict=False))
 
     assert resolve_readable(str(elsewhere)) == elsewhere.resolve()
+
+
+def test_the_default_workspace_is_exempt_from_the_state_dir_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default workspace lives AT ``~/.raven/workspace`` -- inside the state
+    directory -- so the fence as first written denied every file the agent
+    itself had produced. The secrets the fence exists for (config.json, oauth/,
+    serve.json) are all siblings of the workspace, never inside it."""
+    from raven.rpc import files as files_module
+
+    home = tmp_path / "raven-home"
+    ws = home / "workspace"
+    ws.mkdir(parents=True)
+    (ws / "report.md").write_text("# produced by the agent")
+    (home / "serve.json").write_text(json.dumps({"token": "s3cret"}))
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(ws, restrict=False))
+
+    assert resolve_readable(str(ws / "report.md")) == (ws / "report.md").resolve()
+    with pytest.raises(PermissionError):
+        resolve_readable(str(home / "serve.json"))
+
+
+async def test_the_sign_in_cookie_outlives_the_browser_session(gateway_client) -> None:
+    """Without a max-age this is a session cookie: closing the browser signs the
+    user out of a gateway that never went anywhere, and the page then reports a
+    sign-in failure for a service that is up. The server side is durable across
+    restarts, so nothing but this bounds how long a tab stays signed in."""
+    from raven.rpc.transports.ws import _COOKIE_MAX_AGE_S
+
+    gateway, client = gateway_client
+    resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()})
+
+    morsel = resp.cookies["raven_session"]
+    assert int(morsel["max-age"]) == _COOKIE_MAX_AGE_S
+    # Still the same hardening it had; the lifetime is the only thing added.
+    assert morsel["httponly"]
+    assert morsel["samesite"] == "Strict"

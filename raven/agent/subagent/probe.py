@@ -344,12 +344,12 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     def elapsed() -> int:
         return int((time.monotonic() - started) * 1000)
 
-    probe = await probe_one(cfg, source=source)
     kind = getattr(cfg, "kind", None)
+    if kind == "acp":
+        return await _test_acp(cfg, source=source, elapsed=elapsed)
+    probe = await probe_one(cfg, source=source)
     if kind == "openai":
         return TestResult(cfg.name, source, "openai", probe.status == "ready", probe.detail, None, elapsed())
-    if kind == "acp":
-        return await _test_acp(cfg, source=source, probe=probe, elapsed=elapsed)
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
@@ -376,7 +376,7 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", text[:_DETAIL_CAP], elapsed())
 
 
-async def _test_acp(cfg: Any, *, source: Source, probe: ProbeResult, elapsed: Any) -> TestResult:
+async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """Verify an acp agent by connecting to it, and remember what it reported.
 
     Cheaper *and* stronger than the cli test, which is why the two differ. The cli
@@ -385,9 +385,12 @@ async def _test_acp(cfg: Any, *, source: Source, probe: ProbeResult, elapsed: An
     handshake, so this costs no tokens and still reaches a real verdict; and unlike
     the cli test it produces something reusable, since the snapshot it records is
     what the roster later reads statefulness from.
+
+    Always connects live, deliberately skipping the probe: the probe reports the
+    *recorded* snapshot, so consulting it here would replay a stale failure (one
+    slow first `npx` download) as this test's verdict forever. A truly absent
+    executable still fails fast -- launch raises before any timeout waits.
     """
-    if probe.status == "missing":
-        return TestResult(cfg.name, source, "acp", False, probe.detail, None, elapsed())
     snapshot = await verify_agent(cfg)
     if source == "config":
         # Presets are templates, not entries: recording a snapshot for one would

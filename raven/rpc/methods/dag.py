@@ -15,12 +15,18 @@ not listening for every frame is not stuck with whatever it happened to catch:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._reader import DagReadError
 from raven.agent.subagent_dag._resume import read_run_reconciled
+from raven.agent.subagent_dag._store import node_live_key
+from raven.agent.subagent_history import dag_root
 from raven.rpc.errors import InternalError
+from raven.rpc.methods.session import _map_to_wire
+from raven.rpc.methods.subagent import _session_dir
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -56,18 +62,109 @@ async def dag_get(params: dict, *, agent_loop_factory: "AgentLoopFactory | None"
 
 
 async def dag_node(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """One node's rendered prompt and (head of its) output."""
-    tool = _dag_tool(agent_loop_factory)
+    """One node's rendered prompt and (head of its) output.
+
+    Falls back to reading the run dir directly when no live tool is registered.
+    The tool only exists while third-party sub-agents are configured, and a run
+    that already happened does not stop having happened when that config changes
+    -- without the fallback, every past node became unreadable (and
+    ``subagent.list`` would list nodes nothing could open).
+    """
+    run_id = str(params.get("run_id") or "")
+    node_id = str(params.get("node") or "")
+    max_chars = int(params.get("max_output_chars") or 20000)
+    try:
+        tool = _dag_tool(agent_loop_factory)
+    except InternalError:
+        node = await _node_off_disk(run_id, node_id, max_chars, params.get("session_key"), agent_loop_factory)
+        return {"node": _with_messages(node, run_id, node_id)}
     try:
         node = await tool.read_node(
-            params.get("run_id", ""),
-            params.get("node", ""),
-            max_output_chars=int(params.get("max_output_chars") or 20000),
+            run_id,
+            node_id,
+            max_output_chars=max_chars,
             session_key=params.get("session_key"),
         )
     except (DagReadError, DagValidationError) as exc:
         raise InternalError(str(exc)) from exc
-    return {"node": node}
+    return {"node": _with_messages(node, run_id, node_id)}
+
+
+def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
+    """Add the node's transcript in the shape the ordinary renderer takes.
+
+    A node used to reach the panel as two strings, so it drew as two bubbles
+    with nothing between them -- while the equivalent spawned call drew every
+    tool it called. Same wire mapping as ``subagent.context`` for the same
+    reason: one renderer for both kinds of delegated work, not two that drift.
+    """
+    stored: list[dict[str, Any]] = []
+    if node.get("prompt"):
+        stored.append({"role": "user", "content": node["prompt"]})
+    turns = node.get("transcript")
+    if not turns:
+        # Nothing has reached disk yet, which is the normal state of a node
+        # being watched while it runs: its only account is the activity this
+        # very process is collecting. Copied out of the live list because the
+        # collector republishes it on every update from the agent.
+        live = run_activity.live(node_live_key(run_id, node_id))
+        turns = [m for m in list(live.transcript) if isinstance(m, dict) and m.get("role")] if live else []
+    stored.extend(turns)
+    if node.get("output"):
+        stored.append({"role": "assistant", "content": node["output"]})
+    elif node.get("error"):
+        # A failed node's account of itself. It has no output by definition, so
+        # without this the panel showed the prompt and stopped -- the reader saw
+        # a question nobody answered rather than a node that failed, and the
+        # reason was sitting in the manifest the whole time.
+        stored.append({"role": "assistant", "content": str(node["error"])})
+    # The reader's raw provider-shaped turns do not go on the wire: a client
+    # draws `messages`, and declaring the unmapped shape beside it would put a
+    # second, undrawn representation of the same run in the contract.
+    detail = {k: v for k, v in node.items() if k != "transcript"}
+    return {**detail, "messages": _map_to_wire(stored, f"dag:{run_id}:{node_id}")}
+
+
+async def _node_off_disk(
+    run_id: str, node_id: str, max_chars: int, session_key: Any, agent_loop_factory: Any = None
+) -> dict:
+    """``read_node`` against the local filesystem instead of a workspace backend.
+
+    The history root is under agent home, which is local for every backend that
+    runs raven itself; a remote workspace backend is the one case this cannot
+    serve, and that case still has the live tool. Same reader either way -- the
+    file layout is not restated here.
+
+    The factory is threaded through rather than resolved fresh: the running
+    manager carries the project grouping (``raven serve`` builds it with a
+    ``project_slug`` from the launch directory), and a manager built here
+    without it resolves ``sessions/<channel>/`` instead of ``sessions/<slug>/``.
+    That is a directory the run was never written to, so every node the lister
+    offers -- and the lister *does* pass the factory -- would open empty, which
+    is the exact state this fallback exists to prevent.
+    """
+    from raven.agent.subagent_dag._reader import read_node as read_node_off
+
+    if not session_key:
+        raise InternalError("dag.node needs session_key when no run_subagent_dag tool is live")
+    try:
+        root = str(dag_root(_session_dir(str(session_key), agent_loop_factory)))
+        return await read_node_off(_LocalFiles(), root, run_id, node_id, max_output_chars=max_chars)
+    except (DagReadError, DagValidationError, OSError) as exc:
+        raise InternalError(str(exc)) from exc
+
+
+class _LocalFiles:
+    """The three calls ``_reader`` makes of a workspace backend, done locally."""
+
+    async def file_exists(self, path: str) -> bool:
+        return Path(path).is_file()
+
+    async def read_file(self, path: str) -> bytes:
+        return Path(path).read_bytes()
+
+    def join_path(self, *parts: str) -> str:
+        return str(Path(*parts))
 
 
 def register_dag_methods(

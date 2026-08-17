@@ -56,11 +56,29 @@ from raven.spine.turn import Origin, session_of
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
+# Runtime prose, not the model's: written here and shown to the model so it
+# stops, and carried to the client as a notice rather than as an answer. It
+# reads as the assistant speaking, which is exactly why it must never be
+# rendered in the assistant's voice -- see the ``_notice`` key below.
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
     "Would you like me to continue with the remaining parts of the task that do not "
     "require this operation?"
 )
+
+# Marks a stored assistant message the runtime wrote. ``_save_turn`` renames it
+# to ``notice`` for storage, the same way ``_diff`` becomes ``diff``: the
+# underscore keeps it out of the provider payload while the turn is live.
+_NOTICE_KEY = "_notice"
+
+
+def _first_line(text: str) -> str:
+    """The one line of a tool error worth putting in front of a person."""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
 
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
@@ -91,6 +109,7 @@ if TYPE_CHECKING:
     from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
+    from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
@@ -281,6 +300,17 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("display_call failed for {}: {}", getattr(tool, "name", "?"), exc)
         return None
+
+
+_TOOL_PREVIEW_MAX_CHARS = 4_000
+"""How much of a tool's output rides the ``tool.complete`` event to a client.
+
+Nothing is lost from the model's side by this number -- it always receives the
+whole result, and this is only what a reader is shown. It bounds one event, and
+one event lands per tool call in a live turn and again on a session replay, so
+it is a page-weight budget rather than a correctness one. Four thousand covers
+an error with its traceback, a directory listing, and a short file, which is
+most of what a reader opens a card to read."""
 
 
 class AgentLoop:
@@ -620,6 +650,8 @@ class AgentLoop:
         self._mcp_event_sink = None
         self._mcp_connected = False
         self._mcp_connecting = False
+        # Consecutive backend.store failures; see _note_memory_failure.
+        self._memory_fail_streak = 0
         self._processing_lock = asyncio.Lock()
         # Fired after every dispatched turn (success, error, or cancel).
         # Used by the proactive-engine WakeScheduler to re-fire wakes that
@@ -1438,11 +1470,42 @@ class AgentLoop:
             return
         try:
             await self.backend.store(session_key, messages_slice)
-        except Exception:
+        except Exception as e:  # noqa: BLE001 — the turn must survive a failed index
             logger.exception(
                 "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
                 session_key,
             )
+            self._note_memory_failure(str(e))
+        else:
+            self._note_memory_ok()
+
+    _MEMORY_FAILURES_BEFORE_ALARM = 3
+    """How many consecutive store failures make this a standing fault rather
+    than a blip. One failed write is a network hiccup nobody needs told about;
+    three in a row is a backend that is not coming back on its own."""
+
+    def _note_memory_ok(self) -> None:
+        """A successful store clears a standing fault, and says so once."""
+        if self._memory_fail_streak >= self._MEMORY_FAILURES_BEFORE_ALARM:
+            logger.info("backend.store recovered; long-term memory is being written again")
+            self._emit_mcp_event("memory.health", {"ok": True, "error": None})
+        self._memory_fail_streak = 0
+
+    def _note_memory_failure(self, detail: str) -> None:
+        """Escalate a run of failures from the log to the client.
+
+        The swallow above is right -- a failed index must not cost the user
+        their reply -- but on its own it made a permanently broken backend
+        indistinguishable from a working one: writes and recalls can fail every
+        turn for days with the only trace in a log nobody is reading.
+        """
+        self._memory_fail_streak += 1
+        if self._memory_fail_streak == self._MEMORY_FAILURES_BEFORE_ALARM:
+            logger.error(
+                "backend.store has failed {} times in a row; long-term memory is not being written",
+                self._memory_fail_streak,
+            )
+            self._emit_mcp_event("memory.health", {"ok": False, "error": detail[:400]})
 
     def _collect_injected_skill_ids(
         self,
@@ -2155,6 +2218,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
@@ -2352,6 +2416,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 abort_action = False
+                abort_reason = ""
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -2418,7 +2483,13 @@ class AgentLoop:
                     # The log stays one line; the UI event keeps newlines so a
                     # tool that reports several items (e.g. ask_user's
                     # question -> answer pairs) renders one row each.
-                    preview = display_src[:200]
+                    #
+                    # 200 was a row's worth, and the row is not where this ends
+                    # up: the detail card shows the same string, where 200 chars
+                    # cut an ordinary error message mid-sentence and left the
+                    # reader to guess the rest. The cap is what a card can show
+                    # without becoming a file viewer, not what a row can.
+                    preview = display_src[:_TOOL_PREVIEW_MAX_CHARS]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
@@ -2432,8 +2503,12 @@ class AgentLoop:
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
-                                "truncated": len(display_src) > 200,
+                                "truncated": len(display_src) > _TOOL_PREVIEW_MAX_CHARS,
                                 "metadata": tool_metadata,
+                                # The one hop the diff has to make by hand: the
+                                # registry attaches it to the result, and only
+                                # this event reaches a UI.
+                                "diff": getattr(result, "diff", None),
                             },
                         )
                     # A skill the model loaded itself never passes through
@@ -2452,10 +2527,22 @@ class AgentLoop:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
                         messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if (tool_diff := getattr(result, "diff", None)) and messages:
+                        # Underscore-keyed while the turn is live so no provider
+                        # payload grows a field mid-turn; `_save_turn` renames it
+                        # to `diff` on the stored entry. Without this the diff
+                        # exists only on the live tool event, and a reloaded page
+                        # can never number a change it no longer has.
+                        messages[-1]["_diff"] = tool_diff
                     if attach_blocks:
                         pending_images.extend(attach_blocks)
                     if getattr(result, "abort_action", False):
                         abort_action = True
+                        # The blocking tool's own words, kept for the reader: the
+                        # canned reply below says an operation stopped but never
+                        # which one, so without this the user is told a thing
+                        # happened and given no way to find out what.
+                        abort_reason = _first_line(model_text)
                         # A single assistant message may contain several parallel
                         # tool calls (for example ``rm`` followed by a Python
                         # fallback). Once policy terminates the action, none of
@@ -2490,11 +2577,27 @@ class AgentLoop:
                     # the rejected operation into an equivalent interpreter,
                     # script, or tool call. Finish the turn in runtime code and
                     # expose only the non-destructive continuation question.
-                    # Streaming callers need the explicit callback because no
-                    # final model response exists to generate token deltas.
+                    # The model must read this, so it goes into the history as an
+                    # assistant message -- but it goes to the CLIENT as a notice.
+                    # Pushed down the token stream instead, it arrived as the
+                    # model's own prose: glued to whatever the model had just
+                    # narrated (nothing separates two segments in one buffer),
+                    # dressed in the answer's copy and branch actions, and always
+                    # in English no matter what language the turn was in.
+                    from raven.spine.events import NoticeKind as _NoticeKind
+
                     messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
+                    if messages:
+                        messages[-1][_NOTICE_KEY] = {
+                            "kind": _NoticeKind.ACTION_BLOCKED.value,
+                            **({"detail": abort_reason} if abort_reason else {}),
+                        }
                     final_content = _ABORTED_ACTION_REPLY
-                    if on_token_delta is not None:
+                    if on_notice is not None:
+                        await on_notice(_NoticeKind.ACTION_BLOCKED, abort_reason)
+                    elif on_token_delta is not None:
+                        # A channel with no notice outlet still has to say
+                        # something, and silence is the worse failure.
                         await on_token_delta(_ABORTED_ACTION_REPLY)
                     break
 
@@ -2749,6 +2852,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2761,6 +2865,13 @@ class AgentLoop:
         spine TurnRequest's origin.
         """
         from raven.agent.hook import AgentHookContext
+
+        # Captured before any pre-turn work (hooks, personalization, context
+        # assembly): this is when the user's message arrived, and it becomes the
+        # stored user entry's timestamp. Everything saved by _save_turn is
+        # stamped at turn END, so without this the whole turn shares one clock
+        # read and a restored transcript cannot say how long the turn took.
+        turn_received_at = self._now_fn().isoformat()
 
         channel = req.source.channel
         sender_id = req.source.sender_id
@@ -2989,21 +3100,67 @@ class AgentLoop:
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
-        final_content, _, all_msgs, outcome = await self._run_agent_loop(
-            initial_messages,
-            on_progress=on_progress,
-            extraction_session_id=extraction_sid,
-            session_key=key,
-            model=routed_model,
-            fallback_models=fallback_models,
-            injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
-            on_token_delta=on_token_delta,
-            on_reasoning_delta=on_reasoning_delta,
-            on_tool_event=on_tool_event,
-            on_episode_start=on_episode_start,
-            usage_sink=usage_sink,
-            drain=drain,
-        )
+        # The stream buffers exist so a turn that dies mid-answer still has the
+        # text that was already on the reader's screen: the loop only appends an
+        # assistant message once the provider call returns, so a cancel in the
+        # middle of one would otherwise lose exactly what streamed.
+        streamed: dict[str, str] = {"text": "", "thought": ""}
+
+        async def _tap_token(delta: str) -> None:
+            streamed["text"] += delta
+            if on_token_delta is not None:
+                await on_token_delta(delta)
+
+        async def _tap_reasoning(delta: str) -> None:
+            streamed["thought"] += delta
+            if on_reasoning_delta is not None:
+                await on_reasoning_delta(delta)
+
+        async def _tap_episode(index: int) -> None:
+            # A new episode is a new stream: without the reset, a buffer that
+            # spans two assistant messages matches neither and would be saved
+            # as a duplicate of text the loop already committed.
+            streamed["text"] = ""
+            streamed["thought"] = ""
+            if on_episode_start is not None:
+                await on_episode_start(index)
+
+        try:
+            final_content, _, all_msgs, outcome = await self._run_agent_loop(
+                initial_messages,
+                on_progress=on_progress,
+                extraction_session_id=extraction_sid,
+                session_key=key,
+                model=routed_model,
+                fallback_models=fallback_models,
+                injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
+                on_token_delta=_tap_token if on_token_delta is not None else None,
+                on_reasoning_delta=_tap_reasoning if on_reasoning_delta is not None else None,
+                on_tool_event=on_tool_event,
+                on_episode_start=_tap_episode,
+                on_notice=on_notice,
+                usage_sink=usage_sink,
+                drain=drain,
+            )
+        except asyncio.CancelledError:
+            # A stop is not a failure, but it is also not amnesia: what already
+            # streamed is work the reader saw, so it lands in the session with a
+            # note saying a person ended the turn. Then the cancel proceeds.
+            self._save_broken_turn(
+                session, initial_messages, turn_start_idx, turn_received_at, streamed, status="cancelled"
+            )
+            raise
+        except Exception as exc:
+            self._save_broken_turn(
+                session,
+                initial_messages,
+                turn_start_idx,
+                turn_received_at,
+                streamed,
+                status="failed",
+                reason=str(exc),
+            )
+            raise
         self._stash_recovery(key, outcome)
 
         if final_content is None:
@@ -3027,7 +3184,7 @@ class AgentLoop:
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
 
-        self._save_turn(session, all_msgs, turn_start_idx)
+        self._save_turn(session, all_msgs, turn_start_idx, received_at=turn_received_at)
         self.sessions.save(session)
         await self.context_engine.after_turn(
             key,
@@ -3087,11 +3244,95 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
-        """Save new-turn messages into session, truncating large tool results."""
+    def _save_broken_turn(
+        self,
+        session: Session,
+        messages: list[dict],
+        skip: int,
+        received_at: str | None,
+        streamed: dict[str, str],
+        *,
+        status: str,
+        reason: str | None = None,
+    ) -> None:
+        """Persist what a cancelled or failed turn got as far as producing.
+
+        The tail of the turn plus two kinds of repair, then one closing marker:
+
+        - an assistant message whose tool calls never got results gains a
+          synthetic ``[interrupted]`` result per open call, because a stored
+          history with an unanswered tool call is one strict providers reject
+          on the next turn;
+        - the text that streamed after the last committed message is saved as
+          its own assistant message -- it was on the reader's screen, and the
+          loop only commits a message once the provider call returns;
+        - the marker entry carries ``turn_ended`` so a client can say WHY the
+          transcript stops there, and readable text so the model sees the same.
+
+        Never raises: this runs on the way out of a dying turn, and a rescue
+        that throws replaces one loss with another.
+        """
+        try:
+            tail: list[dict] = [dict(m) for m in messages[skip:]]
+            open_calls: dict[str, str] = {}
+            for m in tail:
+                if m.get("role") == "assistant":
+                    for tc in m.get("tool_calls") or []:
+                        cid = str(getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else "") or "")
+                        if cid:
+                            name = getattr(getattr(tc, "function", None), "name", None) or (
+                                (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
+                            )
+                            open_calls[cid] = str(name or "tool")
+                elif m.get("role") == "tool":
+                    open_calls.pop(str(m.get("tool_call_id") or ""), None)
+            for cid, name in open_calls.items():
+                tail.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "name": name,
+                        "content": "[interrupted] this call never returned",
+                    }
+                )
+            text = (streamed.get("text") or "").strip()
+            if text and not any(
+                m.get("role") == "assistant" and str(m.get("content") or "").strip() == text for m in tail
+            ):
+                partial: dict[str, Any] = {"role": "assistant", "content": streamed["text"]}
+                if (thought := (streamed.get("thought") or "").strip()) and not any(
+                    str(m.get("reasoning_content") or "").strip() == thought for m in tail
+                ):
+                    partial["reasoning_content"] = streamed["thought"]
+                tail.append(partial)
+            word = "cancelled by the user" if status == "cancelled" else f"failed: {reason or 'unknown error'}"
+            marker: dict[str, Any] = {
+                "role": "assistant",
+                "content": f"(turn {word})",
+                "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
+            }
+            tail.append(marker)
+            self._save_turn(session, tail, 0, received_at=received_at)
+            self.sessions.save(session)
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
+
+    def _save_turn(self, session: Session, messages: list[dict], skip: int, *, received_at: str | None = None) -> None:
+        """Save new-turn messages into session, truncating large tool results.
+
+        ``received_at`` is the wall clock at which the turn's inbound message
+        arrived. This save runs after the turn completes, so stamping every
+        entry "now" would give the user message and the final answer the same
+        timestamp -- and a restored transcript reads the gap between those two
+        as the turn's duration.
+        """
+        first_user_pending = received_at is not None
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            if first_user_pending and role == "user":
+                entry.setdefault("timestamp", received_at)
+                first_user_pending = False
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if entry.get(_ATTACHED_IMAGE_KEY):
@@ -3100,6 +3341,17 @@ class AgentLoop:
                 continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if notice := entry.pop(_NOTICE_KEY, None):
+                # Same rename as the diff below, for the same reason. Without
+                # it a reload draws this runtime prose as the model's answer,
+                # so the live view and the restored one disagree about who
+                # spoke.
+                entry["notice"] = notice
+            if tool_diff := entry.pop("_diff", None):
+                # Renamed for storage: the private spelling kept it out of the
+                # live provider payload, the plain one is what session.resume
+                # maps onto the wire so a reloaded page can renumber the change.
+                entry["diff"] = tool_diff
             if role == "tool" and isinstance(content, list):
                 # A multimodal tool result. Images must never reach the JSONL:
                 # a single one adds megabytes that are then replayed on every
@@ -3370,6 +3622,7 @@ class AgentLoop:
                         result_preview=info["result_preview"],
                         truncated=info["truncated"],
                         metadata=info.get("metadata"),
+                        diff=info.get("diff"),
                     )
                 )
 
@@ -3385,6 +3638,9 @@ class AgentLoop:
                         detail=text,
                     )
                 )
+
+        async def on_notice(kind: NoticeKind, detail: str) -> None:
+            await emit(Notice(kind=kind, detail=detail or None))
 
         async def _emit_media(paths: list[str]) -> None:
             await emit(
@@ -3480,6 +3736,7 @@ class AgentLoop:
                         on_reasoning_delta=on_reasoning if stream else None,
                         on_tool_event=on_tool,
                         on_episode_start=on_episode if stream else None,
+                        on_notice=on_notice,
                         usage_sink=usage_sink,
                         origin=req.origin,
                         drain=drain,

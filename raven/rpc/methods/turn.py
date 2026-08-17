@@ -289,7 +289,14 @@ async def turn_send(
     _active_turns[lane] = handle
 
     if emitter is not None:
-        await emitter.emit(parsed.session_key, {"type": "message.start", "payload": _tag({"turn_id": turn_id}, target)})
+        # The question rides the event that opens the turn so a client which
+        # did not send it can still draw it: the user entry is written to the
+        # transcript only at turn end, so until then this is the only place a
+        # second window can learn what was asked.
+        await emitter.emit(
+            parsed.session_key,
+            {"type": "message.start", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+        )
 
     return {"turn_id": turn_id, "accepted": True}
 

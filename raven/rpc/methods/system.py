@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.metadata as _md
 import os
 import re
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -90,6 +91,9 @@ async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
             "default_channel": channel,
             "default_session_key": f"{channel}:default",
         },
+        # The host's OS family, not the client's: reveal-in-file-manager runs
+        # where the gateway runs, so the wording has to match that machine.
+        "platform": "mac" if sys.platform == "darwin" else "windows" if sys.platform.startswith("win") else "linux",
     }
 
 
@@ -120,12 +124,27 @@ def _cached_update() -> tuple[bool, str] | None:
 
 
 async def system_version(params: dict) -> dict:
-    """`system.version` — versions for diagnostics, plus any pending upgrade."""
+    """`system.version` — versions for diagnostics, plus any pending upgrade.
+
+    ``check: true`` fetches the latest release before answering, off the event
+    loop. The cached answer can be a poll interval old, which is fine for the
+    banner at boot and wrong for the button labelled "check for updates" -- a
+    person who just clicked it is asking about now.
+    """
     result = {
         "server_version": SERVER_VERSION,
         "schema_version": SCHEMA_VERSION,
         "raven_version": _raven_version(),
     }
+    if params.get("check") is True:
+        import asyncio
+
+        try:
+            from raven.cli.update_notice import check_for_update
+
+            await asyncio.to_thread(check_for_update, _raven_version())
+        except Exception:
+            pass
     pending = _cached_update()
     if pending is not None:
         result["update_available"], result["latest_version"] = pending
@@ -159,6 +178,13 @@ async def system_upgrade(params: dict) -> dict:
         plan = await asyncio.to_thread(plan_upgrade)
     except UpgradeError as exc:
         raise _refuse("not_upgradable", str(exc)) from exc
+    except _md.PackageNotFoundError as exc:
+        # No metadata means the install is mid-replacement: uv removes the old
+        # environment before writing the new one, and a first upgrade sits in
+        # that gap for minutes while it byte-compiles. Reporting the raw lookup
+        # failure reads as a broken install and invites a second upgrade into
+        # the same gap, so name what is actually happening.
+        raise _refuse("in_progress", "An upgrade is already running; wait for it to finish.") from exc
     except Exception as exc:
         raise _refuse("check_failed", f"Could not check for a newer Raven release: {exc}") from exc
 

@@ -37,6 +37,7 @@ from raven.rpc.methods.session import (
     session_export,
     session_list,
     session_most_recent,
+    session_pin,
     session_resume,
     session_title,
 )
@@ -338,6 +339,69 @@ async def test_session_resume_maps_tool_role_with_name_and_context(
     assert tool_msg["text"] == "tool output here"
     assert tool_msg["name"] == "exec"
     assert tool_msg["context"] == "ls -la"
+
+
+async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The stored diff is the one record with real line numbers -- the wire
+    must carry it or a reloaded page can never renumber a change."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_445566"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "edit it")
+    session.add_message("tool", "Successfully edited", tool_call_id="c1", name="edit_file", diff="@@ -1 +1 @@\n-a\n+b")
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["diff"].startswith("@@ -1 +1 @@")
+
+
+async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``turn_ended`` says why a transcript stops where it does; without it a
+    reloaded page renders the marker's model-facing text as an answer."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_778899"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "do it")
+    session.add_message("assistant", "(turn cancelled by the user)", turn_ended={"status": "cancelled"})
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["turn_ended"] == {"status": "cancelled"}
+
+
+async def test_session_resume_carries_the_runtime_notice_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Runtime prose is stored as an assistant message because the MODEL has to
+    read it on the next turn. A reader must not: without ``notice`` on the wire
+    the reload attributes it to the model, contradicting the live view, which
+    drew it as its own row."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_991122"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "clean up")
+    session.add_message(
+        "assistant",
+        "The operation was not completed",
+        notice={"kind": "action_blocked", "detail": "Error: Command blocked by safety guard"},
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["notice"]["kind"] == "action_blocked"
+    assert "safety guard" in msgs[1]["notice"]["detail"]
 
 
 async def test_session_resume_skips_malformed_stored_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -803,6 +867,40 @@ async def test_session_title_on_fresh_session_is_pending_and_writes_no_file(
     assert not files, f"lazy title must not write files; got: {files}"
 
     assert mgr.get_or_create("tui:20260610_100000_lazy01").metadata.get("title") == "Early"
+
+
+async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pinning survives a reload and rides the session.list rows.
+
+    The regression this pins: the web UI used to keep the flag in page memory
+    only, so every refresh silently dropped the pinned group.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("tui:20260610_100000_pin001")
+    s.add_message("user", "hello")
+    mgr.save(s)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": True})
+    assert result == {"pinned": True, "session_key": "tui:20260610_100000_pin001", "pending": False}
+
+    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
+    assert reloaded is not None and reloaded.metadata.get("pinned") is True
+
+    listed = await session_list({})
+    row = next(r for r in listed["sessions"] if r["id"] == "tui:20260610_100000_pin001")
+    assert row["pinned"] is True
+
+    result = await session_pin({"session_id": "tui:20260610_100000_pin001", "pinned": False})
+    assert result["pinned"] is False
+    reloaded = SessionManager(tmp_path).peek("tui:20260610_100000_pin001")
+    assert reloaded is not None and "pinned" not in reloaded.metadata
 
 
 async def test_session_title_missing_session_id_returns_early(

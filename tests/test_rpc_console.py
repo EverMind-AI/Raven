@@ -482,3 +482,290 @@ async def test_editing_a_job_keeps_its_id(isolated_config: None) -> None:
     assert edited["job"]["expr"] == "0 10 * * *"
     listed = await console_module.cron_list({})
     assert len(listed["jobs"]) == 1, "an edit must replace the job, not add a second one"
+
+
+# ---------------------------------------------------------------------------
+# fs.* roots at the session's working directory, not at agent home
+# ---------------------------------------------------------------------------
+
+
+class _WorkdirLoop:
+    """The two attributes the fs handlers read, with the resolver's contract."""
+
+    def __init__(self, by_key: dict[str, Path], default: Path):
+        self._by_key = by_key
+        self._default = default
+        self.workspace = default / "never-this"
+        self.asked: list[str] = []
+
+    def peek_session_workdir(self, session_key: str) -> Path:
+        self.asked.append(session_key)
+        return self._by_key.get(session_key, self._default)
+
+
+def _loop_factory(loop):
+    return lambda: loop
+
+
+async def test_fs_list_roots_at_the_session_workdir(tmp_path: Path) -> None:
+    """The panel lists where the session's turns actually read and write. Agent
+    home is where the old code pointed, and with the default config that is
+    ``~/.raven/workspace`` -- a directory the launch-directory policy never
+    touches, so the tree showed a place no tool call would ever change."""
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    (launch / "notes.md").write_text("x")
+
+    loop = _WorkdirLoop({}, launch)
+    r = await console_module.fs_list({}, agent_loop_factory=_loop_factory(loop))
+
+    assert r["root"] == str(launch.resolve())
+    assert [e["name"] for e in r["entries"]] == ["notes.md"]
+
+
+async def test_fs_list_asks_for_the_named_session(tmp_path: Path) -> None:
+    """A session pinned to its own directory must list THAT directory: the key
+    goes through to the resolver, which is where the override lives."""
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (b / "pinned.txt").write_text("x")
+
+    loop = _WorkdirLoop({"tui:beta": b}, a)
+    r = await console_module.fs_list({"session": "tui:beta"}, agent_loop_factory=_loop_factory(loop))
+
+    assert loop.asked == ["tui:beta"]
+    assert [e["name"] for e in r["entries"]] == ["pinned.txt"]
+
+
+async def test_fs_upload_lands_in_the_session_workdir(tmp_path: Path) -> None:
+    """The uploaded file is handed to the agent as a relative path, so it has to
+    land under the directory the agent's tools resolve relative paths against."""
+    import base64
+
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    loop = _WorkdirLoop({}, launch)
+
+    r = await console_module.fs_upload(
+        {"name": "pic.png", "content_b64": base64.b64encode(b"bytes").decode(), "session": "tui:x"},
+        agent_loop_factory=_loop_factory(loop),
+    )
+
+    assert r["abs_path"] == str(launch.resolve() / "uploads" / "pic.png")
+    assert (launch / "uploads" / "pic.png").read_bytes() == b"bytes"
+
+
+async def test_fs_root_survives_a_loop_without_the_resolver(tmp_path: Path) -> None:
+    """An older loop object has no ``peek_session_workdir``; the handler falls
+    back to its workspace rather than crashing the panel."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    loop = SimpleNamespace(workspace=ws)
+
+    r = await console_module.fs_list({}, agent_loop_factory=_loop_factory(loop))
+
+    assert r["root"] == str(ws.resolve())
+
+
+# ---------------------------------------------------------------------------
+# fs.reveal -- the viewer's fence, then the host's file manager
+# ---------------------------------------------------------------------------
+
+
+async def test_fs_reveal_selects_the_file_in_the_host_file_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    target = launch / "report.md"
+    target.write_text("# hi")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    r = await console_module.fs_reveal({"path": "report.md"}, agent_loop_factory=_loop_factory(loop))
+
+    assert r == {"ok": True}
+    assert spawned == [["open", "-R", str(target.resolve())]]
+
+
+async def test_fs_reveal_refuses_what_the_viewer_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One fence for both: a path the page may not render must not pop a Finder
+    window either, or the reveal button becomes the read the viewer denied."""
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "raven-home"
+    home.mkdir()
+    secret = home / "serve.json"
+    secret.write_text("{}")
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+
+    loop = _WorkdirLoop({}, tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_reveal({"path": str(secret)}, agent_loop_factory=_loop_factory(loop))
+    assert spawned == []
+
+
+# ---------------------------------------------------------------------------
+# channels.status carries the field specs; channels.configure writes them
+# ---------------------------------------------------------------------------
+
+
+async def test_channels_status_rows_carry_their_field_specs(isolated_config: None) -> None:
+    """The page's configure form is drawn from these rows: every field the
+    channel takes rides along -- name, whether it is secret, whether a value is
+    stored -- and never the value itself, because the row crosses the wire on
+    every status poll."""
+    r = await console_module.channels_status({})
+
+    tg = next(c for c in r["channels"] if c["name"] == "telegram")
+    keys = {f["key"] for f in tg["fields"]}
+    assert "token" in keys
+    assert "enabled" not in keys, "the switch is not a form field"
+    token = next(f for f in tg["fields"] if f["key"] == "token")
+    assert token["secret"] is True
+    assert token["set"] is False
+    assert "value" not in token
+
+
+async def test_channels_configure_stores_the_field_and_status_says_so(isolated_config: None) -> None:
+    import json as _json
+
+    from raven.config.loader import get_config_path
+
+    r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "123:abc"}})
+    assert r == {"applied": True}
+
+    raw = _json.loads(get_config_path().read_text())
+    assert raw["channels"]["telegram"]["token"] == "123:abc"
+
+    status = await console_module.channels_status({})
+    tg = next(c for c in status["channels"] if c["name"] == "telegram")
+    token = next(f for f in tg["fields"] if f["key"] == "token")
+    assert token["set"] is True
+    assert "123:abc" not in _json.dumps(status), "secret values must never ride the status wire"
+
+
+async def test_channels_configure_skips_blanks_and_refuses_unknown_fields(isolated_config: None) -> None:
+    """A blank box means "left as is": the form sends every field it showed, so
+    writing the empties would erase a stored secret on every unrelated save."""
+    from raven.rpc.errors import ConfigValidationError
+
+    r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "  "}})
+    assert r == {"applied": False}
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.channels_configure({"name": "telegram", "fields": {"not_a_field": "x"}})
+    with pytest.raises(ConfigValidationError):
+        await console_module.channels_configure({"name": "telegram", "fields": {"enabled": True}})
+    with pytest.raises(ConfigValidationError):
+        await console_module.channels_configure({"name": "nope", "fields": {"token": "x"}})
+
+
+async def test_channels_configure_connects_and_disconnects(isolated_config: None) -> None:
+    """Connecting and disconnecting were both client-side flags that the next
+    status poll overwrote: no RPC could write `enabled`, so the buttons moved
+    nothing on disk and the row snapped back to whatever the config still said.
+    """
+    import json as _json
+
+    from raven.config.loader import get_config_path
+
+    def stored_enabled() -> bool:
+        raw = _json.loads(get_config_path().read_text())
+        return bool(raw["channels"]["telegram"].get("enabled"))
+
+    async def reported_on() -> bool:
+        status = await console_module.channels_status({})
+        return next(c for c in status["channels"] if c["name"] == "telegram")["enabled"]
+
+    r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "123:abc"}, "enabled": True})
+    assert r == {"applied": True}
+    assert stored_enabled() is True
+    assert await reported_on() is True
+
+    r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
+    assert r == {"applied": True}
+    assert stored_enabled() is False
+    assert await reported_on() is False
+
+    raw = _json.loads(get_config_path().read_text())
+    assert raw["channels"]["telegram"]["token"] == "123:abc", "disconnecting must keep the credentials"
+
+
+async def test_channels_configure_refuses_an_empty_request(isolated_config: None) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.channels_configure({"name": "telegram", "fields": {}})
+    with pytest.raises(ConfigValidationError):
+        await console_module.channels_configure({"name": "telegram"})
+
+
+# ---------------------------------------------------------------------------
+# fs.* answers about the state dir the way the viewer does -- both directions
+# ---------------------------------------------------------------------------
+
+
+def _fs_loop(root):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(workspace=str(root))
+
+
+@pytest.mark.asyncio
+async def test_fs_refuses_the_state_dir_when_the_root_sits_above_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under the launch-directory policy the root is the cwd, so started from a
+    home directory the state dir is a *child* of it -- and `serve.json` holds a
+    token that mints unlimited nonces, so it outlives the cookie it is not
+    supposed to be worth."""
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods import console as console_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".raven").mkdir()
+    (tmp_path / ".raven" / "serve.json").write_text('{"token": "SECRET"}')
+    (tmp_path / "notes.md").write_text("ordinary project file")
+    loop = _fs_loop(tmp_path)
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_read({"path": ".raven/serve.json"}, agent_loop_factory=lambda: loop)
+
+    ok = await console_module.fs_read({"path": "notes.md"}, agent_loop_factory=lambda: loop)
+    assert ok["content"] == "ordinary project file"
+
+    listed = await console_module.fs_list({"path": ""}, agent_loop_factory=lambda: loop)
+    assert [e["name"] for e in listed["entries"]] == ["notes.md"], "the state dir must not be offered"
+
+
+@pytest.mark.asyncio
+async def test_fs_still_serves_the_workspace_when_it_is_inside_the_state_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default workspace lives AT `~/.raven/workspace`, so a fence without
+    the viewer's carve-out refuses every file the agent itself wrote -- the same
+    asymmetry as the leak above, mirrored: the viewer renders a file the panel
+    will not list."""
+    from raven.rpc.methods import console as console_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ws = tmp_path / ".raven" / "workspace"
+    ws.mkdir(parents=True)
+    (ws / "report.md").write_text("the agent wrote this")
+    loop = _fs_loop(ws)
+
+    listed = await console_module.fs_list({"path": ""}, agent_loop_factory=lambda: loop)
+    assert [e["name"] for e in listed["entries"]] == ["report.md"]
+
+    got = await console_module.fs_read({"path": "report.md"}, agent_loop_factory=lambda: loop)
+    assert got["content"] == "the agent wrote this"

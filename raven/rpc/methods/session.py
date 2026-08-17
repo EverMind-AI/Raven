@@ -226,7 +226,10 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
       later ``role="tool"`` entry through its ``tool_call_id``. The provider
       shape is rebuilt rather than forwarded so a live-cache message holding
       provider objects still serialises;
-    * ``timestamp`` — the stored ISO wall clock.
+    * ``timestamp`` — the stored ISO wall clock;
+    * ``diff`` — a file tool's unified diff of the change it made, on its
+      ``role="tool"`` entry. The one record with real line numbers, which the
+      arguments alone can never reconstruct.
     """
     out = []
     for m in messages:
@@ -243,7 +246,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             entry["text"] = content
         elif content is not None:
             entry["text"] = str(content)
-        for extra_key in ("context", "name", "tool_call_id", "timestamp"):
+        for extra_key in ("context", "name", "tool_call_id", "timestamp", "diff", "turn_ended", "notice"):
             if extra_key in m:
                 entry[extra_key] = m[extra_key]
         reasoning = m.get("reasoning_content")
@@ -463,6 +466,7 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "started_at": started_at,
         "updated_at": _ts(info.get("last_user_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
+        "pinned": bool(meta.get("pinned")),
     }
 
 
@@ -585,6 +589,40 @@ async def session_title(
     if raw is not None:
         current_title = (raw.metadata or {}).get("title")
     return {"title": current_title, "session_key": session_key, "pending": False}
+
+
+async def session_pin(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.pin`` — pin or unpin a session in the picker.
+
+    The flag lives in session metadata, exactly like the title, so it survives
+    a page reload and is shared by every client reading the same session pool.
+    Same lazy-session contract as ``session.title``: a never-saved session
+    keeps the flag in memory (``pending`` True) until its first save.
+    """
+    session_key = params.get("session_id", "")
+    pinned = bool(params.get("pinned"))
+    if not session_key:
+        return {"pinned": pinned, "session_key": "", "pending": False}
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    mgr = _manager_for(agent_loop, config)
+    session = mgr.get_or_create(session_key)
+    if pinned:
+        session.metadata["pinned"] = True
+    else:
+        session.metadata.pop("pinned", None)
+    if mgr.exists(session_key):
+        try:
+            mgr.save(session)
+        except Exception:
+            logger.warning("session.pin: failed to persist pin for {}", session_key)
+            return {"pinned": pinned, "session_key": session_key, "pending": True}
+        return {"pinned": pinned, "session_key": session_key, "pending": False}
+    return {"pinned": pinned, "session_key": session_key, "pending": True}
 
 
 async def session_clear(
@@ -859,6 +897,9 @@ def register_session_methods(
     async def _title(params: dict) -> dict:
         return await session_title(params, agent_loop_factory=agent_loop_factory)
 
+    async def _pin(params: dict) -> dict:
+        return await session_pin(params, agent_loop_factory=agent_loop_factory)
+
     async def _clear(params: dict) -> dict:
         return await session_clear(params, agent_loop_factory=agent_loop_factory)
 
@@ -881,6 +922,7 @@ def register_session_methods(
     dispatcher.register("session.delete", _delete)
     dispatcher.register("session.most_recent", _most_recent)
     dispatcher.register("session.title", _title)
+    dispatcher.register("session.pin", _pin)
     dispatcher.register("session.clear", _clear)
     dispatcher.register("session.undo", _undo)
     dispatcher.register("session.compress", _compress)
@@ -896,6 +938,7 @@ __all__ = [
     "session_list",
     "session_delete",
     "session_most_recent",
+    "session_pin",
     "session_title",
     "session_clear",
     "session_undo",

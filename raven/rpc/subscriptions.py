@@ -7,6 +7,8 @@ Per-session subscription registry with a coalesce loop:
 - 16ms coalesce loop merges consecutive `token.delta` events into one frame
 - Queue overflow → emit error(code=-32010) + close subscription
 - Non-token events pass through preserving order
+- A turn in flight is buffered, so a subscription opened mid-turn is handed
+  what already streamed before it sees anything live
 
 Owned by the RPC server; passed to `register_turn_methods(dispatcher, emitter)`.
 """
@@ -23,6 +25,20 @@ from loguru import logger
 
 COALESCE_WINDOW_S = 0.016
 QUEUE_CAPACITY = 512
+
+# How many events of a turn in flight are held for replay. Well under
+# QUEUE_CAPACITY: the whole buffer is pushed into a new subscription's queue at
+# once, and a replay that overflows the queue would kill the subscription it
+# exists to serve. Consecutive deltas are merged as they are recorded, so this
+# counts segments and tool calls, not tokens -- a long turn reaches it only
+# after a few hundred calls.
+REPLAY_CAPACITY = 400
+
+# Deltas of the same kind concatenate instead of accumulating one event each.
+_MERGEABLE = ("token.delta", "thinking.delta")
+
+# Ends a turn: the transcript on disk becomes the record, so the buffer goes.
+_TURN_OVER = ("message.complete", "error")
 
 
 @dataclass
@@ -44,17 +60,37 @@ class SubscriptionEmitter:
         self._send_frame = send_frame
         self._by_session: dict[str, list[Subscription]] = {}
         self._by_id: dict[str, Subscription] = {}
+        # session_key -> events of the turn currently in flight, oldest first.
+        self._replay: dict[str, list[dict[str, Any]]] = {}
 
     async def register(self, session_key: str) -> str:
-        """Create a subscription, start its coalesce loop, return the sub_id."""
+        """Create a subscription, start its coalesce loop, return the sub_id.
+
+        A turn already in flight is replayed into the new queue first. Without
+        it, opening the session in a second window (or following a shared link)
+        showed an empty transcript until the turn ended: ``session.resume``
+        reads what is on disk, and a turn is written only once it finishes.
+
+        Replay and the live stream must not overlap or leave a gap, so the
+        buffer is copied and the subscription published with no ``await``
+        between them: an ``emit`` can only run at a suspension point, so it
+        either lands before the copy (and is in it) or after the publish (and
+        is queued behind it).
+        """
         sub = Subscription(
             sub_id=uuid4().hex,
             session_key=session_key,
             queue=asyncio.Queue(maxsize=QUEUE_CAPACITY),
         )
-        sub.coalesce_task = asyncio.create_task(self._coalesce_loop(sub))
+        for event in self._replay.get(session_key, ()):
+            try:
+                sub.queue.put_nowait(event)
+            except asyncio.QueueFull:  # pragma: no cover - REPLAY_CAPACITY forbids it
+                logger.warning("replay overflowed a fresh subscription for {}", session_key)
+                break
         self._by_session.setdefault(session_key, []).append(sub)
         self._by_id[sub.sub_id] = sub
+        sub.coalesce_task = asyncio.create_task(self._coalesce_loop(sub))
         return sub.sub_id
 
     async def unregister(self, sub_id: str) -> bool:
@@ -71,7 +107,11 @@ class SubscriptionEmitter:
 
         Overflow → emit error event + close the affected subscription.
         Other subscribers unaffected.
+
+        Recorded before it is dispatched, so a subscription registering during
+        this call already finds it in the buffer.
         """
+        self._record(session_key, event)
         for sub in list(self._by_session.get(session_key, [])):
             if sub.closed:
                 continue
@@ -82,12 +122,52 @@ class SubscriptionEmitter:
 
     async def close_session(self, session_key: str) -> None:
         """Close all subscriptions belonging to session_key."""
+        self._replay.pop(session_key, None)
         for sub in list(self._by_session.get(session_key, [])):
             await self.unregister(sub.sub_id)
 
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
+
+    def _record(self, session_key: str, event: dict[str, Any]) -> None:
+        """Keep the turn in flight replayable. Synchronous by contract.
+
+        Anything awaited here would open a window in which ``register`` copies
+        a buffer this event has not reached yet while ``emit`` has already
+        passed the point that would have queued it live -- the one ordering
+        that loses an event outright.
+        """
+        kind = event.get("type")
+        if kind == "message.start":
+            # A new turn replaces the last one; nothing before it is live.
+            self._replay[session_key] = [event]
+            return
+        buffered = self._replay.get(session_key)
+        if buffered is None:
+            return
+        if kind in _TURN_OVER:
+            # The turn is over and the transcript is on disk, which is what a
+            # client joining from here reads. Holding the buffer past this
+            # point would replay a finished turn on top of that.
+            del self._replay[session_key]
+            return
+        last = buffered[-1]
+        if kind in _MERGEABLE and last.get("type") == kind:
+            # One growing event rather than one per token, so the buffer is
+            # bounded by how many times the turn changed register, not by how
+            # much it said.
+            buffered[-1] = {
+                "type": kind,
+                "payload": {**last.get("payload", {}), "text": last["payload"].get("text", "") + _text_of(event)},
+            }
+            return
+        buffered.append(event)
+        if len(buffered) > REPLAY_CAPACITY:
+            # Drop from the middle, never the head or the tail: the head opens
+            # the turn a client has to render into, and the tail is what is on
+            # screen right now.
+            del buffered[1]
 
     def _mark_closed(self, sub: Subscription) -> None:
         """Mark subscription closed, cancel its loop, drop from indexes."""
@@ -171,6 +251,11 @@ class SubscriptionEmitter:
             )
         finally:
             self._mark_closed(sub)
+
+
+def _text_of(event: dict[str, Any]) -> str:
+    payload = event.get("payload")
+    return str(payload.get("text", "")) if isinstance(payload, dict) else ""
 
 
 def _merge_consecutive_token_deltas(
