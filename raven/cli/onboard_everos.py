@@ -1392,6 +1392,35 @@ def _ask_managed_port() -> int:
     return int(answer)
 
 
+def _retry_or_skip_address() -> str:
+    """After a bad address: type another, or give up on memory for now.
+
+    Both ways this is reached -- a port with a typo in it, a server not started
+    yet -- are fixed by one more line of input, so ending the step over either
+    would send the user back through the whole wizard for a digit. Giving up
+    stays available and is what the caller turns into "memory off"; what is not
+    on offer is being redirected into a managed setup nobody asked for.
+    """
+    questionary = oc._require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    choice = questionary.select(
+        oc._t("What now?", "怎么办？"),
+        choices=[
+            questionary.Choice(oc._t("Enter a different address", "重新填写地址"), value="retry"),
+            questionary.Choice(
+                oc._t("Skip (start it later and re-run `raven onboard`)", "跳过（稍后启动它，再重跑 raven onboard）"),
+                value="skip",
+            ),
+        ],
+        style=RAVEN_STYLE,
+        qmark=oc._QMARK,
+    ).ask()
+    if choice is None:
+        raise typer.Exit(1)
+    return str(choice)
+
+
 def _use_self_managed_everos() -> bool:
     """Point raven at an EverOS the user runs. Returns False if it is unreachable.
 
@@ -1412,25 +1441,29 @@ def _use_self_managed_everos() -> bool:
     from raven.config.update import set_plugin_config_fields
     from raven.plugin.memory.everos._server import ProbeResult, probe_health
 
-    host = _prompt_text(oc._t("Host (e.g. 127.0.0.1):", "主机(如 127.0.0.1):"), default="localhost")
-    port = _prompt_text(oc._t("Port:", "端口:"))
-    if not port.isdigit():
-        oc.console.print(oc._t(f"  [red]x Not a port: {port}[/red]", f"  [red]✗ 不是合法端口：{port}[/red]"))
-        return False
+    while True:
+        host = _prompt_text(oc._t("Host (e.g. 127.0.0.1):", "主机(如 127.0.0.1):"), default="localhost")
+        port = _prompt_text(oc._t("Port:", "端口:"))
+        if not port.isdigit():
+            oc.console.print(oc._t(f"  [red]x Not a port: {port}[/red]", f"  [red]✗ 不是合法端口：{port}[/red]"))
+            if _retry_or_skip_address() == "retry":
+                continue
+            return False
 
-    base_url = f"http://{host}:{port}"
-    oc.console.print(oc._t(f"  [dim]Checking {base_url}...[/dim]", f"  [dim]正在检查 {base_url}...[/dim]"))
-    result = probe_health(base_url)
-    if result is not ProbeResult.OK:
+        base_url = f"http://{host}:{port}"
+        oc.console.print(oc._t(f"  [dim]Checking {base_url}...[/dim]", f"  [dim]正在检查 {base_url}...[/dim]"))
+        result = probe_health(base_url)
+        if result is ProbeResult.OK:
+            break
         oc.console.print(
             oc._t(
-                f"  [red]x No EverOS answered at {base_url} ({result.value}).[/red]\n"
-                "  [dim]Start it, then run `raven onboard` again.[/dim]",
-                f"  [red]✗ {base_url} 上没有 EverOS 响应（{result.value}）。[/red]\n"
-                "  [dim]先启动它，然后重新运行 raven onboard。[/dim]",
+                f"  [red]x No EverOS answered at {base_url} ({result.value}).[/red]",
+                f"  [red]✗ {base_url} 上没有 EverOS 响应（{result.value}）。[/red]",
             ),
             highlight=False,
         )
+        if _retry_or_skip_address() == "retry":
+            continue
         return False
 
     set_plugin_config_fields(

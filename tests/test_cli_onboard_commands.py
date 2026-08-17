@@ -5310,8 +5310,13 @@ class TestPointingRavenAtAnEverosYouRun:
         from raven.cli import onboard_everos
         from raven.plugin.memory.everos._server import ProbeResult
 
+        import questionary
+
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
         self._stub_prompts(monkeypatch, host="127.0.0.1", port="8000")
+        # A refusal now offers a retype before giving up; this case is the
+        # giving-up branch, so answer it that way.
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("skip"))
         monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
 
         assert onboard_everos._use_self_managed_everos() is False
@@ -5592,3 +5597,76 @@ class TestARefusedSelfManagedAddressEndsTheStep:
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
+
+
+class TestARefusedAddressCanBeRetyped:
+    """A mistyped port should cost a retype, not a whole onboard run.
+
+    Ending the step outright was right about not falling through to the managed
+    path, but wrong about the most likely cause: the address was refused because
+    the server is not up yet or the port has a digit wrong. Both are fixed in
+    one line, and neither is a reason to send the user back to the start.
+    """
+
+    @staticmethod
+    def _prompts(monkeypatch, answers):
+        from raven.cli import onboard_everos
+
+        it = iter(answers)
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: next(it))
+
+    @staticmethod
+    def _choices(monkeypatch, answers):
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        it = iter(answers)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer(next(it)))
+        monkeypatch.setattr(onboard_everos.oc, "_require_questionary", lambda: questionary)
+
+    def test_a_second_address_is_accepted(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        self._prompts(monkeypatch, ["127.0.0.1", "8000", "127.0.0.1", "8100"])
+        self._choices(monkeypatch, ["retry"])
+        seen: list[str] = []
+
+        def _probe(url, **_kw):
+            seen.append(url)
+            return ProbeResult.OK if url.endswith(":8100") else ProbeResult.REFUSED
+
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", _probe)
+
+        assert onboard_everos._use_self_managed_everos() is True
+        assert seen == ["http://127.0.0.1:8000", "http://127.0.0.1:8100"]
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://127.0.0.1:8100"
+
+    def test_skipping_gives_up_without_recording_anything(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        self._prompts(monkeypatch, ["127.0.0.1", "8000"])
+        self._choices(monkeypatch, ["skip"])
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.REFUSED)
+
+        assert onboard_everos._use_self_managed_everos() is False
+        slice_ = (json.loads(tmp_env.read_text()).get("plugins") or {}).get("config", {}).get("everos-memory", {})
+        assert not slice_.get("base_url")
+
+    def test_a_nonsense_port_offers_the_same_choice(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A typo in the port is the same mistake as a typo in the host; it
+        should not be the one that ends the step without asking."""
+        from raven.cli import onboard_everos
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        self._prompts(monkeypatch, ["127.0.0.1", "80o0", "127.0.0.1", "8000"])
+        self._choices(monkeypatch, ["retry"])
+        monkeypatch.setattr("raven.plugin.memory.everos._server.probe_health", lambda _u, **_kw: ProbeResult.OK)
+
+        assert onboard_everos._use_self_managed_everos() is True
