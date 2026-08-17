@@ -8,6 +8,7 @@ Smoke-level coverage: ``--help`` works, options are surfaced, the
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -551,3 +552,119 @@ def test_print_llm_error_non_auth_categories_get_apt_hint_not_key_guidance(
         assert agent_commands._ONE_SHOT_EXIT["code"] == 1
     finally:
         agent_commands._ONE_SHOT_EXIT["code"] = 0
+
+
+# ---------------------------------------------------------------------------
+# Workspace template sync prints one summary line, not one per file, and
+# the one-shot path renders a per-turn tokens/cost summary line.
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_sync_prints_single_summary(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    from raven.utils.helpers import sync_workspace_templates
+
+    ws = tmp_path / "workspace"
+    added = sync_workspace_templates(ws)
+    first = capsys.readouterr()
+    first_text = first.out + first.err
+    assert added
+    assert "Initialized workspace" in first_text
+    assert first_text.count("Created") == 0
+
+    added_again = sync_workspace_templates(ws)
+    second = capsys.readouterr()
+    assert added_again == []
+    assert (second.out + second.err).strip() == ""
+
+    (ws / added[0]).unlink()
+    re_added = sync_workspace_templates(ws)
+    third = capsys.readouterr()
+    assert len(re_added) == 1
+    assert "(1 file)" in (third.out + third.err)
+
+
+def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) -> None:
+    """The module-level logger.disable in helpers yields to a later
+    logger.enable('raven'): loguru drops descendant rules whenever a parent
+    rule is set, so callers that enable logging before syncing get the
+    per-file detail. Freezes the behavior the helpers comment relies on."""
+    from loguru import logger
+
+    from raven.utils.helpers import sync_workspace_templates
+
+    records: list[str] = []
+    sink_id = logger.add(lambda m: records.append(str(m)), level="DEBUG")
+    try:
+        logger.enable("raven")
+        sync_workspace_templates(tmp_path / "ws", silent=True)
+    finally:
+        logger.remove(sink_id)
+    assert any("workspace sync: created" in m for m in records)
+
+
+def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
+    """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
+    the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
+    import os as _os
+
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+    from raven.spine import Text, TurnOutcome, Usage
+    from raven.token_wise.base import UsageSnapshot
+    from raven.token_wise.registry import StrategyRegistry
+
+    cfg = Config()
+    cfg.providers.openrouter.api_key = "stub-test-key"
+    if turn_summary_off:
+        cfg.cli.turn_summary = False
+    save_config(cfg)
+
+    class _StubSubagents:
+        def set_submit(self, _submit) -> None:
+            pass
+
+    class _StubAgentLoop:
+        def __init__(self, **kwargs):
+            self.channels_config = kwargs.get("channels_config")
+            self.subagents = _StubSubagents()
+            self.strategies = StrategyRegistry([])
+
+        def configure_personalization(self, *_args) -> None:
+            pass
+
+        async def run_turn(self, req, emit, drain, *, stream, **_kw) -> TurnOutcome:
+            await self.strategies.after_llm_call(
+                {"content": "stub"},
+                UsageSnapshot(
+                    model="stub-model",
+                    input_tokens=1200,
+                    output_tokens=340,
+                    estimated_cost_usd=0.004,
+                    session_key=req.conversation,
+                ),
+            )
+            await emit(Text(content="stub-response", source=req.source))
+            return TurnOutcome(usage=Usage(1200, 340, 1540), explicit_reply=True)
+
+        async def await_pending_extractions(self, **_kw) -> None:
+            pass
+
+        async def close_mcp(self) -> None:
+            pass
+
+    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
+    monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
+    monkeypatch.setattr("raven.cli.agent_commands.maybe_build_memory_backend", lambda *a, **k: None)
+    monkeypatch.setattr("raven.cli.agent_commands.build_plugin_tools", lambda *a, **k: [])
+    return runner.invoke(app, ["agent", "-m", "hi", "-w", str(tmp_path / "ws")])
+
+
+def test_turn_summary_line_present(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    r = _invoke_agent_with_usage(monkeypatch, tmp_path)
+    assert re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
+
+
+def test_turn_summary_respects_config_off(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    r = _invoke_agent_with_usage(monkeypatch, tmp_path, turn_summary_off=True)
+    assert not re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
