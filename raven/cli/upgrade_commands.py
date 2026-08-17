@@ -45,6 +45,16 @@ import subprocess
 import sys
 import time
 
+# How long to wait for the process being replaced to exit. Sized for a real
+# `raven serve` shutdown, which cancels detached sub-agents, closes every MCP
+# server, flushes the memory backend and closes the browser driver first, and so
+# takes tens of seconds routinely and minutes at worst. A tight bound is not a
+# safety margin here: the parent is going away either way, and giving up early
+# means the install never runs and the surface the upgrade was clicked from
+# never comes back. Waiting too long costs one sleeping helper; waiting too
+# little costs the user a Raven they have to restart by hand.
+PARENT_EXIT_TIMEOUT_S = 300
+
 
 def wait_for_parent(parent_pid):
     if sys.platform != "win32":
@@ -55,7 +65,7 @@ def wait_for_parent(parent_pid):
 def wait_for_parent_posix(parent_pid):
     # POSIX has no waitable handle for a non-child process, so poll the pid.
     # Bounded, so a parent that refuses to die cannot leave the helper resident.
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + PARENT_EXIT_TIMEOUT_S
     while time.monotonic() < deadline:
         try:
             os.kill(parent_pid, 0)
@@ -104,7 +114,7 @@ def wait_for_parent_windows(parent_pid):
         return 1
 
     try:
-        wait_status = kernel32.WaitForSingleObject(handle, 30_000)
+        wait_status = kernel32.WaitForSingleObject(handle, PARENT_EXIT_TIMEOUT_S * 1000)
         wait_error = ctypes.get_last_error()
     finally:
         kernel32.CloseHandle(handle)
@@ -186,6 +196,24 @@ def main(argv=None):
         command.append(requirement)
         return subprocess.run(command, check=False).returncode
 
+    def restart():
+        # Called on every path out of the install, not just the successful one.
+        # Once the parent has exited, this helper holds the only handle to the
+        # surface the user was sitting in -- so a failed install must still put
+        # it back. Leaving nothing running is strictly worse than not upgrading:
+        # the page the upgrade was clicked from cannot even reconnect to say
+        # what went wrong, and the user is left with a dead window.
+        if relaunch is None:
+            return True
+        try:
+            kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
+            subprocess.Popen(relaunch, **kwargs)
+        except OSError as exc:
+            print(f"Could not restart Raven: {exc}.", file=sys.stderr)
+            return False
+        print("Raven restarted.")
+        return True
+
     try:
         channel_status = install(f"raven[channels] @ {wheel_url}")
         if channel_status != 0:
@@ -195,6 +223,7 @@ def main(argv=None):
                     f"Unable to upgrade Raven: uv exited with status {base_status}.",
                     file=sys.stderr,
                 )
+                restart()
                 return base_status
             print(
                 "Warning: Channel dependencies failed to install; installed base raven only. "
@@ -203,20 +232,14 @@ def main(argv=None):
             )
     except OSError as exc:
         print(f"Unable to upgrade Raven: could not run uv: {exc}.", file=sys.stderr)
+        restart()
         return 1
 
     print(f"Raven upgraded: {current_version} -> {latest_version}")
-    if relaunch is not None:
-        try:
-            kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
-            subprocess.Popen(relaunch, **kwargs)
-        except OSError as exc:
-            print(f"Raven upgraded, but could not restart it: {exc}.", file=sys.stderr)
-            return 1
-        print("Raven restarted.")
+    if relaunch is None:
+        print("Restart any other running Raven process to use the new version.")
         return 0
-    print("Restart any other running Raven process to use the new version.")
-    return 0
+    return 0 if restart() else 1
 
 
 if __name__ == "__main__":

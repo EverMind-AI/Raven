@@ -379,10 +379,19 @@ def _stub_constraints_urlretrieve(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(urllib.request, "urlretrieve", Mock(side_effect=OSError("no network")))
 
 
-def _load_upgrade_helper() -> object:
+def _load_upgrade_helper_namespace() -> dict[str, object]:
     namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
     exec(upgrade_commands._UPGRADE_HELPER_SOURCE, namespace)
-    return namespace["main"]
+    return namespace
+
+
+def _load_upgrade_helper() -> object:
+    return _load_upgrade_helper_namespace()["main"]
+
+
+# Read from the helper rather than restated, so raising the bound does not need
+# an edit in two places to stay asserted.
+_PARENT_EXIT_TIMEOUT_S = _load_upgrade_helper_namespace()["PARENT_EXIT_TIMEOUT_S"]
 
 
 def test_upgrade_helper_bootstrap_runs_in_isolated_python() -> None:
@@ -561,6 +570,83 @@ def test_upgrade_helper_stops_when_parent_wait_fails(
     run.assert_not_called()
 
 
+RELAUNCH = json.dumps(["/home/u/.local/bin/raven", "serve", "--port", "18792"])
+
+
+def _helper_with_relaunch(monkeypatch: pytest.MonkeyPatch) -> tuple[object, Mock]:
+    popen = Mock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+    return helper_main, popen
+
+
+def test_upgrade_helper_restarts_the_surface_when_uv_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=3)))
+    helper_main, popen = _helper_with_relaunch(monkeypatch)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    # The install failed, but the process it replaced is already gone -- so the
+    # surface still has to come back, on the old version.
+    assert status == 3
+    popen.assert_called_once()
+    assert popen.call_args.args[0] == json.loads(RELAUNCH)
+
+
+def test_upgrade_helper_restarts_the_surface_when_uv_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(side_effect=OSError("uv is gone")))
+    helper_main, popen = _helper_with_relaunch(monkeypatch)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    popen.assert_called_once()
+
+
+def test_upgrade_helper_reports_a_failed_restart_after_a_good_install(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    assert "spawn denied" in capsys.readouterr().err
+
+
+def test_parent_wait_outlasts_a_slow_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A `raven serve` teardown routinely runs past half a minute, and the bound
+    # used to be 30s -- so this asserts the helper is still waiting at a point
+    # where it used to have given up and abandoned the upgrade.
+    namespace = _load_upgrade_helper_namespace()
+    clock = iter([0.0, *(float(t) for t in range(1, 400))])
+    alive_until = 120.0
+    now = [0.0]
+
+    def monotonic() -> float:
+        now[0] = next(clock)
+        return now[0]
+
+    def kill(pid: int, signal: int) -> None:
+        if now[0] >= alive_until:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(namespace["time"], "monotonic", monotonic)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
+    monkeypatch.setattr(namespace["os"], "kill", kill)
+
+    assert namespace["wait_for_parent_posix"](4321) == 0
+
+
 def _mock_windows_process_api(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -595,7 +681,7 @@ def test_upgrade_helper_waits_on_parent_process_handle(
 
     assert status == 0
     open_process.assert_called_once_with(0x00100000, False, 4321)
-    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    wait_for_single_object.assert_called_once_with(1234, _PARENT_EXIT_TIMEOUT_S * 1000)
     close_handle.assert_called_once_with(1234)
     assert open_process.restype is ctypes.c_void_p
     assert wait_for_single_object.argtypes[0] is ctypes.c_void_p
@@ -637,7 +723,7 @@ def test_upgrade_helper_closes_parent_handle_when_wait_fails(
     status = wait_for_parent(4321)
 
     assert status == 1
-    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    wait_for_single_object.assert_called_once_with(1234, _PARENT_EXIT_TIMEOUT_S * 1000)
     close_handle.assert_called_once_with(1234)
 
 
