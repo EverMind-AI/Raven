@@ -7,7 +7,13 @@ import asyncio
 from agentscope.message import TextBlock
 from agentscope.rag import Chunk
 from agentscope.rag._vdb._vector_store import VectorSearchResult
-from raven_kb_sections import MAX_SECTION_CHARS, SECTION_TEXT, expand, section_key
+from raven_kb_sections import (
+    MAX_SECTION_CHARS,
+    SECTION_ORDINAL,
+    SECTION_TEXT,
+    expand,
+    section_key,
+)
 
 
 def _chunk(
@@ -228,3 +234,36 @@ def test_one_section_under_a_repeated_heading_still_expands():
     passages = asyncio.run(expand([(kb, _hit(only))]))
 
     assert passages[0].text == "THE WHOLE SECTION"
+
+
+def test_an_ordinal_keyed_chunk_is_still_cited_by_its_headings():
+    """`section_key` and the citation path were one function. Once the identity
+    became an ordinal, a citation read `1` instead of `Usage > Example` -- and no
+    existing test saw it, because they all build chunks with a path and no ordinal,
+    where the two happen to coincide."""
+    chunk = _chunk("body", 0, path=["Usage", "Example"])
+    chunk.metadata[SECTION_ORDINAL] = 1
+    kb = _FakeKb([chunk])
+
+    passages = asyncio.run(expand([(kb, _hit(chunk))]))
+
+    assert passages[0].heading_path == ["Usage", "Example"]
+    assert section_key(chunk) == (1,), "the identity should still be the ordinal"
+
+
+def test_two_same_path_sections_with_ordinals_do_not_collapse():
+    """The shape no reading-side guard could close, now closed by the writer: the
+    two sections have distinct identities, so a hit in the second is neither
+    grouped with the first nor handed its text."""
+    path = ["Usage", "Example"]
+    first = _chunk("first body", 0, path=path, section="FIRST SECTION")
+    first.metadata[SECTION_ORDINAL] = 1
+    second = _chunk("second body", 1, path=path)
+    second.metadata[SECTION_ORDINAL] = 2
+    kb = _FakeKb([first, second])
+
+    passages = asyncio.run(expand([(kb, _hit(second))]))
+
+    assert passages[0].text == "second body"
+    assert "FIRST SECTION" not in passages[0].text
+    assert passages[0].heading_path == path

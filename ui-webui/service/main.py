@@ -23,11 +23,12 @@ from agentscope.app.workspace_manager import (
 from agentscope.mcp import HttpMCPConfig, MCPClient, StdioMCPConfig
 from agentscope.model import ChatModelBase
 from agentscope.permission import PermissionContext, PermissionMode
-from agentscope.rag import QdrantStore
+from agentscope.rag import QdrantStore, TextParser
 from agentscope.subagent import make_subagent_tool_factory
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
 from raven_config_routes import build_raven_config_router
+from raven_kb_structure import HeadingAwareChunker, StructuredTextParser
 
 default_mcps = [
     MCPClient(
@@ -220,6 +221,20 @@ app = create_app(
         storage=storage,
         vector_store=vector_store,
     ),
+    # Cut markdown and HTML at their headings instead of at a character budget,
+    # so a chunk says what it is about and a citation can name the section.
+    #
+    # TextParser is listed explicitly because this argument replaces the default
+    # rather than adding to it: passing the structured parser alone would leave
+    # every other text format with no parser at all. Order matters -- a media
+    # type claimed twice resolves to the last parser in the list -- so the
+    # structured one goes second and takes over exactly the two it claims.
+    knowledge_parsers=[TextParser(), StructuredTextParser()],
+    # The chunker is global rather than per media type, so it has to be the
+    # heading-aware one for the parser above to mean anything -- it is what keeps
+    # a chunk inside one section and stores the section a split came from. On a
+    # document with no headings it behaves exactly like ApproxTokenChunker.
+    knowledge_chunker=HeadingAwareChunker(),
     # Wire the CLI sub-agent tool factory so the leader agent can spawn
     # and manage command-line-invoked domain sub-agents.
     extra_agent_tools=make_subagent_tool_factory(
