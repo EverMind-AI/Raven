@@ -43,6 +43,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == tc._VIEWER_UI_PROBE and getattr(self.server, "ui_ok", False):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.end_headers()
+            self.wfile.write(b"// app\n")
         else:
             self.send_response(404)
             self.end_headers()
@@ -52,9 +57,10 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def _serve(port: int, health_ok: bool) -> HTTPServer:
+def _serve(port: int, health_ok: bool, ui_ok: bool = True) -> HTTPServer:
     srv = HTTPServer(("127.0.0.1", port), _Handler)
     srv.health_ok = health_ok  # type: ignore[attr-defined]
+    srv.ui_ok = ui_ok  # type: ignore[attr-defined]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
 
@@ -77,6 +83,21 @@ def test_viewer_health_true_for_our_viewer():
     srv = _serve(port, health_ok=True)
     try:
         assert tc._viewer_health(port) is True
+    finally:
+        srv.shutdown()
+
+
+def test_viewer_health_false_when_ui_assets_are_gone():
+    """The observed failure: a viewer whose install directory was replaced.
+
+    Health and the HTML shell come from memory, so the process keeps reporting
+    itself healthy while every asset read 404s -- reusing it hands the user an
+    unstyled page that never connects. Both probes must pass, not just health.
+    """
+    port = _free_port()
+    srv = _serve(port, health_ok=True, ui_ok=False)
+    try:
+        assert tc._viewer_health(port) is False
     finally:
         srv.shutdown()
 
