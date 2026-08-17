@@ -3,6 +3,9 @@
 # Remote:
 #   irm https://raven.evermind.ai/install.ps1 | iex
 #
+# A piped run always installs the published release wheel, even from inside a
+# clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+#
 # Goal: a clean Windows machine ends up able to run `raven` / `raven tui`
 # without admin rights. The script is idempotent: it reuses existing tools when
 # available and only fills the gaps:
@@ -256,10 +259,28 @@ function Resolve-RavenConstraints([string]$WheelUrl) {
     return $dest
 }
 
+function Test-RavenSource([string]$Dir) {
+    if (-not $Dir) { return $false }
+    $pyproject = Join-Path $Dir "pyproject.toml"
+    return (Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)
+}
+
 function Install-Raven([string]$UvPath, [string]$NodePath) {
-    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-    $pyproject = Join-Path $scriptDir "pyproject.toml"
-    if ((Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "raven"' -Quiet)) {
+    # $PSScriptRoot is set only when this script runs as a file. Piped through
+    # `irm ... | iex` it is empty, and falling back to the current directory
+    # turns a one-line install started from inside a clone into a silent
+    # editable install of that working tree. So local mode requires
+    # $PSScriptRoot; RAVEN_LOCAL_SRC is the explicit opt-in for a piped run.
+    $scriptDir = $null
+    if ($env:RAVEN_LOCAL_SRC) {
+        $resolved = Resolve-Path -LiteralPath $env:RAVEN_LOCAL_SRC -ErrorAction SilentlyContinue
+        if (-not $resolved) { Fail "RAVEN_LOCAL_SRC is not a directory: $($env:RAVEN_LOCAL_SRC)" }
+        $scriptDir = $resolved.Path
+        if (-not (Test-RavenSource $scriptDir)) { Fail "RAVEN_LOCAL_SRC is not a Raven source checkout: $scriptDir" }
+    } elseif ($PSScriptRoot -and (Test-RavenSource $PSScriptRoot)) {
+        $scriptDir = $PSScriptRoot
+    }
+    if ($scriptDir) {
         Write-Info "Detected local Raven source checkout; installing editable: $scriptDir"
         $entry = Join-Path $scriptDir "ui-tui\dist\entry.js"
         if (-not (Test-Path $entry)) {
