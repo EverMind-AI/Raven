@@ -116,6 +116,18 @@ def test_subagents_methods_are_registered() -> None:
         assert name in registered, name
 
 
+def test_instance_methods_are_registered() -> None:
+    """A declared method with no handler answers -32601; the direct-chat surface
+    calls all four on entry."""
+    registered = _registered()
+    for name in (
+        "subagents.instances",
+        "subagents.instance.history",
+        "subagents.instance.forget",
+    ):
+        assert name in registered, name
+
+
 def test_no_subagents_method_is_left_in_progress() -> None:
     assert IN_PROGRESS == set()
 
@@ -179,6 +191,8 @@ def test_the_scan_actually_finds_calls() -> None:
     invoked = _invoked_by_ui_tui()
     assert len(invoked) > 30, f"call scan found only {len(invoked)} methods; the regex likely broke"
     assert "turn.send" in invoked
+
+
 # The other direction. `test_every_contract_method_is_registered` proves a
 # declared method has a handler; this proves a handler is declared. Without it a
 # new method can ship, work, and be called for months while `openrpc.json` and

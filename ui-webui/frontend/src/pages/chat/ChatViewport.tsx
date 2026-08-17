@@ -49,6 +49,7 @@ import {
 	ResizablePanelGroup,
 } from '@/components/ui/resizable.tsx';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+import { useDirectChat } from '@/hooks/useDirectChat';
 import { useKnowledgeBaseMiddlewareSchema } from '@/hooks/useKnowledgeBaseMiddlewareSchema';
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
 import { useMessages } from '@/hooks/useMessages';
@@ -190,6 +191,14 @@ function closePanelInLayout(layout: PanelKey[][], key: PanelKey): PanelKey[][] {
  *   session is selected yet.
  * @returns The right-side main JSX of the chat page.
  */
+/** The text of a composer payload; a direct chat carries no attachments yet. */
+function contentText(content: { type?: string; text?: string }[]): string {
+	return content
+		.filter((b) => b.type === 'text' && b.text)
+		.map((b) => b.text)
+		.join('\n');
+}
+
 export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: ChatViewportProps) {
 	const { t } = useTranslation();
 	const { sessions, refetch: refetchSessions } = useSessions(agentId);
@@ -401,6 +410,18 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		};
 	}, [injectedSkills, sessionId]);
 
+	// Owns the chat area's direct-chat mode. Declared before `useMessages` so its
+	// event handler can be wired in below: a direct turn's events arrive on the
+	// session's stream like any other, tagged with the instance they belong to.
+	const directChat = useDirectChat(sessionId);
+	// Extracted as a stable callback: the panel memo below would otherwise have
+	// to depend on `directChat`, a fresh object each render, and rebuild every
+	// panel on every keystroke.
+	const { enter: directEnter } = directChat;
+	const enterDirect = useCallback(
+		(target: { agent: string; handle: string }) => void directEnter(target),
+		[directEnter],
+	);
 	const { msgs, phase, send, onUserConfirm, onSubagentConfirm, subagentHitl, interrupt } =
 		useMessages(agentId, sessionId, {
 			onTeamUpdated: handleTeamUpdated,
@@ -410,6 +431,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 			onDagRunCompleted: handleDagRunCompleted,
 			onSubagentInstanceUpdated: handleSubagentInstanceUpdated,
 			onSkillsInjected: handleSkillsInjected,
+			onSubagentDirect: directChat.onDirectEvent,
 		});
 	// Skills and MCP servers come from raven's own runtime, not the AgentScope
 	// workspace: the chat agent is the gateway, and the workspace stores are not
@@ -533,6 +555,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 				content: (
 					<SubagentInstanceMonitor
 						msgs={msgs}
+						onEnterDirect={enterDirect}
 						sessionId={sessionId}
 						subagents={subagents}
 						phase={phase}
@@ -591,6 +614,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		}),
 		[
 			t,
+			enterDirect,
 			tasksContext,
 			mcps,
 			mcpsLoading,
@@ -1102,13 +1126,48 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 											</DropdownMenu>
 										</div>
 									</div>
+									{directChat.active && (
+										// Without this a user who enters a direct chat has no way
+										// back and no sign of whose conversation they are in: the
+										// chat area looks exactly as it always does, only with
+										// different content.
+										<div className="flex justify-center px-2 pb-1">
+											<div className="flex max-w-[var(--chat-content-w)] w-full items-center gap-2 text-xs">
+												<button
+													type="button"
+													className="rounded-sm border px-2 py-0.5 hover:bg-accent"
+													onClick={directChat.leave}
+												>
+													{'\u2039 Raven'}
+												</button>
+												<span className="truncate text-muted-foreground">
+													{directChat.active.agent}/
+													{directChat.active.handle}
+												</span>
+											</div>
+										</div>
+									)}
 									<div className="flex flex-1 justify-center min-h-0 overflow-hidden relative [--chat-content-w:48rem]">
 										<ChatContent
 											className={'max-w-[var(--chat-content-w)] w-full'}
-											msgs={msgs}
+											msgs={
+												directChat.active
+													? directChat.viewMsgs
+													: msgs
+											}
 											phase={phase}
-											disabled={!sessionId}
-											onSend={send}
+											disabled={
+												!sessionId ||
+												directChat.pausedReason !== null
+											}
+											onSend={
+												directChat.active
+													? (content) =>
+															void directChat.send(
+																contentText(content),
+															)
+													: send
+											}
 											onUserConfirm={onUserConfirm}
 											onInterrupt={interrupt}
 											footerSlot={

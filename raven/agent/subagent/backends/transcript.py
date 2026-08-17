@@ -10,7 +10,7 @@ to ``max_output_chars`` truncation.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 
@@ -138,9 +138,70 @@ def parse_opencode_json(stdout: str) -> tuple[str | None, str | None]:
     return session_id, reply
 
 
+def parse_claude_stream_json_delta(line: str) -> str:
+    """The reply text one ``--include-partial-messages`` line carries, or "".
+
+    Line-at-a-time and stateless, unlike the parsers above, because this one
+    runs while the process is still writing: it is handed each transcript line
+    as it arrives rather than the finished document.
+
+    Three filters, each measured against a live ``claude -p`` run rather than
+    assumed:
+
+    - only ``stream_event`` / ``content_block_delta``. The same stream repeats
+      the finished text on an ``assistant`` event and again on ``result``;
+      reading those too would render the reply three times.
+    - only ``text_delta``. Its siblings ``thinking_delta`` and
+      ``input_json_delta`` (a tool call's arguments assembling) are not reply
+      text, and the second is not even prose.
+    - only a null ``parent_tool_use_id``. A delta with one is a nested agent's
+      output, which the run's own ``result`` does not contain either.
+
+    An unparsable line is worth nothing here and returns "": this transport
+    interleaves plain diagnostics with its transcript, and a keep-alive line
+    must not fail a turn that is answering fine.
+    """
+    try:
+        obj = json.loads(line.strip())
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(obj, dict) or obj.get("type") != "stream_event":
+        return ""
+    if obj.get("parent_tool_use_id") is not None:
+        return ""
+    event = obj.get("event")
+    if not isinstance(event, dict) or event.get("type") != "content_block_delta":
+        return ""
+    delta = event.get("delta")
+    if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+        return ""
+    text = delta.get("text")
+    return text if isinstance(text, str) else ""
+
+
+_DELTA_READERS: dict[str, Callable[[str], str]] = {
+    "claude_stream_json": parse_claude_stream_json_delta,
+    # No entry for codex_jsonl on purpose: `codex exec --json` emits no partial
+    # event at all. Measured -- a whole reply arrives as the `item.text` of one
+    # `item.completed`, so an incremental reader would hand over the same single
+    # frame the buffered path already returns.
+}
+
+
+def delta_reader(transcript_format: str | None) -> "Callable[[str], str] | None":
+    """The per-line reply reader for a transcript format, or ``None``.
+
+    ``None`` means the format carries no partial text, which is a fact about
+    what the CLI emits rather than a gap here -- see ``_DELTA_READERS``.
+    """
+    return _DELTA_READERS.get(transcript_format or "")
+
+
 __all__ = [
+    "delta_reader",
     "parse_codex_jsonl",
     "parse_claude_stream_json",
+    "parse_claude_stream_json_delta",
     "parse_openclaw_json",
     "parse_opencode_json",
 ]

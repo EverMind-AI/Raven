@@ -174,7 +174,7 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     loop = _FakeLoop("old-prov", "old-model")
     new_provider = SimpleNamespace(name="new-prov")
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
+    monkeypatch.setattr(config_mod, "is_session_busy", lambda _key: False)
     monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
     monkeypatch.setattr(
         config_mod,
@@ -245,7 +245,7 @@ async def test_config_set_model_leaves_an_unconfigured_vendor_on_auto(fake_home:
 async def test_config_set_model_rejected_during_active_turn(fake_home: Path, monkeypatch) -> None:
     import raven.rpc.methods.config as config_mod
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: True)
+    monkeypatch.setattr(config_mod, "is_session_busy", lambda _key: True)
 
     with pytest.raises(ModelSwitchInTurnError):
         await config_set(
@@ -269,7 +269,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
     def _boom(_cfg):
         raise RuntimeError("no api key")
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
+    monkeypatch.setattr(config_mod, "is_session_busy", lambda _key: False)
     monkeypatch.setattr(config_mod, "make_provider", _boom)
     monkeypatch.setattr(
         config_mod,

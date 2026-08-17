@@ -658,6 +658,48 @@ export interface ProviderEndpointInfo {
   };
 }
 /**
+ * One sub-agent instance a turn is addressed to. Null means the main conversation.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DirectTarget".
+ */
+export interface DirectTarget {
+  agent: string;
+  handle: string;
+}
+/**
+ * One sub-agent instance this session has used, verbatim from the instance registry. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` are set only on a dag-node row.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "InstanceRow".
+ */
+export interface InstanceRow {
+  sessionKey: string;
+  agent: string;
+  handle: string;
+  kind: string;
+  status?: string;
+  agentId?: string;
+  runId?: string;
+  nodeId?: string;
+  createdAtMs?: number;
+  updatedAtMs?: number;
+}
+/**
+ * One side of one direct-chat turn, read back from its record directory.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DirectTurn".
+ */
+export interface DirectTurn {
+  call_id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  at_ms: number;
+  prompt_path?: string;
+  out_path?: string;
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "UsageSnapshot".
  */
@@ -815,8 +857,12 @@ export interface CommandsCatalogResponse {
  */
 export interface MessageStartEvent {
   type: 'message.start';
+  /**
+   * `target` names the conversation this event belongs to; absent is the main agent.
+   */
   payload: {
     turn_id: string;
+    target?: DirectTarget;
   };
 }
 /**
@@ -837,6 +883,7 @@ export interface TokenDeltaEvent {
   type: 'token.delta';
   payload: {
     text: string;
+    target?: DirectTarget;
   };
 }
 /**
@@ -899,6 +946,7 @@ export interface MessageCompleteEvent {
   payload: {
     turn_id: string;
     usage: UsageSnapshot;
+    target?: DirectTarget;
   };
 }
 /**
@@ -912,6 +960,7 @@ export interface ErrorEvent {
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;
+    target?: DirectTarget;
   };
 }
 /**
@@ -1309,6 +1358,7 @@ export interface TurnSendParams {
    * @maxItems 64
    */
   media?: string[];
+  target?: DirectTarget;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1734,6 +1784,56 @@ export interface SubagentsTestCancelParams {
  */
 export interface SubagentsTestCancelResult {
   cancelled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstancesParams".
+ */
+export interface SubagentsInstancesParams {
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstancesResult".
+ */
+export interface SubagentsInstancesResult {
+  instances: InstanceRow[];
+  /**
+   * Direct-chat turns not yet reported to the main agent. Display only.
+   */
+  pending_handoff_count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceHistoryParams".
+ */
+export interface SubagentsInstanceHistoryParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceHistoryResult".
+ */
+export interface SubagentsInstanceHistoryResult {
+  turns: DirectTurn[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceForgetParams".
+ */
+export interface SubagentsInstanceForgetParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceForgetResult".
+ */
+export interface SubagentsInstanceForgetResult {
+  removed: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

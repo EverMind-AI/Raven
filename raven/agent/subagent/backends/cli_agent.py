@@ -23,12 +23,14 @@ import signal
 import tempfile
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.subagent.backends.base import bounded_delta
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
@@ -36,6 +38,7 @@ from raven.agent.subagent.backends.observability import (
     record_transcript,
 )
 from raven.agent.subagent.backends.transcript import (
+    delta_reader,
     parse_claude_stream_json,
     parse_codex_jsonl,
     parse_openclaw_json,
@@ -45,6 +48,11 @@ from raven.agent.subagent.instances import InstanceRegistry, get_registry, hold_
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
+
+
+_READ_CHUNK = 65536
+"""Stdout/stderr read size for the streaming pump. Not a line cap: lines are
+reassembled from these chunks, so a transcript line of any length is fine."""
 
 
 class CliAgentTimeoutError(RuntimeError):
@@ -65,6 +73,40 @@ class CliAgentReportedError(RuntimeError):
 
 
 class CliAgentBackend:
+    kind = "cli"
+    streams = False
+    """Whether *this configured command* will emit reply deltas; see ``_can_stream``.
+
+    False on the class and decided per instance, because for this transport the
+    capability is a property of the command rather than of the kind: the same
+    backend streams or does not depending on the flags the operator wrote.
+    """
+
+    @staticmethod
+    def _can_stream(command: str, resume_command: str | None, transcript_format: str | None) -> bool:
+        """Whether the configured templates ask the CLI for partial output.
+
+        Read from the command, never declared, for the same reason ``stateful``
+        is read from ``resume_command``: the flag is the mechanism that would
+        have to deliver it, and a config field claiming otherwise would be a
+        wish. Measured per CLI rather than assumed:
+
+        - ``claude`` emits ``content_block_delta`` frames only under
+          ``--include-partial-messages``, and only alongside
+          ``--output-format stream-json`` -- which is what ``claude_stream_json``
+          means. Without the flag the same run prints its answer once, at the end.
+        - ``codex exec --json`` has no partial event to ask for: a whole reply
+          arrives as one ``item.completed``. No flag turns that into a stream.
+
+        Both templates must carry it. A create that streams and a resume that
+        does not would make the same instance stream on its first turn and stop
+        on every later one -- and a direct chat is almost entirely resumes.
+        """
+        if transcript_format != "claude_stream_json":
+            return False
+        templates = [command, *([resume_command] if resume_command else [])]
+        return all("--include-partial-messages" in template for template in templates)
+
     def __init__(
         self,
         *,
@@ -93,6 +135,7 @@ class CliAgentBackend:
         self._session_id_re = re.compile(session_id_pattern) if session_id_pattern else None
         self._output_re = re.compile(output_pattern) if output_pattern else None
         self._registry = registry or get_registry()
+        self.streams = self._can_stream(command, resume_command, transcript_format)
 
     @property
     def is_stateful(self) -> bool:
@@ -139,6 +182,83 @@ class CliAgentBackend:
         if proc.returncode is None:
             await proc.wait()
 
+    async def _communicate_streaming(
+        self,
+        proc: asyncio.subprocess.Process,
+        stdin_bytes: bytes | None,
+        on_delta: Callable[[str], Awaitable[None]],
+    ) -> tuple[bytes, bytes]:
+        """``communicate()``, plus the reply text of each stdout line as it lands.
+
+        Returns the same ``(stdout, stderr)`` bytes the buffered call does, so
+        everything downstream -- the transcript parse, the session-id search,
+        the recorded attempt -- reads exactly what it read before. Streaming is
+        an observation of the run, not a second way of getting its result.
+
+        Fixed-size reads with a line buffer of its own rather than
+        ``StreamReader.readline``, whose 64 KiB limit raises on a longer line:
+        one transcript line carries a whole tool result, and a run that read
+        even a modest file would fail on a cap the buffered path never had.
+        Bytes are only decoded once a newline has closed the line, so a
+        multi-byte character split across two reads cannot be mangled.
+
+        Stdout is drained concurrently with the stdin write for the reason
+        ``communicate`` does it: a child that fills the stdout pipe while raven
+        is still writing its prompt deadlocks both ends.
+        """
+        read_delta = delta_reader(self.transcript_format)
+        out_chunks: list[bytes] = []
+        err_chunks: list[bytes] = []
+
+        async def feed() -> None:
+            if proc.stdin is None:
+                return
+            try:
+                if stdin_bytes:
+                    proc.stdin.write(stdin_bytes)
+                    await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                # The child exited without reading its prompt; its own output
+                # and exit code are the report, not this.
+                pass
+            finally:
+                proc.stdin.close()
+
+        async def pump_out() -> None:
+            if proc.stdout is None:
+                return
+            pending = b""
+            while chunk := await proc.stdout.read(_READ_CHUNK):
+                out_chunks.append(chunk)
+                if read_delta is None:
+                    continue
+                *lines, pending = (pending + chunk).split(b"\n")
+                for line in lines:
+                    if text := read_delta(line.decode("utf-8", "replace")):
+                        await on_delta(text)
+            # A transcript's last line need not end in a newline.
+            if pending and read_delta is not None and (text := read_delta(pending.decode("utf-8", "replace"))):
+                await on_delta(text)
+
+        async def pump_err() -> None:
+            if proc.stderr is None:
+                return
+            while chunk := await proc.stderr.read(_READ_CHUNK):
+                err_chunks.append(chunk)
+
+        pumps = [asyncio.create_task(coro) for coro in (feed(), pump_out(), pump_err())]
+        try:
+            await asyncio.gather(*pumps)
+        finally:
+            # gather leaves its siblings running when one of them raises -- a
+            # delta sink whose client went away would otherwise leave two tasks
+            # reading a subprocess nobody is waiting for any more.
+            for pump in pumps:
+                pump.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+        await proc.wait()
+        return b"".join(out_chunks), b"".join(err_chunks)
+
     async def _exec(
         self,
         template: str,
@@ -147,6 +267,7 @@ class CliAgentBackend:
         cwd: str,
         agent_id: str | None,
         attempts: list[dict[str, Any]] | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> tuple[str, str]:
         fd, prompt_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".prompt.txt")
         try:
@@ -178,15 +299,29 @@ class CliAgentBackend:
             # exit and have its pid recycled by the OS.
             pgid = proc.pid
             stdin_bytes = None if used_placeholder else task.encode("utf-8")
+            # A spawn keeps `communicate()` -- the well-worn path -- and only a
+            # caller that asked to watch the reply pays for the line pump.
+            capture = (
+                proc.communicate(input=stdin_bytes)
+                if on_delta is None
+                else self._communicate_streaming(proc, stdin_bytes, on_delta)
+            )
             try:
                 if self.timeout is not None:
-                    out, err = await asyncio.wait_for(proc.communicate(input=stdin_bytes), timeout=self.timeout)
+                    out, err = await asyncio.wait_for(capture, timeout=self.timeout)
                 else:
-                    out, err = await proc.communicate(input=stdin_bytes)
+                    out, err = await capture
             except asyncio.TimeoutError:
                 await self._kill_process_group(proc, pgid)
                 raise CliAgentTimeoutError(f"CLI agent {self.name!r} timed out after {self.timeout}s") from None
             except asyncio.CancelledError:
+                await self._kill_process_group(proc, pgid)
+                raise
+            except Exception:
+                # Reachable only through the line pump (a delta sink that
+                # raised): the capture is abandoned here, and abandoning it
+                # without the kill leaves the reparented worker running for the
+                # rest of the process's life. See ``_kill_process_group``.
                 await self._kill_process_group(proc, pgid)
                 raise
             stdout = out.decode("utf-8", "replace")
@@ -226,10 +361,15 @@ class CliAgentBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         # The parent's provider/model are accepted and ignored: this backend
         # shells out to an agent that authenticates and picks a model itself.
         handle = instance or task_id
+        # Re-checked rather than trusted: `streams` is what the manager reads to
+        # decide whether to offer the hook, and a caller driving this backend
+        # directly never consulted it.
+        sink = bounded_delta(on_delta, self.max_output_chars) if self.streams else None
         started = time.monotonic()
         # One span per dispatch, so a resume that fails and retries as a fresh
         # create reads as two invocations of one task rather than two tasks. The
@@ -248,6 +388,7 @@ class CliAgentBackend:
                     handle=handle,
                     resumable=instance is not None,
                     attempts=attempts,
+                    on_delta=sink,
                 )
                 return output
             except Exception as exc:
@@ -259,10 +400,13 @@ class CliAgentBackend:
     def _record(self, span: Any, attempts: list[dict[str, Any]], *, output: str, started: float) -> None:
         """Put this dispatch's raw material on the span.
 
-        No per-step timeline: this transport has none. A cli agent prints its
-        transcript once, at exit, so there is nothing to report while it runs --
-        which is why its roster rows are tagged ``no-progress`` and why the
-        outcome deliberately omits ``update_counts`` rather than reporting zero.
+        No per-step timeline: this transport has none. The steps are read out of
+        the transcript after the process exits, which is why its roster rows are
+        tagged ``no-progress`` and why the outcome deliberately omits
+        ``update_counts`` rather than reporting zero. A command configured for
+        reply streaming does not change that: what it forwards live is the
+        answer's text, not the run's steps, and it is forwarded to a human
+        rather than recorded here.
 
         What is new is that the transcript survives at all. It used to be read for
         a session id and a reply and then dropped, with a 2000-char tail reaching
@@ -296,6 +440,7 @@ class CliAgentBackend:
         handle: str,
         resumable: bool,
         attempts: list[dict[str, Any]],
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         skey = session_key or "default"
         cwd = self.cwd or str(workspace)
@@ -317,7 +462,7 @@ class CliAgentBackend:
             guard = hold_handle(skey, self.name, handle) if resumable else nullcontext()
             async with guard:
                 return await self._run_stateful(
-                    task, task_id, cwd, skey, handle, resumable=resumable, attempts=attempts
+                    task, task_id, cwd, skey, handle, resumable=resumable, attempts=attempts, on_delta=on_delta
                 )
 
         return await self._attempt(
@@ -330,6 +475,7 @@ class CliAgentBackend:
             skey=skey,
             handle=handle,
             attempts=attempts,
+            on_delta=on_delta,
         )
 
     async def _run_stateful(
@@ -342,6 +488,7 @@ class CliAgentBackend:
         *,
         resumable: bool,
         attempts: list[dict[str, Any]] | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Resume this handle's session, or mint one.
 
@@ -376,6 +523,7 @@ class CliAgentBackend:
                     skey=skey,
                     handle=handle,
                     attempts=attempts,
+                    on_delta=on_delta,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -384,14 +532,18 @@ class CliAgentBackend:
                 # the handle here would discard a valid binding for nothing.
                 raise
             except Exception:  # noqa: BLE001 - a hard non-zero exit: the CLI's own session store may have pruned this id
+                # A caller watching this turn keeps whatever the failed attempt
+                # streamed, and the retry appends to it. Measured on claude: a
+                # resume of an unknown id exits before emitting any text delta,
+                # so the case that would read as two answers does not arise.
                 logger.warning(
-                    "Subagent [{}] resume of {}/{!r} failed; forgetting the stale handle and "
+                    "Subagent [{}] resume of {}/{!r} failed; dropping the stale binding and "
                     "retrying once as a fresh create",
                     task_id,
                     self.name,
                     handle,
                 )
-                await self._registry.forget(skey, self.name, handle)
+                await self._registry.unbind(skey, self.name, handle)
         # Minted independently of `handle`: a CLI constrains its session
         # id (claude rejects a non-UUID) while a handle is free-form.
         agent_id = None if self.id_source == "derived" else str(uuid.uuid4())
@@ -405,6 +557,7 @@ class CliAgentBackend:
             skey=skey,
             handle=handle,
             attempts=attempts,
+            on_delta=on_delta,
         )
 
     async def _attempt(
@@ -419,9 +572,10 @@ class CliAgentBackend:
         skey: str,
         handle: str,
         attempts: list[dict[str, Any]] | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
-        stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id, attempts)
+        stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id, attempts, on_delta=on_delta)
 
         jsonl_id: str | None = None
         jsonl_reply: str | None = None

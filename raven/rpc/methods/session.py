@@ -601,7 +601,7 @@ async def session_clear(
     session_key = params.get("session_id", "")
     if not session_key:
         return {"session_id": "", "cleared": False}
-    if turn_module.is_turn_active(session_key):
+    if turn_module.is_session_busy(session_key):
         raise TurnInProgressError(
             f"session {session_key!r} has an active turn; interrupt it before clearing",
             data={"session_key": session_key},
@@ -633,7 +633,7 @@ async def session_undo(
     session_key = params.get("session_id", "")
     if not session_key:
         return {"removed": 0}
-    if turn_module.is_turn_active(session_key):
+    if turn_module.is_session_busy(session_key):
         raise TurnInProgressError(
             f"session {session_key!r} has an active turn; interrupt it before undo",
             data={"session_key": session_key},
@@ -675,7 +675,7 @@ async def session_compress(
             "session.compress requires params.session_id",
             data={"field": "session_id"},
         )
-    if turn_module.is_turn_active(session_key):
+    if turn_module.is_session_busy(session_key):
         raise TurnInProgressError(
             f"session {session_key!r} has an active turn; interrupt it before compressing",
             data={"session_key": session_key},

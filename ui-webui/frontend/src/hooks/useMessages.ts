@@ -145,6 +145,17 @@ export function useMessages(
 		 */
 		onSubagentInstanceUpdated?: (value: Record<string, unknown>) => void;
 		/**
+		 * Called on a ``CUSTOM`` event ``name="subagent_direct_delta" |
+		 * "subagent_direct_complete" | "subagent_direct_error"`` — one instance's
+		 * direct chat. ``value`` carries ``{ target: { agent, handle }, ... }``.
+		 *
+		 * Out of band, and never appended to the reply: a direct turn runs on its
+		 * own lane, so feeding it into the in-progress reply would render a
+		 * sub-agent's answer as the main agent's and end that reply on the wrong
+		 * conversation's completion.
+		 */
+		onSubagentDirect?: (name: string, value: Record<string, unknown>) => void;
+		/**
 		 * Called on a ``CUSTOM`` event ``name="skills_injected"`` — SkillForge
 		 * injected one or more skills into this turn's context. ``value`` is
 		 * ``{ skills: [{ id, source, name }] }``. The typical response is to
@@ -227,6 +238,11 @@ export function useMessages(
 					);
 				} else if (custom.name === 'skills_injected' && custom.value) {
 					optionsRef.current?.onSkillsInjected?.(custom.value as Record<string, unknown>);
+				} else if (custom.name?.startsWith('subagent_direct_') && custom.value) {
+					optionsRef.current?.onSubagentDirect?.(
+						custom.name,
+						custom.value as Record<string, unknown>,
+					);
 				}
 				return;
 			}

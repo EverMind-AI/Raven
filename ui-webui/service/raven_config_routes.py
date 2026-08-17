@@ -9,12 +9,28 @@ Mounted by main.py only when RAVEN_GATEWAY is on.
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from raven_gateway_agent import GatewayClient, gateway_http_base
 
 _FORWARDED_HEADERS = ("content-type", "content-disposition", "content-length")
+
+# Strong references to in-flight direct-chat drivers. asyncio keeps only a weak
+# one, so without this a turn can be garbage-collected mid-answer.
+_DIRECT_TASKS: set[asyncio.Task] = set()
+
+
+def _session_key(session_id: str) -> str:
+    """The raven session key for a web session id.
+
+    One derivation, matching ``RavenGatewayAgent.reply_stream``: the instance
+    registry, the direct-chat records and the handoff are all keyed by it, so a
+    second spelling would address a session that holds none of them.
+    """
+    return f"web:{session_id}" if session_id else "web:default"
 
 
 async def _proxy_files(request: Request, path: str) -> StreamingResponse:
@@ -118,6 +134,50 @@ def build_raven_config_router() -> APIRouter:
     async def delete_subagent_instances(session_key: str) -> dict:
         client = await GatewayClient.shared()
         return await client.call("raven.subagents.instances.delete", {"session_key": session_key})
+
+    @router.get("/subagents/instances/history")
+    async def instance_history(session_id: str, agent: str, handle: str) -> dict:
+        """One instance's past direct turns, for a view being (re)opened.
+
+        The records on disk are the only memory of a direct chat: it is
+        deliberately absent from the session transcript, and its live events are
+        published out of band rather than stored, so a reload has nowhere else
+        to read it from.
+        """
+        client = await GatewayClient.shared()
+        return await client.call(
+            "subagents.instance.history",
+            {"session_key": _session_key(session_id), "agent": agent, "handle": handle},
+        )
+
+    @router.post("/subagents/instances/chat")
+    async def instance_chat(payload: dict = Body(...)) -> dict:
+        """Send one prompt to a sub-agent instance and stream its reply out of band.
+
+        Returns as soon as the turn is *accepted*, not when it is answered: the
+        reply arrives as `subagent_direct_*` custom events on the session's SSE,
+        which is what lets several instances answer at once without any of them
+        holding an HTTP request open.
+        """
+        session_id = str(payload.get("session_id") or "")
+        agent = str(payload.get("agent") or "")
+        handle = str(payload.get("handle") or "")
+        content = str(payload.get("content") or "")
+        if not (session_id and agent and handle and content):
+            raise HTTPException(status_code=400, detail="session_id, agent, handle and content are required")
+
+        from raven_gateway_agent import publish_session_custom, run_direct_chat
+
+        async def _publish(name: str, value: dict) -> None:
+            await publish_session_custom(session_id, name, value)
+
+        # Detached deliberately, and referenced until it ends: a direct turn runs
+        # as long as the sub-agent takes, and awaiting it here would tie that to
+        # one HTTP request that a page reload would abandon mid-answer.
+        task = asyncio.create_task(run_direct_chat(_session_key(session_id), agent, handle, content, publish=_publish))
+        _DIRECT_TASKS.add(task)
+        task.add_done_callback(_DIRECT_TASKS.discard)
+        return {"accepted": True}
 
     @router.post("/subagents/dag/{run_id}/cancel")
     async def cancel_dag_run(run_id: str) -> dict:

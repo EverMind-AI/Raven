@@ -108,6 +108,7 @@ async def run_dag(
     session_key: str | None = None,
     run_id: str | None = None,
     cancel: asyncio.Event | None = None,
+    state_for: "Callable[[str, str | None, str], Any] | None" = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -285,6 +286,7 @@ async def run_dag(
                         node_ended_at=node_ended_at,
                         semaphore=gate,
                         progress_publisher=progress_publisher,
+                        state_for=state_for,
                         session_key=session_key,
                     )
                     for nids in groups.values()
@@ -426,6 +428,7 @@ async def _run_group(
     node_started_at: dict[str, int],
     node_ended_at: dict[str, int],
     semaphore: asyncio.Semaphore,
+    state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
 ) -> None:
@@ -447,6 +450,7 @@ async def _run_group(
             node_started_at=node_started_at,
             node_ended_at=node_ended_at,
             semaphore=semaphore,
+            state_for=state_for,
             progress_publisher=progress_publisher,
             session_key=session_key,
         )
@@ -469,6 +473,7 @@ async def _run_node(
     node_started_at: dict[str, int],
     node_ended_at: dict[str, int],
     semaphore: asyncio.Semaphore,
+    state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
 ) -> None:
@@ -496,6 +501,18 @@ async def _run_node(
             output_path = store.output_path(node.id)
             await store.write_text(prompt_path, prompt)
             prompt_written.add(node.id)
+            # The instance's message list, on the same terms as `spawn` and a
+            # direct chat. A node that names an `instance` is asking to continue
+            # that conversation; without this it started from empty and wrote
+            # nothing back, so the handle bought nothing.
+            node_state = (
+                state_for(session_key or "", node.subagent, node.instance)
+                if (state_for is not None and node.instance)
+                else None
+            )
+            state_kwargs = (
+                {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
+            )
             result = await agent_backend.run(
                 prompt,
                 task_id=node.id,
@@ -503,6 +520,7 @@ async def _run_node(
                 executor=sandbox,
                 session_key=session_key,
                 instance=node.instance,
+                **state_kwargs,
             )
             await store.write_text(output_path, result or "")
             status[node.id] = "completed"

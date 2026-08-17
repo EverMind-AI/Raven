@@ -19,6 +19,7 @@ Two consequences worth stating, because they are what the transport buys:
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from loguru import logger
 from raven.agent.acp.capabilities import CapabilitySnapshot
 from raven.agent.acp.pool import get_pool
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
+from raven.agent.subagent.backends.base import bounded_delta
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_events,
@@ -42,6 +44,14 @@ from raven.agent.subagent.instances import InstanceRegistry, get_registry
 # recorded raw and skipped, never guessed at.
 _ANSWER_UPDATES = ("agent_message_chunk",)
 _THOUGHT_UPDATES = ("agent_thought_chunk",)
+
+# A tool call ends whatever message was being written: an agent that says what
+# it is about to do, runs a command and then reports back has sent two messages,
+# and the protocol marks the boundary only by what came between them. Thoughts
+# and usage updates are deliberately not here -- neither ends a message, and
+# breaking on one would split a single reply mid-sentence.
+_BREAKING_UPDATES = ("tool_call", "tool_call_update")
+_MESSAGE_BREAK = "\n\n"
 
 
 class AcpEmptyTurnError(RuntimeError):
@@ -72,9 +82,26 @@ def _texts(content: Any) -> list[str]:
 
 
 class _TurnCollector:
-    """Accumulates one session's notifications while a prompt is in flight."""
+    """Accumulates one session's notifications while a prompt is in flight.
 
-    def __init__(self) -> None:
+    ``on_delta`` forwards the answer chunks as they arrive, for a caller
+    rendering the turn live. It is called from the connection's read loop, which
+    already treats a raising notification handler as non-fatal (see
+    ``AcpClient._dispatch``) -- so a client that went away mid-turn costs this
+    turn its live rendering, not the connection or the answer, which keeps
+    accumulating here either way.
+
+    One turn can hold several messages, and the chunks carry no boundary of
+    their own: an agent that says what it is about to do, runs a command and
+    then reports back sends two, and joined chunk-to-chunk they read as one
+    paragraph whose halves do not follow from each other. ``_BREAKING_UPDATES``
+    is where the boundary is recovered, and the break is forwarded to
+    ``on_delta`` as well so a live view and the stored reply agree.
+    """
+
+    def __init__(self, on_delta: Callable[[str], Awaitable[None]] | None = None) -> None:
+        self._on_delta = on_delta
+        self._tool_ran = False
         self.answer: list[str] = []
         self.thoughts: list[str] = []
         self.raw: list[dict[str, Any]] = []
@@ -91,12 +118,21 @@ class _TurnCollector:
         kind = kind if isinstance(kind, str) else "unknown"
         self.kinds.append(kind)
         if kind in _ANSWER_UPDATES:
-            self.answer.extend(_texts(update.get("content")))
+            texts = _texts(update.get("content"))
+            if texts and self._tool_ran and self.answer:
+                texts.insert(0, _MESSAGE_BREAK)
+            if texts:
+                self._tool_ran = False
+            self.answer.extend(texts)
+            if self._on_delta is not None:
+                for text in texts:
+                    await self._on_delta(text)
         elif kind in _THOUGHT_UPDATES:
             self.thoughts.extend(_texts(update.get("content")))
-        elif kind == "tool_call":
+        elif kind in _BREAKING_UPDATES:
+            self._tool_ran = True
             title = update.get("title") or update.get("kind") or update.get("toolCallId")
-            if isinstance(title, str):
+            if kind == "tool_call" and isinstance(title, str):
                 self.tool_calls.append(title)
         elif kind == "usage_update":
             self.usage = {k: v for k, v in update.items() if k != "sessionUpdate"}
@@ -114,6 +150,8 @@ class _TurnCollector:
 
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
+
+    streams = True
 
     def __init__(
         self,
@@ -158,7 +196,16 @@ class AcpAgentBackend:
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: Any = None,
+        model: str | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
+        # The parent's provider/model are accepted and ignored, as the cli
+        # transport does it: this backend prompts an agent that holds its own
+        # credential and picks its own model. Accepted rather than omitted
+        # because the manager passes the same keyword set to whichever backend
+        # it resolved, and a missing parameter fails the dispatch with a
+        # TypeError before the agent is ever contacted.
         skey = session_key or "default"
         handle = instance or task_id
         cwd = self.cwd or str(workspace)
@@ -187,7 +234,8 @@ class AcpAgentBackend:
             # Snapshotted before the prompt so the error below names what this
             # turn ran into rather than what the connection has ever refused.
             refused_before = client.refusal_count
-            collector = _TurnCollector()
+            sink = bounded_delta(on_delta, self.max_output_chars)
+            collector = _TurnCollector(sink)
             # Held across the whole turn, not just the send: see
             # `_Connection.session_lock` for why two prompts cannot share one
             # session id.
@@ -209,10 +257,12 @@ class AcpAgentBackend:
             if not text:
                 tail = client.stderr_tail(1500)
                 span.error(f"empty turn (stopReason={stop_reason})")
-                # An agent that asked raven for something -- approval, most
-                # likely -- was told the method does not exist, and adapters
-                # answer that by ending the turn with nothing. The stderr tail
-                # says nothing about it, so name it here or it is unknowable.
+                # An agent that asked raven for something it does not serve --
+                # `fs/read_text_file` and its siblings, permission requests
+                # being answered now -- was told the method does not exist, and
+                # adapters answer that by ending the turn with nothing. The
+                # stderr tail says nothing about it, so name it here or it is
+                # unknowable.
                 refused = client.refusals_since(refused_before, session_id=session_id)
                 # Collapsed: one turn with three tool calls refuses the same
                 # method three times, and naming it three times says no more.
@@ -228,7 +278,51 @@ class AcpAgentBackend:
                 # never produced anything.
                 await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
+            return await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
+
+    async def _finished(
+        self,
+        text: str,
+        *,
+        stop_reason: Any,
+        span: Any,
+        sink: Callable[[str], Awaitable[None]] | None = None,
+    ) -> str:
+        """The reply, marked when the agent stopped before it had said everything.
+
+        Only ``end_turn`` means the agent finished. Every other stop reason
+        leaves a reply that reads complete and is not, and the reader -- the main
+        agent as much as a person in a direct chat -- has no other way to tell:
+        the text simply ends, mid-thought, and the run is reported as a success.
+        Measured, and the reason this exists: a cancelled codex turn returned its
+        opening sentence and nothing else, with the span still green.
+
+        Appended rather than raised. A partial answer is worth having, and the
+        turn's record already holds it -- discarding it to signal the truncation
+        would trade one kind of silence for another.
+
+        The notice is budgeted *before* the reply is clamped, so the one line
+        saying the answer is incomplete cannot be the part that gets cut.
+
+        Pushed through ``sink`` as well as returned, because for a caller that
+        streamed there is no other way for it to arrive: the return value is
+        deliberately not delivered a second time (``AgentLoop.run_turn``), so a
+        notice that only rode on it reached the record and never the screen --
+        which is the one reader it exists for.
+
+        The *unbounded* callback, not the reply's ``bounded_delta``: that budget
+        exists to cap what the agent says, and a reply which saturates it would
+        otherwise swallow the one line explaining that it was cut off -- exactly
+        the case the notice is for. This line is raven's own and fixed-length.
+        """
+        if stop_reason in ("end_turn", None):
             return text[: self.max_output_chars]
+        span.error(f"turn ended early (stopReason={stop_reason})")
+        logger.warning("acp agent {!r}: turn ended with stopReason={!r}; reply is partial", self.name, stop_reason)
+        notice = f"\n\n[raven] {self.name} stopped before finishing (stopReason={stop_reason}); reply is partial."
+        if sink is not None:
+            await sink(notice)
+        return text[: max(0, self.max_output_chars - len(notice))] + notice
 
     async def _open_session(self, client: Any, *, cwd: str, skey: str, handle: str, budget: float) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
@@ -244,7 +338,8 @@ class AcpAgentBackend:
                     # The agent's own store may have pruned this id, and the
                     # `session/load` param shape is not measured against a live
                     # server. Either way a fresh session is a working outcome, so
-                    # forget the handle rather than fail the task.
+                    # drop the stale binding rather than fail the task -- the
+                    # instance itself stays on the strip, see `unbind`.
                     logger.warning(
                         "acp agent {!r}: resuming {}/{!r} failed ({}); starting a fresh session",
                         self.name,
@@ -252,7 +347,7 @@ class AcpAgentBackend:
                         known,
                         exc.message,
                     )
-                    await self._registry.forget(skey, self.name, handle)
+                    await self._registry.unbind(skey, self.name, handle)
                 except AcpError:
                     # A transport-level failure is not evidence the session was
                     # pruned, so the binding is kept and the caller is told.

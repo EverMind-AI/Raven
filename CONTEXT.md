@@ -62,6 +62,17 @@ re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bou
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
+**Subagent working directory** (`workspace=` on every backend's `run`):
+Where a sub-agent's commands and file tools act: the *session's* working directory, the same
+one the dispatching turn's own tools get. Every dispatch supplies it — `spawn` captures
+`workdir.current()` at spawn time (the sub-agent outlives the turn whose binding it would
+read), a DAG node takes the same, and a Direct Chat resolves `session_workdir` because its
+branch returns before `workdir.bind` wraps the turn body. Distinct from **Agent home**
+(`SubagentManager.workspace`, `~/.raven/workspace`), which holds raven's memory and skills
+and is only the fallback for a dispatch that supplied nothing.
+_Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
+raven's own memory instead of the user's checkout, and says nothing about having done so.
+
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
 `execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,
@@ -117,7 +128,10 @@ _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+ca
 
 **Lane**:
 The per-conversation serial execution domain inside the Scheduler: runs one turn at a time
-and is the unit of cancellation. A stalled Lane never blocks other Lanes.
+and is the unit of cancellation. A stalled Lane never blocks other Lanes. A conversation can
+be a *sub*-conversation: a Direct Chat runs on `session#agent/handle`
+(`raven.spine.turn.direct_lane`), which is what lets several instances answer at once while
+the main agent keeps its own serial lane.
 _Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
 
 **TurnRequest**:
@@ -132,9 +146,12 @@ _Avoid_: conflating Deliverable with lifecycle events (`TurnStarted`/`TurnFailed
 those are emitted by the Spine worker, not a runner.
 
 **OriginPools**:
-Per-origin concurrency gates: a `USER` pool and a `system` pool for proactive origins
-(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), sized independently with no borrowing.
-A user turn never waits on a proactive task's LLM slot.
+Per-origin concurrency gates: a `USER` pool, a `system` pool for proactive origins
+(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), and a `direct` pool for Direct Chats, sized
+independently with no borrowing. A user turn never waits on a proactive task's LLM slot, and
+never waits behind several sub-agents answering. The direct pool is chosen per *request*
+rather than per origin - a Direct Chat is a `USER` turn, and an origin of its own would need
+a deliberate home in every origin switch in the codebase.
 
 ### Proactivity
 
@@ -593,6 +610,69 @@ ids, claimed when the run starts, and their outcome once it ends, which is what 
 within a process (`_store.index_guard`); two processes sharing one session still race.
 _Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
 sat in whatever directory the run happened to use and had no `spawn` counterpart.
+
+**Handoff Block** (`raven/agent/subagent/direct_chat.py`):
+The pointer block the runtime prepends to the user's next turn to the main agent after one
+or more Direct Chats: per instance, a UTC time span and the paths of each turn's
+`prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
+Subagent history. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
+and taken-and-cleared on the next turn that has no `direct_target`, so a segment is reported
+exactly once. Every byte in it is raven-minted - agent names from config, handles from the
+registry, call ids from `make_call_id` - which is why it is prepended unwrapped; a field
+echoing a sub-agent's own reply would break that.
+_Avoid_: "handoff summary" - it is deliberately not a summary; nothing in it is generated.
+
+**Reply Streaming** (`raven/agent/subagent/backends/base.py`):
+Whether a Subagent backend hands its reply over as it forms - `SubagentBackend.streams`
+plus the `on_delta` callback - rather than only returning it whole. Read from the mechanism
+that would have to deliver it, never declared: raven-loop and openai always stream, acp
+forwards the `agent_message_chunk` updates it already receives, and a cli agent streams only
+if its configured command asks its CLI for partial output - `claude` under
+`--include-partial-messages` (on the resume template too), while `codex exec --json` has no
+partial event to ask for. Asked for by a Direct Chat alone; a spawn takes the whole reply and keeps
+`chat_with_retry`'s retry ladder, which streaming trades away (a stream that already
+rendered cannot be retried without duplicating itself). What streams is the same text the
+record stores, so a caller that rendered the deltas must not deliver the return value again.
+_Avoid_: conflating it with the roster's `live-progress` tag, which says a transport reports
+its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
+invisible to the model and is about the answer itself.
+
+**Capability Snapshot** (`raven/agent/acp/capabilities.py`):
+What one ACP agent reported at its last handshake - protocol version, whether it can
+resume / fork / load a session, its models and auth methods - recorded by a Test and read
+back as the source of a Subagent's statefulness. Keyed by agent name and stamped with a
+fingerprint of the fields that decide how it launches (`command`, `cwd`, `env`,
+`readyTimeoutMs`; deliberately not `name` / `enabled`, which change nothing about what an
+agent can do). A snapshot whose fingerprint no longer matches is **stale**, not absent: its
+*capabilities* are still used, because dropping them defaults the agent to stateless - which
+costs it resume, its Instance Chip, and the `instance` parameter in the spawn schema - while
+its *verdict* is not, because a green light for a command that has since been edited is a
+claim no measurement backs. The `/subagents` row for a stale entry asks for a test.
+_Avoid_: reading it as a liveness check - it is one measurement, taken at Test time, not a
+statement about the agent right now.
+
+**Unattended Approval** (`raven/agent/acp/permissions.py`):
+How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
+from the options the agent offered by their protocol `kind` (`allow_always`, then
+`allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
+third answer - a dispatch has no operator and no surface that could render a prompt - and
+*not* answering is not one either: measured on `codex-acp`, any error to this request,
+including the `method not found` raven used to send, cancels the whole turn. Presets that
+take a launch-time never-ask setting carry it too, so the question is not asked at all.
+The same trust boundary the cli transport already ran under (`codex -a never`,
+`claude --permission-mode auto`), stated in one place instead of per command template.
+Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
+unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
+that way.
+
+**Stop Reason** (`raven/agent/subagent/backends/acp_agent.py`):
+What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
+other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete
+and is not. Such a reply is kept and carries an appended `[raven]` notice naming the stop
+reason, budgeted before the reply is clamped to `maxOutputChars` so the notice cannot be
+the part that is cut. Kept rather than raised because a partial answer is worth having;
+noticed rather than returned bare because neither the main agent nor a person in a Direct
+Chat can otherwise tell the text simply stops.
 
 **DAG node id** (`raven/agent/subagent_dag/_graph.py`, `_store.py`):
 A node's name inside a `run_subagent_dag` graph, and the address a *later* graph in the

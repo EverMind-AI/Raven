@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import replace
 
 from raven.agent.tools.message import MessageTool
@@ -674,3 +675,214 @@ class TestDagProgressSink:
         await sink("tui:c1", "dag_something_new", {"run_id": "dag-1"})
 
         assert emitter.emitted == []
+
+
+# ---------------------------------------------------------------------------
+# Direct chat: which conversation a turn's events belong to
+# ---------------------------------------------------------------------------
+
+
+async def test_a_direct_turns_events_carry_its_target():
+    """The client can switch instances mid-turn or reconnect, so it cannot infer
+    the owning transcript from its own state -- only from the event."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[Text(content="done")])
+    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert emitter.types() == ["token.delta", "message.complete"]
+    assert [e["payload"]["target"] for _k, e in emitter.emitted] == [
+        {"agent": "Raven-Code", "handle": "refactor-auth"},
+        {"agent": "Raven-Code", "handle": "refactor-auth"},
+    ]
+
+
+async def test_a_streamed_direct_turn_tags_every_chunk():
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="a"), StreamDelta(delta="b")])
+    targets = {"tui:c1": {"agent": "mir", "handle": "scan"}}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    deltas = [e["payload"] for _k, e in emitter.emitted if e["type"] == "token.delta"]
+    assert [d["target"] for d in deltas] == [{"agent": "mir", "handle": "scan"}] * 2
+
+
+async def test_the_turns_end_drops_the_binding():
+    """Held past the turn, the next main-agent reply would be painted into the
+    sub-agent's transcript."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[Text(content="done")])
+    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert targets == {}
+
+
+async def test_a_failed_direct_turn_reports_against_its_target():
+    """The error is what clears the spinner, so it has to name the same view the
+    turn was streaming into -- and it is emitted after the binding is dropped."""
+
+    class _BoomLoop:
+        async def run_turn(self, req, emit, drain, **kwargs):
+            raise RuntimeError("boom")
+
+    emitter = FakeEmitter()
+    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter, direct_targets=targets)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+    assert errors[0]["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+
+
+async def test_a_main_agent_turn_emits_no_target_key_at_all():
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[Text(content="done")])
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets={})
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert all("target" not in e["payload"] for _k, e in emitter.emitted)
+
+
+# ---------------------------------------------------------------------------
+# Direct chat: concurrency (spec 2026-08-16-concurrent-direct-chats)
+# ---------------------------------------------------------------------------
+
+
+class _BlockingLoop:
+    """A runner whose turns wait on a gate, so two can be in flight at once."""
+
+    def __init__(self) -> None:
+        self.gate = asyncio.Event()
+        self.started: list[str] = []
+
+    async def run_turn(self, req, emit, drain, **_kwargs):
+        from raven.spine.runner import TurnOutcome
+
+        self.started.append(req.conversation or "")
+        await self.gate.wait()
+        await emit(Text(content=f"done {req.conversation}"))
+        return TurnOutcome(usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), explicit_reply=True)
+
+
+async def test_two_instances_answer_at_the_same_time():
+    """One lane is a serial domain, so an instance answering while another is
+    answering needs a lane of its own. Both turns must be *inside* the runner
+    before either finishes."""
+    emitter = FakeEmitter()
+    loop = _BlockingLoop()
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        a = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=_src(),
+                text="hi",
+                conversation="tui:c1#A/one",
+                direct_target=("A", "one"),
+            )
+        )
+        b = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=_src(),
+                text="hi",
+                conversation="tui:c1#B/two",
+                direct_target=("B", "two"),
+            )
+        )
+        for _ in range(100):
+            if len(loop.started) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert sorted(loop.started) == ["tui:c1#A/one", "tui:c1#B/two"]
+        loop.gate.set()
+        await a.result()
+        await b.result()
+    finally:
+        await teardown()
+
+
+async def test_a_direct_turn_does_not_block_the_main_agent():
+    """The point of a separate pool: several instances answering must not make
+    the user queue to say one sentence to Raven."""
+    emitter = FakeEmitter()
+    loop = _BlockingLoop()
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        direct = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=_src(),
+                text="hi",
+                conversation="tui:c1#A/one",
+                direct_target=("A", "one"),
+            )
+        )
+        main = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        for _ in range(100):
+            if len(loop.started) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert sorted(loop.started) == ["tui:c1", "tui:c1#A/one"]
+        loop.gate.set()
+        await direct.result()
+        await main.result()
+    finally:
+        await teardown()
+
+
+async def test_a_direct_turns_events_reach_the_sessions_subscription():
+    """The client holds one subscription per session and demultiplexes on the
+    event's target; emitting on the lane key would reach nobody."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="a"), Text(content="b")])
+    targets = {"tui:c1#A/one": {"agent": "A", "handle": "one"}}
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
+    try:
+        turn_ids["tui:c1#A/one"] = "t1"
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=_src(),
+                text="hi",
+                conversation="tui:c1#A/one",
+                direct_target=("A", "one"),
+            )
+        )
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert {key for key, _e in emitter.emitted} == {"tui:c1"}
+    assert all(e["payload"].get("target") == {"agent": "A", "handle": "one"} for _k, e in emitter.emitted)

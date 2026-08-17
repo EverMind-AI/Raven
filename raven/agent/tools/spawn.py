@@ -138,13 +138,9 @@ class SpawnTool(Tool):
             return None
         roster = {a.name: a for a in self._third_party_agents()}
         if agent is None:
-            names = sorted(name for name, a in roster.items() if a.stateful)
-            hint = f" Pass `agent` as one of {names} to reuse a session." if names else ""
-            return (
-                f"Error: `instance` was set to {instance!r} but no `agent` was named, so this is a "
-                f"default Raven subagent -- it has no resumable session for a handle to continue."
-                f"{hint} Call spawn again without `instance`."
-            )
+            # A default Raven sub-agent is resumable now: its transcript is
+            # persisted per handle (raven/agent/subagent/instance_state.py).
+            return None
         meta = roster.get(agent)
         if meta is None or meta.stateful:
             return None

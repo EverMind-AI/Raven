@@ -7,6 +7,8 @@ import json
 import os
 import socket
 import subprocess
+import sys
+import time
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -466,12 +468,13 @@ class TestSharedRosterHelpers:
         )
         stateless = ThirdPartyCliSubagentConfig(name="codex", command="codex exec {prompt}")
         boxed = ThirdPartyCliSubagentConfig(name="boxed", command="cat", reads_local_files=False)
-        remote = ThirdPartyOpenAISubagentConfig(name="miro", base_url="http://x", model="m")
+        remote = ThirdPartyOpenAISubagentConfig(name="custom_http", base_url="http://x", model="m")
         assert third_party_agent_meta(stateful) == AgentMeta("claude_code", "Claude Code", True, True, False)
         assert third_party_agent_meta(stateless) == AgentMeta("codex", "", False, True, False)
         assert third_party_agent_meta(boxed) == AgentMeta("boxed", "", False, False, False)
-        # An HTTP endpoint is remote by default, so it reads no local path.
-        assert third_party_agent_meta(remote) == AgentMeta("miro", "", False, False, False)
+        # An HTTP endpoint is remote by default, so it reads no local path -- and
+        # stateful by default, because raven's own replay backs every endpoint.
+        assert third_party_agent_meta(remote) == AgentMeta("custom_http", "", True, False, False)
 
     def test_listing_degrades_to_the_bare_name_without_a_description(self) -> None:
         listing = format_agent_listing([AgentMeta("a", "does A", False, True), AgentMeta("b", "", True, False)])
@@ -743,17 +746,22 @@ class TestSpawnInstanceGate:
         assert "['claude_code']" in out  # who can, not just who cannot
         assert spawned == []
 
-    async def test_handle_without_an_agent_spawns_nothing(self, tmp_path: Path) -> None:
-        """A default Raven subagent has no resumable session either, and the
-        manager only keys an instance row when `agent` is set."""
+    async def test_handle_without_an_agent_is_forwarded(self, tmp_path: Path) -> None:
+        """A default Raven subagent is resumable now (its transcript is
+        persisted per handle), so a handle with no `agent` named is
+        forwarded like any other, not rejected."""
         tool = self._tool(tmp_path)
-        spawned: list[dict] = []
-        tool._manager.spawn = lambda **kw: spawned.append(kw)  # type: ignore[method-assign]
+        captured: dict = {}
 
+        async def fake_spawn(**kwargs):
+            captured.update(kwargs)
+            return "started"
+
+        tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
         out = await tool.execute(task="do it", instance="author")
 
-        assert out.startswith("Error:")
-        assert spawned == []
+        assert out == "started"
+        assert captured["instance"] == "author"
 
     async def test_handle_on_a_stateful_agent_is_forwarded(self, tmp_path: Path) -> None:
         tool = self._tool(tmp_path)
@@ -806,7 +814,9 @@ async def test_manager_forwards_instance_to_backend(tmp_path: Path) -> None:
 # --- transcript parsing --------------------------------------------------
 
 from raven.agent.subagent.backends.transcript import (
+    delta_reader,
     parse_claude_stream_json,
+    parse_claude_stream_json_delta,
     parse_codex_jsonl,
     parse_openclaw_json,
     parse_opencode_json,
@@ -850,6 +860,48 @@ def test_parse_claude_stream_json_without_result_event() -> None:
     # Session id still recoverable; no reply means the caller falls back to raw stdout.
     stdout = '{"type":"system","subtype":"init","session_id":"sess-2"}'
     assert parse_claude_stream_json(stdout) == ("sess-2", None, False)
+
+
+def test_parse_claude_stream_json_delta_reads_one_text_chunk() -> None:
+    line = (
+        '{"type":"stream_event","event":{"type":"content_block_delta","index":0,'
+        '"delta":{"type":"text_delta","text":"he"}},"session_id":"s","parent_tool_use_id":null}'
+    )
+    assert parse_claude_stream_json_delta(line) == "he"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The finished text, repeated by the same stream twice more.
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"whole"}]}}',
+        '{"type":"result","is_error":false,"result":"whole"}',
+        # Not reply text.
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"h"}}}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","text":"{"}}}',
+        # A nested agent's output, which `result` does not carry either.
+        '{"type":"stream_event","event":{"type":"content_block_delta",'
+        '"delta":{"type":"text_delta","text":"x"}},"parent_tool_use_id":"toolu_1"}',
+        # Frame kinds with no text at all.
+        '{"type":"stream_event","event":{"type":"message_stop"}}',
+        '{"type":"system","subtype":"init","session_id":"s"}',
+        # This transport interleaves plain diagnostics with its transcript.
+        "[plugins] loading",
+        "",
+    ],
+)
+def test_parse_claude_stream_json_delta_reads_nothing_else(line: str) -> None:
+    assert parse_claude_stream_json_delta(line) == ""
+
+
+def test_delta_reader_is_absent_for_a_format_with_no_partial_events() -> None:
+    """Measured on ``codex exec --json``: a whole reply arrives as one
+    ``item.completed``, so there is no partial event to read."""
+    assert delta_reader("claude_stream_json") is parse_claude_stream_json_delta
+    assert delta_reader("codex_jsonl") is None
+    assert delta_reader("opencode_json") is None
+    assert delta_reader("text") is None
+    assert delta_reader(None) is None
 
 
 def test_parse_openclaw_json_extracts_reply_and_session_id() -> None:
@@ -1052,9 +1104,10 @@ def test_stateful_declaration_that_matches_is_accepted() -> None:
     assert third_party_agent_meta(stateful).stateful is True
 
 
-def test_http_agent_cannot_declare_itself_stateful() -> None:
-    with pytest.raises(ValidationError):
-        ThirdPartyOpenAISubagentConfig(name="x", base_url="http://x", model="m", stateful=True)
+def test_http_agent_may_declare_itself_stateful() -> None:
+    """Raven replays the message list itself for this kind, so stateful=True is honoured now."""
+    cfg = ThirdPartyOpenAISubagentConfig(name="x", base_url="http://x", model="m", stateful=True)
+    assert cfg.stateful is True
 
 
 def test_local_file_access_defaults_by_kind_and_round_trips_camel() -> None:
@@ -2154,3 +2207,596 @@ async def test_cli_backend_timeout_kills_reparented_child_after_launcher_already
             "grandchild survived: the launcher had already exited, so a "
             "returncode-gated killpg would silently no-op here"
         )
+
+
+# --- kind-aware stateful ---------------------------------------------------
+
+
+def test_openai_kind_is_stateful_when_declared():
+    """A custom endpoint's operator is the only one who knows replay works there."""
+    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.config.schema import SubagentsConfig
+
+    cfg = SubagentsConfig(
+        third_party=[
+            {
+                "kind": "openai",
+                "name": "custom-http",
+                "baseUrl": "http://localhost:8000/v1",
+                "model": "m",
+                "stateful": True,
+            }
+        ]
+    ).third_party[0]
+
+    assert third_party_agent_meta(cfg).stateful is True
+
+
+def test_openai_kind_is_stateful_by_default():
+    """No UI surface writes this field, so the default is what a custom entry gets.
+
+    It defaults on because raven's replay is what delivers the capability and it
+    works at any endpoint; a false is the endpoint-specific exception below.
+    """
+    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.config.schema import SubagentsConfig
+
+    cfg = SubagentsConfig(
+        third_party=[
+            {
+                "kind": "openai",
+                "name": "custom-http",
+                "baseUrl": "http://localhost:8000/v1",
+                "model": "m",
+            }
+        ]
+    ).third_party[0]
+
+    assert third_party_agent_meta(cfg).stateful is True
+
+
+def test_openai_kind_honours_a_declared_false():
+    """The exception has to survive the load path, or the default swallows it."""
+    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.config.schema import SubagentsConfig
+
+    cfg = SubagentsConfig(
+        third_party=[
+            {
+                "kind": "openai",
+                "name": "custom-http",
+                "baseUrl": "http://localhost:8000/v1",
+                "model": "m",
+                "stateful": False,
+            }
+        ]
+    ).third_party[0]
+
+    assert cfg.stateful is False
+    assert third_party_agent_meta(cfg).stateful is False
+
+
+def test_a_stored_null_stateful_still_loads():
+    """The field was optional until its default became true, so entries written
+    then carry an explicit null. Rejecting one fails validation of the whole
+    top-level Config -- raven stops starting, and the config that could be fixed
+    sits behind the loader that no longer reads it.
+    """
+    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.config.schema import SubagentsConfig
+
+    cfg = SubagentsConfig(
+        third_party=[
+            {
+                "kind": "openai",
+                "name": "written-by-the-old-form",
+                "baseUrl": "http://localhost:8000/v1",
+                "model": "m",
+                "stateful": None,
+            }
+        ]
+    ).third_party[0]
+
+    assert cfg.stateful is True
+    assert third_party_agent_meta(cfg).stateful is True
+
+
+def test_the_mirothinker_preset_is_pinned_stateless():
+    """A preset states replay-suitability for the endpoint it names.
+
+    The default is stateful, so this pin is what makes the roster the model
+    reads say otherwise for this one endpoint.
+    """
+    from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
+    from raven.agent.subagent.presets import third_party_subagent_presets
+    from raven.config.schema import SubagentsConfig
+
+    entry = next(e for e in third_party_subagent_presets() if e.get("preset") == "mirothinker")
+    assert entry["stateful"] is False
+
+    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    meta = third_party_agent_meta(cfg)
+    assert meta.stateful is False
+    assert "stateless" in format_agent_listing([meta])
+
+
+def test_cli_kind_still_derives_stateful_from_resume_command():
+    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.config.schema import SubagentsConfig
+
+    entries = SubagentsConfig(
+        third_party=[
+            {"kind": "cli", "name": "plain", "command": "true --prompt {prompt}"},
+            {
+                "kind": "cli",
+                "name": "resumable",
+                "command": "true --session {agent_id} --prompt {prompt}",
+                "resumeCommand": "true --resume {agent_id} --prompt {prompt}",
+                "idSource": "provisioned",
+            },
+        ]
+    ).third_party
+
+    assert third_party_agent_meta(entries[0]).stateful is False
+    assert third_party_agent_meta(entries[1]).stateful is True
+
+
+async def test_openai_backend_streams_when_a_delta_hook_is_wired(tmp_path: Path) -> None:
+    """The same reply, delivered in frames: the caller renders it as it forms and
+    must not render the return value again."""
+    seen_body: dict[str, Any] = {}
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        seen_body.update(await request.json())
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        for piece in ("stub ", "answer"):
+            frame = json.dumps({"choices": [{"delta": {"content": piece}}]})
+            await resp.write(f"data: {frame}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    try:
+        be = OpenAIApiBackend(name="mirothinker", base_url=f"http://127.0.0.1:{port}/v1", model="mirothinker-1")
+        out = await be.run("solve it", task_id="t9", workspace=tmp_path, executor=None, on_delta=on_delta)
+    finally:
+        await runner.cleanup()
+
+    assert seen == ["stub ", "answer"]
+    assert out == "stub answer"
+    assert seen_body["stream"] is True
+
+
+async def test_openai_backend_streams_no_more_than_it_returns(tmp_path: Path) -> None:
+    """An uncapped stream would render text the record never stores, and it
+    would vanish on the next switch into the instance."""
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        for piece in ("abcd", "efgh"):
+            frame = json.dumps({"choices": [{"delta": {"content": piece}}]})
+            await resp.write(f"data: {frame}\n\n".encode())
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    try:
+        be = OpenAIApiBackend(
+            name="mirothinker",
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="mirothinker-1",
+            max_output_chars=6,
+        )
+        out = await be.run("solve it", task_id="t10", workspace=tmp_path, executor=None, on_delta=on_delta)
+    finally:
+        await runner.cleanup()
+
+    assert "".join(seen) == out == "abcdef"
+
+
+async def test_openai_backend_skips_frames_it_cannot_read(tmp_path: Path) -> None:
+    """These endpoints are only nominally OpenAI-compatible; a keep-alive comment
+    or an unrecognised frame must not fail a turn that is answering fine."""
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await resp.prepare(request)
+        await resp.write(b": keep-alive\n\n")
+        await resp.write(b"data: {not json}\n\n")
+        await resp.write(b'data: {"choices":[{"delta":{}}]}\n\n')
+        await resp.write(b'data: {"choices":["not-an-object"]}\n\n')
+        await resp.write(b'data: {"choices":[{"delta":null}]}\n\n')
+        await resp.write(b'data: {"choices":[{"delta":{"content":"fine"}}]}\n\n')
+        await resp.write(b"data: [DONE]\n\n")
+        return resp
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+
+    async def on_delta(text: str) -> None:
+        return None
+
+    try:
+        be = OpenAIApiBackend(name="mirothinker", base_url=f"http://127.0.0.1:{port}/v1", model="mirothinker-1")
+        out = await be.run("solve it", task_id="t11", workspace=tmp_path, executor=None, on_delta=on_delta)
+    finally:
+        await runner.cleanup()
+
+    assert out == "fine"
+
+
+def test_streaming_capability_is_read_from_the_transport() -> None:
+    """A cli agent cannot be made to stream by declaring that it does: its stdout
+    is buffered whole and the reply parsed out of it after exit."""
+    from raven.agent.subagent.backends import AcpAgentBackend, RavenLoopBackend
+
+    assert RavenLoopBackend.streams is True
+    assert OpenAIApiBackend.streams is True
+    assert AcpAgentBackend.streams is True
+    assert CliAgentBackend.streams is False
+
+
+def test_every_backend_accepts_the_managers_call_shape() -> None:
+    """One keyword set reaches whichever backend the manager resolved, so a
+    backend that declares fewer parameters fails the dispatch with a TypeError
+    before its agent is ever contacted. Checked over all four rather than per
+    backend: the drift is invisible in a test that calls one `run` directly with
+    the arguments that backend happens to declare.
+    """
+    import inspect
+
+    from raven.agent.subagent.backends import AcpAgentBackend, RavenLoopBackend
+
+    passed = {"task_id", "workspace", "executor", "session_key", "instance", "provider", "model"}
+    for cls in (RavenLoopBackend, CliAgentBackend, OpenAIApiBackend, AcpAgentBackend):
+        params = set(inspect.signature(cls.run).parameters)
+        assert passed <= params, f"{cls.__name__}.run cannot be called by the manager: missing {passed - params}"
+        # The manager offers the delta hook to any backend that declares it can
+        # stream, so every backend has to be able to receive it -- cli included,
+        # where whether it *will* stream is decided per instance from the command.
+        assert "on_delta" in params, cls.__name__
+
+
+async def test_openai_backend_streaming_reports_an_upstream_refusal(tmp_path: Path) -> None:
+    """A 401 answered as a stream must fail the turn with the endpoint's own
+    words, exactly as the buffered path does -- not read as an empty reply."""
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.Response(status=401, text="provider rejected the credential")
+
+    port = _free_port()
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+
+    async def on_delta(text: str) -> None:
+        return None
+
+    try:
+        be = OpenAIApiBackend(name="mirothinker", base_url=f"http://127.0.0.1:{port}/v1", model="mirothinker-1")
+        with pytest.raises(RuntimeError, match="HTTP 401"):
+            await be.run("solve it", task_id="t12", workspace=tmp_path, executor=None, on_delta=on_delta)
+    finally:
+        await runner.cleanup()
+
+
+# --- cli streaming (claude_stream_json partial messages) ----------------------
+
+
+def _claude_partial_transcript(pieces: tuple[str, ...], *, session: str = "sess-1") -> list[str]:
+    """The frames a real ``claude -p ... --include-partial-messages`` run emits.
+
+    Shapes taken from a live run, not invented: the answer arrives as
+    ``stream_event`` / ``content_block_delta`` / ``text_delta`` frames and is
+    then repeated whole on ``result``, which is what the buffered parse reads.
+    """
+    lines = [json.dumps({"type": "system", "subtype": "init", "session_id": session})]
+    lines += [
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": piece}},
+                "session_id": session,
+                "parent_tool_use_id": None,
+            }
+        )
+        for piece in pieces
+    ]
+    lines.append(json.dumps({"type": "result", "session_id": session, "is_error": False, "result": "".join(pieces)}))
+    return lines
+
+
+def _transcript_command(tmp_path: Path, lines: list[str], *, name: str = "claude_stub") -> str:
+    """A command that prints ``lines`` one at a time, as a real CLI would."""
+    script = tmp_path / f"{name}.py"
+    body = "\n".join(f"print({line!r}, flush=True)" for line in lines)
+    script.write_text(body + "\n", encoding="utf-8")
+    return f"{sys.executable} {script}"
+
+
+def _streaming_cli(tmp_path: Path, command: str, **kwargs: Any) -> CliAgentBackend:
+    return CliAgentBackend(
+        name="Coder",
+        command=f"{command} --include-partial-messages",
+        transcript_format="claude_stream_json",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+        **kwargs,
+    )
+
+
+def test_cli_streaming_is_read_from_the_command_not_declared() -> None:
+    """Only the flag makes claude emit deltas, so only the flag may claim it."""
+    base = "claude -p {prompt} --output-format stream-json --verbose"
+
+    assert CliAgentBackend(name="a", command=base, transcript_format="claude_stream_json").streams is False
+    assert (
+        CliAgentBackend(
+            name="a", command=f"{base} --include-partial-messages", transcript_format="claude_stream_json"
+        ).streams
+        is True
+    )
+    # codex has no partial event to ask for: the flag would be a wish.
+    assert (
+        CliAgentBackend(
+            name="a", command="codex exec --json --include-partial-messages", transcript_format="codex_jsonl"
+        ).streams
+        is False
+    )
+
+
+def test_cli_streaming_needs_the_flag_on_the_resume_template_too() -> None:
+    """A direct chat is almost entirely resumes. Streaming the first turn and
+    nothing afterwards is worse than not claiming the capability at all."""
+    create = "claude -p {prompt} --output-format stream-json --verbose --include-partial-messages"
+
+    assert (
+        CliAgentBackend(
+            name="a",
+            command=create,
+            resume_command="claude -p {prompt} --resume {agent_id} --output-format stream-json --verbose",
+            transcript_format="claude_stream_json",
+        ).streams
+        is False
+    )
+    assert (
+        CliAgentBackend(
+            name="a",
+            command=create,
+            resume_command=f"{create} --resume {{agent_id}}",
+            transcript_format="claude_stream_json",
+        ).streams
+        is True
+    )
+
+
+async def test_cli_backend_streams_text_deltas_as_the_transcript_arrives(tmp_path: Path) -> None:
+    lines = _claude_partial_transcript(("he", "llo ", "there"))
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert seen == ["he", "llo ", "there"]
+    # The reply still comes from the buffered parse of `result`, so the record
+    # holds what it always held.
+    assert reply == "hello there"
+
+
+async def test_cli_backend_streams_nothing_without_a_hook(tmp_path: Path) -> None:
+    """A spawn keeps the buffered path; the same transcript yields the same reply."""
+    lines = _claude_partial_transcript(("he", "llo ", "there"))
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines))
+
+    assert await be.run("hi", task_id="t1", workspace=tmp_path, executor=None) == "hello there"
+
+
+async def test_cli_backend_streams_only_the_reply_text(tmp_path: Path) -> None:
+    """Thinking, a tool call's arguments assembling, and a nested agent's output
+    all ride the same delta channel and none of them is the reply."""
+    session = "sess-2"
+    lines = [
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hmm"}},
+                "parent_tool_use_id": None,
+            }
+        ),
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": '{"a'}},
+                "parent_tool_use_id": None,
+            }
+        ),
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "nested"}},
+                "parent_tool_use_id": "toolu_1",
+            }
+        ),
+        # An allowed list, not a denied one: a delta type this reader has never
+        # seen may still carry a `text` field, and it is not the reply either.
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "some_future_delta", "text": "not it"}},
+                "parent_tool_use_id": None,
+            }
+        ),
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "real"}},
+                "parent_tool_use_id": None,
+            }
+        ),
+        # The finished text repeats here and on `result`; reading either would
+        # render the answer twice.
+        json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "real"}]}}),
+        json.dumps({"type": "result", "session_id": session, "is_error": False, "result": "real"}),
+    ]
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines, name="filtered"))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert seen == ["real"]
+    assert reply == "real"
+
+
+async def test_cli_backend_streams_past_a_line_longer_than_the_read_chunk(tmp_path: Path) -> None:
+    """One transcript line carries a whole tool result. `StreamReader.readline`
+    raises above 64 KiB, which the buffered path never had to care about."""
+    filler = "x" * 200_000
+    lines = [
+        json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": filler}]}}),
+        *_claude_partial_transcript(("after the big line",)),
+    ]
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines, name="bigline"))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert seen == ["after the big line"]
+    assert reply == "after the big line"
+
+
+async def test_cli_backend_streams_no_more_than_it_returns(tmp_path: Path) -> None:
+    lines = _claude_partial_transcript(("abcd", "efgh"))
+    be = _streaming_cli(tmp_path, _transcript_command(tmp_path, lines, name="capped"), max_output_chars=6)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert "".join(seen) == reply == "abcdef"
+
+
+async def test_cli_backend_ignores_a_delta_hook_it_cannot_honour(tmp_path: Path) -> None:
+    """A caller driving the backend directly never consulted `streams`."""
+    lines = _claude_partial_transcript(("hi",))
+    be = CliAgentBackend(
+        name="Writer",
+        command=_transcript_command(tmp_path, lines, name="nonstreaming"),
+        transcript_format="claude_stream_json",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    assert be.streams is False
+    assert await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta) == "hi"
+    assert seen == []
+
+
+async def test_cli_backend_kills_the_child_when_the_delta_sink_raises(tmp_path: Path) -> None:
+    """A sink whose client went away abandons the capture. Without the kill the
+    reparented worker keeps running, and its two pump tasks keep reading it.
+    """
+    script = tmp_path / "slow_stream.py"
+    script.write_text(
+        "import json, sys, time\n"
+        "frame = {'type': 'stream_event', 'parent_tool_use_id': None,\n"
+        "         'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': 'x'}}}\n"
+        "print(json.dumps(frame), flush=True)\n"
+        "time.sleep(30)\n"
+        "print('never', flush=True)\n",
+        encoding="utf-8",
+    )
+    be = _streaming_cli(tmp_path, f"{sys.executable} {script}")
+
+    async def on_delta(text: str) -> None:
+        raise RuntimeError("client went away")
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="client went away"):
+        await be.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    # Returned on the sink's failure rather than after the child's own sleep.
+    assert time.monotonic() - started < 10
+    assert not [t for t in asyncio.all_tasks() if "pump" in repr(t.get_coro())]
+
+
+async def test_the_line_pump_leaves_no_task_behind_when_the_sink_raises(tmp_path: Path) -> None:
+    """``asyncio.gather`` leaves its siblings running when one of them raises.
+
+    Tested on the pump directly: through ``run`` the abandoned child is killed,
+    which ends the other pumps at EOF anyway, so only this bounds the window
+    without depending on that.
+    """
+    script = tmp_path / "pump_leak.py"
+    script.write_text(
+        "import json, time\n"
+        "frame = {'type': 'stream_event', 'parent_tool_use_id': None,\n"
+        "         'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': 'x'}}}\n"
+        "print(json.dumps(frame), flush=True)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    be = _streaming_cli(tmp_path, "unused")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def boom(text: str) -> None:
+        raise RuntimeError("client went away")
+
+    before = asyncio.all_tasks()
+    try:
+        with pytest.raises(RuntimeError, match="client went away"):
+            await be._communicate_streaming(proc, None, boom)
+        assert asyncio.all_tasks() - before - {asyncio.current_task()} == set()
+    finally:
+        proc.kill()
+        await proc.wait()

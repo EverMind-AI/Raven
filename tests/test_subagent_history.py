@@ -128,3 +128,48 @@ def test_spawn_record_survives_an_unwritable_root(tmp_path: Path) -> None:
     record.finish(status="completed", output="ignored")
 
     assert not record.dir.exists()
+
+
+def test_direct_record_lands_under_the_instance(tmp_path: Path) -> None:
+    from raven.agent.subagent.direct_chat import DirectChatRecord, direct_root
+
+    record = DirectChatRecord.open(tmp_path, agent="Raven-Code", handle="refactor-auth", task_id="t1", task="do it")
+
+    root = direct_root(tmp_path, "Raven-Code", "refactor-auth")
+    assert record.dir.parent == root
+    assert (record.dir / "prompt.md").read_text(encoding="utf-8") == "do it"
+    assert not (record.dir / "out.md").exists()
+
+
+def test_direct_record_shares_the_state_directory(tmp_path: Path) -> None:
+    from raven.agent.subagent.direct_chat import direct_root
+    from raven.agent.subagent.instance_state import instance_state_path
+
+    root = direct_root(tmp_path, "A", "h")
+    assert instance_state_path(tmp_path, "A", "h").parent == root
+
+
+def test_direct_record_finish_writes_the_output(tmp_path: Path) -> None:
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    record = DirectChatRecord.open(tmp_path, agent="A", handle="h", task_id="t1", task="q")
+    record.finish(status="completed", output="a")
+
+    meta = json.loads((record.dir / "meta.json").read_text(encoding="utf-8"))
+    assert (record.dir / "out.md").read_text(encoding="utf-8") == "a"
+    assert meta["status"] == "completed"
+    assert meta["agent"] == "A"
+    assert meta["handle"] == "h"
+    assert meta["ended_at_ms"] >= meta["started_at_ms"]
+
+
+def test_direct_record_survives_an_unwritable_root(tmp_path: Path, monkeypatch) -> None:
+    """History is an audit trail; losing it must never take down the turn."""
+    from raven.agent.subagent.direct_chat import DirectChatRecord
+
+    def boom(*a, **k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr("pathlib.Path.mkdir", boom)
+    record = DirectChatRecord.open(tmp_path, agent="A", handle="h", task_id="t1", task="q")
+    record.finish(status="completed", output="a")

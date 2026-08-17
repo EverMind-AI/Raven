@@ -42,6 +42,7 @@ from raven.spine import (
 from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.events import TurnEvent
 from raven.spine.runner import Drain, Emit
+from raven.spine.turn import session_of
 
 _TURN_FAILED_CODE = -32099
 
@@ -209,20 +210,59 @@ class RpcOutlet:
     MediaOut are eaten — the wire protocol has no event for them and no client
     shows per-turn progress or tool media today (a known gap, deferred)."""
 
-    def __init__(self, channel: str, emitter: SubscriptionEmitter) -> None:
+    def __init__(
+        self,
+        channel: str,
+        emitter: SubscriptionEmitter,
+        direct_targets: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         self.name = channel
         self.capabilities = Capabilities(streaming=True)
         self._emitter = emitter
+        # conversation -> the sub-agent instance this turn was addressed to.
+        # ``turn.send`` binds it, the sink drops it, and it is read here to tag
+        # the reply -- a client that switched instances mid-turn or reconnected
+        # has no other way to tell which transcript a delta belongs to. Empty
+        # when the caller wired none (every turn is then the main agent's).
+        self._direct_targets = direct_targets if direct_targets is not None else {}
+
+    @staticmethod
+    def _subscription(conversation_id: str | None) -> str | None:
+        """The subscription an event on this lane belongs to.
+
+        A direct chat runs on its own lane so it can be concurrent, but the
+        client holds one subscription per *session* and demultiplexes on each
+        event's ``target``. Emitting on the lane key instead would reach a
+        subscription nobody registered. See ``raven.spine.turn.session_of``.
+
+        An unstamped event passes through untouched: the lane stamps every event
+        it routes, so this is only reachable from a caller driving the outlet
+        directly.
+        """
+        return session_of(conversation_id) if conversation_id else conversation_id
+
+    def _tagged(self, payload: dict[str, Any], conversation_id: str) -> dict[str, Any]:
+        """Add the in-flight turn's addressee, or leave the payload untouched.
+
+        Absent rather than null for a main-agent turn: every payload the wire
+        already carried keeps its shape, and an untagged frame reads as the main
+        conversation's by its own content.
+        """
+        target = self._direct_targets.get(conversation_id)
+        return payload if target is None else {**payload, "target": target}
 
     async def deliver(self, out: Deliverable) -> None:
+        # The lane the event came from; `_subscription` maps it to the client's.
         cid = out.conversation_id
         if isinstance(out, Reasoning):
             if out.content:
-                await self._emitter.emit(cid, {"type": "thinking.delta", "payload": {"text": out.content}})
+                await self._emitter.emit(
+                    self._subscription(cid), {"type": "thinking.delta", "payload": {"text": out.content}}
+                )
         elif isinstance(out, ToolEvent):
             if out.phase is ToolPhase.START:
                 await self._emitter.emit(
-                    cid,
+                    self._subscription(cid),
                     {
                         "type": "tool.start",
                         "payload": {
@@ -236,7 +276,7 @@ class RpcOutlet:
                 )
             else:
                 await self._emitter.emit(
-                    cid,
+                    self._subscription(cid),
                     {
                         "type": "tool.complete",
                         "payload": {
@@ -252,11 +292,16 @@ class RpcOutlet:
             # fallback) rides one token.delta into the same buffer the streamed
             # reply uses, so message.complete finalizes it like any other text.
             if out.content:
-                await self._emitter.emit(cid, {"type": "token.delta", "payload": {"text": out.content}})
+                await self._emitter.emit(
+                    self._subscription(cid),
+                    {"type": "token.delta", "payload": self._tagged({"text": out.content}, cid)},
+                )
         elif isinstance(out, EpisodeStart):
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.
-            await self._emitter.emit(cid, {"type": "episode.start", "payload": {"index": out.index}})
+            await self._emitter.emit(
+                self._subscription(cid), {"type": "episode.start", "payload": {"index": out.index}}
+            )
         # Notice / MediaOut: eaten (no wire event today).
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
@@ -267,19 +312,41 @@ class RpcOutlet:
             return
         if not delta:
             return
-        await self._emitter.emit(stream_id, {"type": "token.delta", "payload": {"text": delta}})
-
-    async def emit_complete(self, conversation_id: str, turn_id: str | None, usage: dict[str, Any]) -> None:
         await self._emitter.emit(
-            conversation_id,
-            {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
+            self._subscription(stream_id), {"type": "token.delta", "payload": self._tagged({"text": delta}, stream_id)}
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+    async def emit_complete(
+        self,
+        conversation_id: str,
+        turn_id: str | None,
+        usage: dict[str, Any],
+        target: dict[str, str] | None = None,
+    ) -> None:
+        # ``target`` is passed in rather than read from the map: the sink drops
+        # the turn's slots before finalizing (so the next turn.send cannot race
+        # a half-unwound turn), which means by this point the map no longer
+        # holds it.
+        payload: dict[str, Any] = {"turn_id": turn_id, "usage": usage}
+        if target is not None:
+            payload["target"] = target
+        await self._emitter.emit(self._subscription(conversation_id), {"type": "message.complete", "payload": payload})
+
+    async def emit_error(
+        self,
+        conversation_id: str,
+        code: int,
+        message: str,
+        reason: str,
+        detail: str = "",
+        target: dict[str, str] | None = None,
+    ) -> None:
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if detail:
             payload["detail"] = detail
-        await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
+        if target is not None:
+            payload["target"] = target
+        await self._emitter.emit(self._subscription(conversation_id), {"type": "error", "payload": payload})
 
 
 def _make_rpc_sink(
@@ -288,6 +355,7 @@ def _make_rpc_sink(
     channel: str,
     turn_ids: dict[str, str],
     usages: dict[str, dict[str, Any]],
+    direct_targets: dict[str, dict[str, str]],
     on_turn_end: Callable[[str], None] | None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the hub into the scheduler's EventSink for the TUI. Deliverables
@@ -306,11 +374,15 @@ def _make_rpc_sink(
         await hub.close_stream(conversation_id)
         await hub.wait_idle(channel)
 
-    def _drop(conversation_id: str) -> None:
+    def _drop(conversation_id: str) -> dict[str, str] | None:
         turn_ids.pop(conversation_id, None)
         usages.pop(conversation_id, None)
+        # Returned rather than only dropped: the turn's closing event still has
+        # to name the view it belongs to, and this is where the binding ends.
+        target = direct_targets.pop(conversation_id, None)
         if on_turn_end is not None:
             on_turn_end(conversation_id)
+        return target
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnEnded):
@@ -321,12 +393,12 @@ def _make_rpc_sink(
                 "completion_tokens": 0,
                 "total_tokens": 0,
             }
-            _drop(event.conversation_id)
-            await outlet.emit_complete(event.conversation_id, turn_id, usage)
+            target = _drop(event.conversation_id)
+            await outlet.emit_complete(event.conversation_id, turn_id, usage, target)
             return
         if isinstance(event, TurnFailed):
             await _finish(event.conversation_id)
-            _drop(event.conversation_id)
+            target = _drop(event.conversation_id)
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
             if not event.cancelled:
@@ -336,6 +408,7 @@ def _make_rpc_sink(
                     "turn_failed",
                     "internal",
                     event.error or "",
+                    target,
                 )
             return
         if isinstance(event, TurnStarted):
@@ -352,10 +425,12 @@ def build_rpc_spine(
     *,
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
+    direct_targets: dict[str, dict[str, str]] | None = None,
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
     user_pool: int = 1,
     system_pool: int = 1,
+    direct_pool: int = 8,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a client turn flows through: a hub with the channel's
     RpcOutlet, and a Scheduler whose runner streams the agent loop and whose sink
@@ -364,6 +439,12 @@ def build_rpc_spine(
     can attach it to message.complete) and a ``teardown`` the caller awaits on
     exit (stop the scheduler, then close the hub's workers). ``on_turn_end`` lets
     turn.send drop its active-turn slot at each turn exit.
+
+    ``direct_targets`` is the direct-chat map (conversation -> the sub-agent
+    instance the in-flight turn was addressed to). Pass the same dict
+    ``register_turn_methods`` is given, so what ``turn.send`` binds is what the
+    outlet and the sink tag their events with; defaults to a private map when no
+    client wires one, which reads as "every turn is the main agent's".
 
     ``readback_texts`` is the cron read-back map (conversation -> reply text): the
     runner stores a CRON turn's reply there so the cron fan-out can deliver it as a
@@ -374,7 +455,9 @@ def build_rpc_spine(
     permission. The runner binds it only to USER-origin turns and explicitly
     revokes it for background origins."""
     hub = DeliveryHub()
-    outlet = RpcOutlet(channel, emitter)
+    if direct_targets is None:
+        direct_targets = {}
+    outlet = RpcOutlet(channel, emitter, direct_targets)
     hub.register(outlet)
     turn_ids: dict[str, str] = {}
     usages: dict[str, dict[str, Any]] = {}
@@ -389,8 +472,8 @@ def build_rpc_spine(
             readback_texts,
             approval_responder=approval_responder,
         ),
-        OriginPools(user=user_pool, system=system_pool),
-        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, on_turn_end),
+        OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
+        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end),
     )
 
     async def teardown() -> None:

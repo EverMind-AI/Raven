@@ -197,6 +197,7 @@ class SubAgentDagTool(Tool):
         gate: asyncio.Semaphore | None = None,
         announce: DagAnnouncer | None = None,
         adopt: TaskAdopter | None = None,
+        state_for: "Callable[[str, str | None, str], Any] | None" = None,
         charge: QuotaCharger | None = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
@@ -214,6 +215,11 @@ class SubAgentDagTool(Tool):
         # host passes the sub-agent manager's, so spawns count against it too.
         self._gate = gate if gate is not None else asyncio.Semaphore(max_concurrency)
         self._announce = announce
+        # The manager's instance-state derivation, so a node that names an
+        # `instance` continues that conversation on the same terms `spawn` and a
+        # direct chat do. Injected rather than imported: this tool is built from
+        # the same config as the manager but does not own one.
+        self._state_for = state_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -708,6 +714,7 @@ class SubAgentDagTool(Tool):
                 progress_publisher=emit,
                 semaphore=self._gate,
                 session_key=origin.conversation,
+                state_for=self._state_for,
                 run_id=run_id,
                 cancel=cancel,
             )

@@ -122,6 +122,63 @@ class SubagentRow(_Strict):
     test_running: bool
 
 
+class DirectTarget(_Strict):
+    """One sub-agent instance a turn is addressed to, instead of the main agent.
+
+    Null everywhere it appears means the main conversation. The pair is the
+    instance's whole identity - the registry is keyed
+    ``(session_key, agent, handle)`` and the session is already implied by the
+    method that carries this - so nothing else belongs here.
+    """
+
+    agent: str
+    handle: str
+
+
+class InstanceRow(_Strict):
+    """One sub-agent instance this session has used.
+
+    camelCase field names, unlike every other model here, because a row is a
+    registry record verbatim (``raven/agent/subagent/instances.py``) and the web
+    RPC already serves it unchanged. Renaming the fields for this surface would
+    make the TUI and the web UI disagree about what an instance is, which is the
+    hardest class of bug to find later.
+
+    ``runId`` / ``nodeId`` are set only on a ``dag-node`` row.
+
+    The camelCase is carried by aliases rather than by the attribute names, so
+    the wire keeps the registry's spelling while the Python side stays like
+    every other model in this module.
+    """
+
+    session_key: str = Field(alias="sessionKey")
+    agent: str
+    handle: str
+    kind: str
+    status: str | None = None
+    agent_id: str | None = Field(default=None, alias="agentId")
+    run_id: str | None = Field(default=None, alias="runId")
+    node_id: str | None = Field(default=None, alias="nodeId")
+    created_at_ms: int | None = Field(default=None, alias="createdAtMs")
+    updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
+
+
+class DirectTurn(_Strict):
+    """One side of one direct-chat turn, read back from its record directory.
+
+    A record holds a turn as a pair of files, so it flattens to two of these:
+    the prompt as ``user`` and the reply as ``assistant``. A turn still running,
+    or one that failed, has no reply and yields only the first.
+    """
+
+    call_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    at_ms: int
+    prompt_path: str | None = None
+    out_path: str | None = None
+
+
 class UsageSnapshot(_Strict):
     """Token / cost usage reported at the end of a turn."""
 
@@ -163,6 +220,15 @@ class StubResult(_Strict):
 
 class MessageStartPayload(_Strict):
     turn_id: str
+    target: DirectTarget | None = None
+    """Which conversation this event belongs to; null is the main agent.
+
+    Carried on the four events a direct-chat turn can produce
+    (``message.start`` / ``token.delta`` / ``message.complete`` / ``error``) --
+    it emits exactly one reply and no tool or reasoning output, so no other
+    variant needs the tag. A client cannot infer this from its own state: it can
+    switch instances mid-turn or reconnect, and an untagged delta painted into
+    the main transcript is the failure this prevents."""
 
 
 class MessageStartEvent(_Strict):
@@ -181,6 +247,7 @@ class EpisodeStartEvent(_Strict):
 
 class TokenDeltaPayload(_Strict):
     text: str
+    target: DirectTarget | None = None
 
 
 class TokenDeltaEvent(_Strict):
@@ -234,6 +301,7 @@ class ToolCompleteEvent(_Strict):
 class MessageCompletePayload(_Strict):
     turn_id: str
     usage: UsageSnapshot
+    target: DirectTarget | None = None
 
 
 class MessageCompleteEvent(_Strict):
@@ -246,6 +314,7 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    target: DirectTarget | None = None
 
 
 class ErrorEvent(_Strict):
@@ -601,6 +670,10 @@ class TurnSendParams(_Strict):
     # malformed caller is refused at the schema rather than resolving thousands
     # of paths; the renderer caps how many are inlined regardless.
     media: list[str] | None = Field(default=None, max_length=64)
+    # Absent means the main agent, which is what every existing caller sends.
+    # With it set the turn skips the model entirely and runs one direct-chat
+    # turn against that instance (``TurnRequest.direct_target``).
+    target: DirectTarget | None = None
 
 
 class TurnSendResult(_Strict):
@@ -1142,6 +1215,49 @@ class SubagentsTestCancelParams(_Strict):
 
 class SubagentsTestCancelResult(_Strict):
     cancelled: bool
+
+
+# ---------------------------------------------------------------------------
+# subagents.instance* methods
+#
+# A different noun from the ``subagents.*`` group above: that one is about which
+# sub-agents are configured, this one about the instances a session has actually
+# talked to -- which is what the direct-chat surface addresses.
+# ---------------------------------------------------------------------------
+
+
+class SubagentsInstancesParams(_Strict):
+    session_key: str
+
+
+class SubagentsInstancesResult(_Strict):
+    instances: list[InstanceRow]
+    pending_handoff_count: int = Field(
+        description=(
+            "Direct-chat turns this session has not yet reported to its main agent. "
+            "Display only; the runtime owns the list and clears it on the next main-agent turn."
+        ),
+    )
+
+
+class SubagentsInstanceHistoryParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+
+
+class SubagentsInstanceHistoryResult(_Strict):
+    turns: list[DirectTurn]
+
+
+class SubagentsInstanceForgetParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+
+
+class SubagentsInstanceForgetResult(_Strict):
+    removed: bool
 
 
 # ---------------------------------------------------------------------------
@@ -2229,6 +2345,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
     "subagents.test": (SubagentsTestParams, SubagentsTestResult),
     "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
+    # subagents.instance*
+    "subagents.instances": (SubagentsInstancesParams, SubagentsInstancesResult),
+    "subagents.instance.history": (SubagentsInstanceHistoryParams, SubagentsInstanceHistoryResult),
+    "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),
@@ -2285,6 +2405,9 @@ __all__ = [
     "McpToolInfo",
     "SkillInfo",
     "SubagentRow",
+    "DirectTarget",
+    "InstanceRow",
+    "DirectTurn",
     "ModelOptionProvider",
     "ProviderEndpointInfo",
     "UsageSnapshot",

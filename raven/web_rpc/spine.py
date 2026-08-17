@@ -33,6 +33,7 @@ def build_web(
     channel: str = "web",
     on_turn_end: Callable[[str], None] | None = None,
     readback_texts: dict[str, str] | None = None,
+    direct_targets: dict[str, dict[str, str]] | None = None,
     user_pool: int = 4,
     system_pool: int = 2,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
@@ -46,6 +47,12 @@ def build_web(
     web channel wants token streaming, so it gets its own streaming runner. Both
     drive the same ``agent_loop`` (concurrency-safe: per-turn tool state is
     turn-local). See ui-webui/docs/plans/2026-07-23-p1-gateway-web-channel.md.
+
+    ``direct_targets`` has to be the *same object* the caller hands
+    ``register_turn_methods``: ``turn.send`` writes the addressee into it and the
+    outlet reads it back to tag that lane's events. Two separate dicts is not a
+    degraded version of one -- it is silence, since nothing would ever be tagged
+    and no client could tell a sub-agent's reply from the main agent's.
     """
     return build_rpc_spine(
         agent_loop,
@@ -53,6 +60,7 @@ def build_web(
         channel=channel,
         on_turn_end=on_turn_end,
         readback_texts=readback_texts,
+        direct_targets=direct_targets,
         user_pool=user_pool,
         system_pool=system_pool,
     )

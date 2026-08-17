@@ -36,6 +36,12 @@ Adapter versions are pinned. ``npx -y`` will fetch one that is not present, so a
 unpinned command would silently change which adapter build a user runs; the cost
 is that these need bumping deliberately.
 
+Every preset runs unattended, so none of them may stop to ask permission: raven
+answers whatever an ACP agent asks (``raven/agent/acp/permissions.py``), and the
+two adapters that also take a launch-time "never ask" setting are configured with
+it below so the question is not asked in the first place. The rest have no such
+setting -- checked, not assumed.
+
 The cli transport is not offered by any preset any more, but it is not gone:
 entries already configured that way keep working untouched, and a row whose
 ``kind`` disagrees with its preset's is what the UI reads as "upgradeable".
@@ -58,14 +64,20 @@ from typing import Any
 # hard way:
 #
 #   claude:   claude -p {prompt} --permission-mode auto --session-id {agent_id}
-#             --output-format stream-json --verbose
+#             --output-format stream-json --verbose [--include-partial-messages]
 #             (stream-json is required: plain output buries the answer in tens of
-#             kilobytes of hook and init noise that maxOutputChars would truncate)
+#             kilobytes of hook and init noise that maxOutputChars would truncate.
+#             --include-partial-messages is what makes a direct chat's reply
+#             stream: without it the same run prints its answer once, at the end.
+#             Put it on the resume template too, or the instance streams its
+#             first turn and nothing afterwards -- see CliAgentBackend._can_stream.)
 #   codex:    codex -a never exec --skip-git-repo-check -s workspace-write
 #             -c 'sandbox_workspace_write.network_access=true' --json {prompt}
 #             (-a is a root-level flag: `codex exec -a never` exits 2. And
 #             --skip-git-repo-check is required or every spawn fails at raven's
-#             non-git workspace cwd. Verified against codex-cli 0.144.5.)
+#             non-git workspace cwd. Verified against codex-cli 0.144.5.
+#             No streaming to configure: `exec --json` emits no partial event,
+#             so a whole reply arrives as one `item.completed`. Measured.)
 #   openclaw: openclaw agent --json --session-id {agent_id} -m {prompt}
 #             (create and resume are the same call; --json is required because
 #             plain output interleaves ANSI plugin diagnostics on stdout.
@@ -115,6 +127,15 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "command": _CODEX_ACP,
         "readyTimeoutMs": 120000,
+        # Its default mode ("agent") is approval `on-request` with
+        # `networkAccess: false`, which is the cli preset's sandbox minus the
+        # network the cli preset explicitly turned on. Raven approves whatever
+        # an ACP agent asks for anyway (raven/agent/acp/permissions.py), so
+        # asking buys nothing but a round trip per tool call -- and the mode is
+        # also what restores network access, which no per-call approval does.
+        # Measured in codex-acp 1.1.14: AgentMode.AgentFullAccess is approval
+        # policy "never".
+        "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
     "opencode": {
         "name": "opencode",
@@ -132,7 +153,10 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "preset": "hermes",
         "kind": "acp",
         "description": "Hermes Agent over ACP - general assistant with tool calling.",
-        "command": "hermes acp",
+        # --accept-hooks: auto-approve unseen shell hooks. Its own prompt is a
+        # TTY prompt, which a pooled stdio connection has no way to answer, so
+        # without this the agent waits on a terminal that is not there.
+        "command": "hermes acp --accept-hooks",
     },
     "openclaw": {
         "name": "openclaw",
@@ -161,6 +185,11 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "baseUrl": "https://api.miromind.ai/v1",
         "model": "mirothinker-1-7-deepresearch",
         "apiKey": "",
+        # Stated, not left to the default: raven can replay a message list at any
+        # openai endpoint, so the mechanism never distinguishes them -- what does
+        # is whether the endpoint is meaningful under replay. This one ignores a
+        # system prompt entirely, so a replayed transcript continues nothing.
+        "stateful": False,
     },
 }
 

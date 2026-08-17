@@ -945,6 +945,27 @@ def test_manager_for_falls_through_when_loop_sessions_not_a_manager(
     assert session_module._manager_for(loop, cfg) is sentinel
 
 
+async def test_a_direct_turn_still_counts_as_the_session_being_busy(monkeypatch):
+    """A direct chat runs on a lane of its own, which is what makes it
+    concurrent -- but clear / undo / compress / model-switch mean "is anything
+    running in this session", and a sub-agent answering is."""
+    from raven.rpc.methods import turn as turn_module
+    from raven.spine import direct_lane
+
+    turn_module._active_turns.clear()
+    try:
+        lane = direct_lane("tui:busy", "Coder", "h1")
+        turn_module._active_turns[lane] = object()
+
+        # Not the lane the guard is asked about ...
+        assert turn_module.is_turn_active("tui:busy") is False
+        # ... but the session it belongs to is busy.
+        assert turn_module.is_session_busy("tui:busy") is True
+        assert turn_module.is_session_busy("tui:other") is False
+    finally:
+        turn_module._active_turns.clear()
+
+
 def test_is_turn_active_reflects_active_turns(monkeypatch):
     import asyncio
 
@@ -996,7 +1017,7 @@ async def test_session_clear_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_clear
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: k == key)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: k == key)
     with pytest.raises(TurnInProgressError):
         await session_clear({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -1023,7 +1044,7 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
     from raven.rpc.methods.session import session_undo
 
     mgr, key = _seed_manager(tmp_path)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda k: True)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda k: True)
     with pytest.raises(TurnInProgressError):
         await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
@@ -1205,7 +1226,7 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda key: True)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda key: True)
 
     session_key = "tui:20260622_120000_eeeeee"
     _write_session(tmp_path, session_key, [{"role": "user", "content": "hi"}])
@@ -1236,7 +1257,7 @@ async def test_session_compress_refuses_while_a_turn_is_running(
     """Compacting under a live turn would archive messages the turn is still
     reading, so the handler refuses rather than racing it."""
     session_key = "tui:compress_busy"
-    monkeypatch.setattr(turn_module, "is_turn_active", lambda key: key == session_key)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda key: key == session_key)
 
     with pytest.raises(TurnInProgressError):
         await session_module.session_compress({"session_id": session_key})

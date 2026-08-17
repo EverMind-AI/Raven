@@ -38,9 +38,16 @@ _STDERR_LINES = 200
 _REFUSAL_MEMORY = 64
 _STDERR_LINE_CAP = 500
 
+UNHANDLED: Any = object()
+"""A request handler's way of saying "not mine", answered as ``method not found``.
+
+A sentinel rather than a raise, so a handler that covers one method does not have
+to reach the blanket ``except`` below -- which logs a traceback and would report
+every unimplemented method as a handler crash."""
+
 RequestHandler = Callable[[str, dict[str, Any]], Awaitable[Any]]
-"""Answers an agent-initiated request. Returns the JSON-RPC result, or raises to
-turn into an error response."""
+"""Answers an agent-initiated request. Returns the JSON-RPC result, ``UNHANDLED``,
+or raises to turn into an error response."""
 
 NotificationHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -347,6 +354,10 @@ class AcpClient:
             self._note_refusal(method, session_id if isinstance(session_id, str) else None)
             await self._send_quietly(protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, str(exc)))
             return
+        if result is UNHANDLED:
+            self._note_refusal(method, session_id if isinstance(session_id, str) else None)
+            await self._send_quietly(protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, method))
+            return
         await self._send_quietly(protocol.result_response(request_id, result))
 
     def _note_refusal(self, method: str, session_id: str | None = None) -> None:
@@ -392,4 +403,4 @@ class AcpClient:
         self._pending.clear()
 
 
-__all__ = ["AcpClient", "NotificationHandler", "RequestHandler"]
+__all__ = ["UNHANDLED", "AcpClient", "NotificationHandler", "RequestHandler"]

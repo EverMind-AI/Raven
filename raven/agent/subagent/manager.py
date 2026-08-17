@@ -4,7 +4,8 @@ import asyncio
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,9 @@ from raven.agent.subagent.backends import (
     enabled_third_party,
     third_party_agent_meta,
 )
-from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent.direct_chat import DirectChatError, DirectChatRecord, DirectTurnMeta
+from raven.agent.subagent.instance_state import InstanceState, instance_state_path
+from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent_history import SpawnRecord
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
@@ -36,24 +39,27 @@ _SPAWN_WINDOW_SECONDS = 3600
 # a wedged CLI subagent already holds must never stall behind a slow or
 # corrupt registry write.
 _REGISTRY_WRITE_TIMEOUT_S = 2.0
+# The reserved instance-registry name for the built-in in-process sub-agent.
+# A default spawn has no third-party agent name, but it still needs an identity
+# for a direct chat to address it by.
+RAVEN_LOOP_AGENT = "raven"
 
 
 async def _write_spawn_status(session_key: str | None, agent: str | None, handle: str, status: str) -> None:
-    """Best-effort registry write for one spawn's status, swallowing any failure.
-
-    Only third-party spawns get a row: a default raven-loop subagent has no
-    third-party agent name and must not appear as an instance row.
-    """
-    if not session_key or not agent:
+    """Best-effort registry write for one spawn's status, swallowing any failure."""
+    if not session_key:
         return
     try:
         await asyncio.wait_for(
-            get_registry().upsert_spawn(session_key, agent, handle, status),
+            get_registry().upsert_spawn(session_key, agent or RAVEN_LOOP_AGENT, handle, status),
             timeout=_REGISTRY_WRITE_TIMEOUT_S,
         )
     except Exception:  # noqa: BLE001 - a status row must never fail or hang a spawn
         logger.opt(exception=True).warning(
-            "Subagent instance registry write failed for {}/{!r} (status={})", agent, handle, status
+            "Subagent instance registry write failed for {}/{!r} (status={})",
+            agent or RAVEN_LOOP_AGENT,
+            handle,
+            status,
         )
 
 
@@ -332,14 +338,13 @@ class SubagentManager:
             "handle": handle,
             "workspace": effective_workspace,
         }
-        instance_key = (quota_key, agent, handle) if agent else None
+        instance_key = (quota_key, agent or RAVEN_LOOP_AGENT, handle)
 
         # A row before the task even exists: a spawn queued behind a full gate
         # (or a sandbox VM still booting) would otherwise have no registry row
         # at all until it starts running, making it invisible and unstoppable
         # from the UI for however long it waits.
-        if agent:
-            await _write_spawn_status(session_key, agent, handle, "pending")
+        await _write_spawn_status(session_key, agent, handle, "pending")
 
         # Snapshot here rather than where the task starts running: it queues
         # behind the concurrency gate and a sandbox boot first, and a switch
@@ -352,6 +357,195 @@ class SubagentManager:
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    async def chat(
+        self,
+        *,
+        session_key: str,
+        agent: str,
+        handle: str,
+        text: str,
+        workspace: Path | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> tuple[str, DirectTurnMeta]:
+        """Run one direct-chat turn against an existing instance.
+
+        Unlike ``spawn`` this awaits its result rather than scheduling a
+        background task: the caller is a turn on the spine, and its whole job is
+        to carry this reply back to one client.
+
+        The handle lock is held for the entire turn, so a direct chat and a
+        main-loop spawn addressing the same instance queue rather than
+        interleave that instance's conversation. See ``hold_handle``.
+
+        Nothing here touches the session transcript. A direct chat exists to
+        keep these exchanges out of the main agent's context, so the record
+        directory is the only place the turn is written.
+
+        Raises ``RuntimeError`` up front, before anything is opened or
+        written, if ``agent`` names a third-party sub-agent that is disabled
+        or missing from the current config: ``_resolve_backend`` would
+        otherwise fall back to the built-in raven-loop backend and answer as
+        if it were that agent, with none of its history and no indication to
+        the caller that a substitution happened (see ``enabled_third_party``'s
+        docstring on why a shrunk roster must fail loudly, not silently).
+        Raises ``DirectChatError`` (carrying this turn's ``DirectTurnMeta``)
+        if the backend itself raises, so the caller's per-session handoff can
+        still learn about a failed turn instead of never hearing about it.
+
+        ``on_delta`` is offered to the backend only if the backend declares it
+        can stream (``SubagentBackend.streams``); a transport that cannot is not
+        asked to pretend. The return value is the whole reply either way, and it
+        is what the record stores -- deltas are an observation of a turn, never
+        the source of truth for one. A caller that streamed therefore has to not
+        deliver the return value a second time.
+        """
+        if agent != RAVEN_LOOP_AGENT and agent not in self._backends:
+            raise RuntimeError(
+                f"Cannot chat with instance {handle!r} of agent {agent!r}: this sub-agent is "
+                "disabled or no longer configured, so the instance cannot be addressed. "
+                "Its records remain on disk."
+            )
+        if not self.declared_stateful(agent):
+            # A direct chat is a *continuation*; against a stateless agent every
+            # turn starts from nothing, so the conversation on screen would be a
+            # sequence of unrelated first turns that reads as the instance
+            # forgetting. Refused rather than offered and disappointing.
+            raise RuntimeError(
+                f"Cannot chat with instance {handle!r}: {agent!r} is stateless, so each turn "
+                "would start a fresh conversation with no memory of this one. Spawn it with a "
+                "task instead."
+            )
+
+        session_dir = self._session_dir(session_key)
+        effective_workspace = workspace or self.workspace
+        task_id = str(uuid.uuid4())[:8]
+        state = self.instance_state(session_key, agent, handle)
+
+        record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=text)
+        async with self._hold_instance_slot(session_key, agent, handle), hold_handle(session_key, agent, handle):
+            await _write_spawn_status(session_key, agent, handle, "running")
+            backend = self._resolve_backend(None if agent == RAVEN_LOOP_AGENT else agent)
+            kwargs: dict[str, Any] = {}
+            if state is not None:
+                kwargs["history"] = state.load()
+                kwargs["on_messages"] = state.save
+            if on_delta is not None and getattr(backend, "streams", False):
+                kwargs["on_delta"] = on_delta
+            try:
+                executor = build_executor(
+                    self._sandbox_config,
+                    effective_workspace,
+                    self._owned_ids,
+                    self._home_volume(effective_workspace),
+                )
+                async with executor:
+                    reply = await backend.run(
+                        text,
+                        task_id=task_id,
+                        workspace=effective_workspace,
+                        executor=executor,
+                        session_key=session_key,
+                        instance=handle,
+                        provider=self.provider,
+                        model=self.model,
+                        **kwargs,
+                    )
+            except asyncio.CancelledError:
+                await _write_spawn_status(session_key, agent, handle, "cancelled")
+                record.finish(status="cancelled")
+                raise
+            except Exception as exc:
+                await _write_spawn_status(session_key, agent, handle, "failed")
+                record.finish(status="failed", error=f"Error: {exc}")
+                raise DirectChatError(record.meta()) from exc
+            await _write_spawn_status(session_key, agent, handle, "completed")
+            record.finish(status="completed", output=reply)
+            return reply, record.meta()
+
+    @asynccontextmanager
+    async def _hold_instance_slot(self, session_key: str, agent: str, handle: str) -> AsyncIterator[None]:
+        """Index this turn's own task under the instance it is talking to.
+
+        A direct chat runs inside the turn rather than as a spawned background
+        task, so without this ``live_handles`` omits the pair and the row this
+        very turn just set to ``running`` is reconciled straight back to
+        ``interrupted`` -- the instance reads as dead while it is answering.
+
+        It also makes ``cancel_by_instance`` able to stop one. The TUI does not
+        use that: a direct chat runs on its own lane, so ``turn.cancel`` -- which
+        looks up the session's turn -- does not reach it, and not reaching it is
+        the decision (see the concurrent-direct-chats design, D3). The web
+        surface does use it, an instance's work there being a background task
+        with no turn behind it.
+
+        Deliberately not registered in ``_session_tasks``. That index backs
+        "cancel this session's sub-agents", and the task here is the user's own
+        turn -- a caller asking to stop the session's spawns should not take the
+        turn down with them.
+        """
+        task = asyncio.current_task()
+        key = (session_key or "default", agent, handle)
+
+        if task is None:
+            yield
+            return
+
+        task_id = f"direct-{uuid.uuid4().hex[:8]}"
+        self._running_tasks[task_id] = task
+        self._instance_tasks.setdefault(key, set()).add(task_id)
+        try:
+            yield
+        finally:
+            self._running_tasks.pop(task_id, None)
+            if (ids := self._instance_tasks.get(key)) is not None:
+                ids.discard(task_id)
+                if not ids:
+                    del self._instance_tasks[key]
+
+    def declared_stateful(self, agent: str | None) -> bool:
+        """Whether reusing this agent's handle continues its conversation.
+
+        Read from the roster the tool descriptions advertise, so what the model
+        is told, what the spawn schema offers and what actually happens cannot
+        disagree. ``RAVEN_LOOP_AGENT`` has no config entry to consult and is
+        always stateful: raven owns its message list itself.
+        """
+        if agent is None or agent == RAVEN_LOOP_AGENT:
+            return True
+        return any(meta.name == agent and meta.stateful for meta in self._third_party_meta)
+
+    def _is_replayed(self, agent: str) -> bool:
+        """Whether raven owns this agent's conversation state.
+
+        True for an openai entry that *declares* itself stateful, whose backend
+        has no session of its own and depends on raven replaying the message
+        list; false for a cli agent, which resumes inside its own store.
+
+        The declaration is consulted rather than the kind alone: an endpoint
+        that ignores a system prompt continues nothing under replay, and the
+        mirothinker preset says so (``presets.py``). Replaying at one anyway
+        re-posts the whole transcript every turn -- growing until it trips the
+        endpoint's context limit -- to buy nothing.
+        """
+        backend = self._backends.get(agent)
+        if backend is None or getattr(backend, "kind", None) != "openai":
+            return False
+        return self.declared_stateful(agent)
+
+    def instance_state(self, session_key: str, agent: str | None, handle: str) -> "InstanceState | None":
+        """The message list raven keeps for one instance, or ``None``.
+
+        One derivation for every dispatch path. ``spawn`` and a DAG node used to
+        have none at all, so an agent advertised as stateful started from an
+        empty list on those paths and never wrote one back: reusing a handle
+        read as the sub-agent having forgotten, rather than as an argument that
+        was refused.
+        """
+        name = agent or RAVEN_LOOP_AGENT
+        if not (name == RAVEN_LOOP_AGENT or self._is_replayed(name)):
+            return None
+        return InstanceState(instance_state_path(self._session_dir(session_key), name, handle))
 
     @trace.instrument("subagent.run", extract=semconv.subagent)
     async def _run_subagent(
@@ -446,6 +640,19 @@ class SubagentManager:
         try:
             await _write_spawn_status(session_key, agent, handle, "running")
             backend = self._resolve_backend(agent)
+            # The same message list a direct chat to this handle would carry.
+            # Without it an agent the roster advertises as stateful started every
+            # spawn from empty and wrote nothing back, so reusing a handle read
+            # as the sub-agent having forgotten the earlier turns.
+            #
+            # Only when the caller named an `instance`. A plain spawn's handle is
+            # a fresh task id, so a transcript written under it is addressable by
+            # nobody and reclaimed by nothing -- pure growth on disk for a
+            # conversation that has no second turn by construction.
+            state = self.instance_state(session_key or "", agent, handle) if origin.get("instance") else None
+            state_kwargs: dict[str, Any] = (
+                {"history": state.load(), "on_messages": state.save} if state is not None else {}
+            )
             final_result = await backend.run(
                 task,
                 task_id=task_id,
@@ -455,6 +662,7 @@ class SubagentManager:
                 instance=origin.get("instance"),
                 provider=provider,
                 model=model,
+                **state_kwargs,
             )
             await _write_spawn_status(session_key, agent, handle, "completed")
             record.finish(status="completed", output=final_result)

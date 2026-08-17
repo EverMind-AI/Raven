@@ -16,14 +16,23 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``hermes acp`` whose provider rejected the credential.
 - ``noisy``        - like ``ok``, but writes non-JSON diagnostics to stdout and a
                      large volume to stderr before answering.
-- ``asks``         - requests permission mid-turn and, having been refused, ends the
-                     turn with no content and nothing on stderr. This is the shape
-                     an adapter takes when raven answers its `session/request_permission`
-                     with "method not found".
-- ``asks_late``    - holds prompts until two are in flight, then asks permission on
-                     the *second* session only and ends both turns empty. For the
-                     cross-talk case: one shared connection, two sessions, and only
-                     one of them asked for anything.
+- ``asks``         - requests something raven does not implement (``fs/read_text_file``,
+                     declared unsupported in ``CLIENT_CAPABILITIES``) and, having been
+                     refused, ends the turn with no content and nothing on stderr. This
+                     is the shape an adapter takes when raven answers "method not found".
+- ``asks_late``    - holds prompts until two are in flight, then makes that same
+                     unsupported request on the *second* session only and ends both
+                     turns empty. For the cross-talk case: one shared connection, two
+                     sessions, and only one of them asked for anything.
+- ``permission``   - asks ``session/request_permission`` with a real option list and
+                     answers the prompt with the ``optionId`` raven chose, so a test can
+                     assert *which* option it picked rather than only that it answered.
+- ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
+                     order measured on codex-acp. One turn, two messages, and no
+                     boundary in the chunks themselves.
+- ``cancelled``    - streams one chunk, then reports ``stopReason: "cancelled"``. The
+                     shape measured on codex-acp when a turn is torn down part-way: a
+                     reply that reads finished and is not.
 - ``silent``       - reads and never answers, for the timeout path.
 
 Requests before ``initialize`` are refused, deliberately. A permissive stub is
@@ -81,6 +90,20 @@ def update(session_id: str, payload: dict) -> None:
 
 _PENDING: list = []
 
+# Prompts held open until raven answers the permission request they triggered.
+_AWAITING_PERMISSION: list = []
+
+
+def handle_response(frame) -> None:
+    """Finish a held prompt once raven has answered the permission request."""
+    if not _AWAITING_PERMISSION:
+        return
+    outcome = ((frame.get("result") or {}).get("outcome")) or {}
+    chosen = outcome.get("optionId") or outcome.get("outcome") or "no-answer"
+    request_id, session_id = _AWAITING_PERMISSION.pop(0)
+    update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"chose:{chosen}"}})
+    ok(request_id, {"stopReason": "end_turn"})
+
 
 def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
@@ -93,8 +116,8 @@ def handle_prompt(request_id, params) -> None:
             {
                 "jsonrpc": "2.0",
                 "id": 9002,
-                "method": "session/request_permission",
-                "params": {"sessionId": asker, "toolCall": {"toolCallId": "t1"}},
+                "method": "fs/read_text_file",
+                "params": {"sessionId": asker, "path": "/etc/hostname"},
             }
         )
         for rid, _sid in _PENDING:
@@ -106,13 +129,56 @@ def handle_prompt(request_id, params) -> None:
             {
                 "jsonrpc": "2.0",
                 "id": 9001,
-                "method": "session/request_permission",
-                "params": {"sessionId": session_id, "toolCall": {"toolCallId": "t1"}},
+                "method": "fs/read_text_file",
+                "params": {"sessionId": session_id, "path": "/etc/hostname"},
             }
         )
         # A real adapter gives up on the tool it could not run; the turn ends
         # with nothing, and stderr stays empty.
         ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "permission":
+        # Reversed relative to how an adapter lists them, so a client that
+        # answered with "the first option" instead of choosing by kind fails
+        # this rather than passing by luck.
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 9003,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": session_id,
+                    "toolCall": {"toolCallId": "t1", "kind": "execute"},
+                    "options": [
+                        {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+                        {"optionId": "once", "name": "Allow Once", "kind": "allow_once"},
+                        {"optionId": "always", "name": "Allow for Session", "kind": "allow_always"},
+                    ],
+                },
+            }
+        )
+        _AWAITING_PERMISSION.append((request_id, session_id))
+        return
+    if MODE == "two_messages":
+        # The order measured on codex-acp: a preamble in several chunks, the
+        # tool calls it announced, then the answer itself.
+        # The thought and the usage update sit *inside* a message, which is what
+        # makes this stub able to tell a tool-call boundary from any-other-update:
+        # breaking on those would split both messages in half.
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "let me "}})
+        update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "planning"}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "look."}})
+        update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "status": "pending"})
+        update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "it is "}})
+        update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 7})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "cancelled":
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I will "}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "start by"}})
+        ok(request_id, {"stopReason": "cancelled"})
         return
     if MODE == "empty_turn":
         print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
@@ -148,6 +214,12 @@ def main() -> None:
         method = frame.get("method")
         request_id = frame.get("id")
         params = frame.get("params") or {}
+        # A frame with no method is raven answering something this stub asked.
+        # Without this branch it fell through to the unknown-method arm below
+        # and the stub replied to a reply.
+        if method is None:
+            handle_response(frame)
+            continue
         if method == "initialize":
             if MODE == "reject_init":
                 err(request_id, -32602, "Invalid params")

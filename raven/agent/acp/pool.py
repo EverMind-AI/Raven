@@ -25,6 +25,7 @@ from loguru import logger
 
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
+from raven.agent.acp.permissions import auto_approver
 
 # Budget for the one `initialize` a new connection owes, when the caller does
 # not say. Generous because an adapter fetched by `npx` may be downloading
@@ -200,7 +201,12 @@ class AcpConnectionPool:
                 command=command,
                 cwd=cwd,
                 env=env,
-                on_request=on_request,
+                # Defaulted here rather than at the caller: answering a
+                # permission request is a property of raven-as-an-ACP-client,
+                # not of whichever backend happens to hold the turn, and every
+                # caller leaving it unset is how an unanswered request came to
+                # cancel turns.
+                on_request=on_request if on_request is not None else auto_approver(name),
                 on_notification=router.dispatch,
             )
             # The handshake belongs to establishing the connection, not to the

@@ -420,3 +420,130 @@ async def test_a_broken_config_drops_attachments_without_failing_the_turn(tmp_pa
 
     assert result["accepted"] is True
     assert scheduler.submitted[0].media == ()
+
+
+# ---------------------------------------------------------------------------
+# Direct chat: addressing one sub-agent instance instead of the main agent
+# ---------------------------------------------------------------------------
+
+
+async def test_target_becomes_direct_target_on_the_request() -> None:
+    scheduler = FakeScheduler()
+
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "fix it",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        scheduler=scheduler,
+        turn_ids={},
+    )
+
+    assert scheduler.submitted[0].direct_target == ("Raven-Code", "refactor-auth")
+
+
+async def test_no_target_leaves_direct_target_none() -> None:
+    scheduler = FakeScheduler()
+
+    await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+
+    assert scheduler.submitted[0].direct_target is None
+
+
+async def test_a_partial_target_is_refused_at_the_schema() -> None:
+    """Both halves are the instance's identity; one alone would address nothing."""
+    with pytest.raises(ValidationError):
+        await turn_send(
+            {"session_key": "tui:default", "content": "hi", "target": {"agent": "Raven-Code"}},
+            scheduler=FakeScheduler(),
+            turn_ids={},
+        )
+
+
+async def test_message_start_carries_the_target() -> None:
+    emitter = FakeEmitter()
+
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "fix it",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={},
+    )
+
+    start = next(e for _k, e in emitter.emitted if e["type"] == "message.start")
+    assert start["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+
+
+async def test_a_main_agent_message_start_carries_no_target_key() -> None:
+    """Absent, not null: every payload the wire already carried keeps its shape,
+    and an untagged frame reads as the main conversation's by its own content."""
+    emitter = FakeEmitter()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "hi"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+
+    start = next(e for _k, e in emitter.emitted if e["type"] == "message.start")
+    assert start["payload"] == {"turn_id": start["payload"]["turn_id"]}
+
+
+async def test_the_target_map_is_bound_for_the_outlet_to_read() -> None:
+    targets: dict[str, dict[str, str]] = {}
+
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "fix it",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        scheduler=FakeScheduler(),
+        turn_ids={},
+        direct_targets=targets,
+    )
+
+    # Keyed by the instance's lane, which is what the turn runs on and what the
+    # outlet reads back; a session-keyed slot would be shared by every instance.
+    assert targets == {"tui:default#Raven-Code/refactor-auth": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+
+
+async def test_a_main_agent_turn_clears_a_stale_binding() -> None:
+    """The sink drops the slot at turn end, but a turn that never reached the
+    sink would otherwise leave one behind and tag the next reply as a
+    sub-agent's."""
+    targets: dict[str, dict[str, str]] = {"tui:default": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "hi"},
+        scheduler=FakeScheduler(),
+        turn_ids={},
+        direct_targets=targets,
+    )
+
+    assert targets == {}
+
+
+async def test_a_turn_that_never_ran_still_reports_against_its_target() -> None:
+    """No scheduler wired: the start/error pair is all the client gets, and it
+    must clear the spinner in the view the user was actually looking at."""
+    emitter = FakeEmitter()
+
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "fix it",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        emitter=emitter,
+        scheduler=None,
+    )
+
+    tagged = [e["payload"].get("target") for _k, e in emitter.emitted]
+    assert tagged == [
+        {"agent": "Raven-Code", "handle": "refactor-auth"},
+        {"agent": "Raven-Code", "handle": "refactor-auth"},
+    ]

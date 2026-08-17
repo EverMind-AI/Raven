@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import type { ReplyPhase } from '@/hooks/useMessages';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
+import MessageSquare from '~icons/solar/chat-round-line-bold';
 import Bot from '~icons/solar/cpu-bold-duotone';
 import Square from '~icons/solar/stop-linear';
 
@@ -33,6 +34,14 @@ const LIVE_POLL_MS = 2500;
 const EXCHANGE_OUTPUT_CHARS = 8000;
 
 interface SubagentInstanceMonitorProps {
+	/**
+	 * Switch the chat area to this instance's direct chat. Offered for every row
+	 * that names an agent, DAG-driven ones included: a fan-out registers an
+	 * ordinary instance row per node beside the `dag-node` row, and that one is
+	 * addressable. Gating on `runId` hid exactly those -- the rows a user is
+	 * most likely to want to follow up with.
+	 */
+	onEnterDirect?: (target: { agent: string; handle: string }) => void;
 	msgs: Msg[];
 	sessionId: string | null;
 	subagents: RavenThirdPartySubagent[];
@@ -184,6 +193,7 @@ function rowSummary(inst: MonitorInstance): string {
  */
 export function SubagentInstanceMonitor({
 	msgs,
+	onEnterDirect,
 	sessionId,
 	subagents,
 	phase,
@@ -352,6 +362,38 @@ export function SubagentInstanceMonitor({
 							<span className="flex w-full items-center gap-2">
 							<Bot className="size-4 shrink-0" />
 							<span className="min-w-0 flex-1 truncate text-sm">{inst.handle}</span>
+							{onEnterDirect && inst.agent && (
+								<span
+									role="button"
+									tabIndex={0}
+									// Deliberately unlike the badges beside it: `Writer`,
+									// `done`, `CLI` and `x1` are all passive status, and a
+									// control styled the same way reads as a fifth label
+									// nobody would think to click.
+									className="flex shrink-0 items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground hover:opacity-80"
+									onClick={(e) => {
+										// The row itself expands the detail; entering a
+										// chat is a different action on the same row.
+										e.stopPropagation();
+										onEnterDirect({
+											agent: inst.agent!,
+											handle: inst.handle,
+										});
+									}}
+									onKeyDown={(e) => {
+										if (e.key === 'Enter' || e.key === ' ') {
+											e.stopPropagation();
+											onEnterDirect({
+												agent: inst.agent!,
+												handle: inst.handle,
+											});
+										}
+									}}
+								>
+									<MessageSquare className="size-3" />
+									{t('subagent-monitor.chat')}
+								</span>
+							)}
 							<span className="text-xs text-muted-foreground">{inst.prototype}</span>
 							{inst.status && (
 								<span

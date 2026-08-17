@@ -20,7 +20,7 @@ import pytest
 
 from raven.agent.acp.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint, verify_agent
 from raven.agent.acp.pool import close_pool, get_pool
-from raven.agent.subagent.backends import build_third_party_backend, third_party_agent_meta
+from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.backends.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.probe import probe_one
@@ -210,6 +210,48 @@ async def test_snapshot_store_round_trips_and_invalidates_on_launch_change(tmp_p
     assert snapshot_fingerprint(renamed) == snapshot_fingerprint(cfg), "renaming does not change what an agent can do"
 
 
+async def test_an_edited_launch_config_does_not_cost_an_agent_its_resume(tmp_path: Path, monkeypatch) -> None:
+    """The measured incident: adding one env var made an agent stateless.
+
+    A skipped snapshot is indistinguishable from one never taken, and the
+    fallback for never-taken is *stateless* -- so the agent stopped committing
+    instance rows, which took its chip off the strip, its handle out of
+    ``/instance`` and ``instance`` out of the spawn schema. Nothing said so, and
+    it does not recover on its own: only a test records a new snapshot.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    SnapshotStore(path=path).record(await verify_agent(cfg))
+    assert third_party_agent_meta(cfg).stateful is True
+
+    edited = stub_config("a", ready_timeout_ms=999)
+    snapshot = acp_snapshot_for(edited)
+    assert snapshot is not None and snapshot.stale is True
+    assert third_party_agent_meta(edited).stateful is True, "an edit to how it launches is not a capability change"
+
+
+async def test_a_stale_snapshot_is_never_reported_as_a_verdict(tmp_path: Path, monkeypatch) -> None:
+    """Paired with the case above: capabilities are taken, the status is not.
+
+    A green light measured against a command the entry no longer has is a claim
+    no measurement backs, so the row asks for a test instead.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    SnapshotStore(path=path).record(await verify_agent(cfg))
+
+    fresh = await probe_one(cfg, source="config")
+    assert fresh.status == "ready"
+
+    edited = stub_config("a", ready_timeout_ms=999)
+    stale = await probe_one(edited, source="config")
+    assert stale.status == "attention"
+    assert "launch config changed" in stale.detail
+    assert acp_snapshot_for(edited).usable is False
+
+
 def test_snapshot_store_ignores_a_row_it_cannot_read(tmp_path: Path) -> None:
     path = tmp_path / "caps.json"
     path.write_text(json.dumps({"version": 1, "snapshots": [{"agent": "a"}, "not-a-dict"]}), encoding="utf-8")
@@ -334,9 +376,63 @@ async def test_dispatch_returns_the_agents_answer(tmp_path: Path) -> None:
     assert reply == "pong"
 
 
+async def test_dispatch_accepts_the_managers_full_keyword_set(tmp_path: Path) -> None:
+    """``SubagentManager`` passes one keyword set to whichever backend it
+    resolved, ``provider`` and ``model`` included. This backend ignores both --
+    the agent holds its own credential -- but it has to accept them: without
+    them every acp dispatch died of a TypeError before the agent was contacted,
+    spawn, DAG node and direct chat alike, and the tests missed it by calling
+    ``run`` directly with the arguments this backend happened to declare.
+    """
+    backend = build_third_party_backend(stub_config("a"))
+    reply = await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s1",
+        instance="h1",
+        provider=object(),
+        model="whatever",
+    )
+    assert reply == "pong"
+
+
 async def test_dispatch_truncates_to_max_output_chars(tmp_path: Path) -> None:
     backend = build_third_party_backend(stub_config("a", max_output_chars=2))
     assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "po"
+
+
+async def test_dispatch_streams_the_answer_and_nothing_else(tmp_path: Path) -> None:
+    """This transport already receives the agent's work as it happens; streaming
+    is forwarding the answer chunks and only those. A thought or a tool call is
+    commentary, and the wire has no instance-tagged event to carry it -- it would
+    be rendered into the main agent's transcript.
+    """
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    backend = build_third_party_backend(stub_config("a"))
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert seen == ["pong"]
+    assert reply == "pong"
+
+
+async def test_dispatch_streams_no_more_than_it_returns(tmp_path: Path) -> None:
+    """The reply is truncated to ``max_output_chars``; an uncapped stream would
+    render text the record never stores."""
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    backend = build_third_party_backend(stub_config("a", max_output_chars=2))
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert "".join(seen) == reply == "po"
 
 
 async def test_an_empty_turn_is_a_failure_carrying_the_stderr_tail(tmp_path: Path) -> None:
@@ -355,22 +451,25 @@ async def test_an_empty_turn_is_a_failure_carrying_the_stderr_tail(tmp_path: Pat
 async def test_an_empty_turn_names_a_request_raven_could_not_answer(tmp_path: Path) -> None:
     """The one cause the stderr tail cannot carry.
 
-    Nothing passes ``on_request``, so every agent-initiated request is answered
-    "method not found" -- including ``session/request_permission``, which the
-    presets no longer bypass with a flag. An adapter that is refused ends the
-    turn with no content and says nothing on stderr, so without this the error
-    reads as an unexplained empty turn.
+    ``fs/read_text_file`` is declared unsupported in ``CLIENT_CAPABILITIES``, so
+    an agent that asks for it anyway is answered "method not found". An adapter
+    that is refused ends the turn with no content and says nothing on stderr, so
+    without this the error reads as an unexplained empty turn.
+
+    Permission requests used to be refused this way too and are now answered
+    (``raven/agent/acp/permissions.py``); this covers what raven still refuses.
     """
     backend = build_third_party_backend(stub_config("a", mode="asks"))
     for task_id in ("t1", "t2"):
         with pytest.raises(AcpEmptyTurnError) as excinfo:
             await backend.run("ping", task_id=task_id, workspace=tmp_path, executor=None)
         # Every turn, not only the first: the connection is process-wide and an
-        # adapter that asks for approval asks again on the next tool-using turn,
-        # so a record deduped per connection would explain the failure once and
-        # then go quiet -- worse on a shared connection, where a DAG node's
-        # refusal would consume the one explanation a later spawn needed.
-        assert "session/request_permission" in str(excinfo.value), task_id
+        # adapter that asks for something unsupported asks again on the next
+        # tool-using turn, so a record deduped per connection would explain the
+        # failure once and then go quiet -- worse on a shared connection, where
+        # a DAG node's refusal would consume the one explanation a later spawn
+        # needed.
+        assert "fs/read_text_file" in str(excinfo.value), task_id
 
 
 async def test_a_refusal_is_reported_only_to_the_session_that_asked(tmp_path: Path) -> None:
@@ -390,8 +489,112 @@ async def test_a_refusal_is_reported_only_to_the_session_that_asked(tmp_path: Pa
         return_exceptions=True,
     )
 
-    named = [r for r in results if "session/request_permission" in str(r)]
+    named = [r for r in results if "fs/read_text_file" in str(r)]
     assert len(named) == 1, f"only one session asked; {len(named)} turns named a refusal"
+
+
+async def test_a_permission_request_is_approved_rather_than_refused(tmp_path: Path) -> None:
+    """Refusing one cancels the whole turn, part-answered.
+
+    Measured in ``@agentclientprotocol/codex-acp@1.1.14``: ``CodexApprovalHandler``
+    turns any error from this request -- the "method not found" raven used to
+    send included -- into ``{decision: "cancel"}``. The turn came back with the
+    sentence the agent had already streamed and ``stopReason: "cancelled"``,
+    which read as a short answer rather than as a failure.
+
+    The stub answers with the ``optionId`` it was given, so this asserts the
+    choice and not merely that something was sent: ``allow_always`` outranks
+    ``allow_once``, and both outrank the reject the stub lists first.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="permission"))
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "chose:always"
+
+
+async def test_a_turn_that_stopped_early_says_so_in_its_reply(tmp_path: Path) -> None:
+    """A partial reply that reads finished is the failure mode being fixed.
+
+    Only ``end_turn`` means the agent said everything it meant to. The reply is
+    kept -- it is worth having -- but a reader who cannot see the stop reason
+    has no other way to tell it is half an answer.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="cancelled"))
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out.startswith("I will start by")
+    assert "stopReason=cancelled" in out
+    assert "partial" in out
+
+
+async def test_two_messages_in_one_turn_are_kept_apart(tmp_path: Path) -> None:
+    """Chunks carry no message boundary, and one turn can hold several messages.
+
+    Codex answers a question about a project by saying what it will look at,
+    running the commands, and only then answering. Joined chunk-to-chunk those
+    are one paragraph whose halves do not follow from each other; the tool calls
+    between them are the only mark that the message ended.
+
+    The stub puts a thought inside the first message and a usage update inside
+    the second, so "break on a tool call" and "break on any other update" give
+    different answers here -- otherwise this passes either way, which is what a
+    first version of it did.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+    assert out == "let me look.\n\nit is a repo."
+    # The live view and the stored reply must agree, or a direct chat renders
+    # the run-on version and the record keeps the readable one.
+    assert "".join(seen) == "let me look.\n\nit is a repo."
+
+
+async def test_the_partial_notice_reaches_a_caller_that_streamed(tmp_path: Path) -> None:
+    """The return value is not delivered twice, so a notice riding only on it
+    never reaches the screen.
+
+    A direct chat with an acp instance always streams (``streams = True``), and
+    ``AgentLoop.run_turn`` skips the closing text once anything streamed. So the
+    notice has to go through the same sink the reply did: on it, the record kept
+    the warning and the reader who needed it saw a reply that simply stopped.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="cancelled"))
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+    streamed = "".join(seen)
+    assert "stopReason=cancelled" in streamed, "the notice never reached the stream"
+    assert streamed == out, "what streamed and what the record stores must agree"
+
+
+async def test_the_notice_survives_a_reply_that_used_the_whole_budget(tmp_path: Path) -> None:
+    """The cap bounds what the *agent* says; the notice is raven's own line.
+
+    Sharing the reply's `bounded_delta` budget meant a reply that saturated
+    `maxOutputChars` swallowed the one line explaining it had been cut off --
+    which is precisely the reply that needs it.
+    """
+    cfg = stub_config("a", mode="cancelled", max_output_chars=4)
+    backend = build_third_party_backend(cfg)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+    assert "stopReason=cancelled" in "".join(seen), "the reply's budget swallowed the notice"
+
+
+async def test_a_finished_turn_carries_no_notice(tmp_path: Path) -> None:
+    """Paired with the case above so the notice cannot be unconditional."""
+    backend = build_third_party_backend(stub_config("a"))
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "pong"
 
 
 async def test_a_handle_resumes_the_same_session(tmp_path: Path) -> None:
@@ -427,6 +630,37 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
     assert await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
     rebound = await registry.lookup("s", "a", "work", kind="acp")
     assert rebound is not None and rebound != "pruned-session"
+
+
+async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:
+    """A failed resume learned the id is stale, not that the instance is gone.
+
+    The chip strip and ``/instance`` are drawn from these rows, and the
+    replacement id is only committed by a turn that *succeeds* -- so deleting
+    the row here took the instance off screen for the length of the recovering
+    turn, and left it off if that turn then failed.
+    """
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+
+    assert await registry.unbind("s", "a", "work") is True
+    listed = registry.list_instances("s")
+    assert [(r["agent"], r["handle"]) for r in listed] == [("a", "work")]
+    assert await registry.lookup("s", "a", "work", kind="acp") is None
+    # Idempotent: a second failed resume of an already-unbound handle has
+    # nothing left to drop and must not report that it did.
+    assert await registry.unbind("s", "a", "work") is False
+
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True),
+        registry=registry,
+    )
+    await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    assert len(registry.list_instances("s")) == 1
 
 
 async def test_a_stateless_agent_binds_no_handle(tmp_path: Path) -> None:
@@ -860,3 +1094,69 @@ async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> Non
         await task
 
     assert not launched[0].alive, "the agent process is still running after a cancelled connect"
+
+
+# ---- choosing a permission option -----------------------------------------
+
+
+def test_the_most_permissive_offered_option_is_the_one_chosen() -> None:
+    """By ``kind``, never by ``optionId``.
+
+    The ids are the agent's own vocabulary -- codex happens to mint
+    ``allow_always``, another adapter may mint anything -- while the four kinds
+    are the protocol's. An id raven invented comes back from codex as a decline.
+    """
+    from raven.agent.acp.permissions import permission_outcome
+
+    offered = {
+        "options": [
+            {"optionId": "r", "kind": "reject_once"},
+            {"optionId": "o", "kind": "allow_once"},
+            {"optionId": "a", "kind": "allow_always"},
+        ]
+    }
+    assert permission_outcome(offered) == {"outcome": "selected", "optionId": "a"}
+
+
+def test_a_reject_is_never_chosen_over_an_allow() -> None:
+    from raven.agent.acp.permissions import permission_outcome
+
+    offered = {"options": [{"optionId": "r", "kind": "reject_always"}, {"optionId": "o", "kind": "allow_once"}]}
+    assert permission_outcome(offered) == {"outcome": "selected", "optionId": "o"}
+
+
+def test_only_rejects_offered_still_selects_one() -> None:
+    """Selecting the refusal keeps the turn alive; cancelling ends it.
+
+    Measured on codex-acp: an ``outcome: cancelled`` is ``{decision: "cancel"}``
+    for the whole turn, while a selected reject is one tool call declined.
+    """
+    from raven.agent.acp.permissions import permission_outcome
+
+    assert permission_outcome({"options": [{"optionId": "r", "kind": "reject_once"}]}) == {
+        "outcome": "selected",
+        "optionId": "r",
+    }
+
+
+def test_an_option_with_no_kind_is_still_answerable() -> None:
+    from raven.agent.acp.permissions import permission_outcome
+
+    assert permission_outcome({"options": [{"optionId": "x"}]}) == {"outcome": "selected", "optionId": "x"}
+
+
+def test_no_options_at_all_is_the_only_cancel() -> None:
+    """An ``optionId`` raven made up is indistinguishable from a real choice."""
+    from raven.agent.acp.permissions import permission_outcome
+
+    assert permission_outcome({"options": []}) == {"outcome": "cancelled"}
+    assert permission_outcome({}) == {"outcome": "cancelled"}
+
+
+async def test_the_approver_leaves_unsupported_methods_refused() -> None:
+    """It answers permissions only; ``fs/*`` is advertised as unsupported."""
+    from raven.agent.acp.client import UNHANDLED
+    from raven.agent.acp.permissions import auto_approver
+
+    handle = auto_approver("a")
+    assert await handle("fs/read_text_file", {"path": "/etc/hostname"}) is UNHANDLED

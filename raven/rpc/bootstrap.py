@@ -100,6 +100,10 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
 
     turn_scheduler = None
     turn_ids: dict[str, str] = {}
+    # Owned here, not by the spine, because two collaborators need the same map:
+    # turn.send binds a turn's addressee into it and the spine's outlet/sink read
+    # it back to tag that turn's events (see build_rpc_spine).
+    direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
         from types import SimpleNamespace
@@ -111,6 +115,7 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
+            direct_targets=direct_targets,
             readback_texts=cron_readback,
             approval_responder=approval_broker,
         )
@@ -140,6 +145,7 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
         question_broker=question_broker,
         scheduler=turn_scheduler,
         turn_ids=turn_ids,
+        direct_targets=direct_targets,
         build_error=build_error,
         send_frame=send_frame,
     )

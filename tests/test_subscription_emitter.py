@@ -266,3 +266,76 @@ async def test_closed_subscription_does_not_receive_new_events(
     await asyncio.sleep(COALESCE_WINDOW_S * 3)
     post_count = send_frame.call_count
     assert post_count == pre_count, f"closed sub received events after unregister: pre={pre_count} post={post_count}"
+
+
+# ---------------------------------------------------------------------------
+# Coalescing must not lose a direct-chat tag
+# ---------------------------------------------------------------------------
+
+
+def test_merging_carries_the_direct_chat_target() -> None:
+    """The merged frame is rebuilt, not mutated, so a tag not carried across is
+    a tag dropped -- and an untagged delta reads as the main agent's, which is
+    exactly what this field exists to prevent."""
+    from raven.rpc.subscriptions import _merge_consecutive_token_deltas
+
+    target = {"agent": "Raven-Code", "handle": "refactor-auth"}
+    merged = _merge_consecutive_token_deltas(
+        [
+            {"type": "token.delta", "payload": {"text": "a", "target": target}},
+            {"type": "token.delta", "payload": {"text": "b", "target": target}},
+        ]
+    )
+
+    assert merged == [{"type": "token.delta", "payload": {"text": "ab", "target": target}}]
+
+
+def test_merging_leaves_an_untagged_run_exactly_as_it_was() -> None:
+    from raven.rpc.subscriptions import _merge_consecutive_token_deltas
+
+    merged = _merge_consecutive_token_deltas(
+        [
+            {"type": "token.delta", "payload": {"text": "a"}},
+            {"type": "token.delta", "payload": {"text": "b"}},
+        ]
+    )
+
+    assert merged == [{"type": "token.delta", "payload": {"text": "ab"}}]
+
+
+def test_a_run_breaks_where_the_target_changes() -> None:
+    """Merging across a change would relabel one conversation's text as another's."""
+    from raven.rpc.subscriptions import _merge_consecutive_token_deltas
+
+    target = {"agent": "Raven-Code", "handle": "refactor-auth"}
+    merged = _merge_consecutive_token_deltas(
+        [
+            {"type": "token.delta", "payload": {"text": "a", "target": target}},
+            {"type": "token.delta", "payload": {"text": "b"}},
+        ]
+    )
+
+    assert merged == [
+        {"type": "token.delta", "payload": {"text": "a", "target": target}},
+        {"type": "token.delta", "payload": {"text": "b"}},
+    ]
+
+
+def test_a_new_run_starts_after_the_target_changes() -> None:
+    """Breaking a run must open the next one, not pass the breaking frame through
+    and leave the rest unmerged."""
+    from raven.rpc.subscriptions import _merge_consecutive_token_deltas
+
+    target = {"agent": "Raven-Code", "handle": "refactor-auth"}
+    merged = _merge_consecutive_token_deltas(
+        [
+            {"type": "token.delta", "payload": {"text": "a", "target": target}},
+            {"type": "token.delta", "payload": {"text": "b"}},
+            {"type": "token.delta", "payload": {"text": "c"}},
+        ]
+    )
+
+    assert merged == [
+        {"type": "token.delta", "payload": {"text": "a", "target": target}},
+        {"type": "token.delta", "payload": {"text": "bc"}},
+    ]

@@ -8,7 +8,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
 from typing import Any
 
@@ -77,8 +77,18 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
 
 class RavenLoopBackend:
-    """Runs the task as a bounded in-process Raven agent loop (the default)."""
+    """Runs the task as a bounded in-process Raven agent loop (the default).
 
+    Streaming forwards *every* model call's text, including the preamble a call
+    writes before reaching for a tool. Only the final answer is returned, so a
+    live direct chat shows more than the record replays afterwards: the preamble
+    is progress, and a run's evidence is the answer it arrived at. Withholding it
+    is not an option -- whether a call is the last one is knowable only once it
+    has finished, which is after the whole reply would have been buffered.
+    """
+
+    kind = "raven-loop"
+    streams = True
     _MAX_ITERATIONS = 15
 
     def __init__(
@@ -116,6 +126,9 @@ class RavenLoopBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+        on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         try:
@@ -128,6 +141,9 @@ class RavenLoopBackend:
                 instance=instance,
                 provider=provider,
                 model=model,
+                history=history,
+                on_messages=on_messages,
+                on_delta=on_delta,
             )
         finally:
             IN_SUBAGENT_RUN.reset(token)
@@ -143,7 +159,14 @@ class RavenLoopBackend:
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        history: list[dict[str, Any]] | None = None,
+        on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
+        # Deferred: importing raven.agent.loop runs its package init, which pulls
+        # in AgentLoop, which imports this package at module scope.
+        from raven.agent.loop.streaming import generation_kwargs, stream_llm_call
+
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
         # for callers that drive a backend directly.
@@ -183,20 +206,40 @@ class RavenLoopBackend:
             tools.register(web_search)
         tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names)},
-            {"role": "user", "content": task},
-        ]
+        # A resumed instance brings its own history, system prompt included;
+        # rebuilding the prompt here would append a second system turn.
+        messages: list[dict[str, Any]] = (
+            list(history)
+            if history
+            else [{"role": "system", "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names)}]
+        )
+        messages.append({"role": "user", "content": task})
 
         iteration = 0
         final_result: str | None = None
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
-            response = await provider.chat_with_retry(
-                messages=messages,
-                tools=tools.get_definitions(),
-                model=model,
-            )
+            if on_delta is None:
+                response = await provider.chat_with_retry(
+                    messages=messages,
+                    tools=tools.get_definitions(),
+                    model=model,
+                )
+            else:
+                # A spawned run keeps the retry ladder; only a caller that asked
+                # to watch the reply form gives it up (a stream that already
+                # rendered deltas cannot be retried without duplicating them).
+                # The generation settings are passed on so this run answers under
+                # the same budget as the same instance's spawns -- chat_stream's
+                # signature would otherwise cap it at its own literal 4096.
+                response = await stream_llm_call(
+                    provider,
+                    messages=messages,
+                    tools=tools.get_definitions(),
+                    model=model,
+                    on_token_delta=on_delta,
+                    **generation_kwargs(provider),
+                )
             if response.has_tool_calls:
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages.append(
@@ -230,4 +273,7 @@ class RavenLoopBackend:
         if final_result is None:
             final_result = "Task completed but no final response was generated."
         logger.info("Subagent [{}] completed successfully", task_id)
+        if on_messages is not None:
+            messages.append({"role": "assistant", "content": final_result})
+            on_messages(messages)
         return final_result

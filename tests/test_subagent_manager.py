@@ -334,6 +334,54 @@ async def test_cancel_by_session_cancels_live_task(monkeypatch):
     await _settle(lambda: mgr.get_running_count() == 0)
 
 
+async def test_default_subagent_instance_is_live_while_in_flight(monkeypatch):
+    """A built-in (agent=None) spawn must key `_instance_tasks` the same way
+    `_write_spawn_status` keys its registry row -- otherwise `live_handles`
+    never reports it and a genuinely running instance reads as dead."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _blocking_inner)
+
+    assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
+    await _settle(entered.is_set)
+
+    assert mgr.live_handles("sessLive") == {(manager_mod.RAVEN_LOOP_AGENT, "handle-x")}
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+async def test_cancel_by_instance_stops_a_live_default_subagent(monkeypatch):
+    """The stop key a later task wires to `cancel_by_instance` must actually
+    find a built-in spawn, not silently no-op because it was never indexed."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
+        entered.set()
+        await release.wait()  # never set -- keeps the task live until cancelled
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _blocking_inner)
+
+    assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
+    await _settle(entered.is_set)
+
+    cancelled = await mgr.cancel_by_instance("sessLive", manager_mod.RAVEN_LOOP_AGENT, "handle-x")
+    assert cancelled is True
+    await _settle(lambda: mgr.get_running_count() == 0)
+
+
 async def test_announce_result_routes_to_tui_session_key(monkeypatch):
     """TUI origins pass an authoritative session_key distinct from channel:chat_id
     (chat_id falls back to "default" while the live subscription is keyed by
@@ -478,6 +526,38 @@ async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
 
     assert seen == [True]
     assert IN_SUBAGENT_RUN.get() is False
+
+
+RAVEN_ROW = ("s1", "raven", "notes")
+
+
+async def test_default_subagent_gets_a_registry_row(tmp_path, monkeypatch):
+    from raven.agent.subagent import manager as manager_mod
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    registry = InstanceRegistry(tmp_path / "reg.json")
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
+
+    await manager_mod._write_spawn_status("s1", None, "notes", "running")
+
+    rows = registry.list_instances("s1")
+    assert [(r["sessionKey"], r["agent"], r["handle"]) for r in rows] == [RAVEN_ROW]
+    # `upsert_spawn` hardcodes kind="cli" (instances.py:115). Semantically off for
+    # the built-in sub-agent, but deliberately unchanged: the web RPC's
+    # reconciliation branches on kind == "cli" to decide whether to consult
+    # live_handles, and a new kind would silently stop reconciling these rows.
+    assert rows[0]["kind"] == "cli"
+
+
+def _stub_manager() -> SimpleNamespace:
+    return SimpleNamespace()
+
+
+def test_instance_is_accepted_for_the_default_subagent():
+    from raven.agent.tools.spawn import SpawnTool
+
+    tool = SpawnTool(manager=_stub_manager())
+    assert tool._reject_useless_instance(None, "refactor-auth") is None
 
 
 async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):

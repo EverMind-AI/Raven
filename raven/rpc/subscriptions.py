@@ -180,16 +180,25 @@ def _merge_consecutive_token_deltas(
 
     Non-delta events break the run and pass through unchanged. Preserves
     overall event ordering.
+
+    A run also breaks when the ``target`` changes: the merged frame is rebuilt
+    rather than mutated, so a tag that is not carried across is a tag silently
+    dropped -- and an untagged delta reads as the main agent's, which is the one
+    mistake this field exists to prevent.
     """
     result: list[dict[str, Any]] = []
     pending: dict[str, Any] | None = None
     for event in batch:
         if event.get("type") == "token.delta":
+            target = event["payload"].get("target")
+            if pending is not None and pending["payload"].get("target") != target:
+                result.append(pending)
+                pending = None
             if pending is None:
-                pending = {
-                    "type": "token.delta",
-                    "payload": {"text": event["payload"]["text"]},
-                }
+                payload = {"text": event["payload"]["text"]}
+                if target is not None:
+                    payload["target"] = target
+                pending = {"type": "token.delta", "payload": payload}
             else:
                 pending["payload"]["text"] += event["payload"]["text"]
         else:

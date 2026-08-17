@@ -6,8 +6,8 @@ import asyncio
 import json
 import re
 import time
-from contextlib import AsyncExitStack, aclosing
-from dataclasses import dataclass, field
+from contextlib import AsyncExitStack
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -22,8 +22,10 @@ from raven.agent.loop.recovery import (
     RecoveryLimits,
     classify_empty_response,
 )
+from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.backends import enabled_third_party
+from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
@@ -45,13 +47,12 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
-from raven.providers.reasoning import split_orphan_think
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
-from raven.spine.turn import Origin
+from raven.spine.turn import Origin, session_of
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
@@ -580,6 +581,7 @@ class AgentLoop:
             third_party_subagents=third_party_subagents,
             session_dir=self.sessions.session_dir,
         )
+        self._direct_handoff = DirectChatHandoff()
         # Kept for _register_default_tools to build the optional DAG tool (req4)
         # and for hot-applying web config changes (P4).
         self._third_party_subagents = third_party_subagents or []
@@ -912,6 +914,7 @@ class AgentLoop:
                     guide_skill_id=self._dag_guide_skill_id(),
                     session_dir=self.sessions.session_dir,
                     is_paused=lambda: self.subagents.paused,
+                    state_for=self.subagents.instance_state,
                     gate=self.subagents.dispatch_gate,
                     announce=self.subagents.announce_dag_result,
                     adopt=self.subagents.adopt_background_run,
@@ -1866,6 +1869,7 @@ class AgentLoop:
                 guide_skill_id=self._dag_guide_skill_id(),
                 session_dir=self.sessions.session_dir,
                 is_paused=lambda: self.subagents.paused,
+                state_for=self.subagents.instance_state,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 adopt=self.subagents.adopt_background_run,
@@ -1946,129 +1950,23 @@ class AgentLoop:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
         Per design.md §D3: when a turn caller wires ``on_token_delta``, AgentLoop
-        diverts to this helper instead of ``chat_with_retry``. Each non-empty
-        content chunk fires the callback; tool_call fragments are merged
-        positionally; the final response object is shape-compatible with what
-        ``chat()`` would have returned.
+        diverts here instead of to ``chat_with_retry``. The work itself lives in
+        ``raven.agent.loop.streaming`` — a sub-agent backend answering a direct
+        chat drives the same call and must not drift from it. This method stays
+        as the loop's own entry point (its span, its reconnect budget).
 
-        v0.1 first-cut tool-call merge: assumes one tool call per position,
-        fragments arrive in order, ``id`` / ``function.name`` appear in the
-        first fragment, ``function.arguments`` is the concatenation of
-        per-fragment arguments strings. Multi-tool / out-of-order merging is
-        a v0.2 ask.
-
-        A failure that already streamed deltas is not retried — the caller has
-        rendered them, so a second attempt would duplicate its output. Before
-        the first delta there is nothing to duplicate, so a retryable error
-        reconnects up to ``_MAX_STREAM_RECONNECTS`` times. Once the budget is
-        spent the exception propagates: per N-TURNFAILED a mid-turn provider
-        error is the turn's failure, not a text reply about one.
+        Generation parameters are deliberately not passed on: the main loop has
+        always let ``chat_stream``'s own signature defaults stand here. See
+        ``generation_kwargs`` for the callers that cannot.
         """
-        content_buf: list[str] = []
-        reasoning_buf: list[str] = []
-        tool_call_slots: list[dict[str, Any]] = []
-        final_usage: dict[str, Any] | None = None
-        had_error = False
-        error_content: str | None = None
-        error_classification: ErrorClassification | None = None
-
-        for attempt in range(self._MAX_STREAM_RECONNECTS + 1):
-            # aclosing() guarantees the async generator (and its underlying stream)
-            # is closed when an error from the per-chunk idle cap or the provider
-            # unwinds the loop, so a stalled or broken stream never hangs or leaks
-            # the connection — and a reconnect starts from a closed socket.
-            try:
-                async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
-                    async for delta in stream:
-                        if delta.finish_reason == "error":
-                            # A non-streaming provider's chat() error, replayed
-                            # through the fallback as its single terminal delta.
-                            # Its content is the error text, not a token to render
-                            # or accumulate -- surface it via error_classification
-                            # instead of the normal success collation below.
-                            had_error = True
-                            error_content = delta.content
-                            error_classification = delta.error_classification
-                            if delta.usage is not None:
-                                final_usage = delta.usage
-                            # No reconnect for it: the fallback already spent
-                            # chat()'s own retries, so the stream ends here and
-                            # ``had_error`` answers for the call.
-                            continue
-                        reasoning_delta = getattr(delta, "reasoning_content", None)
-                        if reasoning_delta:
-                            reasoning_buf.append(reasoning_delta)
-                            if on_reasoning_delta is not None:
-                                await on_reasoning_delta(reasoning_delta)
-                        if delta.content:
-                            content_buf.append(delta.content)
-                            if on_token_delta is not None:
-                                await on_token_delta(delta.content)
-                        if delta.tool_call_delta:
-                            _merge_tool_call_fragments(
-                                tool_call_slots,
-                                delta.tool_call_delta,
-                            )
-                        if delta.usage is not None:
-                            final_usage = delta.usage
-                break
-            except TimeoutError:
-                # The idle cap already waited the full timeout; reconnecting would
-                # double an already-long stall, so a stall ends the call.
-                return LLMResponse(
-                    content="".join(content_buf),
-                    finish_reason="error",
-                    error_classification=self.provider.classify_error(TimeoutError()),
-                )
-            except Exception as exc:
-                # Every path out of here is a bare `raise` so the provider's own
-                # exception reaches the caller unchanged: per N-TURNFAILED the turn
-                # must fail (the lane emits TurnFailed) rather than resolve into a
-                # "Sorry" text reply.
-                if bool(content_buf or reasoning_buf or tool_call_slots) or attempt >= self._MAX_STREAM_RECONNECTS:
-                    raise
-                # Duck-typed providers need not implement classify_error; treat a
-                # missing classifier as fatal so the real error surfaces instead of
-                # an AttributeError raised from inside this handler.
-                classify = getattr(self.provider, "classify_error", None)
-                classification = classify(exc) if classify is not None else None
-                if classification is None or not classification.retryable:
-                    raise
-                logger.warning(
-                    "Stream LLM error [{}] before first delta (attempt {}/{}), reconnecting: {}",
-                    classification.category,
-                    attempt + 1,
-                    self._MAX_STREAM_RECONNECTS + 1,
-                    exc,
-                )
-
-        if had_error:
-            return LLMResponse(
-                content=error_content,
-                finish_reason="error",
-                error_classification=error_classification,
-                usage=final_usage or {},
-            )
-
-        tool_calls = _finalize_tool_calls(tool_call_slots)
-        finish_reason = "tool_calls" if tool_calls else "stop"
-
-        content = "".join(content_buf)
-        reasoning_content = "".join(reasoning_buf) or None
-        # getattr because the loop accepts duck-typed providers (test stubs and
-        # thin adapters implement just chat/chat_stream); absent means the
-        # LLMProvider default, False.
-        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
-        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
-            split_reasoning, content = split_orphan_think(content)
-            reasoning_content = split_reasoning
-
-        return LLMResponse(
-            content=content,
-            tool_calls=tool_calls,
-            finish_reason=finish_reason,
-            usage=final_usage or {},
-            reasoning_content=reasoning_content,
+        return await stream_llm_call(
+            self.provider,
+            messages=messages,
+            tools=tools,
+            model=model,
+            on_token_delta=on_token_delta,
+            on_reasoning_delta=on_reasoning_delta,
+            max_reconnects=self._MAX_STREAM_RECONNECTS,
         )
 
     @classmethod
@@ -3328,6 +3226,7 @@ class AgentLoop:
         ``drain`` pulls user messages injected mid-turn (BusyPolicy.INJECT); it
         is threaded into the agent loop and consumed at the top of each iteration.
         """
+        from raven.agent.subagent.direct_chat import DirectChatError
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
             EpisodeStart,
@@ -3345,6 +3244,68 @@ class AgentLoop:
         from raven.spine.runner import TurnOutcome
 
         cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+
+        # Direct sub-agent turn (direct_target -- see TurnRequest). Deliberately
+        # asymmetric with the deliver_text branch below: that one persists to the
+        # session before emitting, this one persists nothing. The whole purpose
+        # of a direct chat is that the main agent's transcript does not carry it;
+        # the turn's evidence is its record directory, and what the main agent
+        # eventually learns is the handoff block, not these messages.
+        if req.direct_target is not None:
+            agent, handle = req.direct_target
+            # The lane is this instance's, so that a direct chat runs concurrently
+            # with the main agent's turn and with every other instance's. Records,
+            # the instance registry and the handoff are the *session's* though --
+            # keyed by the lane they would scatter one instance's history into a
+            # directory of its own and land the handoff on a conversation nobody
+            # reads. See ``raven.spine.turn.session_of``.
+            session_key = session_of(cid)
+            streamed_direct = False
+
+            async def on_direct_delta(text: str) -> None:
+                # Text only, never Reasoning: the wire tags an instance on four
+                # event types and thinking.delta is not one of them, so a direct
+                # chat's reasoning would be rendered into the main transcript.
+                nonlocal streamed_direct
+                if not text:
+                    return
+                streamed_direct = True
+                await emit(StreamDelta(delta=text))
+
+            try:
+                reply, meta = await self.subagents.chat(
+                    session_key=session_key,
+                    agent=agent,
+                    handle=handle,
+                    text=req.text,
+                    # The session's working directory, the same one this turn's
+                    # own tools would get and the same one `spawn` captures. The
+                    # binding is not set here -- `workdir.bind` wraps the main
+                    # turn body further down, which this branch returns before
+                    # reaching -- so it is resolved rather than read. Omitting it
+                    # fell back to agent home (`~/.raven/workspace`), which is
+                    # raven's memory and skills rather than the work: a direct
+                    # chat about the checkout the user is sitting in ran `git
+                    # status` against raven's own home and answered about that.
+                    workspace=self.session_workdir(session_key),
+                    # A non-streaming outlet (the REPL) gets no deltas to
+                    # assemble, exactly as it gets none from a normal turn.
+                    on_delta=on_direct_delta if stream else None,
+                )
+            except DirectChatError as exc:
+                self._direct_handoff.record(session_key, exc.meta)
+                raise
+            self._direct_handoff.record(session_key, meta)
+            # Same rule as the main path below (canon Q2-D b2): what streamed is
+            # already on screen, so a closing Text would render the reply twice.
+            # An instance whose transport cannot stream never sets the flag and
+            # is delivered whole, which is what every direct chat did before.
+            if not streamed_direct:
+                await emit(Text(content=reply))
+            return TurnOutcome(
+                usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                explicit_reply=True,
+            )
 
         # Verbatim delivery (deliver_text — see TurnRequest). Persist before
         # emit, mirroring the normal turn's save-then-reply order, so a save
@@ -3364,6 +3325,14 @@ class AgentLoop:
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
                 explicit_reply=True,
             )
+
+        # A direct chat is invisible to the main agent by design, so this is
+        # where it finds out one happened: pointers to what was asked and
+        # answered, never the text. Take-and-clear, so a segment is reported
+        # once. Nothing pending returns immediately -- this runs on every turn.
+        handoff = self._direct_handoff.take(cid)
+        if handoff is not None:
+            req = replace(req, text=f"{handoff}\n\n{req.text}")
 
         streamed = False
 
@@ -3542,58 +3511,3 @@ class AgentLoop:
         # so it counts as an explicit reply too.
         replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
         return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool)
-
-
-def _merge_tool_call_fragments(
-    slots: list[dict[str, Any]],
-    delta: dict[str, Any],
-) -> None:
-    """Merge a single chat_stream tool_call_delta into accumulator slots.
-
-    Each slot follows the shape ``{id, function: {name, arguments_buf: [str]}}``.
-    Per provider chunk semantics (OpenAI/LiteLLM): each tool call fragment
-    carries an ``index`` field; ``id`` / ``function.name`` typically appear in
-    the first fragment for that index, ``function.arguments`` is a JSON string
-    streamed in pieces.
-
-    Respects the ``index`` field so parallel multi-tool streams do not
-    collapse into ``slots[0]``. Fragments without an ``index`` default to 0
-    (single-tool case, backward-compatible).
-    """
-    incoming = delta.get("tool_calls") or []
-    if not incoming:
-        return
-    for tc in incoming:
-        idx = int(tc.get("index", 0) or 0)
-        while len(slots) <= idx:
-            slots.append({"id": None, "function": {"name": None, "arguments_buf": []}})
-        slot = slots[idx]
-        if tc.get("id") and not slot["id"]:
-            slot["id"] = tc["id"]
-        fn = tc.get("function") or {}
-        if fn.get("name") and not slot["function"]["name"]:
-            slot["function"]["name"] = fn["name"]
-        if fn.get("arguments"):
-            slot["function"]["arguments_buf"].append(fn["arguments"])
-
-
-def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
-    result: list[ToolCallRequest] = []
-    for slot in slots:
-        name = slot["function"]["name"]
-        if not name:
-            continue
-        args_text = "".join(slot["function"]["arguments_buf"])
-        try:
-            args = json.loads(args_text) if args_text else {}
-        except json.JSONDecodeError:
-            args = {"_raw_arguments": args_text}
-        result.append(
-            ToolCallRequest(
-                id=slot["id"] or "",
-                name=name,
-                arguments=args,
-            )
-        )
-    return result

@@ -28,7 +28,7 @@ import os
 import tempfile
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +36,7 @@ from loguru import logger
 
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
+from raven.agent.acp.permissions import auto_approver
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
 
 _FILENAME = "subagent_acp_capabilities.json"
@@ -83,10 +84,18 @@ class CapabilitySnapshot:
     available_models: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     elapsed_ms: int = 0
+    stale: bool = False
+    """Measured against a launch config this agent no longer has.
+
+    Set at load time, never persisted -- it is a fact about the comparison, not
+    about the handshake. What it changes is who may trust which field: the
+    capabilities are still the best evidence available and are used, while the
+    *status* is not, because a green light for a command that has since been
+    edited is a claim no measurement backs."""
 
     @property
     def usable(self) -> bool:
-        return self.status == "ready"
+        return self.status == "ready" and not self.stale
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase for the RPC layers, matching how ``ProbeResult`` does it."""
@@ -204,11 +213,22 @@ class SnapshotStore:
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
-    def load(self, configs: Sequence[Any]) -> dict[str, CapabilitySnapshot]:
-        """Snapshots still valid for these configs, keyed by agent name.
+    def load(self, configs: Sequence[Any], *, allow_stale: bool = False) -> dict[str, CapabilitySnapshot]:
+        """Snapshots for these configs, keyed by agent name.
 
         A snapshot whose fingerprint no longer matches its config is skipped,
         which is the whole invalidation mechanism -- nothing has to delete it.
+
+        ``allow_stale`` returns those too, flagged (see ``CapabilitySnapshot.stale``).
+        For the capability reader, and the reason it exists: dropping a snapshot
+        outright made it indistinguishable from one that was never taken, and the
+        fallback for never-taken is the most damaging default available --
+        *stateless*. Editing an agent's ``env`` therefore cost it its resume, its
+        chip and the ``instance`` parameter in the spawn schema, silently, until
+        someone happened to press Test. Trusting the old capabilities is the
+        weaker claim and it self-heals: if the edit really did swap in an agent
+        that cannot resume, the next ``session/load`` fails and the backend drops
+        the binding and starts fresh.
         """
         rows = {row.get("agent"): row for row in self._read()}
         found: dict[str, CapabilitySnapshot] = {}
@@ -218,8 +238,12 @@ class SnapshotStore:
             if row is None:
                 continue
             snapshot = CapabilitySnapshot.from_row(row)
-            if snapshot is None or snapshot.fingerprint != snapshot_fingerprint(cfg):
+            if snapshot is None:
                 continue
+            if snapshot.fingerprint != snapshot_fingerprint(cfg):
+                if not allow_stale:
+                    continue
+                snapshot = replace(snapshot, stale=True)
             found[name] = snapshot
         return found
 
@@ -346,6 +370,9 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             command=getattr(cfg, "command", "") or "",
             cwd=getattr(cfg, "cwd", None),
             env=dict(getattr(cfg, "env", None) or {}),
+            # The probe dispatches a real task, so it meets real permission
+            # requests and has to answer them the way a dispatch would.
+            on_request=auto_approver(name),
         )
         try:
             init = await client.request("initialize", protocol.initialize_params(), timeout=budget)

@@ -21,6 +21,7 @@ import { looksLikeSlashCommand } from '../domain/slash.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
 import { PASTE_SNIPPET_RE } from '../protocol/paste.js'
+import { appendDirectMessage, directKey, getDirectChat, sendingPausedReason } from './directChatStore.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
 
@@ -90,6 +91,26 @@ export function useSubmission(opts: UseSubmissionOptions) {
     }
   }, [composerState.input, composerState.inputBuf])
 
+  /**
+   * A system line in the conversation on screen.
+   *
+   * `sys` always writes to the main transcript, which in a direct view is not
+   * the one being read -- a refusal or a send failure would land where the user
+   * cannot see it, and unexplained silence is exactly what a hang looks like.
+   */
+  const notifyHere = useCallback(
+    (text: string) => {
+      const active = getDirectChat().active
+
+      if (active === null) {
+        return sys(text)
+      }
+
+      appendDirectMessage(directKey(active.agent, active.handle), { role: 'system', text })
+    },
+    [sys]
+  )
+
   const send = useCallback(
     (text: string, showUserMessage = true) => {
       const expand = expandSnips(composerState.pasteSnips)
@@ -101,12 +122,30 @@ export function useSubmission(opts: UseSubmissionOptions) {
           return sys('session not ready yet')
         }
 
+        // The runtime holds one turn slot per session, so a turn running in the
+        // other conversation blocks this one too. Refuse with the reason rather
+        // than letting the send bounce off a -32003 the user cannot read.
+        const paused = sendingPausedReason(getDirectChat())
+
+        if (paused !== null) {
+          return notifyHere(paused)
+        }
+
         turnController.clearStatusTimer()
         maybeGoodVibes(submitText)
         setLastUserMsg(text)
 
         if (showUserMessage) {
-          appendMessage({ role: 'user', text: displayText })
+          // Echoed into whichever transcript the user is looking at. A direct
+          // chat is invisible to the main agent by design, so its own prompt
+          // must not land in the main transcript either.
+          const active = getDirectChat().active
+
+          if (active === null) {
+            appendMessage({ role: 'user', text: displayText })
+          } else {
+            appendDirectMessage(directKey(active.agent, active.handle), { role: 'user', text: displayText })
+          }
         }
 
         patchUiState({ busy: true, status: 'running…' })
@@ -126,8 +165,8 @@ export function useSubmission(opts: UseSubmissionOptions) {
               patchUiState({ busy: true, status: 'queued for next turn' })
               return sys(`queued: "${submitText.slice(0, 50)}${submitText.length > 50 ? '…' : ''}"`)
             }
-            sys(`error: ${e.message}`)
-            patchUiState({ busy: false, status: 'ready' })
+            notifyHere(`error: ${e.message}`)
+            patchUiState({ status: 'ready' })
           })
         } else {
           gw.request<PromptSubmitResponse>('prompt.submit', { session_id: sid, text: submitText }).catch((e: Error) => {
@@ -169,7 +208,17 @@ export function useSubmission(opts: UseSubmissionOptions) {
         })
         .catch(() => startSubmit(text, expand(text), showUserMessage))
     },
-    [appendMessage, chatStreamRef, composerActions, composerState.pasteSnips, gw, maybeGoodVibes, setLastUserMsg, sys]
+    [
+      appendMessage,
+      chatStreamRef,
+      composerActions,
+      composerState.pasteSnips,
+      gw,
+      maybeGoodVibes,
+      notifyHere,
+      setLastUserMsg,
+      sys
+    ]
   )
 
   const shellExec = useCallback(
@@ -336,6 +385,19 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return
       }
 
+      // Before the composer is cleared and before every busy-input mode below,
+      // because none of them is this conversation's to run when the turn in
+      // flight belongs to another one: 'interrupt' (the default) would tear down
+      // a reply the user is still waiting for in the other view, 'steer' would
+      // inject this text into that other agent's turn, and 'queue' would hold it
+      // until some later view is on screen and send it there. Refusing early
+      // also leaves the text in the composer, so nothing typed is lost.
+      const pausedHere = sendingPausedReason(getDirectChat())
+
+      if (pausedHere !== null) {
+        return notifyHere(pausedHere)
+      }
+
       const editIdx = composerRefs.queueEditRef.current
       composerActions.clearIn()
 
@@ -379,7 +441,18 @@ export function useSubmission(opts: UseSubmissionOptions) {
 
       send(full)
     },
-    [appendMessage, composerActions, composerRefs, handleBusyInput, interpolate, send, sendQueued, shellExec, slashRef]
+    [
+      appendMessage,
+      composerActions,
+      composerRefs,
+      handleBusyInput,
+      interpolate,
+      send,
+      sendQueued,
+      notifyHere,
+      shellExec,
+      slashRef
+    ]
   )
 
   const submit = useCallback(

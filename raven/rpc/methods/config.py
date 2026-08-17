@@ -39,7 +39,7 @@ from raven.rpc.errors import (
     ModelNotAvailableError,
     ModelSwitchInTurnError,
 )
-from raven.rpc.methods.turn import is_turn_active
+from raven.rpc.methods.turn import is_session_busy
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -330,7 +330,7 @@ def _set_model(
         raw_value = stored_model_id(new_provider, raw_value)
 
     session_id = params.get("session_id")
-    if isinstance(session_id, str) and session_id and is_turn_active(session_id):
+    if isinstance(session_id, str) and session_id and is_session_busy(session_id):
         raise ModelSwitchInTurnError(
             f"cannot switch model while session {session_id!r} has an active turn",
             data={"session_id": session_id},

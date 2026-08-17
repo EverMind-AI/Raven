@@ -1034,18 +1034,49 @@ class ThirdPartyOpenAISubagentConfig(Base):
     base_url: str
     model: str
     api_key: str = ""
-    stateful: bool | None = None
-    """An HTTP agent is one-shot per call, so this may only be ``None`` or
-    ``false``; ``true`` is rejected rather than advertised, since no resume
-    mechanism exists for a DAG node to reuse."""
+    stateful: bool = True
+    """Declares whether reusing an instance handle continues this agent's
+    conversation. An HTTP agent has no session of its own to resume, so a
+    ``true`` here opts into Raven replaying the message list itself (see
+    ``raven/agent/subagent/instance_state.py``) rather than agreeing with a
+    resume command the way the cli kind's ``stateful`` does.
+
+    Defaults to ``true``, unlike the cli kind, because the replay mechanism is
+    raven's own and works against any endpoint -- so the default describes the
+    mechanism that is actually there. What a ``false`` records is the opposite:
+    an endpoint replay is meaningless at (mirothinker ignores a system prompt
+    entirely, so a replayed transcript continues nothing). Only a preset, or the
+    person who chose a custom endpoint, can know that; no probe reaches it. No
+    UI surface writes this field, by decision -- a custom entry is stateful, and
+    an operator who knows better edits the config file.
+
+    A stored ``null`` reads as the default rather than as an error: the field
+    used to be ``bool | None`` and entries written then have one on disk. See
+    ``_null_stateful_is_the_default``."""
+
+    @field_validator("stateful", mode="before")
+    @classmethod
+    def _null_stateful_is_the_default(cls, value: Any) -> Any:
+        """Coerce a stored ``null`` to the default instead of rejecting it.
+
+        This field was optional until the default became ``true``, so every
+        entry written by the older form carries an explicit ``null``. Rejecting
+        it would fail validation of the whole top-level ``Config`` -- raven
+        would stop starting, with the config that could be fixed sitting behind
+        the loader that no longer reads it. Same reasoning, and the same shape,
+        as ``_drop_declared_local_file_access`` below.
+        """
+        return True if value is None else value
+
     reads_local_files: bool = False
     """Always ``false`` for this kind; ``true`` is coerced away below.
 
-    ``OpenAIApiBackend.run`` posts a single chat message, so no channel exists
-    through which the endpoint could open a path -- being served from this host
-    does not change that. The value is not inert: ``format_agent_listing``
-    renders it into the spawn / DAG tool descriptions as a ``local-files`` tag,
-    which is the dispatching model's licence to hand this agent a path."""
+    ``OpenAIApiBackend`` has no tools and no filesystem access of its own, so
+    no channel exists through which the endpoint could open a path -- being
+    served from this host does not change that. The value is not inert:
+    ``format_agent_listing`` renders it into the spawn / DAG tool descriptions
+    as a ``local-files`` tag, which is the dispatching model's licence to hand
+    this agent a path."""
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -1053,9 +1084,15 @@ class ThirdPartyOpenAISubagentConfig(Base):
     max_output_chars: int = 128000
 
     @model_validator(mode="after")
-    def _reject_declared_stateful(self) -> "ThirdPartyOpenAISubagentConfig":
-        if self.stateful:
-            raise ValueError("stateful is not supported for kind 'openai' (an HTTP agent has no resumable session)")
+    def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
+        """``stateful`` is honoured for this kind now.
+
+        It used to be rejected on the grounds that an HTTP agent has no
+        resumable session. It has one now, but Raven owns it: the message list
+        is replayed from ``raven/agent/subagent/instance_state.py`` rather than
+        resumed by the provider, so no ``resumeCommand`` is involved and there
+        is nothing for the cli-kind cross-check to verify here.
+        """
         return self
 
     @model_validator(mode="after")
@@ -1072,13 +1109,15 @@ class ThirdPartyOpenAISubagentConfig(Base):
 
         A hard reject is still right where the caller can act on it -- see
         ``reject_unsupported_openai_fields``, which the write path calls on an
-        incoming payload. The neighbouring ``_reject_declared_stateful`` stays a
-        reject because no shipped form ever wrote ``stateful`` on this kind.
+        incoming payload. The neighbouring ``_allow_replayed_state`` no longer
+        rejects ``stateful`` because Raven now replays the message list itself
+        for this kind.
         """
         if self.reads_local_files:
             logger.warning(
                 "readsLocalFiles is not supported for kind 'openai' (sub-agent {!r}); treating it "
-                "as false -- the backend posts one chat message, so nothing can open a path here",
+                "as false -- the backend has no tools and no filesystem access, so nothing can "
+                "open a path here",
                 self.name,
             )
             self.reads_local_files = False

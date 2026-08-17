@@ -14,7 +14,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,6 +173,31 @@ class InstanceRegistry:
                     e,
                 )
 
+    async def unbind(self, session_key: str, agent: str, handle: str) -> bool:
+        """Drop only the transport session id, keeping the instance itself.
+
+        What a failed resume actually learned is that this ``agentId`` is stale,
+        not that the instance stopped existing -- and the instance is what the
+        chip strip and ``/instance`` list are drawn from. Deleting the row
+        instead took the instance off screen for the length of the turn that was
+        recovering it, and permanently if that turn then failed, since only a
+        *successful* turn commits the replacement id.
+        """
+        async with self._lock:
+            records = self._load()
+            key = (session_key, agent, handle)
+            rec = records.get(key)
+            if rec is None or rec.get("agentId") is None:
+                return False
+            records[key] = {**rec, "agentId": None, "updatedAtMs": int(time.time() * 1000)}
+            try:
+                self._flush()
+            except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                logger.warning(
+                    "subagent instance registry write failed (binding dropped in-process, remains on disk): {}", e
+                )
+            return True
+
     async def forget(self, session_key: str, agent: str, handle: str) -> bool:
         """Drop one record (e.g. after its CLI-side session was pruned). Returns
         whether a record was actually removed."""
@@ -214,6 +239,52 @@ class InstanceRegistry:
         return sorted(records, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)
 
 
+def reconcile_instance_rows(
+    rows: list[dict[str, Any]],
+    *,
+    live_handles: "Callable[[str], set[tuple[str, str]]]",
+    active_run_ids: "Callable[[], set[str]]",
+) -> list[dict[str, Any]]:
+    """Rewrite rows the process index says are not actually running.
+
+    The registry is durable and the task index is not, so a gateway that was
+    killed mid-spawn leaves rows reading ``running`` forever. Whether one is
+    genuinely live is answered by a different index per kind: a spawn (``cli``,
+    which is also what a built-in or HTTP instance is recorded as) by the
+    manager's in-flight handles, a ``dag-node`` by its run still being active.
+    A kind with neither is left alone rather than guessed at.
+
+    Shared by the TUI and the web RPC rather than derived twice: two surfaces
+    disagreeing about which instances are live is the hardest kind of bug to
+    find later. The two indexes arrive as callables so this module stays free of
+    the manager and the DAG tool -- neither of which the registry knows about.
+
+    Never mutates a row: the registry hands out its cached records, and a
+    rewrite in place would be read back on the next call as if it had come from
+    disk.
+    """
+    live_by_session: dict[str, set[tuple[str, str]]] = {}
+    runs: set[str] | None = None
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        kind = row.get("kind")
+        if kind == "dag-node" and row.get("status") in ("pending", "running"):
+            if runs is None:
+                runs = active_run_ids()
+            if row.get("runId") not in runs:
+                out.append({**row, "status": "interrupted"})
+                continue
+        elif kind == "cli" and row.get("status") in ("pending", "running"):
+            session_key = row.get("sessionKey", "")
+            if session_key not in live_by_session:
+                live_by_session[session_key] = live_handles(session_key)
+            if (row.get("agent"), row.get("handle")) not in live_by_session[session_key]:
+                out.append({**row, "status": "interrupted"})
+                continue
+        out.append(row)
+    return out
+
+
 _registry: InstanceRegistry | None = None
 
 
@@ -233,6 +304,12 @@ class _HeldLock:
 
 _handle_locks: dict[_Key, _HeldLock] = {}
 
+# Which task currently holds each key, so a nested acquire from that same task
+# passes straight through. Without this, a caller that takes the lock and then
+# calls a backend that takes it again deadlocks on a plain asyncio.Lock: it is
+# waiting for itself, with no timeout and nothing logged.
+_handle_owners: dict[_Key, "asyncio.Task[Any]"] = {}
+
 
 @asynccontextmanager
 async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterator[None]:
@@ -247,15 +324,32 @@ async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterato
 
     The refcount is taken before the lock is awaited, so a waiter keeps the
     entry alive and the map never strands a lock two callers disagree about.
+
+    Re-entrant within one task, and it has to be: the direct-chat path takes
+    this around a whole turn, and the cli backend takes it again around its own
+    lookup-run-commit sequence. Both are right to -- each is the outermost hold
+    on some other path -- and the two together are still one resumption, which
+    is what the lock protects. Non-reentrant, that pair is a deadlock with no
+    error and no timeout: the turn's record simply stays ``running`` forever.
     """
     key = (session_key, agent, handle)
+    current = asyncio.current_task()
+
+    if current is not None and _handle_owners.get(key) is current:
+        yield
+        return
+
     entry = _handle_locks.get(key)
     if entry is None:
         entry = _handle_locks[key] = _HeldLock()
     entry.users += 1
     try:
         async with entry.lock:
-            yield
+            _handle_owners[key] = current  # type: ignore[assignment]
+            try:
+                yield
+            finally:
+                _handle_owners.pop(key, None)
     finally:
         entry.users -= 1
         if entry.users == 0:

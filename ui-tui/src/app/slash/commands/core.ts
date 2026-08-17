@@ -26,6 +26,7 @@ import { getLocale, isLocale, setLocale } from '../../../i18n/index.js'
 import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
+import { enterDirect, getDirectChat, isDirectTarget, leaveDirect } from '../../directChatStore.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 
@@ -193,6 +194,51 @@ export const coreCommands: SlashCommand[] = [
     run: (_arg, ctx) => {
       forceRedraw(process.stdout)
       ctx.transcript.sys('ui redrawn')
+    }
+  },
+
+  {
+    aliases: ['instances'],
+    help: 'switch to a sub-agent instance chat (no arg lists them)',
+    name: 'instance',
+    usage: '/instance [<n> | <agent>/<handle> | main]',
+    run: (arg, ctx) => {
+      const { active, instances } = getDirectChat()
+      const addressable = instances.filter(r => r.kind !== 'dag-node')
+      const target = arg.trim()
+
+      if (!target) {
+        if (addressable.length === 0) {
+          return ctx.transcript.sys('no sub-agent instances in this session yet')
+        }
+
+        const lines = addressable.map(
+          (r, i) =>
+            `${i + 1}. ${r.agent}/${r.handle}${isDirectTarget(active, { agent: r.agent, handle: r.handle }) ? '  (here)' : ''}`
+        )
+
+        return ctx.transcript.sys(
+          [`sub-agent instances (/instance <n> to switch, /instance main to leave):`, ...lines].join('\n')
+        )
+      }
+
+      if (target.toLowerCase() === 'main' || target.toLowerCase() === 'raven') {
+        leaveDirect()
+
+        return ctx.transcript.sys('back on the main conversation')
+      }
+
+      // Accept the index the listing prints as well as the full name -- the
+      // names are long enough that typing one is its own obstacle.
+      const byIndex = /^\d+$/.test(target) ? addressable[Number(target) - 1] : undefined
+      const row = byIndex ?? addressable.find(r => `${r.agent}/${r.handle}` === target || r.handle === target)
+
+      if (!row) {
+        return ctx.transcript.sys(`no such instance: ${target} (try /instance with no argument)`)
+      }
+
+      enterDirect(row.agent, row.handle)
+      ctx.transcript.sys(`talking to ${row.agent}/${row.handle} directly -- Esc returns to Raven`)
     }
   },
 

@@ -107,7 +107,7 @@ def register_config_methods(
       ahead of the policy default on the *next* turn. ``set`` refuses while
       the session has a subagent in flight.
     """
-    from raven.agent.subagent.instances import get_registry
+    from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
     from raven.agent.subagent.presets import third_party_subagent_presets
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
     from raven.agent.subagent.test_state import TestStateStore
@@ -183,31 +183,15 @@ def register_config_methods(
         return getattr(agent, "subagents", None) if agent is not None else None
 
     async def _instances(params: dict) -> dict:
-        rows = get_registry().list_instances(params.get("session_key"))
-
         manager = _subagent_manager()
         dag_tool = _dag_tool()
-        active_run_ids = set(dag_tool.active_run_ids()) if dag_tool is not None else set()
-        live_by_session: dict[str, set[tuple[str, str]]] = {}
-
-        def _reconciled(row: dict) -> dict:
-            # Never mutate the registry's cached record -- build a new dict when a
-            # row needs rewriting, or the next read would see the rewrite as if it
-            # had come from disk.
-            kind = row.get("kind")
-            if kind == "cli" and row.get("status") in ("pending", "running"):
-                session_key = row.get("sessionKey", "")
-                if session_key not in live_by_session:
-                    live_by_session[session_key] = manager.live_handles(session_key) if manager is not None else set()
-                live = live_by_session[session_key]
-                if (row.get("agent"), row.get("handle")) not in live:
-                    return {**row, "status": "interrupted"}
-            elif kind == "dag-node" and row.get("status") in ("pending", "running"):
-                if row.get("runId") not in active_run_ids:
-                    return {**row, "status": "interrupted"}
-            return row
-
-        return {"instances": [_reconciled(row) for row in rows]}
+        return {
+            "instances": reconcile_instance_rows(
+                get_registry().list_instances(params.get("session_key")),
+                live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
+                active_run_ids=(lambda: set(dag_tool.active_run_ids()) if dag_tool is not None else set()),
+            )
+        }
 
     async def _instances_delete(params: dict) -> dict:
         return {"removed": await get_registry().delete_session(params.get("session_key", ""))}

@@ -68,6 +68,36 @@ whether it was saved, so a preset needing just an api key stays directly addable
 dispatch to. Not to be confused with the Agents Overlay, which shows live delegation state
 and writes nothing.
 
+**Direct Chat** (`ui-tui/src/app/directChatStore.ts`):
+The mode in which the chat view is taken over by one sub-agent instance's own
+conversation: same composer, that instance's transcript, Esc to return. Tracked in
+`directChatStore`'s `active` field; `null` means the main Raven conversation. A direct-chat
+turn is `turn.send` with a `target`, and is never written to the session transcript - the
+main agent learns of it only through the Handoff Block. Its events are routed by their own
+`target`, not by which view is on screen, because Esc leaves without stopping the turn. The
+reply arrives as `token.delta` either way: an instance whose transport supports Reply
+Streaming fills the view as it answers, one whose transport does not lands in a single
+frame at the end, and the view treats both identically. Each instance runs on its own lane,
+so several can be answering at once and you can talk to one while another writes; what is
+refused is a *second* prompt to the instance already mid-reply, which would serialise on that
+instance's handle anyway. A sub-agent's turn is not cancellable: Ctrl+C means the main
+agent's turn, as it always did.
+_Avoid_: "sub-agent session" - that is the CLI-side session a handle resumes, not this view.
+
+**Instance Chip** (`ui-tui/src/components/instanceChips.tsx`):
+One entry in the strip above the composer, naming a sub-agent instance this session has
+used and switching to its Direct Chat when selected. The first chip is always the way back
+to the main agent, and it and the active chip are the two the strip never truncates away.
+Two independent marks: the chip you are *on* is painted in the theme's accent, and a chip
+whose instance is *replying* carries a bullet - the second can be any chip, including one
+you are not looking at. Ordered by when each instance first appeared and never resorted, so
+the accent never slides sideways while several instances answer at once. Drawn from the
+instance registry, re-read after any event that could have moved it; a *failed* re-read
+leaves the strip as it was rather than emptying it, since a quiet rpc reports "the call
+failed" and "there is nothing" the same way.
+_Avoid_: "agent chip" - a chip is one *instance* of an agent, and one agent can have
+several.
+
 **Confirm Overlay**:
 The countdown overlay a destructive Confirm Round-Trip presents; the answer resolves
 the paused turn.

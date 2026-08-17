@@ -329,6 +329,25 @@ export const ravenConfigApi = {
 			session_key: sessionKey,
 		}),
 
+	/** One instance's past direct turns; the only memory of them that survives a reload. */
+	instanceHistory: (sessionId: string, agent: string, handle: string) =>
+		client.get<{ turns: { role: 'user' | 'assistant'; content: string }[] }>(
+			'/raven/subagents/instances/history',
+			{ session_id: sessionId, agent, handle },
+		),
+
+	/**
+	 * Send one prompt to an instance. Resolves when the turn is *accepted*, not
+	 * when it is answered: the reply arrives as `subagent_direct_*` events on
+	 * the session stream, which is what lets several instances answer at once.
+	 */
+	chatWithInstance: (body: {
+		session_id: string;
+		agent: string;
+		handle: string;
+		content: string;
+	}) => client.post<{ accepted: boolean }>('/raven/subagents/instances/chat', body),
+
 	cancelDagRun: (runId: string) =>
 		client.post<{ cancelled: boolean }>(
 			`/raven/subagents/dag/${encodeURIComponent(runId)}/cancel`,

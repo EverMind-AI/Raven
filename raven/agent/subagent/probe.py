@@ -204,6 +204,16 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its ACP capabilities have not been recorded yet -- run a test",
             resolved,
         )
+    if snapshot.stale:
+        # The capabilities are still used (see `SnapshotStore.load`); the status
+        # is not. A verdict measured against a command, cwd or env the entry no
+        # longer has is not evidence about the entry as it stands now, and this
+        # row is the one surface that says so.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its launch config changed since the last test -- run a test",
+            resolved,
+        )
     return done(snapshot.status, snapshot.detail, resolved)
 
 

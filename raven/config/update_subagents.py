@@ -56,8 +56,8 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
             name = entry.get("name") or "<unnamed>"
             raise ValueError(
                 f"readsLocalFiles is not supported for kind 'openai' (sub-agent {name!r}): the "
-                "backend posts one chat message, so nothing can open a path on this machine; "
-                "remove the field or set it false"
+                "backend has no tools and no filesystem access, so nothing can open a path on "
+                "this machine; remove the field or set it false"
             )
 
 

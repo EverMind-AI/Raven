@@ -495,6 +495,7 @@
 		"presetNameReserved": "\"{{name}}\" 是预设名称。请在\"预设\"分组中打开它，或换一个名称。"
 	},
 	"subagent-monitor": {
+			"chat": "直聊",
 		"title": "实例",
 		"empty": "本会话暂无子智能体实例。",
 		"sessionId": "会话 id",

@@ -235,3 +235,49 @@ async def test_session_interrupt_is_registered_without_an_emitter() -> None:
     d = Dispatcher()
     register_session_interrupt_method(d)
     assert "session.interrupt" in d.methods()
+
+
+async def test_a_direct_turn_is_not_cancellable(emitter: SubscriptionEmitter, send_frame_capture: AsyncMock) -> None:
+    """Spec D3. `turn.cancel` names a session and means the main agent's turn;
+    a sub-agent that is answering is left to finish. It runs on its instance's
+    own lane, so the session's slot does not hold it and the cancel finds
+    nothing -- rather than reaching across and tearing it down."""
+    targets: dict[str, dict[str, str]] = {}
+    await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+    await turn_send(
+        {
+            "session_key": "tui:default",
+            "content": "fix it",
+            "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+        },
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={},
+        direct_targets=targets,
+    )
+
+    result = await turn_cancel({"session_key": "tui:default"}, emitter=emitter, direct_targets=targets)
+    await asyncio.sleep(0.05)  # let the coalescer flush
+
+    assert result == {"cancelled": False}
+    assert [e for e in _collect_events(send_frame_capture) if e["type"] == "error"] == []
+
+
+async def test_cancelling_a_main_turn_leaves_the_error_untagged(
+    emitter: SubscriptionEmitter, send_frame_capture: AsyncMock
+) -> None:
+    targets: dict[str, dict[str, str]] = {}
+    await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+    await turn_send(
+        {"session_key": "tui:default", "content": "hi"},
+        emitter=emitter,
+        scheduler=FakeScheduler(),
+        turn_ids={},
+        direct_targets=targets,
+    )
+
+    await turn_cancel({"session_key": "tui:default"}, emitter=emitter, direct_targets=targets)
+    await asyncio.sleep(0.05)  # let the coalescer flush
+
+    errors = [e for e in _collect_events(send_frame_capture) if e["type"] == "error"]
+    assert "target" not in errors[-1]["payload"]

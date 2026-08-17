@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -22,6 +23,35 @@ ABORTED_ACTION_RESULT = (
     "The subtask stopped because a safety decision terminated the requested operation. "
     "No alternative method was attempted."
 )
+
+
+def bounded_delta(
+    on_delta: "Callable[[str], Awaitable[None]] | None", limit: int
+) -> "Callable[[str], Awaitable[None]] | None":
+    """Wrap a delta callback so what streams stays a prefix of what returns.
+
+    The backends that cap a reply truncate their return value to
+    ``max_output_chars``. An uncapped stream would render text the record
+    never stores and the next turn's history never replays -- the transcript on
+    screen would be the only place that text ever existed, and it would vanish
+    on the next switch into the instance.
+
+    Returns ``None`` unchanged, so a caller can wrap unconditionally.
+    """
+    if on_delta is None:
+        return None
+
+    remaining = limit
+
+    async def emit(text: str) -> None:
+        nonlocal remaining
+        if remaining <= 0 or not text:
+            return
+        chunk = text[:remaining]
+        remaining -= len(chunk)
+        await on_delta(chunk)
+
+    return emit
 
 
 class SubagentActionAbortedError(Exception):
@@ -46,6 +76,19 @@ class SubagentBackend(Protocol):
     backend's.
     """
 
+    streams: bool = False
+    """Whether this backend reports its reply through ``on_delta`` as it forms.
+
+    A fact about the transport, not about the agent, and so a class attribute
+    rather than anything an operator writes: a cli agent prints its transcript
+    once at exit and cannot be made to stream by declaring that it does. Same
+    rule as ``AgentMeta.live_progress``.
+
+    False by default so a duck-typed backend is read as non-streaming; the
+    manager then never wires ``on_delta``, and the caller falls back to
+    delivering the return value whole. Nothing else in the stack branches on it.
+    """
+
     async def run(
         self,
         task: str,
@@ -57,4 +100,5 @@ class SubagentBackend(Protocol):
         instance: str | None = None,
         provider: LLMProvider | None = None,
         model: str | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> str: ...

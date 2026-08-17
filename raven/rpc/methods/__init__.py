@@ -49,6 +49,7 @@ from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.input import register_input_methods
+from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.plughub import register_plughub_methods
@@ -89,6 +90,7 @@ def register_aligned_methods(
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
+    direct_targets: "dict[str, dict[str, str]] | None" = None,
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
 ) -> None:
@@ -117,6 +119,7 @@ def register_aligned_methods(
         question_broker=question_broker,
         scheduler=scheduler,
         turn_ids=turn_ids,
+        direct_targets=direct_targets,
         build_error=build_error,
         send_frame=send_frame,
     )
@@ -132,6 +135,7 @@ def register_aligned_methods_except_system(
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
+    direct_targets: "dict[str, dict[str, str]] | None" = None,
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
 ) -> None:
@@ -151,6 +155,7 @@ def register_aligned_methods_except_system(
     register_reload_methods(dispatcher)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
@@ -204,6 +209,7 @@ def register_aligned_methods_except_system(
             emitter=emitter,
             scheduler=scheduler,
             turn_ids=turn_ids,
+            direct_targets=direct_targets,
             build_error=build_error,
         )
     # confirm.respond — needs a ConfirmBroker to resolve the pending
@@ -250,6 +256,7 @@ __all__ = [
     "register_reload_methods",
     "register_config_methods",
     "register_subagents_methods",
+    "register_instance_methods",
     "register_dag_methods",
     "register_console_methods",
     "register_memory_methods",

@@ -22,6 +22,8 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from agentscope.event import (
     ReplyEndEvent,
@@ -107,6 +109,24 @@ def _rpc_error_message(method: str, error: object) -> str:
     return f"gateway rpc {method} error: {error}"
 
 
+async def publish_session_custom(session_id: str | None, name: str | None, value: dict | None) -> None:
+    """Publish a CustomEvent on one session's live stream.
+
+    Shared by the reply path and the direct-chat driver so both reach the SSE
+    the same way; a second spelling of this would be a second thing to keep in
+    step with the projection. Failure is swallowed: an out-of-band notification
+    is never worth failing the work it describes.
+    """
+    if not name or not session_id or MESSAGE_BUS is None:
+        return
+    try:
+        from agentscope.app._service._session_projection import SessionProjection
+
+        await SessionProjection(MESSAGE_BUS).publish(session_id, name, value or {})
+    except Exception:  # noqa: BLE001 - viz must never break the reply
+        pass
+
+
 class GatewayClient:
     """One shared WS connection to the gateway web channel, multiplexed."""
 
@@ -124,6 +144,12 @@ class GatewayClient:
         # subscription_id -> queue of event dicts; session_key -> subscription_id
         self._queues: dict[str, asyncio.Queue] = {}
         self._subs: dict[str, str] = {}
+        # The reverse of `_subs`, needed at the push: an event carries its
+        # subscription id, and routing a direct chat's events needs the session
+        # they belong to before the target can key a queue.
+        self._sub_sessions: dict[str, str] = {}
+        # target_key -> queue, for the instances someone is currently watching.
+        self._direct_queues: dict[str, asyncio.Queue] = {}
         self._connect_lock = asyncio.Lock()
 
     @classmethod
@@ -148,6 +174,10 @@ class GatewayClient:
                 await self._ws.send_str(self._token)
             self._pending.clear()
             self._subs.clear()  # re-subscribe on demand after a (re)connect
+            # Same reason, and it has to go with `_subs`: a subscription id is
+            # only unique per connection, so a stale mapping would route a new
+            # connection's events into the previous one's session.
+            self._sub_sessions.clear()
             self._read_task = asyncio.create_task(self._read_loop())
             await self.call("system.hello", {"client_version": _CLIENT_VERSION})
 
@@ -167,9 +197,7 @@ class GatewayClient:
                 elif isinstance(frame, dict) and frame.get("method") == "event":
                     params = frame.get("params", {})
                     sub_id = params.get("subscription_id")
-                    q = self._queues.get(sub_id)
-                    if q is not None:
-                        q.put_nowait(params.get("event") or {})
+                    self._route(sub_id, params.get("event") or {})
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -182,7 +210,10 @@ class GatewayClient:
             self._pending.clear()
             # Wake any reply_stream blocked on a session queue so it ends its turn
             # promptly (with an error) instead of waiting out the read timeout.
-            for q in self._queues.values():
+            # The direct-chat queues too: their driver has no read timeout at all,
+            # so a dropped socket would leave that instance's view waiting for a
+            # reply the connection can no longer deliver.
+            for q in (*self._queues.values(), *self._direct_queues.values()):
                 q.put_nowait({"type": "__disconnected__", "payload": {}})
 
     async def call(self, method: str, params: dict, *, timeout: float = 30) -> dict:
@@ -206,6 +237,45 @@ class GatewayClient:
             raise RuntimeError(_rpc_error_message(method, frame["error"]))
         return frame.get("result", {})
 
+    @staticmethod
+    def target_key(session_key: str, agent: str, handle: str) -> str:
+        """The queue key for one instance's direct chat.
+
+        Length-prefixed on the agent name, as ``ui-tui``'s ``directKey`` is: an
+        agent name and a handle are both free-form, so a bare join lets
+        ``a/b`` + ``c`` collide with ``a`` + ``b/c`` and two instances share a
+        conversation.
+        """
+        return f"{session_key}#{len(agent)}:{agent}/{handle}"
+
+    def _route(self, sub_id: str | None, event: dict) -> None:
+        """Send one event to the main reply's queue or to a direct chat's.
+
+        Routed here, at the push, rather than at the read: a direct turn and the
+        main agent's run concurrently on one subscription, so two consumers
+        sharing one queue would each swallow events belonging to the other --
+        and a swallowed ``message.complete`` ends the wrong turn.
+
+        Only the runtime tags an event, and it tags every event of a direct
+        lane, so an untagged event belongs to the main agent by construction.
+        """
+        target = (event.get("payload") or {}).get("target")
+        if isinstance(target, dict) and target.get("agent") and target.get("handle"):
+            session_key = self._sub_sessions.get(sub_id or "")
+            if session_key is None:
+                return
+            key = self.target_key(session_key, str(target["agent"]), str(target["handle"]))
+            queue = self._direct_queues.get(key)
+            # No queue means nobody is watching this instance right now. Dropped
+            # rather than buffered: the turn's record is on disk either way, and
+            # an unbounded queue per instance nobody reads is a leak.
+            if queue is not None:
+                queue.put_nowait(event)
+            return
+        queue = self._queues.get(sub_id or "")
+        if queue is not None:
+            queue.put_nowait(event)
+
     async def subscribe(self, session_key: str) -> asyncio.Queue:
         """Return the per-session event queue, subscribing once per session."""
         sub_id = self._subs.get(session_key)
@@ -215,11 +285,31 @@ class GatewayClient:
         sub_id = result["subscription_id"]
         q: asyncio.Queue = asyncio.Queue()
         self._subs[session_key] = sub_id
+        self._sub_sessions[sub_id] = session_key
         self._queues[sub_id] = q
         return q
 
-    async def send_turn(self, session_key: str, content: str) -> str:
-        result = await self.call("turn.send", {"session_key": session_key, "content": content})
+    def watch_direct(self, session_key: str, agent: str, handle: str) -> asyncio.Queue:
+        """Open (or reuse) the queue carrying one instance's direct-turn events.
+
+        Opened *before* the prompt is sent, or the first deltas arrive with no
+        queue to land in and the reply appears to start mid-sentence.
+        """
+        key = self.target_key(session_key, agent, handle)
+        queue = self._direct_queues.get(key)
+        if queue is None:
+            queue = self._direct_queues[key] = asyncio.Queue()
+        return queue
+
+    def unwatch_direct(self, session_key: str, agent: str, handle: str) -> None:
+        """Stop carrying one instance's events; later ones are dropped at `_route`."""
+        self._direct_queues.pop(self.target_key(session_key, agent, handle), None)
+
+    async def send_turn(self, session_key: str, content: str, *, target: dict | None = None) -> str:
+        params: dict[str, Any] = {"session_key": session_key, "content": content}
+        if target is not None:
+            params["target"] = target
+        result = await self.call("turn.send", params)
         return result.get("turn_id", "")
 
     async def aclose(self) -> None:
@@ -296,17 +386,7 @@ class RavenGatewayAgent:
     async def _publish_custom(self, name: str | None, value: dict | None) -> None:
         """Publish a CustomEvent on the message bus (live) so it reaches the
         session's SSE stream — used for out-of-band DAG / instance events."""
-        if not name or MESSAGE_BUS is None:
-            return
-        sid = self.state.session_id
-        if not sid:
-            return
-        try:
-            from agentscope.app._service._session_projection import SessionProjection
-
-            await SessionProjection(MESSAGE_BUS).publish(sid, name, value or {})
-        except Exception:  # noqa: BLE001 - viz must never break the reply
-            pass
+        await publish_session_custom(self.state.session_id, name, value)
 
     async def reply_stream(self, inputs=None):
         sid = self.state.session_id
@@ -470,3 +550,67 @@ class RavenGatewayAgent:
         if end is not None:
             yield end
         yield ReplyEndEvent(session_id=sid, reply_id=reply_id, finished_reason=ReplyEndReason.COMPLETED)
+
+
+async def run_direct_chat(
+    session_key: str,
+    agent: str,
+    handle: str,
+    content: str,
+    *,
+    publish: "Callable[[str, dict], Awaitable[None]]",
+) -> None:
+    """Drive one direct-chat turn and publish it out of band.
+
+    Out of band, and not as an AgentScope reply, because the reply path is one
+    reply per session behind a blocking session lock -- a direct turn taken
+    through it would queue behind the main agent instead of running beside it
+    (see the web-UI direct-chat design, W7). Custom events have no such lock and
+    already survive `_drop_stale_turn_events`.
+
+    Three event names, mirroring what the TUI store does with the same stream:
+    a delta appends to the instance's transcript, `complete` closes the turn,
+    `error` closes it having said why. Each carries the target, so a client
+    watching several instances at once can tell whose turn ended.
+    """
+    client = await GatewayClient.shared()
+    await client.subscribe(session_key)
+    target = {"agent": agent, "handle": handle}
+    # Watched before the prompt is sent: the first deltas can arrive while
+    # `send_turn` is still awaiting its own result.
+    queue = client.watch_direct(session_key, agent, handle)
+    try:
+        try:
+            await client.send_turn(session_key, content, target=target)
+        except Exception as exc:  # noqa: BLE001 - reported to the view that asked
+            await publish("subagent_direct_error", {"target": target, "error": str(exc)})
+            return
+
+        while True:
+            event = await queue.get()
+            etype = event.get("type")
+            payload = event.get("payload") or {}
+            if etype == "token.delta":
+                text = payload.get("text", "")
+                if text:
+                    await publish("subagent_direct_delta", {"target": target, "text": text})
+            elif etype == "message.complete":
+                await publish(
+                    "subagent_direct_complete",
+                    {"target": target, "text": payload.get("text", "")},
+                )
+                return
+            elif etype == "error":
+                await publish(
+                    "subagent_direct_error",
+                    {"target": target, "error": _error_delta(payload)},
+                )
+                return
+            elif etype == "__disconnected__":
+                await publish(
+                    "subagent_direct_error",
+                    {"target": target, "error": "gateway connection dropped"},
+                )
+                return
+    finally:
+        client.unwatch_direct(session_key, agent, handle)

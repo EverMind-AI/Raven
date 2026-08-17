@@ -42,17 +42,23 @@ class AgentMeta(NamedTuple):
     """Whether this agent reports its work while it runs.
 
     Advertised because the absence is otherwise indistinguishable from a quiet
-    run: a cli agent prints its transcript once, at exit, so an empty timeline is
-    a property of the transport rather than a hung task. Defaulted so a
-    duck-typed construction cannot claim a capability the transport lacks."""
+    run: a cli agent's work is read out of its transcript after it exits, so an
+    empty timeline is a property of the transport rather than a hung task.
+    Defaulted so a duck-typed construction cannot claim a capability the
+    transport lacks.
+
+    Distinct from ``SubagentBackend.streams``, which a cli agent can have: that
+    one is about the reply reaching a human as it forms, and the model is never
+    told about it. This one is about the *work* being reportable at all, which
+    is what a caller planning around a long-running agent needs to know."""
 
 
 def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one third-party subagent config.
 
-    "Stateful" means reusing an instance handle continues that agent's session
-    instead of starting a fresh one, and it is always read from the mechanism
-    that would have to deliver it -- never from a declaration:
+    "Stateful" means reusing an instance handle continues that agent's
+    conversation instead of starting a fresh one, and it is always read from the
+    mechanism that would have to deliver it -- never from a wish:
 
     - ``cli``: from ``resume_command``. The schema already forces the optional
       ``stateful`` field to agree with it.
@@ -62,7 +68,17 @@ def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
       every acp agent stateless -- which would strip the ``instance`` parameter
       out of the spawn schema entirely and make the DAG pre-check reject any
       graph that shares a handle.
-    - ``openai``: stateless; an HTTP call has no session to resume.
+    - ``openai``: from the config's ``stateful`` field, which defaults to true.
+      The delivering mechanism here is raven's own replay of the stored message
+      list (``raven/agent/subagent/instance_state.py``), which works against
+      every endpoint -- so the mechanism cannot be what distinguishes them, and
+      defaulting off would report a capability absent that is in fact present.
+      What differs is whether a given endpoint is *meaningful* under replay, and
+      that is a fact about the endpoint no probe can reach: mirothinker, for
+      one, ignores a system prompt entirely, so replaying a transcript at it
+      continues nothing. A false is therefore an endpoint-specific exception a
+      preset states, or the operator of a custom endpoint writes by hand; the
+      declaration is the only available carrier of a fact raven cannot discover.
 
     ``snapshot`` is the already-loaded snapshot for this config, for callers
     handling a batch. Omitted, it is read from the store -- so a caller that
@@ -77,6 +93,8 @@ def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
         stateful = bool(snapshot is not None and snapshot.can_resume)
+    elif kind == "openai":
+        stateful = bool(getattr(cfg, "stateful", True))
     else:
         stateful = bool(getattr(cfg, "resume_command", None))
     return AgentMeta(
@@ -91,6 +109,11 @@ def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     )
 
 
+# Agents already reported as running on an edited launch config, so the notice
+# below is printed once per change rather than once per dispatch.
+_STALE_SNAPSHOT_SEEN: set[tuple[str, str]] = set()
+
+
 def acp_snapshot_for(cfg: Any) -> Any:
     """The stored capability snapshot for one acp config, or ``None``.
 
@@ -98,14 +121,32 @@ def acp_snapshot_for(cfg: Any) -> Any:
     run at startup and on a config hot-apply, so the cost is a small JSON read a
     handful of times, and a cache here would be the thing that keeps serving a
     stale "stateless" after a verify has already fixed it.
+
+    A snapshot measured against an older launch config is taken rather than
+    ignored -- see ``SnapshotStore.load`` for why -- and named in the log, since
+    the alternative is a capability quietly disappearing with nothing anywhere
+    connecting it to the edit that caused it.
     """
     from raven.agent.acp.capabilities import SnapshotStore
 
+    name = getattr(cfg, "name", "") or ""
     try:
-        return SnapshotStore().load([cfg]).get(getattr(cfg, "name", "") or "")
+        snapshot = SnapshotStore().load([cfg], allow_stale=True).get(name)
     except Exception as exc:  # noqa: BLE001 - a missing snapshot is a degraded roster, not a crash
-        logger.warning("acp capability snapshot read failed for {!r}: {}", getattr(cfg, "name", None), exc)
+        logger.warning("acp capability snapshot read failed for {!r}: {}", name, exc)
         return None
+
+    if snapshot is not None and snapshot.stale:
+        seen = (name, snapshot.fingerprint)
+        if seen not in _STALE_SNAPSHOT_SEEN:
+            _STALE_SNAPSHOT_SEEN.add(seen)
+            logger.warning(
+                "acp agent {!r}: launch config changed since its capabilities were measured; "
+                "still treating it as resume={} -- run a test to re-measure",
+                name,
+                snapshot.can_resume,
+            )
+    return snapshot
 
 
 def format_agent_listing(meta: Sequence[AgentMeta]) -> str:

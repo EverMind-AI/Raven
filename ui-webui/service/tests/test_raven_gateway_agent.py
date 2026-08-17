@@ -242,3 +242,72 @@ def test_the_retrieved_context_reaches_the_gateway():
 
     assert sent, "the turn never reached the gateway"
     assert sent[0].startswith("[1] (source: kb > s)"), sent[0]
+# --- routing a shared subscription between the main reply and a direct chat ---
+
+
+def _client_with_subscription(session_key: str = "web:s1", sub_id: str = "sub-1"):
+    """A GatewayClient with one session subscribed, no socket involved."""
+    from raven_gateway_agent import GatewayClient
+
+    client = GatewayClient.__new__(GatewayClient)
+    client._queues = {sub_id: asyncio.Queue()}
+    client._subs = {session_key: sub_id}
+    client._sub_sessions = {sub_id: session_key}
+    client._direct_queues = {}
+    return client, sub_id
+
+
+def _tagged(text: str, agent: str = "Coder", handle: str = "refactor") -> dict:
+    return {
+        "type": "token.delta",
+        "payload": {"text": text, "target": {"agent": agent, "handle": handle}},
+    }
+
+
+def test_a_direct_turns_events_never_reach_the_main_reply():
+    """The defect this routing exists to prevent.
+
+    The main reply and a direct turn share one subscription. Fed into the reply
+    loop, a sub-agent's deltas render as the main agent's answer and its
+    ``message.complete`` ends the main turn early -- so the user's own reply
+    stops mid-sentence because a different conversation finished.
+    """
+    client, sub_id = _client_with_subscription()
+    watched = client.watch_direct("web:s1", "Coder", "refactor")
+
+    client._route(sub_id, _tagged("hello"))
+    client._route(sub_id, {"type": "token.delta", "payload": {"text": "main"}})
+
+    assert watched.get_nowait()["payload"]["text"] == "hello"
+    assert client._queues[sub_id].get_nowait()["payload"]["text"] == "main"
+    assert watched.empty() and client._queues[sub_id].empty()
+
+
+def test_two_instances_answering_at_once_do_not_share_a_queue():
+    client, sub_id = _client_with_subscription()
+    a = client.watch_direct("web:s1", "Coder", "one")
+    b = client.watch_direct("web:s1", "Writer", "two")
+
+    client._route(sub_id, _tagged("to a", "Coder", "one"))
+    client._route(sub_id, _tagged("to b", "Writer", "two"))
+
+    assert a.get_nowait()["payload"]["text"] == "to a"
+    assert b.get_nowait()["payload"]["text"] == "to b"
+
+
+def test_an_unwatched_instance_is_dropped_rather_than_buffered():
+    """Nobody is reading it, and its record is on disk either way.
+
+    Buffering would grow one queue per instance the session ever addressed, for
+    a reader that may never come back.
+    """
+    client, sub_id = _client_with_subscription()
+    client._route(sub_id, _tagged("nobody home"))
+    assert client._queues[sub_id].empty(), "it must not fall through to the main reply"
+
+
+def test_two_handles_that_concatenate_alike_do_not_collide():
+    """Agent names and handles are both free-form, so the key is length-prefixed."""
+    from raven_gateway_agent import GatewayClient
+
+    assert GatewayClient.target_key("s", "a/b", "c") != GatewayClient.target_key("s", "a", "b/c")

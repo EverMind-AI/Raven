@@ -432,9 +432,9 @@ def register(app: typer.Typer) -> None:
                 web_hub = None
                 if web_cfg.enabled:
                     from raven.rpc.dispatcher import Dispatcher
-                    from raven.rpc.methods.system import register_system_methods
-                    from raven.rpc.methods.turn import clear_active, register_turn_methods
+                    from raven.rpc.methods.turn import clear_active
                     from raven.rpc.subscriptions import SubscriptionEmitter
+                    from raven.web_rpc.methods import register_web_methods
                     from raven.web_rpc.server import WebSocketRpcServer
                     from raven.web_rpc.spine import build_web
 
@@ -446,31 +446,27 @@ def register(app: typer.Typer) -> None:
                         deliverables=deliverables,
                     )
                     web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
+                    # One map, two readers: `turn.send` records a direct chat's
+                    # addressee here and the outlet reads it back to tag that
+                    # lane's events with it. Built here so both get the same
+                    # object, as raven/rpc/bootstrap.py does for the TUI.
+                    web_direct_targets: dict[str, dict[str, str]] = {}
                     web_scheduler, web_hub, web_turn_ids, web_teardown = build_web(
                         agent,
                         web_emitter,
                         on_turn_end=clear_active,
                         readback_texts=web_readback_texts,
+                        direct_targets=web_direct_targets,
                         user_pool=config.gateway.user_pool,
                         system_pool=config.gateway.system_pool,
                     )
                     web_dispatcher = Dispatcher()
-                    # The same channel its turns run on, or the handshake hands a
-                    # web client the terminal's channel and default session key.
-                    register_system_methods(web_dispatcher, channel="web")
-                    register_turn_methods(
+                    register_web_methods(
                         web_dispatcher,
                         emitter=web_emitter,
                         scheduler=web_scheduler,
                         turn_ids=web_turn_ids,
-                        default_channel="web",
-                    )
-                    # Raven config-admin methods (P4): validate + write + hot-apply
-                    # third-party sub-agent config to this live agent loop.
-                    from raven.web_rpc.methods_config import register_config_methods
-
-                    register_config_methods(
-                        web_dispatcher,
+                        direct_targets=web_direct_targets,
                         agent=agent,
                         cron=cron,
                         config=config,

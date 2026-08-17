@@ -451,6 +451,11 @@
           "name": "media",
           "required": false,
           "schema": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
+        },
+        {
+          "name": "target",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/DirectTarget" }
         }
       ],
       "result": {
@@ -1303,6 +1308,105 @@
           "required": ["cancelled"],
           "properties": {
             "cancelled": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "subagents.instances",
+      "summary": "List the sub-agent instances this session has used, most recently updated first.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstancesResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["instances", "pending_handoff_count"],
+          "properties": {
+            "instances": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/InstanceRow" }
+            },
+            "pending_handoff_count": {
+              "type": "integer",
+              "description": "Direct-chat turns not yet reported to the main agent. Display only."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "subagents.instance.history",
+      "summary": "Read one instance's direct chat, flattened to alternating user/assistant turns.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceHistoryResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["turns"],
+          "properties": {
+            "turns": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/DirectTurn" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "subagents.instance.forget",
+      "summary": "Drop one instance's registry row. Its record directories stay on disk.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "handle",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceForgetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["removed"],
+          "properties": {
+            "removed": { "type": "boolean" }
           }
         }
       },
@@ -5688,6 +5792,48 @@
           }
         }
       },
+      "DirectTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One sub-agent instance a turn is addressed to. Null means the main conversation.",
+        "required": ["agent", "handle"],
+        "properties": {
+          "agent": { "type": "string" },
+          "handle": { "type": "string" }
+        }
+      },
+      "InstanceRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One sub-agent instance this session has used, verbatim from the instance registry. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` are set only on a dag-node row.",
+        "required": ["sessionKey", "agent", "handle", "kind"],
+        "properties": {
+          "sessionKey": { "type": "string" },
+          "agent": { "type": "string" },
+          "handle": { "type": "string" },
+          "kind": { "type": "string" },
+          "status": { "type": "string" },
+          "agentId": { "type": "string" },
+          "runId": { "type": "string" },
+          "nodeId": { "type": "string" },
+          "createdAtMs": { "type": "integer" },
+          "updatedAtMs": { "type": "integer" }
+        }
+      },
+      "DirectTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One side of one direct-chat turn, read back from its record directory.",
+        "required": ["call_id", "role", "content", "at_ms"],
+        "properties": {
+          "call_id": { "type": "string" },
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "content": { "type": "string" },
+          "at_ms": { "type": "integer" },
+          "prompt_path": { "type": "string" },
+          "out_path": { "type": "string" }
+        }
+      },
       "UsageSnapshot": {
         "type": "object",
         "additionalProperties": false,
@@ -5796,9 +5942,11 @@
           "payload": {
             "type": "object",
             "additionalProperties": false,
+            "description": "`target` names the conversation this event belongs to; absent is the main agent.",
             "required": ["turn_id"],
             "properties": {
-              "turn_id": { "type": "string" }
+              "turn_id": { "type": "string" },
+              "target": { "$ref": "#/components/schemas/DirectTarget" }
             }
           }
         }
@@ -5830,7 +5978,8 @@
             "additionalProperties": false,
             "required": ["text"],
             "properties": {
-              "text": { "type": "string" }
+              "text": { "type": "string" },
+              "target": { "$ref": "#/components/schemas/DirectTarget" }
             }
           }
         }
@@ -5924,7 +6073,8 @@
             "required": ["turn_id", "usage"],
             "properties": {
               "turn_id": { "type": "string" },
-              "usage": { "$ref": "#/components/schemas/UsageSnapshot" }
+              "usage": { "$ref": "#/components/schemas/UsageSnapshot" },
+              "target": { "$ref": "#/components/schemas/DirectTarget" }
             }
           }
         }
@@ -5946,7 +6096,8 @@
                 "type": "string",
                 "enum": ["cancelled_by_client", "internal"]
               },
-              "detail": { "type": "string" }
+              "detail": { "type": "string" },
+              "target": { "$ref": "#/components/schemas/DirectTarget" }
             }
           }
         }

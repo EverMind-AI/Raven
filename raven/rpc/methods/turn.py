@@ -32,7 +32,7 @@ from raven.rpc.models import (
     TurnUnsubscribeParams,
 )
 from raven.rpc.subscriptions import SubscriptionEmitter
-from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest
+from raven.spine import ChatType, Media, Origin, Source, TurnHandle, TurnRequest, direct_lane, session_of
 from raven.spine.scheduler import Scheduler, SchedulerDrainingError
 
 if TYPE_CHECKING:
@@ -108,6 +108,18 @@ def is_turn_active(session_key: str) -> bool:
     return session_key in _active_turns
 
 
+def is_session_busy(session_key: str) -> bool:
+    """True if *any* lane of this session has a turn in flight.
+
+    ``is_turn_active`` answers for one lane, which is what ``turn.send`` needs:
+    a direct chat is refused only by that instance still answering. The
+    session-level guards -- clear, undo, compress, model switch -- mean "is
+    anything running here", and a sub-agent answering is running here even
+    though it runs on a lane of its own.
+    """
+    return any(session_of(lane) == session_key for lane in _active_turns)
+
+
 def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the sink's turn-end point (alongside turn_ids/usages)."""
@@ -134,15 +146,37 @@ def _resolve_model(parsed: TurnSendParams) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _target_payload(parsed: TurnSendParams) -> dict[str, str] | None:
+    """The turn's addressee as it goes on the wire, or ``None`` for the main agent."""
+    return None if parsed.target is None else {"agent": parsed.target.agent, "handle": parsed.target.handle}
+
+
+def _tag(payload: dict[str, Any], target: dict[str, str] | None) -> dict[str, Any]:
+    """Add the addressee to an event payload, or leave it exactly as it was.
+
+    Absent rather than null for a main-agent turn, so every payload the wire
+    already carried keeps its shape byte for byte and "untagged means the main
+    conversation" is true of the frame itself, not only of a convention.
+    """
+    return payload if target is None else {**payload, "target": target}
+
+
 async def _emit_start_then_error(
-    emitter: SubscriptionEmitter, session_key: str, turn_id: str, code: int, message: str
+    emitter: SubscriptionEmitter,
+    session_key: str,
+    turn_id: str,
+    code: int,
+    message: str,
+    target: dict[str, str] | None = None,
 ) -> None:
     # message.start first so the front-end has a turn to clear, then the error
     # clears it (its onError resets turnId) — same shape the old per-turn task used.
-    await emitter.emit(session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
+    # Both carry the target: a turn that never ran still belonged to whatever the
+    # client addressed, and that is the view whose spinner has to be cleared.
+    await emitter.emit(session_key, {"type": "message.start", "payload": _tag({"turn_id": turn_id}, target)})
     await emitter.emit(
         session_key,
-        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal"}},
+        {"type": "error", "payload": _tag({"code": code, "message": message, "reason": "internal"}, target)},
     )
 
 
@@ -152,6 +186,7 @@ async def turn_send(
     emitter: SubscriptionEmitter | None = None,
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
+    direct_targets: dict[str, dict[str, str]] | None = None,
     build_error: RpcError | None = None,
     default_channel: str = "tui",
 ) -> dict[str, Any]:
@@ -176,6 +211,7 @@ async def turn_send(
     _resolve_model(parsed)
 
     turn_id = uuid4().hex
+    target = _target_payload(parsed)
 
     if scheduler is None:
         # No agent loop wired (build failed / no provider). Surface per-turn as
@@ -183,13 +219,27 @@ async def turn_send(
         if emitter is not None:
             if build_error is not None:
                 await _emit_start_then_error(
-                    emitter, parsed.session_key, turn_id, build_error.code, build_error.message
+                    emitter, parsed.session_key, turn_id, build_error.code, build_error.message, target
                 )
             else:
-                await _emit_start_then_error(emitter, parsed.session_key, turn_id, -32008, "model_not_available")
+                await _emit_start_then_error(
+                    emitter, parsed.session_key, turn_id, -32008, "model_not_available", target
+                )
         return {"turn_id": turn_id, "accepted": True}
 
-    if is_turn_active(parsed.session_key):
+    # Per lane, not per session: a direct chat runs on its instance's own lane
+    # (see ``direct_lane``), so it is refused only by *that instance* still
+    # answering -- the main agent's turn and every other instance's are
+    # concurrent with it. Two turns to one instance would serialise on
+    # ``hold_handle`` anyway; refusing is what keeps them from queueing behind a
+    # wait with no bound.
+    lane = (
+        direct_lane(parsed.session_key, parsed.target.agent, parsed.target.handle)
+        if parsed.target is not None
+        else parsed.session_key
+    )
+
+    if is_turn_active(lane):
         raise TurnInProgressError(
             f"session {parsed.session_key!r} already has an active turn",
         )
@@ -204,9 +254,14 @@ async def turn_send(
         ),
         text=parsed.content,
         media=_resolve_media(parsed.media),
-        # conversation == the front-end subscription key, so the runner's stream
-        # and the sink's message.complete reach the right subscription.
-        conversation=parsed.session_key,
+        # conversation == the lane. For the main agent that is the session key,
+        # which is also the front-end subscription key; for a direct chat it is
+        # that instance's lane, and ``RpcOutlet`` maps it back to the session so
+        # the client's one subscription still receives it.
+        conversation=lane,
+        # When set, the turn skips the model entirely and runs one direct-chat
+        # turn against that instance (see AgentLoop.run_turn).
+        direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
     )
     try:
         handle = scheduler.submit(req)
@@ -214,7 +269,7 @@ async def turn_send(
         # Server shutting down: surface a turn_failed so the front-end clears its
         # slot; nothing is bound (no leak).
         if emitter is not None:
-            await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed")
+            await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
         return {"turn_id": turn_id, "accepted": True}
 
     # Bind immediately after submit with no await between (the runner reads
@@ -222,11 +277,19 @@ async def turn_send(
     # but not yet run — must see the binding). The sink drops both slots at
     # turn end (turn_ids via build_rpc_spine, _active_turns via clear_active).
     if turn_ids is not None:
-        turn_ids[parsed.session_key] = turn_id
-    _active_turns[parsed.session_key] = handle
+        turn_ids[lane] = turn_id
+    # Bound the same way and dropped by the same sink, so the two cannot fall out
+    # of step. Popped rather than left when there is no target: a stale entry
+    # from an earlier turn would tag the main agent's stream as a sub-agent's.
+    if direct_targets is not None:
+        if target is None:
+            direct_targets.pop(lane, None)
+        else:
+            direct_targets[lane] = target
+    _active_turns[lane] = handle
 
     if emitter is not None:
-        await emitter.emit(parsed.session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
+        await emitter.emit(parsed.session_key, {"type": "message.start", "payload": _tag({"turn_id": turn_id}, target)})
 
     return {"turn_id": turn_id, "accepted": True}
 
@@ -265,6 +328,7 @@ async def turn_cancel(
     params: dict[str, Any],
     *,
     emitter: SubscriptionEmitter | None = None,
+    direct_targets: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -294,15 +358,17 @@ async def turn_cancel(
     handle.cancel()
 
     if emitter is not None:
+        # Tagged from the live map rather than from params: the client cancels a
+        # session, not a target, and this error is the only signal that clears
+        # the view the cancelled turn was streaming into.
         await emitter.emit(
             parsed.session_key,
             {
                 "type": "error",
-                "payload": {
-                    "code": _TURN_FAILED_CODE,
-                    "message": "turn_cancelled",
-                    "reason": "cancelled_by_client",
-                },
+                "payload": _tag(
+                    {"code": _TURN_FAILED_CODE, "message": "turn_cancelled", "reason": "cancelled_by_client"},
+                    (direct_targets or {}).get(parsed.session_key),
+                ),
             },
         )
 
@@ -355,6 +421,7 @@ def register_turn_methods(
     emitter: SubscriptionEmitter | None = None,
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
+    direct_targets: dict[str, dict[str, str]] | None = None,
     build_error: RpcError | None = None,
     default_channel: str = "tui",
 ) -> None:
@@ -377,6 +444,7 @@ def register_turn_methods(
             emitter=emitter,
             scheduler=scheduler,
             turn_ids=turn_ids,
+            direct_targets=direct_targets,
             build_error=build_error,
             default_channel=default_channel,
         )
@@ -388,7 +456,7 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter)
+        return await turn_cancel(params, emitter=emitter, direct_targets=direct_targets)
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)
