@@ -20,9 +20,17 @@ import json
 from typing import Any, AsyncGenerator
 
 import httpx
+import json_repair
 from loguru import logger
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest, format_llm_error
+from raven.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderHTTPError,
+    RunMeta,
+    ToolCallRequest,
+    format_llm_error,
+)
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -386,15 +394,25 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
                     continue
                 buf = tool_call_buffers.get(call_id) or {}
                 args_raw = buf.get("arguments") or item.get("arguments") or "{}"
+                # Repaired rather than wrapped in {"raw": ...}, and the repair
+                # recorded: a turn cut mid-blob ends the arguments text here,
+                # and that is the one local signal the call never finished
+                # arriving. Wrapped, it stayed dispatchable and the model read
+                # a schema complaint about a field it never sent.
+                repaired = False
                 try:
                     args = json.loads(args_raw)
                 except Exception:
-                    args = {"raw": args_raw}
+                    args = json_repair.loads(args_raw)
+                    repaired = True
+                if not isinstance(args, dict):
+                    args, repaired = {"raw": args_raw}, True
                 tool_calls.append(
                     ToolCallRequest(
                         id=f"{call_id}|{buf.get('id') or item.get('id') or 'fc_0'}",
                         name=buf.get("name") or item.get("name"),
                         arguments=args,
+                        run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                     )
                 )
         elif event_type == "response.completed":

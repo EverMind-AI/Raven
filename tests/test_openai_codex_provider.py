@@ -372,3 +372,43 @@ def test_chat_error_content_renders_the_canonical_shape(monkeypatch):
     category, provider_name, _detail = parsed
     assert category == "auth"
     assert provider_name == "openai_codex"
+
+
+@pytest.mark.asyncio
+async def test_arguments_that_needed_repair_are_reported_as_such():
+    """The Responses stream hands over the arguments as text, and a cut turn
+    ends that text mid-blob. Parsing it into `{"raw": ...}` on failure kept the
+    call dispatchable while telling nothing about why it was malformed: the
+    model then reads a schema complaint about a field it never sent.
+
+    Repaired and marked instead, which is what the other transports do -- the
+    registry refuses a marked call before validation, so the repaired arguments
+    are never acted on.
+    """
+
+    class _EndingStream:
+        """Unlike `_FakeStreamResponse`, ends rather than stalling -- this case
+        needs the consumer to return, not to hit its idle timeout."""
+
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = lines
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    def stream(arguments: str) -> "_EndingStream":
+        done = {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": arguments},
+        }
+        completed = {"type": "response.completed", "response": {"status": "completed"}}
+        return _EndingStream([f"data: {json.dumps(done)}", "", f"data: {json.dumps(completed)}", ""])
+
+    _, whole, _ = await _consume_sse(stream('{"path": "a.py", "content": "done"}'), timeout=1.0)
+    assert whole[0].run_meta is None
+
+    _, cut, _ = await _consume_sse(stream('{"path": "a.py", "content": "import ran'), timeout=1.0)
+    assert cut[0].run_meta is not None
+    assert cut[0].run_meta.arguments_repaired is True
+    assert cut[0].arguments["content"] == "import ran", "repaired, not stuffed into a raw blob"

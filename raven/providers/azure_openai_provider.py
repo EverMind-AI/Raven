@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from typing import Any
 from urllib.parse import urljoin
@@ -14,6 +15,7 @@ from raven.providers.base import (
     LLMProvider,
     LLMResponse,
     ProviderHTTPError,
+    RunMeta,
     ToolCallRequest,
     format_llm_error,
     send_max_tokens,
@@ -219,16 +221,25 @@ class AzureOpenAIProvider(LLMProvider):
             tool_calls = []
             if message.get("tool_calls"):
                 for tc in message["tool_calls"]:
-                    # Parse arguments from JSON string if needed
+                    # Parse arguments from JSON string if needed. Whether the
+                    # repair was needed travels with the call: a cut mid-blob
+                    # is closed here silently, and that repair is the one local
+                    # signal that the call never finished arriving.
                     args = tc["function"]["arguments"]
+                    repaired = False
                     if isinstance(args, str):
-                        args = json_repair.loads(args)
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = json_repair.loads(args)
+                            repaired = True
 
                     tool_calls.append(
                         ToolCallRequest(
                             id=tc["id"],
                             name=tc["function"]["name"],
                             arguments=args,
+                            run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                         )
                     )
 
