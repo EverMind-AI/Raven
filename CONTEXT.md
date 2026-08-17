@@ -425,7 +425,7 @@ A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`end
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
-candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
+candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 

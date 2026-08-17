@@ -6,7 +6,9 @@ import asyncio
 
 import pytest
 
+from raven.config.raven import SkillForgeRouterConfig
 from raven.memory_engine.skill_forge import (
+    RRF_K,
     RouterHit,
     SkillForgeRouter,
     rrf_merge_weighted,
@@ -82,8 +84,25 @@ class TestRrfMergeAcrossSources:
     def test_rrf_score_written_to_meta(self) -> None:
         hits = [_hit("a/1", "x")]
         out = rrf_merge_weighted([("a", 1.0, hits)], k=5)
-        # RRF score for rank-1 of single source with w=1: 1/(60+1) ~= 0.01639
-        assert out[0].meta["rrf_score"] == pytest.approx(1.0 / 61.0)
+        # RRF score for rank-1 of single source with w=1: 1/(RRF_K+1)
+        assert out[0].meta["rrf_score"] == pytest.approx(1.0 / (RRF_K + 1))
+
+    def test_rrf_k_override_steepens_rank_ladder(self) -> None:
+        """A larger rrf_k flattens rank differences until source weight
+        alone decides the order; the default keeps rank competitive."""
+        local = [
+            _hit("local/a", "alpha"),
+            _hit("local/b", "beta"),
+            _hit("local/c", "gamma"),
+        ]
+        hub = [_hit("hub/d", "delta")]
+        args = [("local", 1.0, local), ("hub", 0.85, hub)]
+
+        names = [h.name for h in rrf_merge_weighted(args, k=5)]
+        assert names.index("delta") < names.index("gamma")
+
+        names = [h.name for h in rrf_merge_weighted(args, k=5, rrf_k=60)]
+        assert names.index("gamma") < names.index("delta")
 
     def test_weight_affects_relative_ranking(self) -> None:
         """A hit ranked #3 in a high-weight source can outrank a hit
@@ -101,7 +120,7 @@ class TestRrfMergeAcrossSources:
             k=5,
         )
         names = [h.name for h in out]
-        # local rank-3 (1/63 = ~0.0159) > mass rank-1 (0.01/61 = ~0.00016)
+        # local rank-3 (1/(RRF_K+3)) > mass rank-1 (0.01/(RRF_K+1)),
         # so 'gamma' must outrank 'delta'.
         assert names.index("gamma") < names.index("delta")
 
@@ -177,6 +196,40 @@ class TestSkillForgeRouterSelect:
         out = await router.select("q", history=[], k=5)
         names = {h.name for h in out}
         assert names == {"x", "y"}
+
+    async def test_rrf_k_reaches_the_fusion(self) -> None:
+        """The constructor arg must survive the hop into rrf_merge_weighted.
+        Asserting the exact score catches a dropped pass-through, which
+        would otherwise silently fall back to the module default."""
+        a = _StubSource("local", 1.0, [_hit("local/x", "x")])
+
+        out = await SkillForgeRouter([a], rrf_k=60).select("q", history=[], k=5)
+        assert out[0].meta["rrf_score"] == pytest.approx(1.0 / 61.0)
+
+        out = await SkillForgeRouter([a]).select("q", history=[], k=5)
+        assert out[0].meta["rrf_score"] == pytest.approx(1.0 / (RRF_K + 1))
+
+    async def test_shipped_defaults_interleave_the_three_sources(self) -> None:
+        """The ordering the shipped config produces, asserted rather than
+        described: every source places its top hit and Local keeps slot 1."""
+        cfg = SkillForgeRouterConfig()
+        sources = [
+            _StubSource(
+                name,
+                cfg.weights[name],
+                [_hit(f"{name}/1", f"{name}#1"), _hit(f"{name}/2", f"{name}#2")],
+            )
+            for name in ("local", "everos", "hub")
+        ]
+        router = SkillForgeRouter(sources, rrf_k=cfg.rrf_k)
+        out = await router.select("q", history=[], k=5)
+        assert [h.name for h in out] == [
+            "local#1",
+            "everos#1",
+            "local#2",
+            "hub#1",
+            "everos#2",
+        ]
 
     async def test_over_fetches_per_source(self) -> None:
         """Default over_fetch_factor=2 means each source is asked for k*2."""
