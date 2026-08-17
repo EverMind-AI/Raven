@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -890,3 +892,41 @@ class TestParsingLsofListenOutput:
         from raven.plugin.memory.everos._server import _parse_listen_port
 
         assert _parse_listen_port("") is None
+
+
+class TestParsingProcLocks:
+    """Rows captured from a real Linux /proc/locks (kernel 6.8, Ubuntu).
+
+    This branch cannot run on the development machine, so the format is pinned
+    from a live capture rather than from the documentation. The waiter row is
+    the reason: a process blocked on the same lock is listed with a "->" prefix
+    that shifts every field right by one, and a parser that read the pid
+    positionally without noticing would hand back the waiter. The caller of
+    ``lock_holder`` goes on to signal what it is told.
+    """
+
+    @staticmethod
+    def _parse(rows: str, inode: int, tmp_path, monkeypatch) -> int | None:
+        from raven.plugin.memory.everos import _server
+
+        lock = tmp_path / "ome.db.lock"
+        lock.touch()
+        monkeypatch.setattr(Path, "read_text", lambda self, **kw: rows)
+        monkeypatch.setattr(Path, "exists", lambda self: True)
+        monkeypatch.setattr(_server.Path, "stat", lambda self, **kw: SimpleNamespace(st_ino=inode))
+        return _server._proc_locks_pid(lock)
+
+    def test_a_holder_row(self, tmp_path, monkeypatch) -> None:
+        rows = "3: FLOCK  ADVISORY  WRITE 1550263 fc:00:4980767 0 EOF\n"
+        assert self._parse(rows, 4980767, tmp_path, monkeypatch) == 1550263
+
+    def test_a_waiter_never_wins_whatever_the_order(self, tmp_path, monkeypatch) -> None:
+        holder = "2: FLOCK  ADVISORY  WRITE 1550263 fc:00:4980768 0 EOF"
+        waiter = "2: -> FLOCK  ADVISORY  WRITE 1550264 fc:00:4980768 0 EOF"
+
+        for rows in (f"{holder}\n{waiter}\n", f"{waiter}\n{holder}\n"):
+            assert self._parse(rows, 4980768, tmp_path, monkeypatch) == 1550263
+
+    def test_an_unrelated_inode_is_not_matched(self, tmp_path, monkeypatch) -> None:
+        rows = "3: FLOCK  ADVISORY  WRITE 1550263 fc:00:4980767 0 EOF\n"
+        assert self._parse(rows, 999999, tmp_path, monkeypatch) is None

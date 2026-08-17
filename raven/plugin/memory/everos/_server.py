@@ -348,7 +348,19 @@ def _proc_locks_pid(lock: Path) -> int | None:
         return None
     for line in lines:
         fields = line.split()
-        # 1: FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> 0 EOF
+        # 3: FLOCK  ADVISORY  WRITE 1550263 fc:00:4980767 0 EOF
+        #                          ^pid     ^maj:min:inode
+        #
+        # A process blocked waiting on the same lock gets a row of its own,
+        # prefixed with "->", which shifts every field right by one:
+        #
+        # 2: -> FLOCK  ADVISORY  WRITE 1550264 fc:00:4980768 0 EOF
+        #
+        # Reading position 4 there yields the lock type rather than a pid, so
+        # int() rejects it and the waiter is skipped. That is the intended
+        # outcome and not a lucky accident to preserve by hand: the holder is
+        # who may be signalled, and handing back a waiter's pid would have the
+        # caller stop the wrong process.
         if len(fields) < 6:
             continue
         try:
