@@ -324,3 +324,51 @@ def test_litellm_still_filters_out_the_cache_key() -> None:
         "through LiteLLMProvider is gone, so re-read this provider's docstring and decide "
         "whether it still has a reason to exist."
     )
+
+
+def test_chat_error_content_renders_the_canonical_shape(monkeypatch):
+    """Codex's swallowed error must carry the canonical
+    ``Error calling LLM (<category>@<provider>)`` content the CLI renderer
+    parses, not a raw ``Error calling Codex`` string that renders as a fake
+    agent reply with exit 0."""
+    from raven.providers.base import parse_llm_error
+
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok", "acct"))
+
+    class _Resp:
+        status_code = 401
+
+        async def aread(self):
+            return b"Unauthorized"
+
+    class _StreamCM:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCM()
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider.httpx.AsyncClient", _Client)
+    provider = OpenAICodexProvider(default_model="gpt-5")
+
+    resp = asyncio.run(provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5"))
+
+    assert resp.finish_reason == "error"
+    parsed = parse_llm_error(resp.content)
+    assert parsed is not None, resp.content
+    category, provider_name, _detail = parsed
+    assert category == "auth"
+    assert provider_name == "openai_codex"

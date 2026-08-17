@@ -14,7 +14,7 @@ import json_repair
 from loguru import logger
 
 from raven.providers import prompt_cache
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest, format_llm_error
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
@@ -468,10 +468,12 @@ class LiteLLMProvider(LLMProvider):
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
             # string — the retry/fallback layer reads this verdict.
+            classification = self.classify_error(e)
+            head = self._provider_name or (self._gateway.name if self._gateway else None)
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=format_llm_error(e, classification, provider=head),
                 finish_reason="error",
-                error_classification=self.classify_error(e),
+                error_classification=classification,
             )
 
     async def chat_stream(

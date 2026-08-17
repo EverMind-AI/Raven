@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import httpx
 import json_repair
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest, format_llm_error
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -171,20 +171,22 @@ class AzureOpenAIProvider(LLMProvider):
                     exc = ProviderHTTPError(
                         response.status_code, f"Azure OpenAI API Error {response.status_code}: {response.text}"
                     )
+                    classification = self.classify_error(exc)
                     return LLMResponse(
-                        content=str(exc),
+                        content=format_llm_error(exc, classification, provider="azure_openai"),
                         finish_reason="error",
-                        error_classification=self.classify_error(exc),
+                        error_classification=classification,
                     )
 
                 response_data = response.json()
                 return self._parse_response(response_data)
 
         except Exception as e:
+            classification = self.classify_error(e)
             return LLMResponse(
-                content=f"Error calling Azure OpenAI: {repr(e)}",
+                content=format_llm_error(e, classification, provider="azure_openai"),
                 finish_reason="error",
-                error_classification=self.classify_error(e),
+                error_classification=classification,
             )
 
     def _parse_response(self, response: dict[str, Any]) -> LLMResponse:
@@ -229,9 +231,12 @@ class AzureOpenAIProvider(LLMProvider):
             )
 
         except (KeyError, IndexError) as e:
+            err = ValueError(f"unexpected Azure OpenAI response shape: {e!r}")
+            classification = self.classify_error(err)
             return LLMResponse(
-                content=f"Error parsing Azure OpenAI response: {str(e)}",
+                content=format_llm_error(err, classification, provider="azure_openai"),
                 finish_reason="error",
+                error_classification=classification,
             )
 
     def get_default_model(self) -> str:

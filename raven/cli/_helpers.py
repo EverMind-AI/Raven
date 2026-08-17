@@ -59,12 +59,19 @@ def check_provider_credentials(config: Config) -> None:
             "no provider configured",
             # A command, not a config path: the old text pointed at
             # ~/.raven/config.json, the layout the CLI exists to hide.
-            remedy="Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>",
+            remedy=(
+                "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
+                "Or run `raven onboard` for guided setup."
+            ),
         )
 
     status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
     if not status.ok:
-        raise MissingCredentialsError(status.summary, provider=provider_name)
+        raise MissingCredentialsError(
+            status.summary,
+            provider=provider_name,
+            remedy="Run `raven onboard` for guided setup.",
+        )
 
 
 def make_provider(config: Config):

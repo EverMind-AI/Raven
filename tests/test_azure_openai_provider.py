@@ -130,3 +130,74 @@ def test_the_api_version_comes_from_config_rather_than_the_client() -> None:
     """A tenant on another version had no way to say so while it was hardcoded."""
     provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com", api_version="2025-01-01")
     assert provider._build_chat_url("d").endswith("?api-version=2025-01-01")
+
+
+@pytest.mark.asyncio
+async def test_a_non_200_renders_the_canonical_error_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Azure's error content must carry the canonical
+    ``Error calling LLM (<category>@<provider>)`` shape: the CLI's
+    diagnosis + fix-hint renderer keys off it, and a raw body here renders
+    as a fake agent reply with exit 0."""
+    from raven.providers.base import parse_llm_error
+
+    monkeypatch.setattr(
+        "raven.providers.azure_openai_provider.httpx.AsyncClient",
+        _non_ok_client_cls(401, '{"error":{"message":"invalid subscription key","code":"401"}}'),
+    )
+    provider = _make_provider(timeout=5.0)
+    resp = await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4o")
+
+    assert resp.finish_reason == "error"
+    parsed = parse_llm_error(resp.content)
+    assert parsed is not None, resp.content
+    category, provider_name, detail = parsed
+    assert category == "auth"
+    assert provider_name == "azure_openai"
+    assert "invalid subscription key" in detail
+    assert '{"error"' not in (resp.content or "")
+
+
+@pytest.mark.asyncio
+async def test_a_raised_exception_renders_the_canonical_error_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The swallowed-exception branch must also produce the canonical shape,
+    not a raw ``Error calling Azure OpenAI: repr(e)`` string."""
+    from raven.providers.base import parse_llm_error
+
+    class _RaisingClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "_RaisingClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> bool:
+            return False
+
+        async def post(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("connection reset by peer")
+
+    monkeypatch.setattr("raven.providers.azure_openai_provider.httpx.AsyncClient", _RaisingClient)
+    provider = _make_provider(timeout=5.0)
+    resp = await provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-4o")
+
+    assert resp.finish_reason == "error"
+    parsed = parse_llm_error(resp.content)
+    assert parsed is not None, resp.content
+    category, provider_name, detail = parsed
+    assert category == "network"
+    assert provider_name == "azure_openai"
+    assert "connection reset by peer" in detail
+
+
+def test_an_unparseable_response_shape_renders_the_canonical_error_content() -> None:
+    """The response-parsing branch is an error outlet too and must not leak
+    a raw ``Error parsing Azure OpenAI response`` string past the renderer."""
+    from raven.providers.base import parse_llm_error
+
+    provider = _make_provider(timeout=5.0)
+    resp = provider._parse_response({})
+
+    assert resp.finish_reason == "error"
+    parsed = parse_llm_error(resp.content)
+    assert parsed is not None, resp.content
+    assert parsed[1] == "azure_openai"
