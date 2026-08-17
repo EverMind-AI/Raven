@@ -12,6 +12,7 @@ whichever module a caller patches through.
 from __future__ import annotations
 
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import typer
 
@@ -84,9 +85,18 @@ def _configured_target_url() -> str:
     """
     from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
-    port = _recorded_memory_slice().get("port")
+    slice_ = _recorded_memory_slice()
+    port = slice_.get("port")
     if isinstance(port, int) and port > 0:
         return f"http://localhost:{port}"
+    # No recorded intent, but an address recorded by a raven that predates the
+    # field still says where this install has been running. Reading it as the
+    # intent is what stops an upgrade from silently relocating a service the
+    # user never asked to move -- the constant is the answer only when there is
+    # nothing at all to go on.
+    recorded = slice_.get("base_url")
+    if isinstance(recorded, str) and urlparse(recorded).port:
+        return recorded
     return DEFAULT_EVEROS_BASE_URL
 
 
@@ -1330,6 +1340,58 @@ def _same_address(a: str | None, b: str | None) -> bool:
     return ha in _LOOPBACK_NAMES and hb in _LOOPBACK_NAMES
 
 
+def _port_is_free(port: int) -> bool:
+    """Whether a local TCP port can still be bound."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _ask_managed_port() -> int:
+    """Where a raven-managed server should listen.
+
+    Silent while the intended port is free, which is nearly always. 18791 is a
+    recommendation rather than a fixed address, but turning that into a screen
+    on every fresh install asks for a decision almost nobody has to make. The
+    case that had no way forward is the occupied one: the start failed and the
+    wizard had nothing to offer, so that is where the question belongs.
+
+    The default offered is whatever is already recorded, not the shipped
+    constant, so a second run does not quietly undo a port the user moved to by
+    inviting them to press Enter on the old one.
+    """
+    from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+
+    current = urlparse(_configured_target_url()).port or urlparse(DEFAULT_EVEROS_BASE_URL).port or 18791
+    if _port_is_free(current):
+        return int(current)
+    oc.console.print(
+        oc._t(
+            f"  [yellow]! Port {current} is already in use by something else.[/yellow]",
+            f"  [yellow]⚠ 端口 {current} 已被别的程序占用。[/yellow]",
+        )
+    )
+    answer = _prompt_text(
+        oc._t("Memory service port:", "记忆服务端口:"),
+        default=str(current),
+    )
+    if not str(answer).isdigit():
+        oc.console.print(
+            oc._t(
+                f"  [dim]Not a port ({answer}); keeping {current}.[/dim]",
+                f"  [dim]不是合法端口（{answer}），仍用 {current}。[/dim]",
+            )
+        )
+        return int(current)
+    return int(answer)
+
+
 def _use_self_managed_everos() -> bool:
     """Point raven at an EverOS the user runs. Returns False if it is unreachable.
 
@@ -1970,6 +2032,12 @@ def _step4_memory(
     _record_root(root, owned=True)
     configure_everos_env(root)
     ensure_everos_home(root)
+
+    # Only when the default is taken. A port screen on every fresh install
+    # would be a decision almost nobody has to make; the case that had no way
+    # forward is the occupied one, where the start simply failed and the wizard
+    # had nowhere to send the user.
+    _set_base_url(f"http://localhost:{_ask_managed_port()}")
 
     # Configure required models FIRST, then flip the backend on — so a Ctrl+C
     # mid-configuration leaves backend at its prior (disabled) value rather

@@ -5426,3 +5426,113 @@ class TestSwitchingToSelfManagedClearsTheOldRoot:
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["owned"] is False
         assert "root" not in slice_, "kept a path into a root raven promised not to touch"
+
+
+class TestTheManagedPortIsOfferedNotImposed:
+    """18791 is a recommendation, not a fixed address.
+
+    A managed setup could only ever reach a different port by having a server
+    already running on one and the user electing to keep it. Nobody could say
+    up front "use this port instead", which is the case that matters when 18791
+    is already taken -- there the managed path had no way forward at all.
+    """
+
+    def test_a_free_port_is_not_worth_a_screen(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: True)
+        monkeypatch.setattr(
+            onboard_everos, "_prompt_text", lambda *a, **kw: pytest.fail("asked about a port that was free")
+        )
+
+        assert onboard_everos._ask_managed_port() == 18791
+
+    def test_a_typed_port_is_recorded_as_the_target(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "20000")
+
+        assert onboard_everos._ask_managed_port() == 20000
+
+    def test_nonsense_falls_back_to_the_default(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        monkeypatch.setattr(onboard_everos, "_prompt_text", lambda *a, **kw: "not-a-port")
+
+        assert onboard_everos._ask_managed_port() == 18791
+
+    def test_an_already_recorded_port_is_the_offered_default(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second run must not offer 18791 to someone who already moved off
+        it -- accepting the offer would silently undo their choice."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"port": 20000}}}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(onboard_everos, "_port_is_free", lambda _p: False)
+        seen: list[str] = []
+
+        def _spy(_label, **kw):
+            seen.append(kw.get("default", ""))
+            return kw.get("default", "")
+
+        monkeypatch.setattr(onboard_everos, "_prompt_text", _spy)
+
+        assert onboard_everos._ask_managed_port() == 20000
+        assert seen == ["20000"]
+
+    def test_the_build_path_asks(self) -> None:
+        import inspect
+
+        from raven.cli import onboard_everos
+
+        assert "_ask_managed_port" in inspect.getsource(onboard_everos._step4_memory)
+
+
+class TestAnUpgradeDoesNotRelocateAnExistingService:
+    """A config written before `port` existed still states where it runs.
+
+    Falling straight through to the constant would read every pre-upgrade
+    install as sitting on a legacy port and move it -- silently, on the very
+    first run after the upgrade, and with no question asked. The recorded
+    address is the intent until the user says otherwise.
+    """
+
+    def test_a_recorded_address_is_the_intent_when_no_port_is_stored(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
+            encoding="utf-8",
+        )
+
+        assert onboard_everos._configured_target_url() == "http://localhost:1995"
+
+    def test_an_explicit_port_still_wins_over_the_cached_address(self, tmp_env: Path) -> None:
+        """base_url follows the service; port is the decision. When they
+        disagree the decision is what convergence aims at."""
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(
+            json.dumps(
+                {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995", "port": 18791}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        assert onboard_everos._configured_target_url() == "http://localhost:18791"
+
+    def test_nothing_recorded_falls_back_to_the_shipped_default(self, tmp_env: Path) -> None:
+        from raven.cli import onboard_everos
+
+        tmp_env.write_text(json.dumps({}), encoding="utf-8")
+
+        assert onboard_everos._configured_target_url() == "http://localhost:18791"
