@@ -1974,11 +1974,24 @@ def _step4_memory(
         ).ask()
         if source is None:
             raise typer.Exit(1)
-        if source == "self" and _use_self_managed_everos():
+        if source == "self":
+            if _use_self_managed_everos():
+                return None
+            # The step ends here. Falling through to the managed path would
+            # have walked someone who just said "I run my own EverOS" through
+            # configuring four model roles and a key for a setup they did not
+            # ask for, and left a root on disk they will not use -- while the
+            # line printed a moment earlier told them to start their server and
+            # re-run. A refused address is a server not started or a port
+            # mistyped, not a change of mind.
+            _set_memory_backend(None)
+            oc.console.print(
+                oc._t(
+                    "  [dim]Long-term memory stays off until that server is reachable.[/dim]",
+                    "  [dim]在那个服务可达之前，长期记忆保持关闭。[/dim]",
+                )
+            )
             return None
-        # A refused address falls through to the managed path rather than
-        # ending the step: the user still wants memory, and this is the way
-        # that does not depend on a server they have to go and start.
 
     if _memory_enabled():
         action = questionary.select(

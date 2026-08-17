@@ -29,6 +29,7 @@ from typer.testing import CliRunner
 from raven.cli import onboard_channels, onboard_commands, onboard_everos
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
+from raven.plugin.memory.everos import _discover as _discover_mod
 
 runner = CliRunner()
 
@@ -5536,3 +5537,58 @@ class TestAnUpgradeDoesNotRelocateAnExistingService:
         tmp_env.write_text(json.dumps({}), encoding="utf-8")
 
         assert onboard_everos._configured_target_url() == "http://localhost:18791"
+
+
+class TestARefusedSelfManagedAddressEndsTheStep:
+    """Choosing self-managed and mistyping the port is not a change of mind.
+
+    The step used to fall through to the managed path, so a user who had just
+    said "I run my own EverOS" was walked through configuring four model roles
+    and an API key for a setup they had not asked for -- and left with a root
+    built on disk that they would not use. The message printed one line earlier
+    already says what to do: start it and re-run. Doing the opposite of that in
+    the same breath is the contradiction worth removing.
+    """
+
+    @staticmethod
+    def _seed(tmp_env: Path) -> None:
+        tmp_env.write_text(json.dumps({"memory": {"backend": "everos"}}), encoding="utf-8")
+
+    def test_the_wizard_does_not_go_on_to_configure_models(
+        self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        self._seed(tmp_env)
+        monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(
+            onboard_everos,
+            "_config_everos_role",
+            lambda **_kw: pytest.fail("configured a managed model after the user chose self-managed"),
+        )
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    def test_memory_is_left_off_rather_than_half_built(self, tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Leaving the backend on would have the runtime spawn a managed server
+        against a root the user never agreed to."""
+        import questionary
+
+        from raven.cli import onboard_everos
+
+        self._seed(tmp_env)
+        monkeypatch.setattr(onboard_everos, "_use_self_managed_everos", lambda: False)
+        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+        monkeypatch.setattr(_discover_mod, "pick", lambda _s: None)
+        monkeypatch.setattr(_discover_mod, "discover", list)
+        monkeypatch.setattr(questionary, "select", lambda *a, **kw: _Answer("self"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
