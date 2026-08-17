@@ -253,7 +253,21 @@ def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> StopOutc
     record = find_recorded_server(root)
     if record is None:
         return StopOutcome.NOT_OURS
-    pid = int(record["pid"])
+    return stop_pid(int(record["pid"]), timeout=timeout)
+
+
+def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
+    """Stop a specific everos server and wait for it.
+
+    Takes the pid rather than re-deriving it, so a caller that identified the
+    process some other way -- :func:`lock_holder`, which asks the OS -- can act
+    on what it found. Going back through the pidfile there would report
+    ``NOT_OURS`` for a process the caller had just named, and losing the pidfile
+    is precisely the case the lock lookup exists to recover.
+
+    The caller is responsible for having established that this pid is an everos
+    serving the root in question; both routes in do.
+    """
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
@@ -683,4 +697,5 @@ __all__ = [
     "StopOutcome",
     "ensure_everos_server",
     "lock_holder",
+    "stop_pid",
 ]

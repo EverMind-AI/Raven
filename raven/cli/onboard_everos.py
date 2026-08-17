@@ -1361,7 +1361,7 @@ def _stop_for_reload(root: Path | str) -> bool:
     the models a moment ago, and applying them is what that means. Only a server
     raven can identify as serving this root is touched.
     """
-    from raven.plugin.memory.everos._server import StopOutcome, stop_recorded_server
+    from raven.plugin.memory.everos._server import StopOutcome, stop_pid
 
     holder = _lock_holder(root)
     if holder is None:
@@ -1372,13 +1372,21 @@ def _stop_for_reload(root: Path | str) -> bool:
             "  [dim]正在重启服务以加载新配置...[/dim]",
         )
     )
-    outcome = stop_recorded_server(root)
+    # The pid the lock named, not the one the pidfile remembers. Asking the
+    # pidfile here would report "not ours" about the very process just
+    # identified, which is the state the lock lookup exists to get out of.
+    outcome = stop_pid(holder.pid)
     if outcome is not StopOutcome.STOPPED:
+        reason = {
+            StopOutcome.SIGNAL_FAILED: oc._t("the stop signal could not be delivered", "停止信号发送失败"),
+            StopOutcome.STILL_DRAINING: oc._t("it is still finishing memory work", "它还在收尾未完成的记忆任务"),
+        }.get(outcome, oc._t("it did not stop", "它没有停下"))
         oc.console.print(
             oc._t(
-                f"  [yellow]! Could not restart it ({outcome.value}); the new models take effect "
-                "the next time it starts.[/yellow]",
-                f"  [yellow]⚠ 未能重启（{outcome.value}），新模型将在它下次启动时生效。[/yellow]",
+                f"  [yellow]! The service is still running ({reason}), so it keeps the models it "
+                "started with. The new ones take effect the next time it starts.[/yellow]",
+                f"  [yellow]⚠ 服务仍在运行（{reason}），它用的还是启动时那套模型。"
+                "新模型将在它下次启动时生效。[/yellow]",
             ),
             highlight=False,
         )

@@ -930,3 +930,45 @@ class TestParsingProcLocks:
     def test_an_unrelated_inode_is_not_matched(self, tmp_path, monkeypatch) -> None:
         rows = "3: FLOCK  ADVISORY  WRITE 1550263 fc:00:4980767 0 EOF\n"
         assert self._parse(rows, 999999, tmp_path, monkeypatch) is None
+
+
+class TestStoppingWhatTheLockNamed:
+    """The pidfile finds the target for a stop; the lock finds it for a lookup.
+
+    Letting those disagree defeats the reason the lock lookup exists. A server
+    raven started and then lost the pidfile for is exactly the case the lock was
+    added to recover, and a caller that identifies the holder that way and then
+    stops "the recorded server" gets NOT_OURS for a process it just named.
+    """
+
+    def test_a_pid_from_the_lock_can_be_stopped(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        signalled: list[int] = []
+        monkeypatch.setattr(_server.os, "kill", lambda pid, sig: signalled.append(pid))
+        # First poll says still alive, second says gone.
+        alive = iter([True, False])
+        monkeypatch.setattr(_server, "_is_everos_server", lambda _p: next(alive, False))
+        monkeypatch.setattr(_server.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(_server, "_pidfile_path", lambda: Path("/nonexistent/everos-server.pid"))
+
+        assert _server.stop_pid(4242) is _server.StopOutcome.STOPPED
+        assert signalled == [4242]
+
+    def test_an_undeliverable_signal_is_reported(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        def _boom(_pid, _sig):
+            raise PermissionError("not yours")
+
+        monkeypatch.setattr(_server.os, "kill", _boom)
+        assert _server.stop_pid(4242) is _server.StopOutcome.SIGNAL_FAILED
+
+    def test_a_process_that_will_not_go_is_reported_as_draining(self, monkeypatch) -> None:
+        from raven.plugin.memory.everos import _server
+
+        monkeypatch.setattr(_server.os, "kill", lambda _p, _s: None)
+        monkeypatch.setattr(_server, "_is_everos_server", lambda _p: True)
+        monkeypatch.setattr(_server.time, "sleep", lambda _s: None)
+
+        assert _server.stop_pid(4242, timeout=1.0) is _server.StopOutcome.STILL_DRAINING
