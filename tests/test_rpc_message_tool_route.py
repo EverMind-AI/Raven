@@ -82,7 +82,7 @@ def _make_agent(workspace: Path, provider=None) -> AgentLoop:
         max_iterations=3,
     )
 
-    async def _noop() -> None:
+    async def _noop(**_kw) -> None:
         return None
 
     loop._start_executor = _noop

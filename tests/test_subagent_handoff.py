@@ -168,7 +168,7 @@ def _loop_with_handoff(tmp_path, monkeypatch):
         def get_default_model(self) -> str:
             return "fake/model"
 
-    async def _noop() -> None:
+    async def _noop(**_kw) -> None:
         return None
 
     loop = AgentLoop(provider=_RecordingProvider(), workspace=tmp_path / "home")

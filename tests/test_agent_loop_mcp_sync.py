@@ -263,3 +263,52 @@ async def test_the_oauth_flow_reaches_the_same_sink(workspace) -> None:
     await asyncio.sleep(0)
 
     assert seen == [("oauth.pending", {"server": "svc", "url": "https://idp.example/authorize?x=1"})]
+
+
+async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(workspace) -> None:
+    """The bound a turn puts on the first connect.
+
+    A server parked at the browser-authorization step blocks on a human for up
+    to the OAuth flow's timeout, and the manager connects servers one after
+    another -- so without this bound one unanswered park held every later
+    server and the user's message behind them.
+    """
+    import asyncio
+
+    released = asyncio.Event()
+
+    async def parked(name, cfg, registry, stack, executor=None, http_auth=None):
+        await released.wait()
+        registry.register(_FakeTool(f"mcp_{name}_late"))
+        return [f"mcp_{name}_late"]
+
+    loop = _loop(workspace, {"parks": MCPServerConfig(url="https://parks.test/mcp")})
+
+    with patch(_PATCH, new=parked):
+        await asyncio.wait_for(loop._connect_mcp(wait=0.05), timeout=5)
+        # The turn is free to go, and the connect was not cancelled to get there.
+        assert not loop.tools.has("mcp_parks_late")
+        assert loop._mcp_connecting is True
+
+        released.set()
+        for _ in range(200):
+            if loop.tools.has("mcp_parks_late"):
+                break
+            await asyncio.sleep(0.01)
+
+    # It finished on its own afterwards, so its tools are there for the next turn.
+    assert loop.tools.has("mcp_parks_late")
+    assert loop._mcp_connected is True
+
+
+async def test_an_unbounded_caller_still_waits_for_the_whole_sync(workspace) -> None:
+    """`_start` has nothing else to do and keeps the old behaviour, which is also
+    what keeps a SandboxInitError reaching its handler there."""
+    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop._connect_mcp()
+
+    assert loop.tools.has("mcp_svc_search")
+    assert loop._mcp_connected is True
+    assert loop._mcp_connecting is False

@@ -988,7 +988,7 @@ class TestAgentLoopExecutorLifecycle:
         loop = AgentLoop(provider=mock_provider, workspace=tmp_path, mcp_servers={"svc": object()})
         loop._executor = TrackingExecutor()
 
-        async def _failing_connect_mcp():
+        async def _failing_connect_mcp(**_kw):
             raise RuntimeError("unexpected network error")
 
         loop._connect_mcp = _failing_connect_mcp
@@ -1026,7 +1026,7 @@ class TestAgentLoopExecutorLifecycle:
         loop._executor = StartedThenFailsMCP()
 
         # Patch _connect_mcp to raise SandboxInitError after executor starts
-        async def _failing_connect_mcp():
+        async def _failing_connect_mcp(**_kw):
             raise SandboxInitError("test: MCP sandbox guard fired")
 
         loop._connect_mcp = _failing_connect_mcp

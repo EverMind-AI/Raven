@@ -302,6 +302,24 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
         return None
 
 
+_MCP_TURN_WAIT_S = 20.0
+"""How long a turn waits for the first MCP sync before proceeding without it.
+
+Long enough for local stdio servers to hand over their tool lists, short enough
+that a server parked on an authorization nobody answered does not become the
+reader's wait. See ``AgentLoop._connect_mcp``.
+"""
+
+
+def _log_late_mcp_sync(task: "asyncio.Task") -> None:
+    """Report an MCP sync that finished after its turn stopped waiting."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("MCP: the connect a turn stopped waiting for failed: {}", exc)
+
+
 _TOOL_PREVIEW_MAX_CHARS = 4_000
 """How much of a tool's output rides the ``tool.complete`` event to a client.
 
@@ -1684,18 +1702,52 @@ class AgentLoop:
             )
         return self._mcp_manager
 
-    async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy)."""
+    async def _connect_mcp(self, *, wait: float | None = None) -> None:
+        """Connect to configured MCP servers (one-time, lazy).
+
+        ``wait`` bounds how long the CALLER blocks, not how long the connect
+        gets: past it the sync keeps running and its tools land in the registry
+        for the next turn. A turn passes one because a server parked at the
+        browser-authorization step is waiting on a person, for up to
+        ``OAUTH_FLOW_TIMEOUT``, and the manager connects servers one after
+        another -- so one unanswered park held every later server and the
+        message behind them. Measured at 10m35s from send to the first model
+        call, on a park nobody had been shown.
+
+        Left unbounded for a caller that has nothing else to do (``_start``),
+        which also keeps SandboxInitError reaching its handler there.
+        """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
         # Set flag synchronously before the first await — asyncio is single-threaded so no
         # context switch occurs here; a lock is not needed for this mutual-exclusion pattern.
         self._mcp_connecting = True
+
+        async def _sync() -> None:
+            try:
+                await self.sync_mcp(self._mcp_servers)
+                self._mcp_connected = True
+            finally:
+                self._mcp_connecting = False
+
+        if wait is None:
+            await _sync()
+            return
+
+        # Shielded, so the timeout below leaves the connect running rather than
+        # cancelling it mid-handshake -- a cancelled sync leaves its remaining
+        # servers marked `connecting`, which no later sync retries.
+        task = asyncio.ensure_future(_sync())
         try:
-            await self.sync_mcp(self._mcp_servers)
-            self._mcp_connected = True
-        finally:
-            self._mcp_connecting = False
+            await asyncio.wait_for(asyncio.shield(task), timeout=wait)
+        except TimeoutError:
+            logger.info(
+                "MCP: still connecting after {:.0f}s; starting the turn without the servers "
+                "that have not finished (they join the next one)",
+                wait,
+            )
+            # Nobody awaits the task now, so it has to report for itself.
+            task.add_done_callback(_log_late_mcp_sync)
 
     async def sync_mcp(self, cfg_servers: dict) -> dict:
         """Reconcile live MCP connections with ``cfg_servers``.
@@ -3727,7 +3779,7 @@ class AgentLoop:
             with workdir.bind(turn_workdir):
                 try:
                     await self._start_executor()
-                    await self._connect_mcp()
+                    await self._connect_mcp(wait=_MCP_TURN_WAIT_S)
                     out = await self._process_message(
                         req,
                         session_key=cid,
