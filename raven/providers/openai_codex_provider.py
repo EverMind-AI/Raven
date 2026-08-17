@@ -22,7 +22,7 @@ from typing import Any, AsyncGenerator
 import httpx
 from loguru import logger
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest, format_llm_error
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -98,10 +98,11 @@ class OpenAICodexProvider(LLMProvider):
                 finish_reason=finish_reason,
             )
         except Exception as e:
+            classification = self.classify_error(e)
             return LLMResponse(
-                content=f"Error calling Codex: {str(e)}",
+                content=format_llm_error(e, classification, provider="openai_codex"),
                 finish_reason="error",
-                error_classification=self.classify_error(e),
+                error_classification=classification,
             )
 
     def get_default_model(self) -> str:
