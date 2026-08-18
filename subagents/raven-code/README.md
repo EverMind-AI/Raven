@@ -519,18 +519,25 @@ and two concurrent spawns cannot share a conversation. `hold_handle` serialises
 turns that do share a handle, which the branch requires: multiple calls on one
 session must not overlap.
 
-Install through the RPC, not the file-level helper - the helper writes the file in
-whatever process calls it and the live gateway keeps the roster it loaded at
-startup, so the dispatching model never sees the change:
+Install by writing the host raven's config, which needs nothing running:
 
 ```bash
-python3 install.py --dry-run   # print the resolved entry, change nothing
+python3 install.py --dry-run   # print the resolved entry and the interpreter
 python3 install.py             # back up the current list, then register
 ```
 
-The endpoint **replaces** the list, so `install.py` reads the live one first,
-merges this entry into it by name, and writes a timestamped backup beside itself
-before the PUT.
+The write goes through `raven.config.update_subagents`, the only supported write
+path: it validates the entry against the schema, replaces the entry sharing its
+name, refuses a list that would hold duplicates and
+replaces the file atomically, none of which hand-edited JSON gets. That module
+lives in the host raven's environment rather than the installer's, so `install.py`
+reaches it in a subprocess - the shebang of `raven` on `PATH`, or
+`--raven-python`.
+
+What writing the file costs is that nothing running picks it up: a live raven
+holds the roster it read at startup, so **restart it (or the gateway) before the
+dispatching model can see the change**. The previous list is written to a
+timestamped backup beside this file first.
 
 `subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved so the
 published file carries no path from the machine that built it. They are resolved
@@ -540,8 +547,10 @@ so neither a relative command nor the entry's `cwd` field can stand in for the
 real path. Moving this folder means re-running `install.py`.
 
 An edit made in the web UI afterwards will not appear here, and re-installing
-would overwrite it. Read the live entry first with
-`curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents`.
+would overwrite it. Read the registered entry first: it is `subagents.thirdParty`
+in `~/.raven/config.json`, or
+`curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents` while the service
+is up.
 
 The `description` is the field that matters most - it is what the dispatching
 model reads when deciding whether to hand work here, so the capability boundary
@@ -596,7 +605,7 @@ blocking.
 | File | |
 |---|---|
 | `run.py` | Host-side launcher (conversation state, workspace binding, session-path resolution, answer-based verdict, change summary) |
-| `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC |
+| `install.py` | Resolves the `subagent.json` placeholders and writes the entry into the host raven's config |
 | `config.json` | Run config. Holds **no** secrets |
 | `.env` / `.env.example` | The real secrets (mode 600, never published) and their template |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders |

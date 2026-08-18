@@ -420,3 +420,16 @@ def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
     assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
+
+
+def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports() -> None:
+    """An ACP connection closed first fails every pending turn with a connection
+    error, which records as a failure rather than as the stop it is. And the
+    gateway never closed the ACP pool at all, so its servers outlived it."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
+    drain = src.index("begin_drain()")
+    cancel = src.index("await agent.subagents.cancel_all()")
+    web = src.index("await web_teardown()")
+    pool = src.index("await close_pool()")
+
+    assert drain < cancel < web < pool

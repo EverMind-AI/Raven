@@ -19,6 +19,7 @@ export const DAG_STATUS_GLYPH: Record<DagRunNodeStatus, { color: (t: Theme) => s
   completed: { color: t => t.color.statusGood, glyph: '✓' },
   failed: { color: t => t.color.error, glyph: '✗' },
   skipped: { color: t => t.color.muted, glyph: '⊘' },
+  cancelled: { color: t => t.color.error, glyph: '⊗' },
   interrupted: { color: t => t.color.warn, glyph: '■' }
 }
 
@@ -37,6 +38,7 @@ export const dagRunHeadline = (run: DagRunState): string => {
   const completed = run.done ? (run.summary?.completed ?? counted('completed')) : counted('completed')
   const failed = run.done ? (run.summary?.failed ?? counted('failed')) : counted('failed')
   const skipped = run.done ? (run.summary?.skipped ?? counted('skipped')) : counted('skipped')
+  const cancelled = run.done ? (run.summary?.cancelled ?? counted('cancelled')) : counted('cancelled')
 
   const parts = [plural(total, 'node'), `${completed} done`]
 
@@ -50,6 +52,10 @@ export const dagRunHeadline = (run: DagRunState): string => {
 
   if (skipped > 0) {
     parts.push(`${skipped} skipped`)
+  }
+
+  if (cancelled > 0) {
+    parts.push(`${cancelled} cancelled`)
   }
 
   if (run.done && counted('interrupted') > 0) {

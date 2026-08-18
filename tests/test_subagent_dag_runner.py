@@ -107,7 +107,7 @@ async def test_run_dag_runs_a_sub_agent_whose_name_has_a_space() -> None:
         workdir="/w",
         run_root="/hist/mas_dag",
     )
-    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0}
+    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
     # The name survives into the per-node records the UI and the resume path read.
     assert {f["subagent"] for f in result.files} == {"General Audit"}
 
@@ -135,7 +135,7 @@ async def test_run_dag_passes_output_downstream_and_emits_progress() -> None:
         progress_publisher=pub,
     )
 
-    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0}
+    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
     # b is the only sink -> terminal output; it received a's output through a file.
     assert len(result.terminal_outputs) == 1
     term = result.terminal_outputs[0]
@@ -227,7 +227,7 @@ async def test_run_dag_writes_node_status_transitions_to_registry(
         session_key="web:sess1",
     )
 
-    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0}
+    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
     assert any(status == "running" for _, status in seen)
     final_status = {r["nodeId"]: r["status"] for r in reg.list_instances("web:sess1")}
     assert final_status == {"a": "completed", "b": "completed"}
@@ -305,9 +305,9 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
 
     by_node = {f["node"]: f["status"] for f in result.files}
     assert by_node["a"] == "completed"
-    assert by_node["b"] == "skipped"
+    assert by_node["b"] == "cancelled"
     assert by_node["c"] == "skipped"  # dependent of the cancelled node
-    assert result.summary == {"total": 3, "completed": 1, "failed": 0, "skipped": 2}
+    assert result.summary == {"total": 3, "completed": 1, "failed": 0, "skipped": 1, "cancelled": 1}
 
     assert reaped == ["b"]  # CancelledError was actually raised into the node
 
@@ -364,7 +364,7 @@ async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
     # == not <=: the gate has to be saturated for the bound to prove anything.
     # A private semaphore per run lets all 6 nodes reach 4 in flight instead.
     assert peak == 2, f"{peak} nodes ran at once under a shared Semaphore(2)"
-    assert all(r.summary == {"total": 3, "completed": 3, "failed": 0, "skipped": 0} for r in results)
+    assert all(r.summary == {"total": 3, "completed": 3, "failed": 0, "skipped": 0, "cancelled": 0} for r in results)
 
 
 async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
@@ -394,7 +394,7 @@ async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
         session_key="web:sess1",
     )
 
-    assert result.summary == {"total": 2, "completed": 0, "failed": 1, "skipped": 1}
+    assert result.summary == {"total": 2, "completed": 0, "failed": 1, "skipped": 1, "cancelled": 0}
     rows = {r["nodeId"]: r["status"] for r in reg.list_instances("web:sess1")}
     assert rows == {"a": "failed", "b": "skipped"}
 
@@ -1612,7 +1612,7 @@ async def test_a_cross_run_dependency_neither_blocks_nor_unterminals_a_node() ->
         "/hist/mas_dag",
     )
 
-    assert second.summary == {"completed": 1, "failed": 0, "skipped": 0, "total": 1}
+    assert second.summary == {"completed": 1, "failed": 0, "skipped": 0, "cancelled": 0, "total": 1}
     assert [out["node"] for out in second.terminal_outputs] == ["build"]
     # The declared edge stays on the record: it is what the node asked for.
     assert second.files[0]["depends_on"] == ["plan"]
@@ -2071,17 +2071,17 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
         await task
 
     entries = json.loads(backend.files["/hist/mas_dag/index.json"].decode())
-    assert entries[-1]["status"] == {"plan": "skipped"}, entries[-1]
+    assert entries[-1]["status"] == {"plan": "cancelled"}, entries[-1]
 
     nodes = await read_session_nodes(backend, "/hist/mas_dag")
-    assert nodes.state["plan"] == "skipped"
+    assert nodes.state["plan"] == "cancelled"
     assert not nodes.is_readable("plan")
 
     # And the advice the two refusals give no longer contradict: neither offers
     # a reference that the other denies.
     with pytest.raises(DagValidationError, match="no output, so there is nothing to reference either"):
         await _run([{"id": "plan", "subagent": "x", "prompt_template": "again"}], backend, "/hist/mas_dag")
-    with pytest.raises(DagValidationError, match="skipped, so it wrote no output"):
+    with pytest.raises(DagValidationError, match="was stopped mid-run"):
         await _run([{"id": "other", "subagent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
 
 
@@ -2309,3 +2309,168 @@ async def test_the_live_index_does_not_outlive_the_node() -> None:
     )
 
     assert activity.live(node_live_key(result.run_id, "a")) is None
+
+
+class _BlockingExec(_FakeExec):
+    """Holds one node inside its dispatch until the test lets go of it."""
+
+    def __init__(self, block_id: str) -> None:
+        super().__init__()
+        self.block_id = block_id
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+        if task_id == self.block_id:
+            self.entered.set()
+            await self.release.wait()
+        return await super().run(task, task_id=task_id, **kwargs)
+
+
+def _two_node_spec() -> dict:
+    return {
+        "nodes": [
+            {"id": "a", "subagent": "x", "prompt_template": "hi"},
+            {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+        ]
+    }
+
+
+async def test_a_stop_separates_the_node_that_was_running_from_the_one_that_never_ran() -> None:
+    backend = _InMemBackend()
+    agent = _BlockingExec("a")
+    cancel = asyncio.Event()
+    events: list[dict] = []
+
+    async def publisher(name: str, payload: dict) -> None:
+        if name == "dag_node_updated":
+            events.append(payload)
+
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec(_two_node_spec()),
+            subagents={"x": agent},
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+            cancel=cancel,
+            progress_publisher=publisher,
+        )
+    )
+    await asyncio.wait_for(agent.entered.wait(), 5)
+    cancel.set()
+    result = await asyncio.wait_for(task, 5)
+
+    assert {e["node"]: e["status"] for e in result.files} == {"a": "cancelled", "b": "skipped"}
+    assert result.summary["cancelled"] == 1
+    assert result.summary["skipped"] == 1
+    assert result.summary["completed"] == 0
+    # The last thing a client heard about `a` was that it started, so the stop
+    # has to be published or the node is drawn as running forever.
+    assert any(e.get("node") == "a" and e.get("status") == "cancelled" for e in events)
+
+
+async def test_a_cancelled_node_keeps_the_start_time_its_dispatch_gave_it() -> None:
+    backend = _InMemBackend()
+    agent = _BlockingExec("a")
+    cancel = asyncio.Event()
+
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec(_two_node_spec()),
+            subagents={"x": agent},
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+            cancel=cancel,
+        )
+    )
+    await asyncio.wait_for(agent.entered.wait(), 5)
+    cancel.set()
+    result = await asyncio.wait_for(task, 5)
+
+    entry = next(e for e in result.files if e["node"] == "a")
+    assert entry["started_at"] is not None
+    assert entry["ended_at"] >= entry["started_at"]
+
+
+async def test_an_outer_cancellation_records_the_running_node_as_cancelled() -> None:
+    backend = _InMemBackend()
+    agent = _BlockingExec("a")
+
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec(_two_node_spec()),
+            subagents={"x": agent},
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+        )
+    )
+    await asyncio.wait_for(agent.entered.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    entries = json.loads(backend.files["/hist/mas_dag/index.json"].decode())
+    assert entries[-1]["status"] == {"a": "cancelled", "b": "skipped"}, entries[-1]
+
+    nodes = await read_session_nodes(backend, "/hist/mas_dag")
+    assert nodes.state["a"] == "cancelled"
+    assert not nodes.is_readable("a")
+
+
+async def test_the_transcript_label_names_the_cancelled_nodes() -> None:
+    backend = _InMemBackend()
+    agent = _BlockingExec("a")
+    cancel = asyncio.Event()
+
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec(_two_node_spec()),
+            subagents={"x": agent},
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+            cancel=cancel,
+        )
+    )
+    await asyncio.wait_for(agent.entered.wait(), 5)
+    cancel.set()
+    result = await asyncio.wait_for(task, 5)
+
+    label = SubAgentDagTool._result_label(result)
+    assert "1 cancelled" in label
+    assert "1 skipped" in label
+
+
+async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() -> None:
+    backend = _InMemBackend()
+    agent = _BlockingExec("a")
+    cancel = asyncio.Event()
+
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi"}]}),
+            subagents={"x": agent},
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+            cancel=cancel,
+        )
+    )
+    await asyncio.wait_for(agent.entered.wait(), 5)
+    cancel.set()
+    await asyncio.wait_for(task, 5)
+
+    with pytest.raises(DagValidationError, match="was stopped mid-run"):
+        await _run(
+            [{"id": "next", "subagent": "x", "prompt_template": "{{ a.output }}"}],
+            backend,
+            "/hist/mas_dag",
+        )

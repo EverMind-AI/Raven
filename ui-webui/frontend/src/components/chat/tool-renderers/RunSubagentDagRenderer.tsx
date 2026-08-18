@@ -69,6 +69,10 @@ function DagSummaryStrip({
 		['total', 'dag.summary.total', summary.total],
 		['completed', DAG_STATUS_LABEL_KEY.completed, summary.completed],
 		['failed', DAG_STATUS_LABEL_KEY.failed, summary.failed],
+		// `summary.cancelled` predates its own field: a manifest recorded before
+		// this run status existed has no such key, so default it rather than let
+		// a historical run render a blank chip where a 0 belongs.
+		['cancelled', DAG_STATUS_LABEL_KEY.cancelled, summary.cancelled ?? 0],
 		['skipped', DAG_STATUS_LABEL_KEY.skipped, summary.skipped],
 	];
 	if (reused > 0) items.push(['reused', DAG_STATUS_LABEL_KEY.reused, reused]);

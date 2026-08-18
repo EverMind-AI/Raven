@@ -363,15 +363,19 @@ Raven-X inherits `http_proxy` / `https_proxy` (its fetch client keeps
 A hand-written third-party subagent named `Raven-Research` (no `preset` field).
 
 ```bash
-python3 install.py --dry-run   # print the resolved entry, change nothing
+python3 install.py --dry-run   # print the resolved entry and the interpreter
 python3 install.py             # back up the current list, then register
 ```
 
-`install.py` goes through `PUT /raven/subagents`, not the file-level helper -
-see the note in `../raven-ppt/README.md`, which is where that lesson was
-learned. The endpoint takes **every** entry, not just this one, so the script
-reads the live list first, merges this entry into it by name, and writes a
-timestamped backup beside itself before the PUT.
+`install.py` writes the host raven's config through
+`raven.config.update_subagents`, the only supported write path - it validates the
+entry, replaces the one sharing its name, refuses a list that would hold duplicates
+and replaces the file atomically. That module is
+importable only from the host raven's environment, so the installer reaches it in
+a subprocess and stays runnable under a bare `python3`. Nothing has to be running
+for this, and nothing running picks it up either: **restart raven (or the
+gateway) afterwards**, since a live one holds the roster it read at startup. The
+previous list is written to a timestamped backup beside this file first.
 
 `subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved so the
 published file carries no path from the machine that built it. They are resolved
@@ -409,7 +413,8 @@ still said `researcher_x` while the live entry had been renamed `Raven-Research`
 in the web UI, so installing from it would have added a *second* entry rather
 than updating one, and its description still promised an agent that "cannot read
 local files" long after the `-filetools` profile gave it six file tools. Read the
-live entry before assuming they agree:
+live entry before assuming they agree - it is `subagents.thirdParty` in
+`~/.raven/config.json`, or, while the service is up:
 
 ```bash
 curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents
@@ -433,7 +438,7 @@ different agent with a different mechanism, hence a distinct name.
 | File | | Published |
 |---|---|---|
 | `run.py` | Host-side launcher (own workspace, session-log extraction, answer-based verdict) | yes |
-| `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC | yes |
+| `install.py` | Resolves the `subagent.json` placeholders and writes the entry into the host raven's config | yes |
 | `config.json` | Raven-X run config. Holds **no** secrets | yes |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders | yes |
 | `.env.example` | Template for the secrets and the two path knobs | yes |
@@ -442,7 +447,7 @@ different agent with a different mechanism, hence a distinct name.
 | `.config.rendered.*.json` | Transient merge of the two, mode 600, deleted after each run | **no** |
 | `Raven-X/` | The agent itself. Ships as source; its `.venv` does not | yes |
 | `Raven-X-dr29-rollback.tar.gz` `config.json.bak-*` | The build this one replaced, and the configs that preceded it | **no** |
-| `subagents-backup-*.json` | What `install.py` saved before a PUT - carries every other entry on this host | **no** |
+| `subagents-backup-*.json` | What `install.py` saved before the write - carries every other entry on this host | **no** |
 | `runs/` `cache/` `cron/` `ledger/` | Runtime dirs the build derives from the config file's parent. `ledger/` is empty at rest (see above) | **no** |
 
 ## Publishing

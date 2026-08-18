@@ -536,6 +536,30 @@ async def test_a_skipped_node_is_not_a_row(workspace: Path) -> None:
     assert by_node["survey"]["status"] == "error"
 
 
+async def test_a_cancelled_node_keeps_its_row(workspace: Path) -> None:
+    """A cancelled node ran -- it has a transcript, a cost and a clock -- so
+    unlike a skipped one its row opens onto something and stays on the panel."""
+    _write_run(
+        workspace,
+        "20260812T120000Z-deadbeef",
+        manifest={
+            "survey": {
+                "status": "cancelled",
+                "subagent": "Researcher",
+                "started_at": 1_700_000_000_000,
+                "ended_at": 1_700_000_004_000,
+            },
+            "write": {"status": "skipped", "subagent": "Writer"},
+        },
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert set(by_node) == {"survey"}
+    assert by_node["survey"]["status"] == "cancelled"
+
+
 async def test_a_dag_row_is_addressed_by_run_and_node(workspace: Path) -> None:
     """A node id is unique inside its run and nowhere else, so the pair travels
     and the id is only ever a label."""

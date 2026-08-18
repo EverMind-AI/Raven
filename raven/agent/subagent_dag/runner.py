@@ -170,10 +170,11 @@ async def run_dag(
     than let one be minted internally) if it needs to key a cancellation signal
     to the same id the registry records.
 
-    ``cancel``, when set at any point during the run, marks every node not
-    already terminal as ``skipped`` and cancels any node task currently in
-    flight so its semaphore slot is released; the run still finishes normally
-    and returns a result describing what was skipped, rather than raising.
+    ``cancel``, when set at any point during the run, cancels any node task
+    currently in flight so its semaphore slot is released, records each such
+    node as ``cancelled`` and every other not-yet-terminal node as
+    ``skipped``; the run still finishes normally and returns a result
+    describing what stopped, rather than raising.
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
@@ -193,7 +194,7 @@ async def run_dag(
         store = DagRunStore(backend, run_root, run_id or make_run_id())
         await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
 
-    published_skips: set[str] = set()
+    published_terminal: set[str] = set()
 
     # Built before the `try` below, not inside it: the cancellation handler reads
     # `status`, and a handler that covers the first await has to be able to.
@@ -239,23 +240,22 @@ async def run_dag(
         while True:
             _cascade_failures(deps, status)
             if cancel is not None and cancel.is_set():
-                # A node still "running" here was cancelled mid-flight (see
-                # _run_ready_groups below) and never reached a terminal status
-                # because CancelledError bypasses _run_node's except-Exception.
-                for nid, st in status.items():
-                    if st in ("pending", "running"):
-                        status[nid] = "skipped"
+                _mark_stopped(status)
             for nid, st in status.items():
-                if st == "skipped" and nid not in published_skips:
-                    published_skips.add(nid)
-                    node_started_at[nid] = _now_ms()
-                    node_ended_at[nid] = _now_ms()
-                    await _emit(
-                        progress_publisher,
-                        "dag_node_updated",
-                        {"run_id": store.run_id, "node": nid, "status": "skipped"},
-                    )
-                    await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, "skipped")
+                if st not in ("skipped", "cancelled") or nid in published_terminal:
+                    continue
+                published_terminal.add(nid)
+                now = _now_ms()
+                # A cancelled node already has a real start time from its
+                # dispatch; only a skipped one needs both stamps invented.
+                node_started_at.setdefault(nid, now)
+                node_ended_at[nid] = now
+                await _emit(
+                    progress_publisher,
+                    "dag_node_updated",
+                    {"run_id": store.run_id, "node": nid, "status": st},
+                )
+                await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
             ready = [
                 nid
                 for nid, st in status.items()
@@ -320,9 +320,7 @@ async def run_dag(
         # `status`, and `read_session_nodes` would report them `running` forever:
         # neither reusable nor readable, for a run that is definitively over --
         # and the two refusals that produces contradict each other.
-        for nid, st in status.items():
-            if st in ("pending", "running"):
-                status[nid] = "skipped"
+        _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
         raise
 
@@ -376,6 +374,7 @@ def _tally(status: dict[str, str]) -> dict:
         "completed": sum(1 for s in status.values() if s == "completed"),
         "failed": sum(1 for s in status.values() if s == "failed"),
         "skipped": sum(1 for s in status.values() if s == "skipped"),
+        "cancelled": sum(1 for s in status.values() if s == "cancelled"),
     }
 
 
@@ -401,6 +400,21 @@ async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancell
         if not cancelled:
             raise
         logger.opt(exception=True).warning("DAG index write failed for cancelled run {}", store.run_id)
+
+
+def _mark_stopped(status: dict[str, str]) -> None:
+    """Give every unfinished node the outcome the stop actually gave it.
+
+    A `running` node was cut off mid-flight and never reached a terminal
+    status, because CancelledError bypasses _run_node's except-Exception. A
+    `pending` one was never dispatched, which is what `skipped` means
+    everywhere else.
+    """
+    for nid, st in status.items():
+        if st == "running":
+            status[nid] = "cancelled"
+        elif st == "pending":
+            status[nid] = "skipped"
 
 
 def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> None:
@@ -510,6 +524,9 @@ async def _run_node(
         started_at_ms = _now_ms()
         did = None
         node_started_at[node.id] = started_at_ms
+        # Set inside the gate, so a node still queued for a concurrency slot
+        # stays `pending`: this is what tells a stop which nodes actually ran.
+        status[node.id] = "running"
         await _emit(
             progress_publisher,
             "dag_node_updated",
