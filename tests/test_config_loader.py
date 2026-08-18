@@ -457,6 +457,7 @@ def test_migration_write_back_does_not_materialise_defaults(tmp_path: Path) -> N
     assert "tools" not in on_disk
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o500 does not block root")
 def test_migration_is_correct_even_when_the_file_cannot_be_written(tmp_path: Path) -> None:
     """A read-only home must not brick the boot: the in-memory migration is
     what makes the process correct, the write only keeps the file honest."""

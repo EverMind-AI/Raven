@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -157,7 +158,13 @@ class TestSpawnPreflight:
         """A /health 200 proves the LLM client was built, so do not second-guess it."""
         _write_llm_section(everos_toml, api_key="")
         waits: list[int] = []
-        with patch("raven.plugin.memory.everos._server._probe_health", return_value=True):
+        # _speaks_our_api is stubbed too: a healthy address is also probed for the
+        # API prefix, and leaving that unstubbed makes the outcome depend on
+        # whether the developer's machine happens to have EverOS on this port.
+        with (
+            patch("raven.plugin.memory.everos._server._probe_health", return_value=True),
+            patch("raven.plugin.memory.everos._server._speaks_our_api", return_value=True),
+        ):
             await ensure_everos_server("http://localhost:18791", on_wait=lambda: waits.append(1))
 
         assert waits == [], "narrated a wait that never happened"
@@ -391,6 +398,10 @@ class TestThePrimitivesAgainstTheRealOS:
 
         assert _is_everos_server(os.getpid()) is False
 
+    @pytest.mark.skipif(
+        shutil.which("ps") is None,
+        reason="no ps on PATH: _is_everos_server cannot read a command line without it",
+    )
     def test_ps_recognises_a_process_whose_command_line_says_everos(self) -> None:
         import subprocess
         import sys
@@ -1005,6 +1016,7 @@ class TestAnUnwritableRootFailsAsAStartFailure:
     situation the user can act on: fix the permissions and run it again.
     """
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o555 does not block root")
     def test_it_surfaces_as_runtime_error(self, tmp_path, monkeypatch) -> None:
         from raven.plugin.memory.everos import _server
 
