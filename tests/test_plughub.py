@@ -62,6 +62,30 @@ ENTRY_APIKEY = {
 }
 
 
+ENTRY_OAUTH = {
+    "id": "notionish",
+    "version": "1.0.0",
+    "contributes": [
+        {
+            "kind": "mcp",
+            "connection": {"type": "streamableHttp", "url": "https://mcp.example.com/mcp"},
+            "auth": {
+                "mode": "oauth",
+                "scopes_hint": ["read"],
+                "endpoints": {
+                    "issuer": "https://mcp.example.com",
+                    "authorizationEndpoint": "https://mcp.example.com/authorize",
+                    "tokenEndpoint": "https://mcp.example.com/token",
+                    "registrationEndpoint": "https://mcp.example.com/register",
+                    "scopes": ["default"],
+                    "resource": "https://mcp.example.com/mcp",
+                },
+            },
+        }
+    ],
+}
+
+
 async def test_install_writes_config_and_ledger(_isolated):
     result = await install_plugin(ENTRY_NONE)
     assert result["catalog_id"] == "deepwiki"
@@ -76,6 +100,26 @@ async def test_install_apikey_field_lands_in_env(_isolated):
     await install_plugin(ENTRY_APIKEY, {"FIRECRAWL_API_KEY": "fc-123"})
     cfg = _cfg(_isolated)
     assert cfg["tools"]["mcpServers"]["firecrawl"]["env"]["FIRECRAWL_API_KEY"] == "fc-123"
+
+
+async def test_install_carries_the_catalog_oauth_endpoints_into_config(_isolated):
+    """The connect reads them off the server stanza, so the install has to land
+    them there rather than re-consulting the catalog later."""
+    await install_plugin(ENTRY_OAUTH)
+    stanza = _cfg(_isolated)["tools"]["mcpServers"]["notionish"]
+    assert stanza["oauth"]["tokenEndpoint"] == "https://mcp.example.com/token"
+    assert stanza["oauth"]["scopes"] == ["default"]
+
+    from raven.config.schema import MCPServerConfig
+
+    assert MCPServerConfig.model_validate(stanza).oauth.registration_endpoint == "https://mcp.example.com/register"
+
+
+async def test_an_entry_without_endpoints_writes_no_oauth_stanza(_isolated):
+    entry = json.loads(json.dumps(ENTRY_OAUTH))
+    del entry["contributes"][0]["auth"]["endpoints"]
+    await install_plugin(entry)
+    assert "oauth" not in _cfg(_isolated)["tools"]["mcpServers"]["notionish"]
 
 
 async def test_install_missing_required_field_fails_clean(_isolated):
@@ -188,6 +232,7 @@ async def test_catalog_detail_and_config_template_validates(monkeypatch):
 async def test_every_catalog_mcp_template_is_valid(monkeypatch):
     monkeypatch.delenv("RAVEN_PLUGHUB_URL", raising=False)
     from raven.config.schema import MCPServerConfig
+    from raven.plughub.trust import validate_mcp_connection
 
     data = catalog_mod._bundled()
     for entry in data["entries"]:
@@ -196,9 +241,23 @@ async def test_every_catalog_mcp_template_is_valid(monkeypatch):
                 continue
             cfg = dict(contrib["connection"])
             cfg["auth"] = (contrib.get("auth") or {}).get("mode", "none")
-            MCPServerConfig.model_validate(cfg)
+            endpoints = (contrib.get("auth") or {}).get("endpoints")
+            if endpoints:
+                cfg["oauth"] = endpoints
+            validated = MCPServerConfig.model_validate(cfg)
             if cfg["auth"] == "oauth":
                 assert contrib["connection"].get("url"), f"{entry['id']}: oauth requires a url"
+            if endpoints:
+                # Declared facts stand in for a fetch, so a block that only half
+                # describes the authorization server is worse than none: it reads
+                # as configured while still needing discovery.
+                assert cfg["auth"] == "oauth", f"{entry['id']}: oauth endpoints on a non-oauth entry"
+                for field in ("issuer", "authorization_endpoint", "token_endpoint"):
+                    assert getattr(validated.oauth, field), f"{entry['id']}: oauth endpoints omit {field}"
+                assert not validated.oauth.client_id or validated.oauth.redirect_uri, (
+                    f"{entry['id']}: a declared client_id needs the redirect_uri it is registered under"
+                )
+                validate_mcp_connection(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -694,3 +753,51 @@ def test_each_runners_own_spelling_of_relaxed_trust_is_refused(arg: str) -> None
 
     with pytest.raises(HubTrustError):
         validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "pkg", arg, "v"]})
+
+
+# ---------------------------------------------------------------------------
+# an oauth endpoint block is where an authorization code goes
+# ---------------------------------------------------------------------------
+
+
+def _oauth_stanza(**overrides) -> dict:
+    oauth = {
+        "issuer": "https://as.example",
+        "authorizationEndpoint": "https://as.example/authorize",
+        "tokenEndpoint": "https://as.example/token",
+    }
+    oauth.update(overrides)
+    return {"type": "streamableHttp", "url": "https://mcp.example/mcp", "auth": "oauth", "oauth": oauth}
+
+
+def test_a_catalog_entry_may_declare_its_authorization_server() -> None:
+    from raven.plughub.trust import validate_mcp_connection
+
+    validate_mcp_connection(_oauth_stanza(redirectUri="http://127.0.0.1:18860/oauth/callback"))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tokenEndpoint": "http://as.example/token"},
+        {"authorizationEndpoint": "http://as.example/authorize"},
+        {"registrationEndpoint": "ftp://as.example/register"},
+        {"issuer": "http://as.example"},
+        {"resource": "http://mcp.example/mcp"},
+    ],
+)
+def test_a_catalog_entry_may_not_send_an_authorization_code_over_plaintext(overrides: dict) -> None:
+    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+
+    with pytest.raises(HubTrustError):
+        validate_mcp_connection(_oauth_stanza(**overrides))
+
+
+@pytest.mark.parametrize("key", ["client_secret", "clientSecret"])
+def test_a_catalog_entry_may_not_carry_an_oauth_client_secret(key: str) -> None:
+    """A secret every user of the catalog holds is not a secret, and raven
+    authorizes as a public client either way."""
+    from raven.plughub.trust import HubTrustError, validate_mcp_connection
+
+    with pytest.raises(HubTrustError, match="public client"):
+        validate_mcp_connection(_oauth_stanza(**{key: "sh-1"}))

@@ -92,6 +92,9 @@ def _build_mcp_config(contrib: dict, form: dict) -> dict:
 
     cfg: dict[str, Any] = dict(contrib.get("connection") or {})
     cfg["auth"] = ((contrib.get("auth") or {}).get("mode")) or "none"
+    endpoints = (contrib.get("auth") or {}).get("endpoints")
+    if cfg["auth"] == "oauth" and isinstance(endpoints, dict):
+        cfg["oauth"] = dict(endpoints)
     for field in (contrib.get("auth") or {}).get("fields") or []:
         _render_field(cfg, field, form)
     # After rendering, not before: a field's `into` target lands in the same

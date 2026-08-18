@@ -18,6 +18,14 @@ redirect URL is a process-wide resource (``serve_commands.SERVE`` follows the
 same pattern). The ``state`` value is read from the authorization URL the SDK
 hands to ``redirect_handler`` — the SDK generates it, we only correlate.
 
+A server's config may also carry the discovery results themselves
+(``MCPOAuthConfig``, filled in by a market install from the catalog entry). When
+it does, :func:`provider_for` seeds them instead of fetching them, so the
+browser opens without the RFC 9728/8414 round trips in front of it -- and with a
+pre-registered ``client_id``, without the registration round trip either. An
+endpoint the server answers as not being there is disarmed and the next connect
+discovers; see :class:`_CatalogSeed` and :data:`NO_SEED_ENV`.
+
 The consumer is :class:`~raven.agent.tools.mcp_manager.MCPConnectionManager`:
 for a server configured ``auth="oauth"`` it builds a provider through
 :func:`provider_for` and hands it to the transport as an ``httpx.Auth``, so the
@@ -33,6 +41,7 @@ import json
 import os
 import tempfile
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 from urllib.parse import parse_qs, urlparse
@@ -273,6 +282,7 @@ class FileTokenStorage:
     def __init__(self, server: str, redirect_uri: str) -> None:
         self._path = credentials_path(server)
         self._redirect_uri = redirect_uri
+        self._preregistered: Any = None
 
     def _read(self) -> dict:
         try:
@@ -348,24 +358,59 @@ class FileTokenStorage:
             return 1.0
         return None
 
+    def use_preregistered_client(self, client_info) -> None:
+        """Stand in for dynamic registration when the file holds none.
+
+        A registration this storage never minted, so it is never written back:
+        it is a catalog fact, and a copy on disk would outlive the entry that
+        justified it.
+        """
+        self._preregistered = client_info
+
     async def get_client_info(self):
         from mcp.shared.auth import OAuthClientInformationFull
 
         raw = self._read().get("client_info")
         if not raw:
-            return None
+            return self._preregistered
         try:
             info = OAuthClientInformationFull.model_validate(raw)
         except Exception:  # noqa: BLE001
-            return None
+            return self._preregistered
         if self._redirect_uri not in [str(u) for u in info.redirect_uris or []]:
-            return None  # port drift -> force re-registration
+            # Port drift. A registration raven minted is dead the moment its
+            # redirect stops matching, but a pre-registered one is declared
+            # against a redirect of its own and was only accepted because that
+            # redirect is the one in use -- so it is the better fallback here
+            # than re-running registration.
+            return self._preregistered
         return info
 
     async def set_client_info(self, client_info) -> None:
         data = self._read()
         data["client_info"] = client_info.model_dump(mode="json", exclude_none=True)
         self._write(data)
+
+    def seed_disarmed(self, fingerprint: str) -> bool:
+        """Whether these exact catalog facts already failed against this server."""
+        return str(self._read().get("oauth_seed_stale") or "") == fingerprint
+
+    def disarm_seed(self, fingerprint: str) -> None:
+        """Record that these catalog facts do not work, so the next connect
+        discovers instead of trusting them again.
+
+        Keyed by fingerprint rather than a bare flag: a catalog that later
+        corrects the entry must be believed, and only the facts that actually
+        failed stay distrusted.
+        """
+        try:
+            data = self._read()
+            if data.get("oauth_seed_stale") == fingerprint:
+                return
+            data["oauth_seed_stale"] = fingerprint
+            self._write(data)
+        except Exception as e:  # noqa: BLE001 — losing the marker costs the optimization, not the connect
+            logger.warning("MCP OAuth: could not record a stale catalog seed at {}: {}", self._path, e)
 
 
 # ── Browser flow ───────────────────────────────────────────────────
@@ -513,6 +558,263 @@ def open_browser(server: str, auth_url: str) -> bool:
     return opened
 
 
+# ── Catalog-carried authorization-server facts ─────────────────────
+
+NO_SEED_ENV = "RAVEN_MCP_OAUTH_NO_SEED"
+"""Set to force live discovery for every server, ignoring catalog facts.
+
+The escape hatch for a catalog entry that is wrong in a way raven cannot
+detect -- an authorization endpoint that has moved fails in the browser, where
+nothing on this side sees the error."""
+
+_ASM_WELL_KNOWN = ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration")
+_PRM_WELL_KNOWN = "/.well-known/oauth-protected-resource"
+_ENDPOINT_ABSENT = (404, 405)
+"""Statuses that say a seeded URL is not the endpoint the entry claims it is."""
+
+
+class _CatalogSeed:
+    """The discovery documents a server's config already carries.
+
+    Holds them in the shape the SDK parses off the wire, so the flow that
+    consumes them is the same flow either way: :meth:`answer` hands back the
+    document instead of letting the request leave the machine. What is missing
+    from the config is simply not answered and still gets fetched.
+    """
+
+    def __init__(
+        self,
+        *,
+        fingerprint: str,
+        asm: dict | None,
+        prm: dict | None,
+        client_info: Any,
+        hosts: set[str],
+        token: str,
+        register: str,
+    ) -> None:
+        self.fingerprint = fingerprint
+        self.asm = asm
+        self.prm = prm
+        self.client_info = client_info
+        self._hosts = hosts
+        self._token = token
+        self._register = register
+
+    def answer(self, request: Any) -> Any:
+        """The canned response for a discovery request, or ``None`` to let it fly."""
+        import httpx
+
+        if request.method != "GET":
+            return None
+        # Host-checked: the resource_metadata URL in a WWW-Authenticate header is
+        # the server's to choose, and a document about some other origin is not
+        # the one this config describes.
+        if (request.url.host or "") not in self._hosts:
+            return None
+        path = request.url.path or ""
+        if self.asm is not None and any(marker in path for marker in _ASM_WELL_KNOWN):
+            return httpx.Response(200, json=self.asm, request=request)
+        if self.prm is not None and _PRM_WELL_KNOWN in path:
+            return httpx.Response(200, json=self.prm, request=request)
+        return None
+
+    def rejected(self, request: Any, response: Any) -> bool:
+        """Whether ``response`` is this server refusing a seeded endpoint.
+
+        A refusal at the registration endpoint is always about the entry: the
+        only request that ever goes there is a registration the seeded metadata
+        pointed at. The token endpoint also carries every routine refresh, and a
+        service that has expired or revoked a ``refresh_token`` answers ``400
+        invalid_grant`` -- disarming on that would retire the seed over a dead
+        token rather than a wrong fact, so only a status that says the endpoint
+        itself is not there counts there.
+
+        An authorization endpoint that has moved is not covered -- that error is
+        rendered in the user's browser, not returned here.
+        """
+        if response is None or response.status_code < 400:
+            return False
+        url = str(request.url)
+        if self._register and url == self._register:
+            return True
+        return bool(self._token) and url == self._token and response.status_code in _ENDPOINT_ABSENT
+
+
+def _seed_for(server: str, cfg: Any, uri: str, storage: FileTokenStorage) -> _CatalogSeed | None:
+    """Read ``cfg.oauth`` into a seed, or return ``None`` to discover as usual."""
+    if os.environ.get(NO_SEED_ENV, "").strip():
+        return None
+    oauth = getattr(cfg, "oauth", None)
+    issuer = str(getattr(oauth, "issuer", "") or "")
+    authorize = str(getattr(oauth, "authorization_endpoint", "") or "")
+    token = str(getattr(oauth, "token_endpoint", "") or "")
+    if not (issuer and authorize and token):
+        # A partial document is not a document: the SDK's metadata model requires
+        # all three, and guessing the rest is what discovery is for.
+        return None
+
+    register = str(oauth.registration_endpoint or "")
+    scopes = [str(s) for s in (oauth.scopes or [])]
+    asm: dict[str, Any] = {
+        "issuer": issuer,
+        "authorization_endpoint": authorize,
+        "token_endpoint": token,
+        "response_types_supported": ["code"],
+    }
+    if register:
+        asm["registration_endpoint"] = register
+    if scopes:
+        asm["scopes_supported"] = scopes
+
+    fingerprint = _fingerprint(oauth)
+    if storage.seed_disarmed(fingerprint):
+        logger.info("MCP OAuth: '{}' has failed with these catalog endpoints before; discovering instead", server)
+        return None
+
+    prm = _seeded_prm(server, cfg, oauth, issuer, scopes)
+    client_info = _preregistered_client(server, oauth, uri)
+
+    from urllib.parse import urlsplit
+
+    hosts = {urlsplit(cfg.url).hostname or "", urlsplit(issuer).hostname or ""}
+    return _CatalogSeed(
+        fingerprint=fingerprint,
+        asm=asm,
+        prm=prm,
+        client_info=client_info,
+        hosts=hosts,
+        token=token,
+        register=register,
+    )
+
+
+def _fingerprint(oauth: Any) -> str:
+    import hashlib
+
+    payload = json.dumps(oauth.model_dump(mode="json"), sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _seeded_prm(server: str, cfg: Any, oauth: Any, issuer: str, scopes: list[str]) -> dict | None:
+    """The RFC 9728 document to answer with, if the config's is safe to trust.
+
+    Gated on the declared ``resource`` matching the audience the SDK would
+    derive from the server URL on its own. A protected-resource document is the
+    one discovery result whose staleness is *silent*: it fixes what audience the
+    minted token is for, so a moved resource yields a token that looks fine and
+    is rejected by every tool call. Refusing to move the audience keeps the
+    worst a stale entry can do to a visible failure.
+    """
+    resource = str(getattr(oauth, "resource", "") or "")
+    if not resource:
+        return None
+    try:
+        from mcp.shared.auth_utils import resource_url_from_server_url
+    except ImportError:  # pragma: no cover — SDK moved it; discovery still works
+        return None
+    canonical = resource_url_from_server_url(cfg.url)
+    if resource.rstrip("/") != canonical.rstrip("/"):
+        logger.info(
+            "MCP OAuth: '{}' declares resource {} but its url canonicalizes to {}; fetching that document instead",
+            server,
+            resource,
+            canonical,
+        )
+        return None
+    prm: dict[str, Any] = {
+        "resource": resource,
+        "authorization_servers": [issuer],
+        "bearer_methods_supported": ["header"],
+    }
+    if scopes:
+        prm["scopes_supported"] = scopes
+    return prm
+
+
+def _preregistered_client(server: str, oauth: Any, uri: str) -> Any:
+    """Build the declared client, or ``None`` to register dynamically.
+
+    The redirect has to be the one raven is actually listening on. A registered
+    client's redirect set is fixed at the service, and :data:`CALLBACK_PORT`
+    walks a ladder when its first choice is taken -- so on the day the port
+    moves, the pre-registered client would send the browser to a port nobody
+    answers. Registering dynamically on the port in hand is the working
+    alternative, and it costs one round trip.
+    """
+    client_id = str(getattr(oauth, "client_id", "") or "")
+    if not client_id:
+        return None
+    declared = str(getattr(oauth, "redirect_uri", "") or "")
+    if not declared:
+        logger.warning(
+            "MCP OAuth: '{}' declares a client_id but no redirect_uri; registering dynamically instead", server
+        )
+        return None
+    if declared != uri:
+        logger.info(
+            "MCP OAuth: '{}' registered its client for {} but the callback is on {}; registering dynamically instead",
+            server,
+            declared,
+            uri,
+        )
+        return None
+    from mcp.shared.auth import OAuthClientInformationFull
+
+    try:
+        return OAuthClientInformationFull(
+            client_id=client_id,
+            redirect_uris=[declared],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            token_endpoint_auth_method="none",  # noqa: S106 — public client, not a secret
+        )
+    except Exception as e:  # noqa: BLE001 — an unusable declaration must not break the connect
+        logger.warning(
+            "MCP OAuth: '{}' declares an unusable client_id ({}); registering dynamically instead", server, e
+        )
+        return None
+
+
+@lru_cache(maxsize=1)
+def _seeded_provider_class(base: type) -> type:
+    """``base`` with the discovery requests answered from a :class:`_CatalogSeed`.
+
+    A subclass rather than a reimplementation: the SDK's ``async_auth_flow``
+    stays the single description of the OAuth flow, and this only decides which
+    of the requests it yields actually reach the network. That is what keeps the
+    fallback honest -- a document the seed does not carry, or a seed that gets
+    disarmed, leaves the flow byte-for-byte the one that runs today.
+    """
+
+    class SeededOAuthClientProvider(base):  # type: ignore[misc, valid-type]
+        def __init__(self, *args: Any, seed: _CatalogSeed, on_rejected: Callable[[], None], **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._seed = seed
+            self._on_rejected = on_rejected
+
+        async def async_auth_flow(self, request):  # type: ignore[no-untyped-def]
+            inner = super().async_auth_flow(request)
+            reply: Any = None
+            try:
+                while True:
+                    try:
+                        outgoing = await inner.asend(reply)
+                    except StopAsyncIteration:
+                        return
+                    canned = self._seed.answer(outgoing)
+                    if canned is not None:
+                        reply = canned
+                        continue
+                    reply = yield outgoing
+                    if self._seed.rejected(outgoing, reply):
+                        self._on_rejected()
+            finally:
+                await inner.aclose()
+
+    return SeededOAuthClientProvider
+
+
 async def provider_for(
     server: str,
     cfg: Any,
@@ -536,7 +838,15 @@ async def provider_for(
     uri = redirect_uri() or await _ensure_callback_endpoint()
     flow = _Flow(server, notify, interactive=interactive)
     storage = FileTokenStorage(server, uri)
-    provider = OAuthClientProvider(
+    seed = _seed_for(server, cfg, uri, storage)
+    kwargs: dict[str, Any] = {}
+    cls: Any = OAuthClientProvider
+    if seed is not None:
+        if seed.client_info is not None:
+            storage.use_preregistered_client(seed.client_info)
+        cls = _seeded_provider_class(OAuthClientProvider)
+        kwargs = {"seed": seed, "on_rejected": lambda: storage.disarm_seed(seed.fingerprint)}
+    provider = cls(
         server_url=cfg.url,
         client_metadata=OAuthClientMetadata(
             client_name="Raven",
@@ -549,6 +859,7 @@ async def provider_for(
         redirect_handler=flow.redirect,
         callback_handler=flow.callback,
         timeout=OAUTH_FLOW_TIMEOUT,
+        **kwargs,
     )
     # The SDK's _initialize() restores the tokens but not when they expire, and
     # is_token_valid() reads a missing expiry as "valid" -- so a restart never

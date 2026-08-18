@@ -5,6 +5,17 @@ hub can override it later via ``RAVEN_PLUGHUB_URL`` without touching the
 callers — search/detail keep the same shapes either way. Entries are data,
 never code: the riskiest thing a catalog entry can carry is a stdio command
 line, which the GUI surfaces verbatim behind an explicit confirm.
+
+An ``mcp`` contribution's ``auth`` block may carry an ``endpoints`` object
+alongside ``mode``/``scopes_hint``. It is the authorization server's own
+metadata (``issuer``, ``authorizationEndpoint``, ``tokenEndpoint``,
+``registrationEndpoint``, ``scopes``, ``resource``, and optionally a
+pre-registered public ``clientId`` with the ``redirectUri`` it is registered
+under). An install copies it verbatim into the server's ``oauth`` config stanza,
+where it saves the connect the discovery fetches; ``MCPOAuthConfig`` documents
+each field and ``mcp_oauth._CatalogSeed`` what is done with it. Omitting the
+block is the discovery path, unchanged, so an entry only needs it once someone
+has read the service's well-known documents and copied them.
 """
 
 from __future__ import annotations
