@@ -5,12 +5,22 @@ side has to emit YAML rather than interpolate strings into it. ``description``
 is model-written prose, which makes the characters YAML reserves -- a colon, a
 leading ``#``, quotes, a newline -- ordinary content rather than edge cases.
 Each of those produced a file that could not be read back, so each gets a case
-here.
+here. CJK strings appear as unicode escapes to keep the source ASCII; they pin
+that non-ASCII prose survives the trip unmangled.
 """
 
 import pytest
+from loguru import logger
 
-from raven.memory_engine.playbook import NodeSpec, ParamSpec, PlaybookSpec, PlaybookStore, Triggers
+from raven.playbook import NodeSpec, ParamSpec, PlaybookExistsError, PlaybookSpec, PlaybookStore, Triggers
+
+_CJK_WORD = "\u7ade\u54c1"  # jing pin: "competitor"
+
+
+def _store(tmp_path) -> PlaybookStore:
+    """A store pinned to an empty builtin layer, so these single-layer
+    assertions stay true when the package grows real builtin playbooks."""
+    return PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
 
 
 def _spec(description: str) -> PlaybookSpec:
@@ -18,9 +28,9 @@ def _spec(description: str) -> PlaybookSpec:
         name="competitor-scan",
         description=description,
         mode="dag",
-        triggers=Triggers(keywords=["竞品"]),
-        nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="调研 ${params.target}")],
-        params={"target": ParamSpec(required=True, description="要扫描的竞品名称")},
+        triggers=Triggers(keywords=[_CJK_WORD]),
+        nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="research ${params.target}")],
+        params={"target": ParamSpec(required=True, description="which competitor should be scanned?")},
     )
 
 
@@ -28,22 +38,23 @@ def _spec(description: str) -> PlaybookSpec:
 #: uses freely; ``at_cap`` guards the other end -- the contract caps the field at
 #: 200 characters, and a value sitting on the cap must not be folded or trimmed.
 _DESCRIPTIONS = {
-    "colon": "当用户要做尽调时: 先广度扫描, 再深挖存疑项",
-    "full_width_colon": "触发场景：想快速了解某家公司",
-    "leading_hash": "#1 优先级：竞品对比",
-    "inline_hash": "对标 A/B # 不含定价页",
-    "double_quotes": '用户说"帮我看看竞品"时匹配',
-    "single_quotes": "用户说'对标一下'时匹配",
-    "newline": "第一行说明\n第二行补充",
+    "colon": "for due diligence: scan broadly first, then dig into open doubts",
+    "full_width_colon": "trigger\uff1awhen the user wants a quick company briefing",
+    "leading_hash": "#1 priority: competitor comparison",
+    "inline_hash": "benchmark A/B # excluding the pricing page",
+    "double_quotes": 'matches when the user says "check the competitors"',
+    "single_quotes": "matches when the user says 'benchmark this'",
+    "newline": "first line of the intent\nsecond line with details",
     "yaml_keywords": "null true false ~ - [] {} @ ` |",
-    "at_cap": "调研" * 100,
+    "cjk_prose": "\u5c3d\u8c03\u65f6\u5148\u5e7f\u5ea6\u626b\u63cf",
+    "at_cap": "scan" * 50,
 }
 
 
 @pytest.mark.parametrize("label", list(_DESCRIPTIONS), ids=list(_DESCRIPTIONS))
 def test_description_survives_round_trip(tmp_path, label):
     description = _DESCRIPTIONS[label]
-    store = PlaybookStore(tmp_path)
+    store = _store(tmp_path)
     spec = _spec(description)
     store.save(spec)
 
@@ -52,13 +63,13 @@ def test_description_survives_round_trip(tmp_path, label):
     # The block region has to come back intact too: a frontmatter that fails to
     # terminate would swallow the body and the fenced block with it.
     assert loaded.nodes is not None and [n.id for n in loaded.nodes] == ["scan"]
-    assert loaded.triggers.keywords == ["竞品"]
+    assert loaded.triggers.keywords == [_CJK_WORD]
     assert loaded.params["target"].required is True
 
 
 def test_saved_file_keeps_the_three_regions(tmp_path):
-    store = PlaybookStore(tmp_path)
-    store.save(_spec("触发场景：竞品对比"))
+    store = _store(tmp_path)
+    store.save(_spec("trigger: competitor comparison"))
 
     text = (tmp_path / "competitor-scan" / "playbook.md").read_text(encoding="utf-8")
     assert text.startswith("---\n")
@@ -67,3 +78,159 @@ def test_saved_file_keeps_the_three_regions(tmp_path):
     # The human region names the playbook, so a reader who opens the file sees
     # what it is before any machine field.
     assert "# competitor-scan" in text
+
+
+def test_save_writes_one_file_and_nothing_else(tmp_path):
+    """One directory, one playbook.md: no sidecar travels with the file."""
+    store = _store(tmp_path)
+    store.save(_spec("no sidecar"))
+    entries = sorted(p.name for p in (tmp_path / "competitor-scan").iterdir())
+    assert entries == ["playbook.md"]
+
+
+def test_notes_render_into_the_body_not_the_block(tmp_path):
+    store = _store(tmp_path)
+    store.save(_spec("with notes"), notes=["Open question: what is the scan for?", "Assumption: weekly cadence"])
+
+    text = (tmp_path / "competitor-scan" / "playbook.md").read_text(encoding="utf-8")
+    body, block = text.split("```yaml playbook-spec", 1)
+    assert "## Open questions" in body
+    assert "- Open question: what is the scan for?" in body
+    assert "Assumption: weekly cadence" in body
+    assert "Open question" not in block
+
+    # The body is informational only: the notes do not come back as fields.
+    loaded = store.load("competitor-scan")
+    assert loaded.description == "with notes"
+
+
+def test_hand_written_directory_loads(tmp_path):
+    """A directory holding only a hand-written playbook.md is a playbook."""
+    target = tmp_path / "hand-made"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: hand-made\ndescription: written by hand\n---\n\n"
+        "free-form body the machine never parses\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: prompt\nconfirm: true\n"
+        "triggers:\n  keywords: [handmade]\n"
+        "prompts: one research node, then one content node depending on it\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    store = _store(tmp_path)
+    assert store.list_ids() == ["hand-made"]
+    spec = store.load("hand-made")
+    assert spec.mode == "prompt" and spec.description == "written by hand"
+
+
+# --- The two-layer library: a writable user root over the packaged builtin root.
+
+
+def _write_md(root, name: str, description: str) -> None:
+    target = root / name
+    target.mkdir(parents=True)
+    (target / "playbook.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\nbody\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: prompt\nconfirm: true\n"
+        f"triggers:\n  keywords: [{name}]\n"
+        "prompts: one research node\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+
+def _layered(tmp_path) -> PlaybookStore:
+    (tmp_path / "user").mkdir(exist_ok=True)
+    (tmp_path / "builtin").mkdir(exist_ok=True)
+    return PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
+
+
+def test_list_ids_merges_both_layers(tmp_path):
+    store = _layered(tmp_path)
+    _write_md(tmp_path / "builtin", "briefing", "builtin briefing")
+    _write_md(tmp_path / "builtin", "shared-name", "builtin flavour")
+    _write_md(tmp_path / "user", "shared-name", "user flavour")
+    _write_md(tmp_path / "user", "mine", "user only")
+
+    assert store.list_ids() == ["briefing", "mine", "shared-name"]
+    assert store.origin_of("briefing") == "builtin"
+    assert store.origin_of("mine") == "user"
+    assert store.origin_of("shared-name") == "user"
+    assert store.origin_of("absent") is None
+
+
+def test_user_layer_shadows_builtin_and_warns_once(tmp_path):
+    store = _layered(tmp_path)
+    _write_md(tmp_path / "builtin", "shared-name", "builtin flavour")
+    _write_md(tmp_path / "user", "shared-name", "user flavour")
+
+    lines: list[str] = []
+    sink_id = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    try:
+        first = store.load("shared-name")
+        second = store.load("shared-name")
+    finally:
+        logger.remove(sink_id)
+
+    assert first.description == "user flavour"
+    assert second.description == "user flavour"
+    shadow_warnings = [line for line in lines if "shadows the builtin" in line]
+    assert len(shadow_warnings) == 1
+
+
+def test_builtin_is_read_only_through_save(tmp_path):
+    """No write path reaches the builtin layer: a name clash without
+    ``overwrite`` refuses, and with it the write lands as a user shadow."""
+    store = _layered(tmp_path)
+    _write_md(tmp_path / "builtin", "competitor-scan", "the shipped one")
+    before = (tmp_path / "builtin" / "competitor-scan" / "playbook.md").read_bytes()
+
+    with pytest.raises(PlaybookExistsError):
+        store.save(_spec("my own take"))
+
+    saved_to = store.save(_spec("my own take"), overwrite=True)
+    assert saved_to == tmp_path / "user" / "competitor-scan" / "playbook.md"
+    assert (tmp_path / "builtin" / "competitor-scan" / "playbook.md").read_bytes() == before
+    assert store.is_shadowing("competitor-scan")
+    assert store.load("competitor-scan").description == "my own take"
+
+
+def test_generated_playbook_lands_in_the_user_layer(tmp_path):
+    store = _layered(tmp_path)
+    path = store.save(_spec("fresh from the generator"))
+    assert path == tmp_path / "user" / "competitor-scan" / "playbook.md"
+    assert store.origin_of("competitor-scan") == "user"
+
+
+def test_shipped_builtins_load_and_validate(tmp_path):
+    """The packaged library is not exempt from its own rules: every shipped
+    playbook loads, passes the field definition, and has a trigger vocabulary."""
+    from raven.playbook.store import BUILTIN_ROOT
+    from raven.playbook.validate import validate_structure
+
+    store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
+    names = store.list_ids()
+    assert names == ["deep-dive", "topic-briefing"]
+    modes = set()
+    for name in names:
+        spec = store.load(name)
+        assert store.origin_of(name) == "builtin"
+        assert validate_structure(spec) == [], name
+        assert spec.triggers.keywords, name
+        modes.add(spec.mode)
+    # One of each mode, so both execution paths ship a worked example.
+    assert modes == {"dag", "prompt"}
+
+
+@pytest.mark.parametrize("name", ["../escape", "/tmp/absolute", "UPPER", "a b", ""])
+def test_save_refuses_a_name_that_is_not_a_directory_name(tmp_path, name):
+    """The name is the directory the file lands in, and both creation entries
+    can reach save() with a value pydantic never checked (model_copy runs no
+    validators) -- so the write is where the shape is enforced."""
+    store = _store(tmp_path)
+    spec = _spec("fine").model_copy(update={"name": name})
+    with pytest.raises(ValueError):
+        store.save(spec)
+    assert list(tmp_path.rglob("playbook.md")) == []
