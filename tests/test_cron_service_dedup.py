@@ -27,11 +27,12 @@ def svc(tmp_path: Path) -> CronService:
     return CronService(tmp_path / "jobs.json")
 
 
-def _add(svc, msg, schedule, *, channel="tui", to="direct", topic_tag=None):
+def _add(svc, msg, schedule, *, channel="tui", to="direct", topic_tag=None, deliver=False):
     return svc.add_job(
         name=msg[:30],
         schedule=schedule,
         message=msg,
+        deliver=deliver,
         channel=channel,
         to=to,
         topic_tag=topic_tag,
@@ -174,3 +175,20 @@ def test_topic_tag_dedup_runs_before_message_equal(svc):
         topic_tag="meds_morning",
     )
     assert j1.id == j2.id
+
+
+def test_topic_tag_dedup_takes_the_new_deliver_flag(svc):
+    """An in-place update has to carry the caller's flag, not the old one.
+
+    The dedup branches update a job the caller believes it is creating, so
+    every field the caller passed has to land. ``deliver`` did not: the branch
+    updated message, name and schedule and left the flag as first registered,
+    so a re-registration asking for delivery was silently answered with the
+    original value.
+    """
+    first = _add(svc, "take meds", CronSchedule(kind="every", every_ms=60_000), topic_tag="meds", deliver=False)
+    again = _add(svc, "take the meds", CronSchedule(kind="every", every_ms=90_000), topic_tag="meds", deliver=True)
+
+    assert again.id == first.id, "topic_tag dedup should have updated in place"
+    assert again.payload.deliver is True
+    assert svc.list_jobs()[0].payload.deliver is True
