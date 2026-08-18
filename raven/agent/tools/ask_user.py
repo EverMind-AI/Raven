@@ -124,20 +124,6 @@ class AskUserTool(Tool):
         """Set the current turn's conversation_id (the broker key, turn-local)."""
         self._cid.set(conversation_id)
 
-    async def ask_direct(self, prompt: str, choices: list[str] | None, conversation_id: str) -> str | None:
-        """One host-side question outside a model tool call.
-
-        For host machinery that must confirm with the user before the model
-        is even involved (the playbook funnel's whole-run confirm gate).
-        Returns ``None`` when the round-trip is structurally unavailable (no
-        broker, no conversation) -- the caller decides what that means -- and
-        otherwise the user's answer, which is ``""`` on timeout or
-        cancellation (the broker never raises).
-        """
-        if not self._broker or not conversation_id:
-            return None
-        return await self._broker.await_question(conversation_id, prompt=prompt, choices=_normalize_options(choices))
-
     @property
     def name(self) -> str:
         return "ask_user"

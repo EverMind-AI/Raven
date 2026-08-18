@@ -303,7 +303,7 @@ class TestTheCommand:
         assert opened == [], "the gateway it starts opens the browser itself"
 
     def test_it_waits_for_a_supervisor_that_is_between_restarts(
-        self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch
+        self, home: Path, a_built_page, supervised: list[int], monkeypatch
     ) -> None:
         """A live supervisor with no gateway answering yet is a restart in flight.
         Starting a second one would leave two racing for the same port."""
@@ -317,10 +317,9 @@ class TestTheCommand:
         serve_commands._web(port=18999)
 
         assert supervised == [], "it started a second supervisor beside a live one"
-        assert opened == ["http://127.0.0.1:18999/auth#z"]
 
     def test_a_dead_supervisor_s_leftover_file_is_a_first_launch(
-        self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch
+        self, home: Path, a_built_page, supervised: list[int], monkeypatch
     ) -> None:
         """web.json is removed on a clean exit only, so a killed supervisor leaves
         one behind. Reading it as live would leave the page with no engine at all."""
@@ -332,7 +331,6 @@ class TestTheCommand:
         serve_commands._web(port=18999)
 
         assert supervised == [18999]
-        assert opened == ["http://127.0.0.1:18999/auth#z"]
 
     def test_a_gateway_that_never_comes_up_is_reported_not_opened(
         self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch
@@ -362,7 +360,7 @@ class TestTheCommand:
         assert started == [] and opened == [] and supervised == []
 
     def test_no_page_built_refuses_instead_of_opening_the_placeholder(
-        self, two_candidates, home: Path, opened: list[str], started: list[int], supervised: list[int]
+        self, two_candidates, home: Path, started: list[int], supervised: list[int]
     ) -> None:
         """`serve` is still useful with no page -- the WebSocket is the point of it
         -- but the page is the whole point of `web`."""
@@ -370,7 +368,7 @@ class TestTheCommand:
             serve_commands._web(port=18999)
 
         assert exit_info.value.exit_code == 1
-        assert started == [] and supervised == [] and opened == []
+        assert started == [] and supervised == []
 
 
 class _FakeProc:

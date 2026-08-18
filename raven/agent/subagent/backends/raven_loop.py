@@ -241,8 +241,7 @@ class RavenLoopBackend:
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         # A resumed instance brings its own history, system prompt included;
-        # rebuilding the prompt here would append a second system turn. A
-        # fresh run's prompt carries the role's skill whitelist.
+        # rebuilding the prompt here would append a second system turn.
         messages: list[dict[str, Any]] = (
             list(history)
             if history
@@ -302,7 +301,7 @@ class RavenLoopBackend:
                     # something the sub-agent did, and it is the one a reader
                     # asking "what happened" most needs to see.
                     activity.note_tool_call(tool_call.name)
-                    result = await tools.execute(tool_call.name, tool_call.arguments)
+                    result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # The subagent's loop is an untrusted-data path too — fence its
                     # tool output like the main loop does in add_tool_result.
                     messages.append(

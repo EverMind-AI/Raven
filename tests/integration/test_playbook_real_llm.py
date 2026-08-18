@@ -7,9 +7,8 @@ neither collects nor reports it. Run it explicitly:
     uv run pytest tests/integration/test_playbook_real_llm.py -v
 
 Assertions check decision-level expectations (mode, role casting, faithful
-step transcription, honest self-reporting), not exact output text — the
-generator is a model call, so the only stable contract is the shape of its
-decisions.
+step transcription, draft gating), not exact output text — the generator is a
+model call, so the only stable contract is the shape of its decisions.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ _CASES = yaml.safe_load(
 
 
 def _make_generator():
-    from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
+    from raven.memory_engine.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(api_key=OPENROUTER_KEY, default_model=MODEL, provider_name="openrouter")
@@ -70,11 +69,11 @@ def _make_generator():
 @pytest.mark.parametrize("case", _CASES, ids=[c["id"] for c in _CASES])
 async def test_case(case):
     gen = _make_generator()
-    result = await gen.generate(case["input"], skills=case.get("pinned_skills"))
-    spec = result.spec
+    spec = await gen.generate(case["input"], skills=case.get("pinned_skills"))
     expect = case["expect"]
 
     assert spec.mode == expect["mode"], f"mode: got {spec.mode}, want {expect['mode']}"
+    assert spec.status == expect.get("status", "draft")
 
     if "agents_used" in expect:
         used = {n.agent for n in spec.nodes or []}
@@ -86,10 +85,13 @@ async def test_case(case):
         assert len(roots) >= 2, "expected two independent scan nodes"
     if expect.get("prompts_required"):
         assert (spec.prompts or "").strip(), "prompt mode must ship assembly guidance"
-    if "open_questions_min" in expect:
-        questions = [n for n in result.notes if n.startswith("Open question:")]
-        assert len(questions) >= expect["open_questions_min"], result.notes
+    if "blocking_questions_min" in expect:
+        assert len(spec.provenance.blocking_questions) >= expect["blocking_questions_min"]
     if "must_reference_skills" in expect:
         bound = {s for n in spec.nodes or [] for s in n.skills}
         joined_prompts = spec.prompts or ""
         assert all(sk in bound or sk in joined_prompts for sk in expect["must_reference_skills"])
+    if "specified_by_user_covers" in expect:
+        joined = " ".join(spec.provenance.specified_by_user)
+        for token in expect["specified_by_user_covers"]:
+            assert token in joined, f"specified_by_user should cover {token!r}"

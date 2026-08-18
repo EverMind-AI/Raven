@@ -125,7 +125,6 @@ upgrade_commands.register(app)
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
 from raven.cli.deep_research_commands import deep_research_app
-from raven.cli.playbook_commands import playbook_app
 from raven.cli.provider_commands import provider_app
 from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
@@ -134,7 +133,6 @@ from raven.cli.skill_commands import skill_app
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
 app.add_typer(deep_research_app, name="deep-research")
-app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
@@ -186,6 +184,15 @@ def run() -> None:
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
         raise SystemExit(1) from exc
+    finally:
+        # Every command loads the config, so any of them can be the one that
+        # migrates it -- `status`, `provider list`, `cron list`. Only `agent` and
+        # `gateway` say so up front, and an unsaid notice is lost rather than
+        # deferred: the watermark leaves the next load with nothing to report.
+        # So this is the catch-all for every other command.
+        from raven.cli._helpers import print_config_migration_notices
+
+        print_config_migration_notices()
 
 
 if __name__ == "__main__":

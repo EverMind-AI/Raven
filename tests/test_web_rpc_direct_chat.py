@@ -57,9 +57,7 @@ async def test_the_web_spine_tags_a_direct_turns_events_with_its_target() -> Non
     scheduler, _hub, turn_ids, teardown = build_web(_Loop(), emitter, direct_targets=targets)
     try:
         turn_ids["web:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="web:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="web:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -75,9 +73,7 @@ async def test_a_main_agent_turn_on_the_web_channel_stays_untagged() -> None:
     scheduler, _hub, turn_ids, teardown = build_web(_Loop(), emitter, direct_targets={})
     try:
         turn_ids["web:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="web:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="web:c1"))
         await handle.result()
     finally:
         await teardown()

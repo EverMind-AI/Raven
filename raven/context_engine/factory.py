@@ -71,14 +71,12 @@ def build_context_engine(
     model: str,
     context_window_tokens: int,
     get_tool_definitions: Callable[[], list[dict]],
-    get_tool_notices: Callable[[], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
-    playbook_listing: Callable[[], list[tuple[str, str]]] | None = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -116,7 +114,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace, playbook_listing=playbook_listing),
+        IdentitySegmentBuilder(workspace),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
@@ -135,6 +133,12 @@ def build_context_engine(
             ),
             hub_client=skill_hub_client,
             get_tool_definitions=get_tool_definitions,
+            min_safety=skill_forge_router_config.hub.min_safety,
+            blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+            auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
+            install_audit_path=(
+                workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
+            ),
         ),
         CuratorSegmentBuilder(
             workspace=workspace,
@@ -146,7 +150,7 @@ def build_context_engine(
             now_fn=now_fn,
         ),
     ]
-    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices)
+    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)
 
 
 def _build_router(
@@ -213,6 +217,7 @@ def _build_router(
         sources=sources,
         over_fetch_factor=skill_forge_router_config.over_fetch_factor,
         dedup_by=skill_forge_router_config.dedup_by,
+        rrf_k=skill_forge_router_config.rrf_k,
     )
 
 

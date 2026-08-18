@@ -265,7 +265,6 @@ def test_set_tool_context_hands_deliver_files_the_channel_and_session_key() -> N
 
     class _Stub:
         tools = _Tools()
-        _playbooks = None
 
     AgentLoop._set_tool_context(_Stub(), "web", "default", None, session_key="web:s1")
 
@@ -291,7 +290,6 @@ def test_an_im_turn_never_sees_deliver_files_in_the_schema(tool) -> None:
 
     class _Loop:
         tools = registry
-        _playbooks = None
 
     def offered() -> set[str]:
         return {d["function"]["name"] for d in registry.get_definitions()}

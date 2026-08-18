@@ -121,7 +121,7 @@ def _collect():
 
 
 def test_pieces_satisfy_their_spine_protocols():
-    assert isinstance(RpcTurnRunner(object(), FakeEmitter(), {}, {}), TurnRunner)
+    assert isinstance(RpcTurnRunner(object(), FakeEmitter(), {}, {}, {}), TurnRunner)
     outlet = RpcOutlet("tui", FakeEmitter())
     assert isinstance(outlet, Outlet)
     assert isinstance(outlet, SupportsStreaming)
@@ -135,7 +135,7 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     rich = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cost_usd": 0.01, "context_used": 42}
     loop = _RunTurnLoop(events=[StreamDelta(delta="he"), StreamDelta(delta="llo")], usage=rich)
     usages: dict[str, dict] = {}
-    runner = RpcTurnRunner(loop, FakeEmitter(), usages, {})
+    runner = RpcTurnRunner(loop, FakeEmitter(), usages, {}, {})
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
     events, emit = _collect()
 
@@ -154,10 +154,15 @@ async def test_user_turn_receives_tui_approval_capability(tmp_path):
     tool = ExecTool(executor=executor, working_dir=str(tmp_path))
     loop = _ApprovalRunLoop(tool)
     responder = _ApprovalResponder(True)
-    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
-    # The id rides the request: the lane resolved it before the runner ran, so the
-    # approval binding names this turn rather than whatever a per-lane slot holds.
-    req = TurnRequest(origin=Origin.USER, source=_src(), text="delete", conversation="tui:c1", turn_id="turn-a")
+    runner = RpcTurnRunner(
+        loop,
+        FakeEmitter(),
+        {},
+        {"tui:c1": "turn-a"},
+        {},
+        approval_responder=responder,
+    )
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="delete", conversation="tui:c1")
     _events, emit = _collect()
 
     await runner.run(req, emit, lambda: [])
@@ -171,8 +176,15 @@ async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
     tool = ExecTool(executor=executor, working_dir=str(tmp_path))
     loop = _ApprovalRunLoop(tool)
     responder = _ApprovalResponder(True)
-    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, approval_responder=responder)
-    req = TurnRequest(origin=Origin.CRON, source=_src(), text="delete", conversation="cron:c1", turn_id="turn-a")
+    runner = RpcTurnRunner(
+        loop,
+        FakeEmitter(),
+        {},
+        {"cron:c1": "turn-a"},
+        {},
+        approval_responder=responder,
+    )
+    req = TurnRequest(origin=Origin.CRON, source=_src(), text="delete", conversation="cron:c1")
     _events, emit = _collect()
 
     await runner.run(req, emit, lambda: [])
@@ -192,8 +204,8 @@ async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fire
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     loop.run_turn = _run_turn
-    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {})
-    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="T7")
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {"tui:c1": "T7"}, {})
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
     events, emit = _collect()
 
     await runner.run(req, emit, lambda: [])
@@ -206,7 +218,7 @@ async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fire
 
 async def test_runner_no_synthetic_when_message_tool_did_not_fire():
     loop = _RunTurnLoop(tools={"message": MessageTool()})  # sent flag stays False
-    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {})
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {"tui:c1": "T7"}, {})
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"), emit, lambda: [])
     assert events == []  # no synthetic completion
@@ -218,7 +230,7 @@ async def test_runner_cron_captures_reply_non_streaming():
     # would deliver nowhere). Mirrors the gateway's GatewayTurnRunner read-back.
     loop = _RunTurnLoop(reply_text="reminder fired")
     readback: dict[str, str] = {}
-    runner = RpcTurnRunner(loop, FakeEmitter(), {}, readback)
+    runner = RpcTurnRunner(loop, FakeEmitter(), {}, {}, readback)
     req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
     events, emit = _collect()
 
@@ -462,9 +474,7 @@ async def test_streaming_turn_emits_token_deltas_then_message_complete():
     scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"  # turn.send binds this; emulate here
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -495,9 +505,7 @@ async def test_interleaved_events_keep_emit_order_through_one_queue():
     scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -513,9 +521,7 @@ async def test_non_streamed_text_reaches_the_wire_as_a_token_delta():
     scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -531,9 +537,7 @@ async def test_empty_stream_turn_still_emits_message_complete():
     scheduler, hub, turn_ids, teardown = build_rpc_spine(_RunTurnLoop(events=[]), emitter)
     try:
         turn_ids["tui:c1"] = "t9"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t9")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -606,193 +610,12 @@ async def test_cancelled_turn_does_not_emit_error():
     try:
         handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await started.wait()
-        await handle.cancel()
+        handle.cancel()
         await handle.result()
     finally:
         await teardown()
 
     assert emitter.emitted == []  # no error from the sink on cancellation
-
-
-# ---------------------------------------------------------------------------
-# Turn identity: which turn a completion says ended, and whose slots it releases
-# ---------------------------------------------------------------------------
-
-
-async def test_an_internally_submitted_turns_completion_carries_its_own_id():
-    """A lane is serial, so a turn the runtime submits itself (a sub-agent
-    announce, a deep-research delivery) can end while a client's turn is still
-    QUEUED behind it on the same lane. Stamping the completion from the lane's
-    slot names the queued turn instead, and the client reads its own turn as
-    ended -- losing that turn's whole content. The completion must name the turn
-    that actually ended.
-    """
-    emitter = FakeEmitter()
-    loop = _RunTurnLoop(events=[Text(content="announce")])
-    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
-    try:
-        turn_ids["tui:c1"] = "u1"  # turn.send bound the client's turn; it is queued
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="done", conversation="tui:c1")
-        )
-        await handle.result()
-    finally:
-        await teardown()
-
-    completions = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
-    assert len(completions) == 1, emitter.emitted
-    stamped = completions[0]["payload"]["turn_id"]
-    assert stamped != "u1", "the announce turn's end was reported under the client turn's id"
-    assert isinstance(stamped, str) and stamped
-
-
-async def test_an_internally_submitted_turns_end_leaves_the_client_slots_alone():
-    """The lane's client-facing slots belong to the turn ``turn.send`` bound them
-    for. Releasing them at another turn's end opens the -32003 guard for a second
-    send and leaves the queued turn's own end with no binding to report against.
-    """
-    emitter = FakeEmitter()
-    loop = _RunTurnLoop(events=[Text(content="announce")])
-    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
-    ended: list[str] = []
-    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
-        loop, emitter, direct_targets=targets, on_turn_end=ended.append
-    )
-    try:
-        turn_ids["tui:c1"] = "u1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="done", conversation="tui:c1")
-        )
-        await handle.result()
-    finally:
-        await teardown()
-
-    assert turn_ids["tui:c1"] == "u1"
-    assert targets == {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
-    assert ended == []
-
-
-async def test_a_turn_nobody_bound_still_reports_a_populated_turn_id():
-    """``MessageCompletePayload.turn_id`` is a required ``str``, yet a turn no
-    client bound an id for used to complete with ``None`` -- a frame a strict
-    validator rejects, and the shape that makes a consumer's own-id guard fall
-    through. The lane mints one, so no turn ends unidentified.
-    """
-    emitter = FakeEmitter()
-    loop = _RunTurnLoop(events=[Text(content="announce")])
-    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter)
-    try:
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="done", conversation="tui:c1")
-        )
-        await handle.result()
-    finally:
-        await teardown()
-
-    completions = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
-    assert len(completions) == 1, emitter.emitted
-    stamped = completions[0]["payload"]["turn_id"]
-    assert isinstance(stamped, str) and stamped, f"turn_id must always be populated; got {stamped!r}"
-
-
-async def test_the_owning_turns_end_still_releases_its_slots():
-    """The gate must not become a leak: the turn that bound the lane's slots is
-    still the one that frees them, or the -32003 guard never reopens."""
-    emitter = FakeEmitter()
-    loop = _RunTurnLoop(events=[Text(content="done")])
-    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
-    ended: list[str] = []
-    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
-        loop, emitter, direct_targets=targets, on_turn_end=ended.append
-    )
-    try:
-        turn_ids["tui:c1"] = "u1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="u1")
-        )
-        await handle.result()
-    finally:
-        await teardown()
-
-    assert "tui:c1" not in turn_ids
-    assert targets == {}
-    assert ended == ["tui:c1"]
-    completions = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
-    assert completions[0]["payload"]["turn_id"] == "u1"
-
-
-async def test_a_non_owning_turns_end_does_not_clobber_the_owners_live_usage():
-    """``usages`` is keyed by lane (``conversation_id``), the same key
-    ``turn_ids`` / ``direct_targets`` use -- a turn cancelled while queued and
-    the turn that actually owns the lane share it. ``_drop``'s pop must be
-    gated by ownership like those other releases already are, or a non-owning
-    turn's end pops the owner's just-written usage out from under it, and the
-    owner's own message.complete then reports it zeroed."""
-    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
-    from raven.spine.delivery import DeliveryHub
-    from raven.spine.events import TurnEnded, TurnFailed
-
-    hub = DeliveryHub()
-    emitter = FakeEmitter()
-    turn_ids = {"tui:c1": "owner"}
-    usages: dict[str, dict] = {}
-    direct_targets: dict[str, dict] = {}
-    outlet = RpcOutlet("tui", emitter, direct_targets)
-    hub.register(outlet)
-    sink = _make_rpc_sink(hub, outlet, "tui", turn_ids, usages, direct_targets, None)
-
-    rich = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-    usages["tui:c1"] = dict(rich)  # the owner's runner wrote this before its own TurnEnded fired
-
-    # A different turn on the same lane, cancelled while queued, ends first.
-    await sink(TurnFailed(error="cancelled", cancelled=True, conversation_id="tui:c1", turn_id="queued-1"))
-
-    assert usages.get("tui:c1") == rich, "a non-owning turn's end must not drop the owner's live usage"
-
-    await sink(
-        TurnEnded(
-            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            latency_ms=1.0,
-            explicit_reply=True,
-            conversation_id="tui:c1",
-            turn_id="owner",
-        )
-    )
-    completions = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
-    assert len(completions) == 1
-    assert completions[0]["payload"]["usage"] == rich
-
-
-async def test_the_synthetic_message_tool_call_id_uses_the_turns_own_id():
-    """The synthetic id is derived from the turn, not from the lane's slot: read
-    from the slot, an internally submitted turn's synthetic completion collides
-    with the client turn queued behind it, and a client turn whose slot was
-    already released gets a bare ``msg-``."""
-    message_tool = MessageTool()
-
-    class _MessageToolLoop:
-        tools = {"message": message_tool}
-
-        async def run_turn(self, req, emit, drain, **_kwargs) -> TurnOutcome:
-            message_tool._turn.set(replace(message_tool._cur(), sent=True))
-            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
-
-    emitter = FakeEmitter()
-    scheduler, _hub, turn_ids, teardown = build_rpc_spine(_MessageToolLoop(), emitter)
-    try:
-        turn_ids["tui:c1"] = "u1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="done", conversation="tui:c1")
-        )
-        await handle.result()
-    finally:
-        await teardown()
-
-    completes = [e for _k, e in emitter.emitted if e["type"] == "tool.complete"]
-    assert len(completes) == 1, emitter.emitted
-    tcid = completes[0]["payload"]["tool_call_id"]
-    assert tcid != "msg-u1"
-    assert tcid.startswith("msg-") and len(tcid) > len("msg-")
 
 
 class TestDagProgressSink:
@@ -931,9 +754,7 @@ async def test_a_direct_turns_events_carry_its_target():
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -952,9 +773,7 @@ async def test_a_streamed_direct_turn_tags_every_chunk():
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -972,9 +791,7 @@ async def test_the_turns_end_drops_the_binding():
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -995,9 +812,7 @@ async def test_a_failed_direct_turn_reports_against_its_target():
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter, direct_targets=targets)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -1012,9 +827,7 @@ async def test_a_main_agent_turn_emits_no_target_key_at_all():
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets={})
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -1128,7 +941,6 @@ async def test_a_direct_turns_events_reach_the_sessions_subscription():
                 text="hi",
                 conversation="tui:c1#A/one",
                 direct_target=("A", "one"),
-                turn_id="t1",
             )
         )
         await handle.result()

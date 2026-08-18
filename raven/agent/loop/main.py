@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
@@ -16,11 +15,18 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.context import ContextBuilder
+from raven.agent.loop.failure_streak import (
+    failure_class,
+    is_hard_tool_failure,
+    loop_break_nudge,
+)
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
+    is_only_think_debris,
+    strip_think_blocks,
 )
 from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
@@ -47,7 +53,11 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    send_max_tokens,
+)
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
@@ -55,6 +65,16 @@ from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin, session_of
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
+
+# How long a turn is willing to wait on plugin-side indexing before letting the
+# write finish on its own. A budget, not a deadline: the task keeps running.
+_STORE_TURN_BUDGET_S: float = 5.0
+# Outstanding detached writes past which a turn waits for one to land, so a slow
+# memory service cannot grow an unbounded queue behind a fast typist.
+_STORE_MAX_INFLIGHT: int = 4
+# Teardown's total budget for letting those writes finish.
+_STORE_DRAIN_BUDGET_S: float = 15.0
+
 
 # Runtime prose, not the model's: written here and shown to the model so it
 # stops, and carried to the client as a notice rather than as an answer. It
@@ -195,22 +215,6 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
-# Failure markers a plain retry would likely clear — these must NOT count toward
-# the tool-failure-loop streak (nudging on a 429 that self-heals is just noise).
-_TRANSIENT_FAILURE_MARKERS = (
-    "429",
-    "rate limit",
-    "timed out",
-    "timeout",
-    "no healthy upstream",
-    "502",
-    "503",
-)
-# Successful-but-empty results: the tool ran fine and just found nothing. A
-# repeated empty search is legitimate exploration, not a stuck dead call, so it
-# must NOT count toward the failure streak.
-_EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
-
 # Marks the synthetic user message that carries images a transport cannot put in
 # a tool result. Not persisted: the tool result above it already names the file
 # path, so the only thing this message would add to the transcript is a user turn
@@ -244,41 +248,6 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
     return out
 
 
-def _is_hard_tool_failure(result: object) -> bool:
-    """True for a deterministic tool failure (recurs on an identical retry).
-
-    False for success or a transient/retryable error. Used to decide whether a
-    repeated identical tool call is a stuck loop worth breaking.
-    """
-    s = str(result)
-    low = s.lower()
-    if any(m in low for m in _TRANSIENT_FAILURE_MARKERS):
-        return False
-    if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
-        return False
-    m = re.search(r"Exit code:\s*(-?\d+)", s)
-    if m:
-        return m.group(1) != "0"
-    # Real not-found failures (file / dir / path / old_text) all start with
-    # "Error:" or carry a non-zero exit code, so those are already covered; a
-    # bare "not found" scan would only risk flagging successful output that
-    # merely mentions the phrase.
-    return s.lstrip().startswith("Error") or "error:" in low[:80]
-
-
-def _loop_break_nudge(tool: str, n: int) -> str:
-    """Injected when the same tool fails deterministically N times running, so
-    the model stops repeating a dead approach instead of adapting."""
-    return (
-        f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
-        "Stop repeating it. If it is an external dependency (network/API/search), "
-        "complete what you can offline from local data and report what stayed blocked. "
-        "If it is a file or path error, re-examine the EXACT path before any retry — "
-        "do not call it again unchanged. Otherwise change approach: a different tool, "
-        "command, or strategy."
-    )
-
-
 def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
     """A tool's own label for its transcript row, or None if it cannot give one.
 
@@ -302,16 +271,12 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
         return None
 
 
-_MCP_TURN_WAIT_S = 90.0
+_MCP_TURN_WAIT_S = 20.0
 """How long a turn waits for the first MCP sync before proceeding without it.
 
-Mirrors the manager's own per-handshake budget (``_HANDSHAKE_TIMEOUT``), so a
-cold stdio server downloading its package on first run still makes it into the
-very turn a user sends after installing it. The sync no longer includes anyone
-waiting on a person -- a connect that reaches the browser-authorization step is
-marked ``auth_required`` and left behind by the sync itself -- and it connects
-servers concurrently, so in practice this bound is the slowest single
-handshake, not a sum. See ``AgentLoop._connect_mcp``.
+Long enough for local stdio servers to hand over their tool lists, short enough
+that a server parked on an authorization nobody answered does not become the
+reader's wait. See ``AgentLoop._connect_mcp``.
 """
 
 
@@ -474,18 +439,12 @@ class AgentLoop:
         # real window. ("Explicit", not "pinned" -- Provider Pin is a different
         # registered term, see CONTEXT.md.)
         self._context_window_explicit = bool(context_window_tokens)
-        if context_window_tokens == 65536:
-            # The retired schema default, which the old bootstrap wrote to
-            # disk verbatim -- so on upgraded installs this exact value is
-            # more often a fossil than a choice. The config is deliberately
-            # not rewritten (a value the user can see in their own file stays
-            # theirs); this line is what keeps that stance from failing
-            # silently.
-            logger.warning(
-                "contextWindowTokens: 65536 is pinning the context window (the old default, "
-                "written out by earlier versions); remove the line from config.json to size "
-                "it from each model's real window"
-            )
+        # No special case for 65536 here any more: the retired default the old
+        # bootstrap wrote to disk is cleared where it lives, once, by
+        # ``config.loader._migrate_legacy_context_window``. Whatever reaches
+        # this constructor is therefore a real choice, and warning about a real
+        # choice would just be noise.
+        #
         # allow_fetch=False: construction must not block on a synchronous
         # network call for an OpenRouter model's window -- whatever is already
         # cached (in-process or on disk, any age) answers instead. See
@@ -518,6 +477,12 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
+        # Writes that outran their turn budget and are still running. Held so
+        # teardown can drain them instead of dropping whatever was slowest.
+        self._store_inflight: set[asyncio.Task] = set()
+        # Writes refused because indexing never caught up. Reported at teardown:
+        # a dropped write is a turn the user will not be able to recall.
+        self._store_dropped = 0
 
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
@@ -577,6 +542,13 @@ class AgentLoop:
             workspace,
             skill_forge_router_config,
         )
+        # Install-policy knobs for the use_skill tool (registered later in
+        # ``_register_builtin_tools``, which no longer sees these configs).
+        self._skill_min_safety = float(
+            getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
+        )
+        self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine" = build_context_engine(
             workspace=workspace,
@@ -586,10 +558,6 @@ class AgentLoop:
             model=self.model,
             context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
-            # Late-bound: the playbook runtime is built after the context
-            # engine, and the library can change between turns.
-            playbook_listing=lambda: self._playbooks.listing() if self._playbooks is not None else [],
-            get_tool_notices=self._mcp_tool_notices,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
             # SkillForgeRouter + EverOS recall lane.
@@ -988,25 +956,6 @@ class AgentLoop:
                     charge=self.subagents.charge_dag_run,
                 )
             )
-        # The agent's own entry into the playbook library. Registered only when
-        # the library actually holds something matchable: the passive funnel
-        # already decided before this turn, so this tool exists for the cases it
-        # structurally cannot catch -- a request that means a playbook without
-        # using any of its trigger words, and a parameter supplied only after a
-        # previous run asked for it -- and an empty roster has neither.
-        if self._playbooks is not None and not self._playbooks.empty:
-            from raven.agent.tools.run_playbook import RunPlaybookTool
-
-            self.tools.register(RunPlaybookTool(self._playbooks))
-        # Creation registers whenever the feature is on -- an empty library is
-        # exactly when capturing the first workflow matters.
-        if self._playbooks is not None:
-            from raven.agent.tools.create_playbook import CreatePlaybookTool
-            from raven.config.update import set_playbook_disabled
-
-            self.tools.register(
-                CreatePlaybookTool(self._playbook_generator, self._playbook_store, set_playbook_disabled)
-            )
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -1044,7 +993,18 @@ class AgentLoop:
                 ReadSkillTool(client=self._skill_hub_client, registry=skill_registry),
             )
             self.tools.register(
-                UseSkillTool(client=self._skill_hub_client, registry=skill_registry),
+                UseSkillTool(
+                    client=self._skill_hub_client,
+                    registry=skill_registry,
+                    min_safety=self._skill_min_safety,
+                    blocklist=self._skill_blocklist,
+                    auto_install=self._skill_auto_install,
+                    install_audit_path=(
+                        self.workspace / "skills" / "hub" / "installs.jsonl"
+                        if self._skill_hub_client is not None
+                        else None
+                    ),
+                ),
             )
 
         # Progressive tool disclosure. Registered last so the catalog it
@@ -1089,13 +1049,9 @@ class AgentLoop:
         one announce path.
         """
         from raven.agent.subagent_dag.tool import SubAgentDagTool
-        from raven.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
+        from raven.memory_engine.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
 
-        # The user layer of the two-layer library; the builtin layer is the
-        # store's own default. ``subagents.workspace`` is agent home here, so
-        # playbooks sit beside memory and skills rather than following the
-        # per-turn working directory.
-        user_layer = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
+        library_dir = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
         dag_tool = SubAgentDagTool(
             workspace=self.subagents.workspace,
             third_party_subagents=self._third_party_subagents,
@@ -1107,7 +1063,7 @@ class AgentLoop:
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
         )
-        from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
+        from raven.memory_engine.playbook import agent_roster, load_role_pool
 
         executor = PlaybookExecutor(
             backend_factory=self.subagents.build_role_backend,
@@ -1115,31 +1071,13 @@ class AgentLoop:
             provider=self.provider,
             compose_model=cfg.model,
         )
-        roster = agent_roster(load_role_pool())
-        executor.set_roster(roster)
-        store = PlaybookStore(user_layer)
-        # Kept for the create_playbook tool: creation shares the library and
-        # generator with the funnel, so both entries write the same place.
-        self._playbook_store = store
-        self._playbook_generator = PlaybookGenerator(self.provider, None, roster, StaticInventory(), model=cfg.model)
-
-        async def ask_via_broker(prompt: str, choices: "list[str] | None", conversation_id: str):
-            # Resolved per call, not captured: the tool exists after
-            # _register_default_tools and the transport injects its broker
-            # later still. None (no tool / no broker) tells the runtime the
-            # environment cannot ask, which it treats as consent-not-required.
-            tool = self.tools.get("ask_user")
-            if isinstance(tool, AskUserTool):
-                return await tool.ask_direct(prompt, choices, conversation_id)
-            return None
-
+        executor.set_roster(agent_roster(load_role_pool()))
         return PlaybookRuntime(
             provider=self.provider,
-            store=store,
+            store=PlaybookStore(library_dir),
             executor=executor,
             model=cfg.model,
-            disabled=cfg.disabled,
-            ask=ask_via_broker,
+            include_draft=cfg.match_draft,
         )
 
     def _dag_guide_skill_id(self) -> str | None:
@@ -1312,7 +1250,29 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096)
+        # allow_fetch=False for the same reason construction passes it (see
+        # __init__): this runs per turn on the loop's own thread, and it only
+        # needs a number to reserve -- not the one a request will carry. The
+        # fallback under-reserves at worst; the importing tier costs seconds.
+        ceiling = send_max_tokens(
+            getattr(self.provider, "generation", None),
+            # The id a request will go out under, so the reservation matches the
+            # ceiling that request will carry rather than the stored name's.
+            getattr(self.provider, "wire_model_id", lambda m: m)(self.model),
+            allow_fetch=False,
+        )
+        # The whole ceiling, not a share of it. Requests no longer name a
+        # ceiling, so the one that applies is the model's own -- whatever the
+        # vendor or LiteLLM's transformation fills in. Reserving less than that
+        # hands out a prompt the reply cannot coexist with: measured on this
+        # repo's default model, a share leaves the prompt 150000 of a 200000
+        # window against a reply allowed 64000, and the sum is refused at
+        # request time. `_emergency_shrink` only elides tool bodies, so a
+        # history grown on conversation gets no retry from that refusal.
+        #
+        # A share would be right again only if the request carried one, which
+        # is the trade the previous shape made and this one does not.
+        reserved_output = min(ceiling, self.context_window_tokens)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
@@ -1584,16 +1544,69 @@ class AgentLoop:
             return
         if not messages_slice:
             return
-        try:
-            await self.backend.store(session_key, messages_slice)
-        except Exception as e:  # noqa: BLE001 — the turn must survive a failed index
-            logger.exception(
-                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
-                session_key,
+
+        async def _store() -> None:
+            try:
+                await self.backend.store(session_key, messages_slice)  # type: ignore[union-attr]
+            except Exception as e:  # noqa: BLE001 - the turn must survive a failed index
+                logger.exception(
+                    "backend.store failed for session {}; turn data preserved in session log, "
+                    "plugin-side indexing skipped",
+                    session_key,
+                )
+                self._note_memory_failure(str(e))
+            else:
+                self._note_memory_ok()
+
+        task = asyncio.create_task(_store())
+        self._store_inflight.add(task)
+        task.add_done_callback(self._store_inflight.discard)
+        # Deliberately not cancelled on timeout: the point is to stop *waiting*,
+        # not to abandon the write. A turn that indexes quickly still does so
+        # inline, which keeps ordering intact in the common case.
+        await asyncio.wait({task}, timeout=_STORE_TURN_BUDGET_S)
+
+        if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+            # Backpressure rather than unbounded growth: a service slow enough
+            # to accumulate this many outstanding writes is one whose queue
+            # should stop growing, not one to keep feeding.
+            #
+            # Bounded by the turn's own budget, and that bound is the whole
+            # point. Unbounded, this waited on the slowest outstanding write
+            # instead -- and since flush_every_turns defaults to 1, every
+            # interactive turn is a final flush carrying the six-minute
+            # extraction budget, so reaching the cap stalled a turn for
+            # minutes. That is the stall this method exists to remove.
+            await asyncio.wait(set(self._store_inflight), timeout=_STORE_TURN_BUDGET_S)
+            if len(self._store_inflight) > _STORE_MAX_INFLIGHT:
+                # Still saturated. The queue is what gives, not the turn: this
+                # write is dropped and said out loud at teardown, rather than
+                # held open behind writes that are already over their time.
+                task.cancel()
+                self._store_inflight.discard(task)
+                self._store_dropped += 1
+                logger.warning(
+                    "backend.store dropped for session {}: {} writes still in flight after {}s",
+                    session_key,
+                    len(self._store_inflight),
+                    _STORE_TURN_BUDGET_S,
+                )
+
+    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> None:
+        """Let detached writes finish before the process goes away.
+
+        Writes that outran their turn budget are still in flight. Exiting on top
+        of them loses exactly the turns that were slowest to index, which is a
+        silent and biased kind of data loss.
+        """
+        pending = {t for t in self._store_inflight if not t.done()}
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
+        if self._store_dropped:
+            logger.warning(
+                "{} turn(s) were not indexed: the memory service never caught up",
+                self._store_dropped,
             )
-            self._note_memory_failure(str(e))
-        else:
-            self._note_memory_ok()
 
     _MEMORY_FAILURES_BEFORE_ALARM = 3
     """How many consecutive store failures make this a standing fault rather
@@ -1800,45 +1813,19 @@ class AgentLoop:
             )
         return self._mcp_manager
 
-    def _mcp_tool_notices(self) -> list[str]:
-        """Host facts about MCP tools the definitions cannot carry.
-
-        One line per enabled server sitting in ``auth_required``: its tools are
-        not in the definitions at all, so without this the model reads an
-        unauthorized plugin as a capability that does not exist and says so.
-        Rendered into the runtime-context block, not the system prompt -- the
-        set changes turn to turn and must never be cached with the prefix.
-        """
-        # getattr: the engine factory takes this callable during __init__,
-        # before the manager attribute is assigned further down.
-        mgr = getattr(self, "_mcp_manager", None)
-        if mgr is None:
-            return []
-        # Stated as fact, not as a directive: this block's own header says
-        # "metadata only, not instructions", and the model is told to treat it
-        # that way -- an imperative here would be either ignored or a fence
-        # violation. The fact alone is enough to stop it reporting a missing
-        # capability.
-        return [
-            f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
-            f"absent from this turn's definitions until the user authorizes it in the plugin panel."
-            for snap in mgr.status()
-            if snap["state"] == "auth_required" and snap.get("enabled", True)
-        ]
-
     async def _connect_mcp(self, *, wait: float | None = None) -> None:
         """Connect to configured MCP servers (one-time, lazy).
 
         ``wait`` bounds how long the CALLER blocks, not how long the connect
         gets: past it the sync keeps running and its tools land in the registry
-        for the next turn. The manager already refuses to wait on a person --
-        a connect that reaches the browser-authorization step is marked
-        ``auth_required`` and the sync moves on without it -- so this bound
-        only covers real handshakes, and it matches their own budget. It
-        exists because one wedged sync once held a message for 10m35s, and a
-        turn must never inherit a wait like that whatever the cause.
+        for the next turn. A turn passes one because a server parked at the
+        browser-authorization step is waiting on a person, for up to
+        ``OAUTH_FLOW_TIMEOUT``, and the manager connects servers one after
+        another -- so one unanswered park held every later server and the
+        message behind them. Measured at 10m35s from send to the first model
+        call, on a park nobody had been shown.
 
-        Left unbounded for a caller that has nothing else to do (``run()``),
+        Left unbounded for a caller that has nothing else to do (``_start``),
         which also keeps SandboxInitError reaching its handler there.
         """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
@@ -2003,16 +1990,6 @@ class AgentLoop:
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
-        # Not in the name list above: the playbook executor's DAG tool is a
-        # private unregistered instance, reachable only through the runtime.
-        # Recorded here -- the one place every origin passes -- because
-        # consider() only runs for user turns, while a CRON/SENTINEL turn can
-        # still call run_playbook and its announce must go to the turn's own
-        # address, not the last human conversation's.
-        if self._playbooks is not None:
-            self._playbooks.set_context(
-                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
-            )
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the DAG tool's progress sink (host wires it to the web
@@ -2130,10 +2107,25 @@ class AgentLoop:
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
-        """Remove <think>…</think> blocks that some models embed in content."""
+        """Remove <think>…</think> blocks that some models embed in content.
+
+        Paired blocks are removed. What is left is then checked for being
+        nothing but tag debris: when a backend inlines its reasoning and the
+        turn is cut off inside it, content arrives as a lone closing tag with
+        no opener to pair against, so the substitution above finds nothing and
+        an eleven-character string reads as a real answer. Recovery is skipped
+        and the tag is what the user sees.
+
+        The check is on residue, not on vendor spellings -- it does not matter
+        which prefix a backend picked. Text that merely mentions a tag keeps
+        its other words and is returned untouched.
+        """
         if not text:
             return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+        cleaned = strip_think_blocks(text)
+        if is_only_think_debris(cleaned):
+            return None
+        return cleaned or None
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
@@ -2442,9 +2434,10 @@ class AgentLoop:
         compress_retries = 0
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
-        # Tool-failure-loop break (#1b): track consecutive same-tool hard
-        # failures across iterations; nudge once per fresh streak, bounded/turn.
-        loop_fail_tool: str | None = None
+        # Tool-failure-loop break (#1b): track consecutive hard failures of the
+        # same tool *with the same kind of error* across iterations; nudge once
+        # per fresh streak, bounded/turn.
+        loop_fail_key: tuple[str, str] | None = None
         loop_fail_streak = 0
         loop_nudges = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
@@ -2482,14 +2475,6 @@ class AgentLoop:
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
-                        # An injected message is a new user message by every
-                        # other definition in the loop, but it never reaches
-                        # consider(), whose reset would otherwise clear the
-                        # conversation's declined playbooks -- so an explicit
-                        # re-request inside the fall-through turn stays
-                        # refused. Reset here, at the merge point.
-                        if self._playbooks is not None:
-                            self._playbooks.reset_declines(session_key)
 
             tool_defs = self.tools.get_definitions()
 
@@ -2666,7 +2651,7 @@ class AgentLoop:
                     if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
                         setter(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
@@ -2757,13 +2742,14 @@ class AgentLoop:
                         break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(model_text):
-                        if tool_call.name == loop_fail_tool:
+                    if is_hard_tool_failure(model_text):
+                        failure_key = (tool_call.name, failure_class(model_text))
+                        if failure_key == loop_fail_key:
                             loop_fail_streak += 1
                         else:
-                            loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                            loop_fail_key, loop_fail_streak = failure_key, 1
                     else:
-                        loop_fail_tool, loop_fail_streak = None, 0
+                        loop_fail_key, loop_fail_streak = None, 0
 
                 if abort_action:
                     # A normal tool result starts another model iteration. That
@@ -2808,7 +2794,7 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
+                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak, loop_fail_key[1])
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be
@@ -2999,25 +2985,6 @@ class AgentLoop:
                 callback()
             except Exception:
                 logger.exception("on_turn_complete callback failed")
-
-    async def await_pending_extractions(
-        self,
-        flush_session_id: str | None = None,
-        *,
-        wait: bool = True,
-    ) -> None:
-        """No-op retained for CLI / batch-mode call-site compatibility.
-
-        Previously this flushed the local skill-extraction buffer and
-        blocked on its in-flight tasks. That embedded pipeline was
-        removed — case-to-skill distillation now lives in the
-        :class:`MemoryBackend` plugin (``backend.store`` /
-        ``backend.feedback``), which the after-turn pipeline drives
-        directly. Kept so ``raven agent`` callers don't need changing;
-        the ``flush_session_id`` / ``wait`` knobs are inert.
-        """
-        del flush_session_id, wait
-        return None
 
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""

@@ -162,7 +162,7 @@ async def test_handle_cancel_running_turn():
     sched = _scheduler(runner)
     handle = sched.submit(_req())
     await runner.started.wait()
-    await handle.cancel()
+    handle.cancel()
     assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
 
 
@@ -172,7 +172,7 @@ async def test_handle_cancel_queued_turn_without_running_it():
     first = sched.submit(_req(channel="tg", chat_id="1"))
     await runner.started.wait()
     queued = sched.submit(_req(channel="tg", chat_id="1"))  # same lane, queued behind first
-    await queued.cancel()
+    queued.cancel()
     assert await asyncio.wait_for(queued.result(), timeout=1.0) is None  # resolved, never ran
     assert not first._fut.done()  # surgical: cancelling the queued turn leaves the running one alone
 
@@ -181,7 +181,7 @@ async def test_handle_cancel_is_idempotent_after_completion():
     sched = _scheduler(SuccessRunner())
     handle = sched.submit(_req())
     await handle.result()
-    await handle.cancel()  # already terminal -> no-op, no raise
+    handle.cancel()  # already terminal -> no-op, no raise
 
 
 # --- lane reaper (idle recycling + recycle/submit atomicity) ---
@@ -226,7 +226,7 @@ async def test_cancel_on_a_reaped_lanes_handle_is_a_noop():
     lane = sched._lanes["tg:1"]
     sched._sweep(now=lane._idle_since + _DEFAULT_IDLE_TTL + 1)  # reap the lane
     assert "tg:1" not in sched._lanes
-    await handle.cancel()  # the handle still references the reaped lane -> no-op, no raise
+    handle.cancel()  # the handle still references the reaped lane -> no-op, no raise
     assert handle._fut.done()
 
 
@@ -415,7 +415,7 @@ async def test_cancel_on_a_merged_inject_is_noop_and_host_survives():
     inject = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text="inject"))
     drain_gate.set()
     await runner.drained.wait()
-    await inject.cancel()  # already merged (chained), host still running -> no-op, must not kill host
+    inject.cancel()  # already merged (chained), host still running -> no-op, must not kill host
     finish_gate.set()
     assert await asyncio.wait_for(host.result(), timeout=1.0) == outcome  # host survived
     assert await asyncio.wait_for(inject.result(), timeout=1.0) == outcome  # chained outcome
@@ -459,7 +459,7 @@ async def test_cancel_on_a_mailboxed_inject_removes_it_before_merge():
     host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
     await runner.started.wait()
     inject = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text="inject"))
-    await inject.cancel()  # still in the mailbox -> self-cancel (removed, resolved cancelled)
+    inject.cancel()  # still in the mailbox -> self-cancel (removed, resolved cancelled)
     assert await asyncio.wait_for(inject.result(), timeout=1.0) is None
     assert len(sched._lanes["tg:1"]._inject_mailbox) == 0
     gate.set()

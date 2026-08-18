@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import re
 
-_CLOSE_TAG_RE = re.compile(r"</think>|</thinking>", re.IGNORECASE)
+_CLOSE_TAG_RE = re.compile(r"</(?:[a-z][\w.-]{0,15}:)?(?:think|thinking)>", re.IGNORECASE)
 
 
 def split_orphan_think(text: str) -> tuple[str | None, str]:

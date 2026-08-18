@@ -122,7 +122,7 @@ def is_session_busy(session_key: str) -> bool:
 
 def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
-    so the slot clears at the end of the turn that owns it (alongside turn_ids)."""
+    so the slot clears at the sink's turn-end point (alongside turn_ids/usages)."""
     _active_turns.pop(session_key, None)
 
 
@@ -262,10 +262,6 @@ async def turn_send(
         # When set, the turn skips the model entirely and runs one direct-chat
         # turn against that instance (see AgentLoop.run_turn).
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
-        # The id this call returns and puts on message.start, so the lane stamps
-        # THIS value on the turn's lifecycle events and the client's correlation
-        # key survives end to end.
-        turn_id=turn_id,
     )
     try:
         handle = scheduler.submit(req)
@@ -276,13 +272,10 @@ async def turn_send(
             await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed", target)
         return {"turn_id": turn_id, "accepted": True}
 
-    # Bind immediately after submit with no await between (submit is synchronous,
-    # so the worker — scheduled but not yet run — must see the binding). This map
-    # is no longer where the sink gets the id to stamp (the turn carries its own):
-    # it records WHICH turn owns this lane's client-facing slots, so a turn the
-    # runtime submitted onto the same lane cannot release them out from under a
-    # client turn still queued behind it. The sink drops both slots at the owning
-    # turn's end (turn_ids via build_rpc_spine, _active_turns via clear_active).
+    # Bind immediately after submit with no await between (the runner reads
+    # turn_ids[session_key] and submit is synchronous, so the worker — scheduled
+    # but not yet run — must see the binding). The sink drops both slots at
+    # turn end (turn_ids via build_rpc_spine, _active_turns via clear_active).
     if turn_ids is not None:
         turn_ids[lane] = turn_id
     # Bound the same way and dropped by the same sink, so the two cannot fall out
@@ -348,7 +341,7 @@ async def turn_cancel(
 
     Sequence:
       1. Look up the active turn handle; if absent → ``{cancelled: False}``.
-      2. ``await handle.cancel()``.
+      2. ``handle.cancel()``.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
@@ -369,7 +362,7 @@ async def turn_cancel(
     if handle is None:
         return {"cancelled": False}
 
-    await handle.cancel()
+    handle.cancel()
 
     if emitter is not None:
         # Tagged from the live map rather than from params: the client cancels a
@@ -408,7 +401,7 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
     handle = _active_turns.get(session_key) if session_key else None
     if handle is None:
         return {"ok": False}
-    await handle.cancel()
+    handle.cancel()
     await handle.result()
     return {"ok": True}
 

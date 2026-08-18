@@ -168,6 +168,26 @@ _Avoid_: using "Sentinel" as the name of the whole proactivity subsystem (stale 
 The time-driven trigger path inside the Proactive Engine: cron jobs and heartbeat.
 _Avoid_: conflating with Sentinel
 
+**Fire-at-origin**:
+The cron ownership rule: a job is claimed and delivered only by the runner that
+owns its creation-time channel binding (`payload.channel/to`) — the gateway for
+enabled IM channels, an open TUI session for `tui`.
+A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
+dropped at that runner's next startup); there is no trigger-time re-routing.
+_Avoid_: reintroducing fire-time channel selection (the retired
+`cron.forward_channels`) — bind the target at creation instead. The `cli`
+channel value is retired with the REPL; stored `cli`-bound jobs migrate to
+`tui` at load time.
+
+**Fixed-delay interval**:
+The scheduling contract for `--every` jobs: the next run is computed from the
+moment the previous fire **completed**, not from the moment it was due. A job
+that takes 15s to run therefore repeats every `interval + 15s`, and its clock
+drifts by design — the property being bought is that a slow run can never
+overlap itself or leave a backlog to catch up on.
+_Avoid_: calling this fixed-rate, or reading `--every 2m` as a promise to fire
+on the two-minute mark; calendar-anchored schedules are what `--cron` is for.
+
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
 proactive side of prediction).
@@ -491,7 +511,7 @@ A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`end
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
-candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
+candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
@@ -512,45 +532,45 @@ replays pieces or just deletes a config stanza.
 _Avoid_: "manifest" -- that is the plugin's own declaration; a ledger is the record of one
 install of it.
 
-**Playbook** (`raven/playbook/`):
-A stored, reusable orchestration for a family of tasks: one `playbook.md` per
-directory under a playbook root, in three regions — a two-field frontmatter
-(`name` / `description`), a human-readable body, and one fenced
-`yaml playbook-spec` block holding every machine field. Being under a root is
-what makes it a playbook, so no marker field can disagree with where the file
-sits — one directory, one file, no sidecar and no lifecycle fields. The library
-is two such roots layered: `raven/playbook/builtin/` ships with the package and
-has no write path, and `<agent_home>/playbooks/` (override: `playbooks.dir`) is
-where both creation entries — `raven playbook create` and the `create_playbook`
-tool — land their product, disabled for review; a user directory reusing a
-builtin's name shadows it, with a load warning. A generator's open questions and
-assumptions go into the body (its `## Open questions` section) for a human to
-read; whether a playbook is matchable on this machine is config (the
-`playbooks.disabled` deny list — absent means on, disabling only mutes the
-passive funnel and explicit runs still work), because the file is the
-distribution unit and local state must not travel with it.
+**Playbook** (`memory_engine/playbook/`):
+A task-family-level orchestration template a `PlaybookGenerator` derives from one
+user input: role configs cast from the four capability bases (research / code /
+data / content) plus either an explicit step graph (`mode="dag"`, emitted only
+when the user's input itself spells the steps out — faithful transcription, never
+invented) or orchestration principles for the runtime main agent (`mode="prompt"`,
+the default). Persisted as a skill-shaped SKILL.md (contract in a fenced yaml
+block) so the skill_local registry indexes it. Generation is one forced tool call
+plus a bounded validation-repair loop; `status` starts at `draft` and open
+`blocking_questions` pin it there. Discovery is a two-stage funnel: `triggers`
+(a compile-time-expanded, generic-word-filtered keyword/phrase vocabulary,
+substring-matched per message at zero cost) nominates candidates, and one
+LLM gate call judges intent, extracts runtime-input values and adjudicates
+between overlapping candidates — any gate failure resolves to no match, so
+the conversation falls through untouched.
+_Avoid_: conflating with a Skill (a playbook is a structured skill subtype — the
+runtime-enforced form of the same flow knowledge) and with the sub-agent DAG run
+(`run_subagent_dag` executes a graph once; a playbook stores one for reuse).
 
-The two modes differ only in where the graph comes from: `dag` ships it as
-`nodes`; `prompt` ships assembly guidance as `prompts` and a model composes the
-graph at run time. Both then pass the same validation and reach the same
-dispatch — a node list handed to `SubAgentDagTool.run_with_roles` with a backend
-built per node, running in the background and announcing its own result. A field
-the release cannot honour is refused rather than noted: `nodes[].confirm` and an
-`instance` handle on a stateless agent fail validation, because a gate reported
-after the step ran is worse than no gate.
-
-Discovery is a two-stage funnel: `triggers.keywords` (guarded against stop
-words, short entries and generic words, then substring-matched per message at
-zero cost) nominates candidates, and one LLM gate judges intent, extracts
-`params` and adjudicates between overlapping candidates. Any gate failure
-resolves to no match, so the conversation falls through untouched. The
-`run_playbook` tool is the agent's own entry for what that funnel structurally
-cannot catch — a request that never says a trigger word, and an answer supplied
-after a run asked for it.
-_Avoid_: calling it a Skill or a SKILL.md — a playbook has its own root, its own
-file name and its own loader, and is not indexed by `skill_local`. Also avoid
-conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
-model just wrote; a playbook stores one for reuse).
+**SkillPolicy** (`skill_hub/policy.py`):
+The install-time safety decision both Hub install paths consult before any
+`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
+tool. `refusal_for_detail()` checks, in order: the operator blocklist
+(`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
+`min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
+score; a missing or malformed score passes), and an external home-dotdir lint over the
+skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
+candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
+Every install that passes is appended to a JSONL audit trail
+(`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
+`install_skip_reason()` is the separate operator-consent gate over the bundle download
+itself (`skillForge.autoInstall`: `auto` / `prompt` / `off`), consulted by both call sites
+right before `install()`, after all safety vetting. A consent decline is a **skip**, not a
+refusal: the already-vetted skill body still injects (and `read_skill` still works), only
+the on-disk bundle is withheld. Alongside the JSONL trail, a passing install stamps a
+one-time `.install-meta.json` into the skill directory (`write_install_meta`, first
+install wins) — the O(1) provenance source behind `raven skill list`'s Installed column.
+_Avoid_: calling an autoInstall skip a "refusal" or "block" — refusals are safety verdicts
+on the skill; a skip is withheld operator consent for the download.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.

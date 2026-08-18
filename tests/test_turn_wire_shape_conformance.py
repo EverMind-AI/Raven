@@ -27,7 +27,7 @@ _turn_event_adapter: TypeAdapter[TurnEvent] = TypeAdapter(TurnEvent)
 
 
 class FakeHandle:
-    async def cancel(self) -> None:
+    def cancel(self) -> None:
         pass
 
     async def result(self):
@@ -77,10 +77,7 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
     """B1 regression: message.complete payload must be ``{turn_id, usage}``.
 
     Driven through the real spine (build_rpc_spine): the sink emits message.complete
-    after the render barrier. No id is bound for this turn, so it also pins that
-    ``turn_id`` is a populated ``str`` rather than the ``null`` the declared
-    ``MessageCompletePayload`` never allowed -- exactly the frame a client with an
-    ``additionalProperties: false`` validator rejects.
+    after the render barrier.
     """
     send_frame = AsyncMock(return_value=None)
     emitter = SubscriptionEmitter(send_frame=send_frame)
@@ -101,6 +98,7 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(_StubAgent(), emitter)
     try:
         await emitter.register("tui:default")
+        turn_ids["tui:default"] = "t1"
         await scheduler.submit(_req()).result()
         await asyncio.sleep(0.1)  # let the coalescer flush
     finally:
@@ -112,7 +110,6 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
 
     payload = completions[0]["payload"]
     assert set(payload) == {"turn_id", "usage"}, f"payload keys must be exactly {{turn_id, usage}}; got {set(payload)}"
-    assert isinstance(payload["turn_id"], str) and payload["turn_id"]
     assert "content" not in payload  # B1: must not leak
     _assert_event_validates(completions[0])  # Pydantic accepts
 

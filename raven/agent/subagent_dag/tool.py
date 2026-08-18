@@ -620,9 +620,6 @@ class SubAgentDagTool(Tool):
         try:
             spec = parse_dag_spec({"nodes": nodes})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
-            # ``capabilities``, not ``self._capabilities``: a caller-supplied role
-            # (the playbook executor's entry) is only in the merged map, and the
-            # capability pre-check has to see it or every such node is unknown.
             validate_capabilities(spec, capabilities)
             # ``run_dag`` checks the roster too, but it does so inside the run --
             # which a backgrounded call has already returned from. Checked here

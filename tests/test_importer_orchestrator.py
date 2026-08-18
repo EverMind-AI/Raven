@@ -25,19 +25,25 @@ from raven.importer.types import (
 class FakeBackend:
     """Records store() calls for assertion."""
 
-    def __init__(self, *, fail_on: set[str] | None = None) -> None:
+    def __init__(self, *, fail_on: set[str] | None = None, drop_on: set[str] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
         self._fail_on = fail_on or set()
+        # A backend that reports a dropped write instead of raising: the shape
+        # a real EverosBackend takes when the memory service is unavailable.
+        self._drop_on = drop_on or set()
 
     async def recall(self, query: str, *, user_id: str | None = None, agent_id: str | None = None, top_k: int) -> list:
         return []
 
     async def store(
         self, session_id: str, messages: list[dict[str, Any]], *, metadata: dict[str, Any] | None = None
-    ) -> None:
+    ) -> bool:
         if session_id in self._fail_on:
             raise RuntimeError(f"store failed for {session_id}")
+        if session_id in self._drop_on:
+            return False
         self.calls.append({"session_id": session_id, "messages": messages, "metadata": metadata})
+        return True
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         pass
@@ -199,6 +205,32 @@ class TestErrorIsolation:
     async def test_store_failure_continues(self, tmp_path: Path) -> None:
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend(fail_on={"import-a"})
+        scanner = FakeScanner(
+            {
+                "a": _session(n_msgs=1, session_id="import-a"),
+                "b": _session(n_msgs=1, session_id="import-b"),
+            }
+        )
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+
+        summary = await run_import(items, backend, state)
+
+        assert summary.failed == 1
+        assert summary.submitted == 1
+        assert not state.is_submitted("claude_code", "a")
+        assert state.is_submitted("claude_code", "b")
+
+    @pytest.mark.asyncio
+    async def test_a_dropped_write_is_treated_exactly_like_a_raised_one(self, tmp_path: Path) -> None:
+        """The policy does not change, only the signal that triggers it.
+
+        A backend that reports a dropped write rather than raising must still
+        leave the source unsubmitted. Without this the resume state marks the
+        source done, and a rerun skips the very history that was never stored
+        -- silent, permanent, and invisible in the summary.
+        """
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend(drop_on={"import-a"})
         scanner = FakeScanner(
             {
                 "a": _session(n_msgs=1, session_id="import-a"),

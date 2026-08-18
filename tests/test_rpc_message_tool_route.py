@@ -90,13 +90,12 @@ def _make_agent(workspace: Path, provider=None) -> AgentLoop:
     return loop
 
 
-def _req(session_key: str = "tui:default", turn_id: str | None = None) -> TurnRequest:
+def _req(session_key: str = "tui:default") -> TurnRequest:
     return TurnRequest(
         origin=Origin.USER,
         source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
         text="hi",
         conversation=session_key,
-        turn_id=turn_id,
     )
 
 
@@ -172,7 +171,7 @@ async def test_ac4_synthetic_tool_complete_before_message_complete(workspace) ->
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
     try:
         turn_ids["tui:default"] = "t-ac4"
-        await scheduler.submit(_req(turn_id="t-ac4")).result()
+        await scheduler.submit(_req()).result()
     finally:
         await teardown()
 

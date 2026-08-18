@@ -70,9 +70,9 @@ def update_cron_config(
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
-    Schema defaults (``forward_channels=["*"]`` / ``default_timezone="Asia/Shanghai"``)
-    take effect on next load. Stays consistent with the file's "never bake
-    defaults to disk" principle.
+    Schema defaults (``default_timezone="Asia/Shanghai"``) take effect on
+    next load. Stays consistent with the file's "never bake defaults to
+    disk" principle.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
@@ -160,6 +160,41 @@ def set_sentinel_nudge_quota(
         _write_atomic(path, data)
         logger.info("config/update: sentinel nudge quota patched {!r}", changed)
     return changed
+
+
+def set_skill_blocked(
+    name: str,
+    blocked: bool,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Add/remove a skill name on ``skillForge.blocklist``; returns the new
+    list. Matching is case-insensitive; adding an already-listed name or
+    removing an absent one is a no-op (the file is still not rewritten).
+
+    The blocklist is read at process start (AgentLoop / context engine
+    construction), so a change takes effect on the next agent/gateway
+    start, not on a running process.
+    """
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    section = data.setdefault("skillForge", {})
+    current = [str(x) for x in (section.get("blocklist") or [])]
+    lowered = {x.casefold() for x in current}
+    if blocked:
+        if name.casefold() in lowered:
+            return current
+        current.append(name)
+    else:
+        if name.casefold() not in lowered:
+            return current
+        current = [x for x in current if x.casefold() != name.casefold()]
+    section["blocklist"] = current
+    _write_atomic(path, data)
+    logger.info(
+        "config/update: skillForge.blocklist now {!r} ({} {!r})", current, "blocked" if blocked else "unblocked", name
+    )
+    return current
 
 
 def set_language(
@@ -322,31 +357,39 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     logger.info("config/update: seeded memory/plugins/skillForge extension defaults")
 
 
-def set_playbook_disabled(
-    name: str,
-    disabled: bool,
+def set_plugin_config_fields(
+    plugin_id: str,
+    fields: dict[str, Any],
     *,
+    remove: tuple[str, ...] | None = None,
     config_path: Path | None = None,
-) -> bool:
-    """Add/remove one playbook name on the ``playbooks.disabled`` deny list.
+) -> None:
+    """Merge ``fields`` into ``plugins.config[plugin_id]`` on the on-disk config.
 
-    Returns True when the file changed (False = already in the desired
-    state). The list is the only per-machine playbook state: playbook.md is
-    the distribution unit and carries no switch, so disable adds the name
-    here and enable removes it — for builtin and user playbooks alike. The
-    runtime reads the list once at loop start; a change applies on the next
-    agent/gateway start.
+    A merge rather than a replace: the slice holds several independent decisions
+    (which EverOS root, whether raven owns it, its cached address) written at
+    different moments, and a replacing write would drop whichever the caller did
+    not happen to be carrying.
+
+    ``remove`` names keys that no longer apply, for the case a merge cannot
+    express. Switching to an EverOS the user runs has to retract the recorded
+    root, not merely stop updating it: left behind, it is still exported as
+    ``EVEROS_ROOT`` and still points raven at a directory it has just promised
+    to leave alone.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    section = data.setdefault("playbooks", {})
-    deny = list(section.get("disabled") or [])
-    if disabled == (name in deny):
-        return False
-    section["disabled"] = sorted(set(deny) | {name}) if disabled else [n for n in deny if n != name]
+    slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
+    slice_.update(fields)
+    for key in remove or ():
+        slice_.pop(key, None)
     _write_atomic(path, data)
-    logger.info("config/update: playbooks.disabled {} {!r}", "added" if disabled else "removed", name)
-    return True
+    logger.info(
+        "config/update: plugins.config.{} updated ({}{})",
+        plugin_id,
+        ", ".join(fields),
+        f"; removed {', '.join(remove)}" if remove else "",
+    )
 
 
 def set_memory_backend(
@@ -380,6 +423,6 @@ __all__ = [
     "set_default_model",
     "set_sandbox_backend",
     "set_memory_backend",
-    "set_playbook_disabled",
+    "set_skill_blocked",
     "init_extension_block_defaults",
 ]

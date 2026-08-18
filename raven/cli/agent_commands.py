@@ -1,12 +1,10 @@
-"""Top-level ``agent`` command + its dedicated helpers.
+"""Top-level ``agent`` command (one-shot ``-m`` mode).
 
-This module owns:
-
-- The interactive ``raven agent`` REPL command body (multiline paste,
-  history, agent-loop wiring).
-- A small bundle of helpers used only by that command: prompt-toolkit
-  session init, terminal restore, TTY-flush, response rendering, exit
-  detection.
+``raven agent -m "..."`` runs a single USER turn through the spine
+(submit -> lane -> run_turn -> hub -> CliOutlet) and exits. The
+interactive REPL was removed — ``raven tui`` is the interactive
+front-end; invoking ``raven agent`` without ``-m`` prints a pointer
+and exits non-zero.
 
 ``commands.py`` registers the command via :func:`register`.
 """
@@ -14,15 +12,9 @@ This module owns:
 from __future__ import annotations
 
 import asyncio
-import signal
-import sys
 from pathlib import Path
 
 import typer
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
@@ -33,8 +25,8 @@ from raven.cli._helpers import (
     load_runtime_config,
     make_provider,
     parse_fake_now,
+    print_config_migration_notices,
     print_deprecated_memory_window_notice,
-    warn_about_pending_cli_reminders,
 )
 from raven.cli._plugin_stack import (
     build_plugin_registry,
@@ -46,70 +38,17 @@ from raven.utils.helpers import project_slug, sync_workspace_templates
 console = Console()
 
 
-# ---------------------------------------------------------------------------
-# Module-level state (interactive REPL only)
-# ---------------------------------------------------------------------------
-
-EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
-
-# ---------------------------------------------------------------------------
-# CLI input: prompt_toolkit for editing, paste, history, and display
-# ---------------------------------------------------------------------------
-
-_PROMPT_SESSION: PromptSession | None = None
-_SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
-
-
-# ---------------------------------------------------------------------------
-# Helpers (private to this module)
-# ---------------------------------------------------------------------------
-
-
-def _stdout_isatty() -> bool:
-    """Whether stdout is an interactive TTY (seam for the onboarding gate test;
-    CliRunner swaps ``sys.stdout`` for a non-TTY buffer)."""
-    return sys.stdout.isatty()
-
-
-def _restore_terminal() -> None:
-    """Restore terminal to its original state (echo, line buffering, etc.)."""
-    if _SAVED_TERM_ATTRS is None:
-        return
-    try:
-        import termios
-
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
-    except Exception:
-        pass
-
-
-def _init_prompt_session() -> None:
-    """Create the prompt_toolkit session with persistent file history."""
-    global _PROMPT_SESSION, _SAVED_TERM_ATTRS
-
-    # Save terminal state so we can restore it on exit
-    try:
-        import termios
-
-        _SAVED_TERM_ATTRS = termios.tcgetattr(sys.stdin.fileno())
-    except Exception:
-        pass
-
-    from raven.config.paths import get_cli_history_path
-
-    history_file = get_cli_history_path()
-    history_file.parent.mkdir(parents=True, exist_ok=True)
-
-    _PROMPT_SESSION = PromptSession(
-        history=FileHistory(str(history_file)),
-        enable_open_in_editor=False,
-        multiline=False,  # Enter submits (single line mode)
-    )
+# One-shot ``-m`` exit code: set by the error renderer, checked after the
+# turn. Module-level because the render callback runs inside the delivery
+# hub's worker task, where raising typer.Exit would be swallowed.
+_ONE_SHOT_EXIT = {"code": 0}
 
 
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     content = response or ""
+    if _print_llm_error(content):
+        return
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} Raven[/cyan]")
@@ -117,32 +56,49 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
     console.print()
 
 
-def _is_exit_command(command: str) -> bool:
-    """Return True when input should end interactive chat."""
-    return command.lower() in EXIT_COMMANDS
+# Category-apt hints for non-auth provider errors. Credential guidance would
+# mislead here: a rate limit or a network drop is not fixed by re-checking the
+# key. Categories absent from this map (invalid_request, unknown, ...) render
+# the error line alone.
+_NON_AUTH_HINTS = {
+    "rate_limit": "Hint: the provider is rate limiting; retry in a moment.",
+    "network": "Hint: network problem; check connectivity and retry.",
+    "context_overflow": "Hint: the input exceeds the model's context window; shorten it.",
+    "server": "Hint: provider-side error; retry later or switch models.",
+    "model_unavailable": "Hint: model not served; pick another with raven provider use <name>/<model>.",
+    "billing": "Hint: billing or quota issue; check your provider account.",
+}
 
 
-async def _read_interactive_input_async() -> str:
-    """Read user input using prompt_toolkit (handles paste, history, display).
+def _print_llm_error(content: str) -> bool:
+    """Render a provider error as a diagnosis + fix hint instead of a fake
+    agent reply. Returns True when handled; marks the one-shot path to exit
+    non-zero."""
+    from rich.markup import escape
 
-    prompt_toolkit natively handles:
-    - Multiline paste (bracketed paste mode)
-    - History navigation (up/down arrows)
-    - Clean display (no ghost characters or artifacts)
-    """
-    if _PROMPT_SESSION is None:
-        raise RuntimeError("Call _init_prompt_session() first")
-    try:
-        # raw=True passes ANSI escape sequences through verbatim. Without
-        # this, background coroutines (cron fires, Sentinel nudges) that
-        # print rich-styled output while the user sits at this prompt get
-        # their ESC bytes mangled — visible as ?[36m...?[0m garbage.
-        with patch_stdout(raw=True):
-            return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblue'>You:</b> "),
-            )
-    except EOFError as exc:
-        raise KeyboardInterrupt from exc
+    from raven.providers.base import parse_llm_error
+
+    parsed = parse_llm_error(content)
+    if parsed is None:
+        return False
+    category, provider, detail = parsed
+    console.print()
+    if category == "auth":
+        # No status code here: the auth bucket also fires on 403, on
+        # PermissionDeniedError and on substring matches, so naming one would
+        # be a guess. The detail carries the provider's own reason instead.
+        where = f" ({escape(provider)})" if provider else ""
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
+        target = provider or "<name>"
+        console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
+    else:
+        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
+        hint = _NON_AUTH_HINTS.get(category)
+        if hint:
+            console.print(hint)
+    console.print()
+    _ONE_SHOT_EXIT["code"] = 1
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -182,36 +138,6 @@ def register(app: typer.Typer) -> None:
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
-        wait_skill_extract: bool = typer.Option(
-            False,
-            "--wait-skill-extract/--no-wait-skill-extract",
-            help=(
-                "Block exit until in-flight everos extraction tasks finish. "
-                "Off by default — extraction is fire-and-forget, so the CLI "
-                "returns as soon as the agent responds and any in-flight "
-                "boundary-detection / case-extraction LLM call may be "
-                "cancelled by interpreter shutdown. When on (without "
-                "--flush-skill-buffer), the per-session pending-turn buffer "
-                "is left intact for the next CLI invocation, which is the "
-                "mode you want for scripted multi-turn boundary-detection "
-                "testing (multiple ``-m`` calls sharing the same ``-s``)."
-            ),
-        ),
-        flush_skill_buffer: bool = typer.Option(
-            False,
-            "--flush-skill-buffer/--no-flush-skill-buffer",
-            help=(
-                "Send a ``session_end`` signal for this session before exit, "
-                "draining whatever turns are sitting in the everos "
-                "boundary-detection buffer through case + skill extraction. "
-                "Pair with --wait-skill-extract to actually block on the "
-                "resulting LLM calls (a flush without --wait-skill-extract "
-                "schedules the drain but won't survive interpreter "
-                "shutdown). Use on the final ``-m`` of a scripted "
-                "multi-turn session, or to force extraction after a single "
-                "``-m`` turn (a lone turn never trips a boundary on its own)."
-            ),
-        ),
         fake_now: str | None = typer.Option(
             None,
             "--fake-now",
@@ -222,32 +148,29 @@ def register(app: typer.Typer) -> None:
             ),
         ),
     ):
-        """Interact with the agent directly."""
+        """Run a one-shot agent turn (requires -m); interactive chat lives in `raven tui`."""
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
 
-        # Startup gate: a config that cannot reach a model is settled first. Only
-        # on an interactive TTY -- scripted one-shots (`-m`) and non-TTY pipes must
-        # fail loudly later rather than block on prompts.
-        if message is None and _stdout_isatty():
-            from raven.cli.onboard_commands import ensure_ready_to_start
-
-            ensure_ready_to_start()
+        if message is None:
+            console.print(
+                "[yellow]The interactive REPL was removed. Use [bold]raven tui[/bold] "
+                'for interactive chat, or [bold]raven agent -m "..."[/bold] for a '
+                "one-shot turn.[/yellow]"
+            )
+            raise typer.Exit(code=2)
 
         from loguru import logger
 
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-        from raven.cli._cron_handler import make_on_cron_job
         from raven.cli._proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
             build_sentinel_stack,
         )
-        from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
-        from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.session.manager import SessionManager, new_chat_id
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
@@ -259,6 +182,7 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
+        print_config_migration_notices()
         sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
@@ -308,22 +232,11 @@ def register(app: typer.Typer) -> None:
 
             session_id = resolve_session_cross_channel(session_manager, session_id)
 
-        # Create cron service (callback set below once the agent exists).
-        # allowed_channels={"cli"} prevents this REPL from claiming reminders
-        # created in Feishu/Telegram/etc. — those should be delivered by the
-        # gateway which has the real channel adapters wired up.
-        cron_store_path = get_cron_dir() / "jobs.json"
-        cron = CronService(
-            cron_store_path,
-            allowed_channels={"cli"},
-            now_fn=parse_fake_now(fake_now),
-        )
-
         # Build Sentinel stack if enabled — same wiring gateway uses, so the two
         # processes share state via ~/.raven/sentinel/state.json. Discover
         # triggers are dispatcher-side: only the gateway has real channel
-        # adapters, so REPL must NOT drain them or feishu/slack triggers get
-        # consumed without delivery.
+        # adapters, so this process must NOT drain them or feishu/slack triggers
+        # get consumed without delivery.
         sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
             config,
             sentinel_cfg,
@@ -359,6 +272,10 @@ def register(app: typer.Typer) -> None:
             registry=plugin_registry,
         )
 
+        # No cron_service here: with the REPL gone this process is never a
+        # cron runner, so registering CronTool would create jobs nothing
+        # fires. Scripted reminder creation is `raven cron add` with an
+        # explicit --channel.
         agent_loop = AgentLoop(
             provider=provider,
             now_fn=parse_fake_now(fake_now),
@@ -373,14 +290,13 @@ def register(app: typer.Typer) -> None:
             # Gates run_subagent_dag: AgentLoop registers it only when the roster
             # is non-empty, since its nodes dispatch to these agents.
             third_party_subagents=config.subagents.third_party,
-            playbook_config=config.playbooks,
+            playbook_config=config.playbook,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
-            cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             workdir_resolver=workdir_resolver,
@@ -394,8 +310,8 @@ def register(app: typer.Typer) -> None:
             runtime_config=ec_config.runtime,
             # ``-m "..."`` is a one-shot — no next turn for recovery
             # injection, so the ``"interactive"`` policy skips the
-            # checkpoint here. REPL (``message is None``) is multi-turn.
-            interactive=message is None,
+            # checkpoint here.
+            interactive=False,
             response_modifier=sentinel_response_modifier,
             on_user_inbound=sentinel_on_user_inbound,
             backend=backend,
@@ -406,18 +322,15 @@ def register(app: typer.Typer) -> None:
         agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
         attach_sentinel_spawn(sentinel_runner, agent_loop)
         attach_sentinel_decision_consumer(sentinel_runner, agent_loop, sentinel_cfg=sentinel_cfg)
-        # REPL has no real ChannelManager — provide a minimal shim that
-        # reports "cli" as the sole enabled channel so cli reminders take
-        # the pass-through path (deliver to REPL stdout via the spine CliOutlet). The same
-        # shim goes to the sentinel runner so anticipatory (sentinel:direct)
-        # nudges resolve to the terminal instead of being dropped.
+        # One-shot mode has no real ChannelManager — provide a minimal shim
+        # that reports "cli" as the sole enabled channel so sentinel
+        # (sentinel:direct) resolution targets the terminal instead of being
+        # dropped.
         from types import SimpleNamespace
 
         cli_shim = SimpleNamespace(enabled_channels=["cli"])
         if sentinel_runner is not None:
             sentinel_runner.set_channel_manager(cli_shim)
-        # cron.on_job is wired inside run_interactive once the spine scheduler
-        # exists — cron reminders submit CRON turns through it.
 
         # Show spinner when logs are off (no output to miss); skip when logs are on
         def _thinking_ctx():
@@ -425,232 +338,79 @@ def register(app: typer.Typer) -> None:
                 from contextlib import nullcontext
 
                 return nullcontext()
-            # Animated spinner is safe to use with prompt_toolkit input handling
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
 
-        if message:
-            # Single message mode — one USER turn through spine (submit -> lane ->
-            # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
-            # (channel="cli", chat_id="direct", session_key=session_id). Progress
-            # renders via the CliOutlet, gated by the same two config flags the bus
-            # path honored (send_progress / send_tool_hints).
-            from raven.cli._repl_spine import build_repl
-            from raven.spine import ChatType, Origin, Source, TurnRequest
+        # Single message mode — one USER turn through spine (submit -> lane ->
+        # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
+        # (channel="cli", chat_id="direct", session_key=session_id). Progress
+        # renders via the CliOutlet, gated by the same two config flags the bus
+        # path honored (send_progress / send_tool_hints).
+        from raven.cli._repl_spine import build_repl
+        from raven.spine import ChatType, Origin, Source, TurnRequest
 
-            async def run_once():
-                # Bring the memory-backend plugin online before any turn
-                # runs. ``backend`` is ``None`` when no plugin is wired.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
+        async def run_once():
+            # Bring the memory-backend plugin online before any turn
+            # runs. ``backend`` is ``None`` when no plugin is wired.
+            if backend is not None:
                 try:
-                    # Build inside the running loop: Scheduler pins its home loop in
-                    # __init__, so build_repl must not run in the sync prologue.
-                    ch = agent_loop.channels_config
-                    scheduler, hub, teardown = build_repl(
-                        agent_loop,
-                        "cli",
-                        lambda t: _print_agent_response(t, render_markdown=markdown),
-                        render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
-                        send_progress=bool(ch.send_progress) if ch else False,
-                        send_tool_hints=bool(ch.send_tool_hints) if ch else False,
+                    await backend.start()
+                except Exception:
+                    logger.exception(
+                        "memory backend start failed; continuing with legacy memory path",
                     )
-                    # A one-shot spawn rarely finishes before the hard-exit below (same
-                    # as the bus path), but wire submit for parity with REPL/TUI.
-                    agent_loop.subagents.set_submit(scheduler.submit)
-                    with _thinking_ctx():
-                        handle = scheduler.submit(
-                            TurnRequest(
-                                origin=Origin.USER,
-                                source=Source(
-                                    channel="cli",
-                                    chat_id="direct",
-                                    sender_id="user",
-                                    chat_type=ChatType.DM,
-                                ),
-                                text=message,
-                                conversation=session_id,
-                            )
-                        )
-                        await handle.result()
-                    await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
-                    await teardown()
-                    if wait_skill_extract or flush_skill_buffer:
-                        # ``flush_skill_buffer`` sends session_end so any
-                        # buffered turns drain through extraction (a single
-                        # -m turn never trips a boundary on its own).
-                        # ``wait_skill_extract`` blocks on the in-flight
-                        # tasks; without it the flush schedules work that
-                        # interpreter shutdown will cancel. The two flags
-                        # are orthogonal — scripted multi-turn testing uses
-                        # --wait-skill-extract alone so the buffer survives
-                        # for the next CLI run.
-                        await agent_loop.await_pending_extractions(
-                            flush_session_id=session_id if flush_skill_buffer else None,
-                            wait=wait_skill_extract,
-                        )
-                    await agent_loop.close_mcp()
-                finally:
-                    if backend is not None:
-                        try:
-                            await backend.stop()
-                        except Exception:
-                            logger.exception(
-                                "memory backend stop failed; continuing shutdown",
-                            )
-
-            asyncio.run(run_once())
-        else:
-            # Interactive mode — user turns run through spine (submit -> lane ->
-            # hub -> CliOutlet); cron/sentinel nudges go via the spine hub
-            # (hub.post -> CliOutlet) too.
-            from raven.cli._repl_spine import build_repl, run_repl_loop
-
-            _init_prompt_session()
-            console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
-
-            if ":" in session_id:
-                cli_channel, cli_chat_id = session_id.split(":", 1)
-            else:
-                cli_channel, cli_chat_id = "cli", session_id
-
-            def _handle_signal(signum, frame):
-                sig_name = signal.Signals(signum).name
-                _restore_terminal()
-                console.print(f"\nReceived {sig_name}, goodbye!")
-                sys.exit(0)
-
-            signal.signal(signal.SIGINT, _handle_signal)
-            signal.signal(signal.SIGTERM, _handle_signal)
-            # SIGHUP is not available on Windows
-            if hasattr(signal, "SIGHUP"):
-                signal.signal(signal.SIGHUP, _handle_signal)
-            # Ignore SIGPIPE to prevent silent process termination when writing to closed pipes
-            # SIGPIPE is not available on Windows
-            if hasattr(signal, "SIGPIPE"):
-                signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-
-            async def run_interactive():
-                # Backend lifecycle matches the single-message
-                # mode; ``backend`` is ``None`` when no plugin is wired,
-                # in which case start/stop are skipped.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
-                # agent_loop.run() is now a lifecycle keep-alive (executor /
-                # debug server / MCP up, then idle); all turns go through the
-                # spine. Gathered on teardown.
-                runtime_task = asyncio.create_task(agent_loop.run())
-
-                # Build the spine before starting cron: cron jobs submit CRON
-                # turns through this scheduler, and on_job must be wired
-                # before cron.start() so an immediately-firing job has its
-                # callback. Scheduler pins its home loop here (run_interactive is
-                # async) — it must not move to the sync prologue.
-                def _render_nudge_marker() -> None:
-                    console.print()
-                    console.print("[bold magenta]🐦‍⬛ [主动][/bold magenta]")
-
-                _ch = agent_loop.channels_config
+            try:
+                # Build inside the running loop: Scheduler pins its home loop in
+                # __init__, so build_repl must not run in the sync prologue.
+                ch = agent_loop.channels_config
                 scheduler, hub, teardown = build_repl(
                     agent_loop,
-                    cli_channel,
+                    "cli",
                     lambda t: _print_agent_response(t, render_markdown=markdown),
                     render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
-                    render_marker=_render_nudge_marker,
-                    send_progress=bool(_ch.send_progress) if _ch else False,
-                    send_tool_hints=bool(_ch.send_tool_hints) if _ch else False,
+                    send_progress=bool(ch.send_progress) if ch else False,
+                    send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                 )
-                # Subagent result re-injection submits a SUBAGENT-origin turn.
+                # A one-shot spawn rarely finishes before the hard-exit below (same
+                # as the bus path), but wire submit for parity with the TUI.
                 agent_loop.subagents.set_submit(scheduler.submit)
-                # Cron reminders run as CRON-origin turns through the spine
-                # scheduler, delivered by the hub -> CliOutlet (replacing the
-                # legacy bus path). readback_texts/system_events stay unset: the
-                # REPL has no heartbeat, so the handler no-ops them.
-                cron.on_job = make_on_cron_job(
-                    agent_loop,
-                    hub,
-                    submit=scheduler.submit,
-                    channel_manager=cli_shim,
-                    session_manager=session_manager,
-                    default_channel="cli",
-                )
-                # Sentinel nudges now ride the spine hub -> CliOutlet (replacing
-                # the legacy bus consume): late-bind the REPL hub's post.
-                if sentinel_runner is not None and sentinel_runner.dispatcher is not None:
-                    sentinel_runner.dispatcher.set_post(hub.post)
-                # Start cron so scheduled reminders ("remind me in 1 minute")
-                # actually fire — previously the REPL created a CronService but
-                # never started its tick loop, so jobs just sat in jobs.json.
-                await cron.start()
-                # Start Sentinel if enabled so anticipatory nudges reach the REPL.
-                # Nudges ride the spine hub -> CliOutlet (which renders the 🐦‍⬛
-                # proactive marker for _sentinel_origin); no bus consumer here.
-                if sentinel_runner is not None:
-                    await sentinel_runner.start()
-
-                def _on_exit() -> None:
-                    _restore_terminal()
-                    console.print("\nGoodbye!")
-
-                def _slash(command: str) -> bool:
-                    from raven.cli._repl_slash import handle_repl_slash
-
-                    return handle_repl_slash(command, console=console)
-
-                try:
-                    await run_repl_loop(
-                        read_input=_read_interactive_input_async,
-                        submit=scheduler.submit,
-                        wait_idle=hub.wait_idle,
-                        channel=cli_channel,
-                        chat_id=cli_chat_id,
-                        is_exit=_is_exit_command,
-                        handle_slash=_slash,
-                        thinking=_thinking_ctx,
-                        on_exit=_on_exit,
-                    )
-                finally:
-                    if sentinel_runner is not None:
-                        await sentinel_runner.stop()
-                    cron.stop()
-                    agent_loop.stop()
-                    await teardown()  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
-                    await asyncio.gather(runtime_task, return_exceptions=True)
-                    if wait_skill_extract or flush_skill_buffer:
-                        # ``exit`` is not a natural boundary; without a
-                        # flush any buffered turns would sit
-                        # indefinitely until the next session reuses
-                        # the id. With ``flush_skill_buffer`` we send
-                        # session_end here so they drain; with
-                        # ``wait_skill_extract`` we block on the
-                        # resulting (and any other in-flight) task.
-                        await agent_loop.await_pending_extractions(
-                            flush_session_id=(f"{cli_channel}:{cli_chat_id}" if flush_skill_buffer else None),
-                            wait=wait_skill_extract,
+                with _thinking_ctx():
+                    handle = scheduler.submit(
+                        TurnRequest(
+                            origin=Origin.USER,
+                            source=Source(
+                                channel="cli",
+                                chat_id="direct",
+                                sender_id="user",
+                                chat_type=ChatType.DM,
+                            ),
+                            text=message,
+                            conversation=session_id,
                         )
-                    await agent_loop.close_mcp()
-                    # Stop the memory-backend plugin before exit.
-                    # Closes the HTTP client pool (HTTP mode) or releases
-                    # any in-process EverMem handles (embedded).
-                    if backend is not None:
-                        try:
-                            await backend.stop()
-                        except Exception:
-                            logger.exception(
-                                "memory backend stop failed; continuing shutdown",
-                            )
-                    warn_about_pending_cli_reminders(cron, config)
+                    )
+                    await handle.result()
+                await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
+                await teardown()
+                await agent_loop.close_mcp()
+            finally:
+                if backend is not None:
+                    try:
+                        # Detached indexing writes first: stopping the backend
+                        # closes the HTTP client they still need.
+                        await agent_loop.drain_backend_stores()
+                        await backend.stop()
+                    except Exception:
+                        logger.exception(
+                            "memory backend stop failed; continuing shutdown",
+                        )
 
-            asyncio.run(run_interactive())
+        _ONE_SHOT_EXIT["code"] = 0
+        asyncio.run(run_once())
+        # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
+        # thread, torch) segfault during interpreter finalization. The exit
+        # chokepoint in raven.cli.commands.run hard-exits past finalization
+        # when that hazard is live, so this path just returns normally.
+        if _ONE_SHOT_EXIT["code"]:
+            raise typer.Exit(_ONE_SHOT_EXIT["code"])
 
 
 __all__ = ["register"]

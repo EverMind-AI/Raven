@@ -104,6 +104,11 @@ def _llm_attrs(resp: Any, provider: str, model: str | None, provider_class: str 
     reasoning = getattr(resp, "reasoning_content", None)
     if reasoning:
         attrs["llm.reasoning_preview"] = _preview(reasoning)
+    # Only stamped when true: a truncated call is the rare one worth finding in
+    # a trace, and an always-present false would bury it.
+    if getattr(resp, "truncated", False):
+        attrs["llm.truncated"] = True
+        attrs["llm.max_tokens"] = getattr(resp, "max_tokens", None)
     return attrs
 
 

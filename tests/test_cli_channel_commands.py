@@ -33,7 +33,7 @@ def _read(path: Path) -> dict:
 
 
 def test_enable_disable_round_trip(tmp_config: Path) -> None:
-    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     assert r.exit_code == 0, r.stdout
     assert "enabled" in r.stdout
 
@@ -60,6 +60,8 @@ def test_enable_complex_channel_with_kebab_flags(tmp_config: Path) -> None:
             "X",
             "--app-secret",
             "Y",
+            "--allow-from",
+            "*",
         ],
     )
     assert r.exit_code == 0, r.stdout
@@ -81,6 +83,8 @@ def test_enable_nested_field_via_dotted_flag(tmp_config: Path) -> None:
             "xapp",
             "--dm.policy",
             "allowlist",
+            "--allow-from",
+            "*",
         ],
     )
     assert r.exit_code == 0, r.stdout
@@ -90,7 +94,7 @@ def test_enable_nested_field_via_dotted_flag(tmp_config: Path) -> None:
 
 
 def test_get_with_show_secrets(tmp_config: Path) -> None:
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "plain_value"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "plain_value", "--allow-from", "*"])
     r = runner.invoke(app, ["channels", "get", "telegram", "--show-secrets"])
     assert r.exit_code == 0
     assert "plain_value" in r.stdout
@@ -137,7 +141,7 @@ def test_help_alias_no_longer_exists(tmp_config: Path) -> None:
 
 
 def test_reset_clears_token(tmp_config: Path) -> None:
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     assert _read(tmp_config)["channels"]["telegram"]["token"] == "abc"
 
     r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
@@ -166,7 +170,7 @@ def test_no_flag_bool_negative(tmp_config: Path) -> None:
     """``--no-foo`` form must set the bool field to False."""
     runner.invoke(
         app,
-        ["channels", "enable", "telegram", "--token", "abc", "--reply-to-message"],
+        ["channels", "enable", "telegram", "--token", "abc", "--reply-to-message", "--allow-from", "*"],
     )
     section = _read(tmp_config)["channels"]["telegram"]
     assert section["replyToMessage"] is True
@@ -206,9 +210,10 @@ def test_register_config_commands_direct_invocation() -> None:
 
 def test_enable_no_fields_prints_schema_table(tmp_config: Path) -> None:
     """``channels enable telegram`` (no flags) must fall back to schema table
-    instead of writing an empty enable."""
+    instead of writing an empty enable. Required --token is unset, so this
+    now also errors (see test_enable_missing_token_exits_nonzero)."""
     r = runner.invoke(app, ["channels", "enable", "telegram"])
-    assert r.exit_code == 0
+    assert r.exit_code != 0
     out = r.stdout
     assert "--token" in out
     assert "--allow-from" in out
@@ -269,7 +274,7 @@ def test_channels_list_command(tmp_config: Path) -> None:
 
 def test_channels_list_reflects_enabled_state(tmp_config: Path) -> None:
     """``channels list`` Enabled column must mirror the live config."""
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     r = runner.invoke(app, ["channels", "list"])
     assert r.exit_code == 0
     # telegram row should have a ✓; un-enabled channels should not
@@ -296,8 +301,12 @@ def test_channels_bare_prints_help_not_error() -> None:
 
 
 def test_enable_warns_empty_credentials(tmp_config: Path) -> None:
-    """Enabling a channel without supplying its secret fields must warn."""
-    r = runner.invoke(app, ["channels", "enable", "telegram", "--allow-from", "alice"])
+    """Enabling a channel whose secret fields are optional must warn, not fail.
+
+    Uses weixin (secret ``token`` is not required): required-but-empty fields
+    now error out instead, so telegram no longer exercises the warn path.
+    """
+    r = runner.invoke(app, ["channels", "enable", "weixin", "--allow-from", "alice"])
     assert r.exit_code == 0
     assert "Empty credential fields" in r.stdout
     assert "--token" in r.stdout
@@ -305,17 +314,18 @@ def test_enable_warns_empty_credentials(tmp_config: Path) -> None:
 
 def test_enable_with_token_no_credential_warning(tmp_config: Path) -> None:
     """Supplying all secrets must NOT emit the empty-credential warning."""
-    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     assert r.exit_code == 0
     assert "Empty credential fields" not in r.stdout
 
 
-def test_enable_telegram_defaults_allow_from_to_wildcard(tmp_config: Path) -> None:
-    """Enabling a channel without explicit ``--allow-from``
-    must result in ``allowFrom == ['*']`` (allow anyone), not ``[]`` (deny all).
-    The empty-list default caused silent message rejection in gateway runtime.
+def test_enable_telegram_defaults_allow_from_to_wildcard(tmp_config: Path, tty_mock) -> None:
+    """Enabling a channel without explicit ``--allow-from`` (interactive run,
+    wildcard confirmed) must result in ``allowFrom == ['*']`` (allow anyone),
+    not ``[]`` (deny all). The empty-list default caused silent message
+    rejection in gateway runtime.
     """
-    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"], input="y\n")
     assert r.exit_code == 0, r.stdout
     section = _read(tmp_config)["channels"]["telegram"]
     assert section["allowFrom"] == ["*"], f"expected allowFrom=['*'] (schema default), got {section['allowFrom']!r}"
@@ -349,7 +359,7 @@ def test_all_channel_schemas_default_allow_from_to_wildcard() -> None:
 
 def test_reset_aborts_without_confirm(tmp_config: Path) -> None:
     """Reset without ``--yes`` and answering 'N' must abort and leave file alone."""
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     r = runner.invoke(app, ["channels", "reset", "telegram"], input="N\n")
     assert r.exit_code == 0
     assert "Aborted" in r.stdout
@@ -358,7 +368,7 @@ def test_reset_aborts_without_confirm(tmp_config: Path) -> None:
 
 
 def test_reset_proceeds_on_y(tmp_config: Path) -> None:
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     r = runner.invoke(app, ["channels", "reset", "telegram"], input="y\n")
     assert r.exit_code == 0
     section = _read(tmp_config)["channels"]["telegram"]
@@ -366,7 +376,7 @@ def test_reset_proceeds_on_y(tmp_config: Path) -> None:
 
 
 def test_reset_yes_flag_skips_confirm(tmp_config: Path) -> None:
-    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
     r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
     assert r.exit_code == 0
     section = _read(tmp_config)["channels"]["telegram"]
@@ -453,6 +463,7 @@ def test_channels_login_dispatches_to_channel_login(tmp_config: Path, monkeypatc
             return True
 
     _patch_discover_specs(monkeypatch, "telegram", Fake)
+    monkeypatch.setattr("raven.cli.channel_commands.die_if_not_tty", lambda *a, **k: None)
 
     r = runner.invoke(app, ["channels", "login", "telegram"])
     assert r.exit_code == 0, r.stdout
@@ -474,6 +485,7 @@ def test_channels_login_force_flag_passes_through(tmp_config: Path, monkeypatch:
             return True
 
     _patch_discover_specs(monkeypatch, "telegram", Fake)
+    monkeypatch.setattr("raven.cli.channel_commands.die_if_not_tty", lambda *a, **k: None)
 
     r = runner.invoke(app, ["channels", "login", "telegram", "--force"])
     assert r.exit_code == 0
@@ -491,6 +503,7 @@ def test_channels_login_returns_false_exits_1(tmp_config: Path, monkeypatch: pyt
             return False
 
     _patch_discover_specs(monkeypatch, "telegram", Fake)
+    monkeypatch.setattr("raven.cli.channel_commands.die_if_not_tty", lambda *a, **k: None)
 
     r = runner.invoke(app, ["channels", "login", "telegram"])
     assert r.exit_code == 1
@@ -607,3 +620,153 @@ def test_whatsapp_login_returns_false_when_npm_missing(
 
     result = asyncio.run(whatsapp_channel.login())
     assert result is False
+
+
+# ============================================================================
+# allow_from='*' confirm gate (enable) + missing-required exit code + TTY guard
+# ============================================================================
+
+
+@pytest.fixture
+def tty_mock(monkeypatch: pytest.MonkeyPatch):
+    """Simulate an interactive terminal for the wildcard confirm gate."""
+    monkeypatch.setattr("raven.cli.channel_commands.is_tty", lambda: True)
+
+
+def test_enable_open_allowfrom_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Interactive enable resolving to allow_from='*' must ask for confirmation
+    (default No); declining writes nothing."""
+    calls: list[dict] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        calls.append({"prompt": prompt, "default": kwargs.get("default", args[0] if args else None)})
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    assert calls, "typer.confirm must be invoked when allow_from resolves to '*'"
+    assert calls[0]["default"] is False
+    assert r.exit_code != 0
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("telegram")
+        assert section is None or section.get("enabled") is not True
+
+
+def test_enable_open_allowfrom_nontty_requires_explicit_flag(tmp_config: Path) -> None:
+    """Non-TTY enable resolving to allow_from='*' without the explicit flag must
+    refuse: exit non-zero, output carries the risk hint and the required flag."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
+    assert r.exit_code != 0
+    combined = r.stdout + (r.output or "")
+    assert "--allow-from" in combined
+    assert "*" in combined
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("telegram")
+        assert section is None or section.get("enabled") is not True
+
+
+def test_enable_open_allowfrom_tty_confirm_yes_writes(tmp_config: Path, tty_mock) -> None:
+    """Accepting the confirm keeps the schema-default wildcard and enables."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"], input="y\n")
+    assert r.exit_code == 0, r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
+
+
+def test_enable_open_allowfrom_nontty_explicit_flag_proceeds(tmp_config: Path) -> None:
+    """Explicit ``--allow-from '*'`` in a non-TTY run is accepted with a warning."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
+
+
+def test_enable_restricted_allowfrom_skips_gate(tmp_config: Path) -> None:
+    """A restricted allow_from needs no confirmation in any terminal mode."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert r.exit_code == 0, r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["alice"]
+
+
+def test_enable_star_inside_id_does_not_trigger_gate(tmp_config: Path) -> None:
+    """An ID merely containing ``*`` (e.g. ``user*1``) is not the wildcard:
+    the confirm gate must not fire on substring matches."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "user*1"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["user*1"]
+
+
+def test_enable_star_item_in_list_triggers_gate(tmp_config: Path) -> None:
+    """An exact ``*`` item anywhere in the comma list still counts as the
+    explicit wildcard: non-TTY prints the risk warning and proceeds."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "a,*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["allowFrom"] == ["a", "*"]
+
+
+def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
+    """Bare ``enable telegram`` (required --token unset) must error on the first
+    line and exit non-zero; the schema table stays as follow-up detail."""
+    import re
+
+    r = runner.invoke(app, ["channels", "enable", "telegram"])
+    assert r.exit_code != 0
+    first_line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+    assert re.search(r"missing required .*--token", first_line), f"first line: {first_line!r}"
+    assert "--allow-from" in r.stdout
+
+
+def test_enable_partial_credentials_still_fails_missing_required(tmp_config: Path) -> None:
+    """Supplying one required flag must not bypass the check for the others:
+    ``enable feishu --app-id X`` (no --app-secret) errors first line, exits 1."""
+    import re
+
+    r = runner.invoke(app, ["channels", "enable", "feishu", "--app-id", "X", "--allow-from", "alice"])
+    assert r.exit_code != 0
+    first_line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+    assert re.search(r"missing required .*--app-secret", first_line), f"first line: {first_line!r}"
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("feishu")
+        assert section is None or section.get("enabled") is not True
+
+
+def test_enable_unrelated_flag_still_fails_missing_required(tmp_config: Path) -> None:
+    """A flag unrelated to credentials must not bypass the check either:
+    ``enable telegram --allow-from '*'`` (no --token) errors first line, exits 1."""
+    import re
+
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--allow-from", "*"])
+    assert r.exit_code != 0
+    first_line = next(ln for ln in r.stdout.splitlines() if ln.strip())
+    assert re.search(r"missing required .*--token", first_line), f"first line: {first_line!r}"
+    if tmp_config.exists():
+        section = _read(tmp_config).get("channels", {}).get("telegram")
+        assert section is None or section.get("enabled") is not True
+
+
+def test_channels_login_nontty_no_traceback(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-TTY ``channels login`` exits 2 with a re-run hint instead of
+    reaching the interactive adapter (bare prompt_toolkit traceback)."""
+
+    class Fake(_FakeChannelBase):
+        name = "weixin"
+        display_name = "Weixin"
+
+        async def login(self, force: bool = False) -> bool:
+            raise AssertionError("login must not run in a non-interactive terminal")
+
+    _patch_discover_specs(monkeypatch, "weixin", Fake)
+    r = runner.invoke(app, ["channels", "login", "weixin"])
+    assert r.exit_code == 2, r.stdout
+    assert "Traceback" not in r.stdout
+    assert "Re-run with:" in r.stdout

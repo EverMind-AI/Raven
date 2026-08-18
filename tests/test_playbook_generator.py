@@ -4,17 +4,18 @@ import json
 
 import pytest
 
-from raven.playbook import (
+from raven.memory_engine.playbook import (
     PlaybookGenerationError,
     PlaybookGenerator,
+    PlaybookStore,
     StaticInventory,
 )
 
 ROSTER = {
-    "research-raven": "deep retrieval and fact-checking",
-    "code-raven": "repository-level code work",
-    "data-raven": "the whole data chain",
-    "content-raven": "text and deliverables",
+    "research-raven": "深度检索与事实核查",
+    "code-raven": "仓库级代码工作",
+    "data-raven": "数据全链路",
+    "content-raven": "文本与交付物",
 }
 
 
@@ -41,27 +42,26 @@ class ScriptedProvider:
 
 GOOD_DAG = {
     "name": "weekly-feedback",
-    "description": "weekly user-feedback analysis",
+    "description": "每周用户反馈分析",
     "mode": "dag",
     "confirm": True,
-    "triggers": {"keywords": ["user feedback", "feedback weekly"]},
-    "params": {"week_of": {"type": "string", "required": True, "description": "which week should be analyzed?"}},
+    "triggers": {"keywords": ["用户反馈", "反馈周报"]},
+    "params": {"week_of": {"type": "string", "required": True, "description": "分析哪一周？"}},
     "nodes": [
         {
             "id": "pull",
             "agent": "data-raven",
-            "promptTemplate": "pull the feedback for ${params.week_of}",
+            "promptTemplate": "拉取 ${params.week_of} 的反馈",
             "skills": ["sql-queries"],
         },
         {
             "id": "report",
             "agent": "content-raven",
-            "promptTemplate": "write the weekly report from {{ pull.output }}",
+            "promptTemplate": "按 {{ pull.output }} 写周报",
             "dependsOn": ["pull"],
         },
     ],
-    "assumptions": ["the data source is slack"],
-    "blockingQuestions": [],
+    "provenance": {"specifiedByUser": ["数据源为 slack"], "blockingQuestions": []},
 }
 
 
@@ -79,18 +79,19 @@ def _generator(payloads, skills=("sql-queries",)):
 
 async def test_happy_path_fills_code_owned_fields():
     gen, _ = _generator([GOOD_DAG])
-    result = await gen.generate("weekly feedback analysis, the flow is fixed...", skills=["sql-queries"])
-    assert result.spec.name == "weekly-feedback"
-    assert result.spec.nodes[1].depends_on == ["pull"]
-    assert result.notes == ["Assumption: the data source is slack"]
+    spec = await gen.generate("每周反馈分析,流程固定...", skills=["sql-queries"])
+    assert spec.name == "weekly-feedback"
+    assert spec.status == "draft"
+    assert spec.provenance.source_input.startswith("每周反馈分析")
+    assert spec.nodes[1].depends_on == ["pull"]
 
 
 async def test_repair_loop_feeds_errors_back():
     bad = dict(GOOD_DAG)
     bad["nodes"] = [dict(GOOD_DAG["nodes"][0], agent="ghost-agent"), GOOD_DAG["nodes"][1]]
     gen, _ = _generator([bad, GOOD_DAG])
-    result = await gen.generate("weekly feedback analysis", skills=["sql-queries"])
-    assert result.spec.name == "weekly-feedback"
+    spec = await gen.generate("每周反馈分析", skills=["sql-queries"])
+    assert spec.name == "weekly-feedback"
     repair_msg = gen._provider.calls[1][-1]["content"]
     assert "ghost-agent" in repair_msg and "emit_playbook" in repair_msg
 
@@ -104,26 +105,16 @@ async def test_gives_up_after_budget_with_error_detail():
 
 async def test_envelope_wrapped_spec_is_unwrapped():
     gen, _ = _generator([{"playbook": GOOD_DAG}])
-    result = await gen.generate("weekly feedback analysis")
-    assert result.spec.name == "weekly-feedback"
+    spec = await gen.generate("每周反馈分析")
+    assert spec.name == "weekly-feedback"
 
 
-async def test_unknown_skills_degrade_into_notes():
+async def test_unknown_skills_degrade_into_missing_capabilities():
     payload = json.loads(json.dumps(GOOD_DAG))
     payload["nodes"][0]["skills"] = ["ghost-skill"]
     gen, _ = _generator([payload])
-    result = await gen.generate("weekly feedback analysis")
-    assert any(n.startswith("Missing capability:") and "ghost-skill" in n for n in result.notes)
-
-
-async def test_blocking_questions_become_notes_not_fields():
-    payload = json.loads(json.dumps(GOOD_DAG))
-    payload["blockingQuestions"] = ["what is the report for?"]
-    gen, _ = _generator([payload])
-    result = await gen.generate("weekly feedback analysis")
-    assert "Open question: what is the report for?" in result.notes
-    # The self-report never reaches the machine fields.
-    assert "blockingQuestions" not in result.spec.block_dump()
+    spec = await gen.generate("每周反馈分析")
+    assert any("ghost-skill" in m for m in spec.provenance.missing_capabilities)
 
 
 async def test_model_proposed_triggers_go_through_the_guards():
@@ -134,12 +125,12 @@ async def test_model_proposed_triggers_go_through_the_guards():
     than a person.
     """
     payload = json.loads(json.dumps(GOOD_DAG))
-    payload["triggers"] = {"keywords": ["help", "a", "user feedback", "user feedback", "SEO", "seo"]}
+    payload["triggers"] = {"keywords": ["帮我", "的", "用户反馈", "用户反馈", "SEO", "seo"]}
     gen, _ = _generator([payload])
 
-    result = await gen.generate("weekly feedback analysis")
+    spec = await gen.generate("每周反馈分析")
 
-    assert result.spec.triggers.keywords == ["user feedback", "seo"]
+    assert spec.triggers.keywords == ["用户反馈", "seo"]
 
 
 async def test_all_junk_triggers_feed_the_repair_loop():
@@ -148,24 +139,25 @@ async def test_all_junk_triggers_feed_the_repair_loop():
     rejected, and an index entry is a permanent per-message cost.
     """
     junk = json.loads(json.dumps(GOOD_DAG))
-    junk["triggers"] = {"keywords": ["a", "help", "the"]}
+    junk["triggers"] = {"keywords": ["的", "帮我", "一下"]}
     gen, _ = _generator([junk, GOOD_DAG])
 
-    result = await gen.generate("weekly feedback analysis")
+    spec = await gen.generate("每周反馈分析")
 
-    assert result.spec.triggers.keywords == ["user feedback", "feedback weekly"]
+    assert spec.triggers.keywords == ["用户反馈", "反馈周报"]
     repair_msg = gen._provider.calls[1][-1]["content"]
     assert "every trigger candidate was dropped" in repair_msg
 
 
-async def test_revise_keeps_the_name_and_reports_fresh_notes():
+async def test_revise_enforces_the_immutable_region(tmp_path):
     gen, _ = _generator([GOOD_DAG])
-    result = await gen.generate("weekly feedback analysis")
+    spec = await gen.generate("每周反馈分析")
+    PlaybookStore(tmp_path).save(spec)
 
-    edited = json.loads(json.dumps(GOOD_DAG))
-    edited["name"] = "renamed-anyway"
-    edited["assumptions"] = ["the report becomes daily"]
-    gen2, _ = _generator([edited])
-    revised = await gen2.revise(result.spec, "make the report daily")
-    assert revised.spec.name == result.spec.name
-    assert revised.notes == ["Assumption: the report becomes daily"]
+    dropped = json.loads(json.dumps(GOOD_DAG))
+    dropped["provenance"]["specifiedByUser"] = []  # drops the user-specified fact
+    fixed = json.loads(json.dumps(GOOD_DAG))
+    gen2, _ = _generator([dropped, fixed])
+    revised = await gen2.revise(spec, "报告改成日报")
+    assert revised.name == spec.name
+    assert "数据源为 slack" in revised.provenance.specified_by_user

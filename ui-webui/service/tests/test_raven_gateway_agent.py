@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from types import SimpleNamespace
 
 import raven_gateway_agent as rga
@@ -74,10 +73,9 @@ _IDLE = 0.05
 class _FakeGatewayClient:
     """Hands out one pre-seeded queue and pumps a scripted feed on send_turn."""
 
-    def __init__(self, queue: asyncio.Queue, feed, turn_id: str = "turn-1") -> None:
+    def __init__(self, queue: asyncio.Queue, feed) -> None:
         self._queue = queue
         self._feed = feed
-        self._turn_id = turn_id
         self.task: asyncio.Task | None = None
         self.sent: list[str] = []
 
@@ -87,7 +85,7 @@ class _FakeGatewayClient:
     async def send_turn(self, session_key: str, content: str) -> str:
         self.sent.append(content)
         self.task = asyncio.get_running_loop().create_task(self._pump())
-        return self._turn_id
+        return "turn-1"
 
     async def _pump(self) -> None:
         for delay, event in self._feed:
@@ -96,15 +94,12 @@ class _FakeGatewayClient:
             self._queue.put_nowait(event)
 
 
-def _drive(feed, *, seed=(), idle: float = _IDLE, retriever=None, sent=None, own_turn_id="turn-1", blocking=None):
+def _drive(feed, *, seed=(), idle: float = _IDLE, retriever=None, sent=None):
     """Run one reply_stream turn against a scripted feed.
 
     ``seed`` pre-fills the queue as if a previous turn had left events behind.
     ``retriever`` replaces the agent's, and ``sent`` is a list the turn text
-    handed to the gateway is appended to. ``own_turn_id`` is what the gateway
-    returns from turn.send, and ``blocking`` overrides the blocking-tool clock --
-    set it far above ``idle`` so which of the two clocks fired is legible from how
-    long the turn took.
+    handed to the gateway is appended to.
     Returns ``(event_class_names, concatenated_deltas, published_customs)``.
     """
 
@@ -112,7 +107,7 @@ def _drive(feed, *, seed=(), idle: float = _IDLE, retriever=None, sent=None, own
         queue: asyncio.Queue = asyncio.Queue()
         for event in seed:
             queue.put_nowait(event)
-        client = _FakeGatewayClient(queue, feed, turn_id=own_turn_id)
+        client = _FakeGatewayClient(queue, feed)
 
         async def _shared():
             return client
@@ -123,8 +118,6 @@ def _drive(feed, *, seed=(), idle: float = _IDLE, retriever=None, sent=None, own
         if retriever is not None:
             agent._retriever = retriever
         agent.timeout_seconds = idle
-        if blocking is not None:
-            agent.blocking_timeout_seconds = blocking
         customs: list[tuple] = []
 
         async def _publish_custom(name, value):
@@ -159,21 +152,6 @@ _DONE = {"type": "message.complete", "payload": {}}
 
 def test_a_blocking_tool_outlives_the_idle_clock():
     names, _, _ = _drive([(0, _start("run_subagent_dag", blocking=True)), (_IDLE * 6, _COMPLETE), (0, _DONE)])
-
-    assert "ToolResultEndEvent" in names, names
-    assert names[-1] == "ReplyEndEvent"
-
-
-def test_a_blocking_tool_still_gets_more_than_the_idle_clock():
-    """The blocking clock is a backstop, not a latency budget: a real sub-agent run
-    finishes far inside it. Pinned explicitly so the ceiling that replaced the
-    unbounded wait cannot be tightened down to the idle clock, which is the
-    regression the unbounded wait was introduced to fix.
-    """
-    names, _, _ = _drive(
-        [(0, _start("run_subagent_dag", blocking=True)), (_IDLE * 6, _COMPLETE), (0, _DONE)],
-        blocking=_IDLE * 600,
-    )
 
     assert "ToolResultEndEvent" in names, names
     assert names[-1] == "ReplyEndEvent"
@@ -223,107 +201,6 @@ def test_a_stale_turn_tail_does_not_bleed_into_the_next_turn():
     assert names[-1] == "ReplyEndEvent"
 
 
-def test_a_foreign_turns_completion_does_not_end_this_turn():
-    """A distinctly-identified foreign completion is exactly what a fixed gateway
-    emits for a turn that is not ours, so this is the shape worth pinning.
-
-    It depends entirely on a gateway-side invariant: every `message.complete`
-    carries the id of the turn that actually ended, and the lane mints one for a
-    turn no client submitted. Without that, a turn the runtime submitted onto our
-    lane completes under *our* id (or under none) and no service-side comparison
-    can tell it apart -- see the raven-side
-    `test_an_internally_submitted_turns_completion_carries_its_own_id` and
-    `test_a_turn_nobody_bound_still_reports_a_populated_turn_id`, which are what
-    hold that end up. Its stray delta still renders (deltas carry no turn id to
-    filter on); only the completion is filtered.
-    """
-    names, text, _ = _drive(
-        [
-            (0, {"type": "token.delta", "payload": {"text": "STALE"}}),
-            (0, {"type": "message.complete", "payload": {"turn_id": "turn-0"}}),
-            (0, {"type": "token.delta", "payload": {"text": "fresh"}}),
-            (0, _DONE),
-        ]
-    )
-
-    assert "fresh" in text, text
-    assert names[-1] == "ReplyEndEvent"
-
-
-def test_this_turns_own_completion_ends_it():
-    """The service trusts its own id because nothing else can forge it: turn.send
-    handed it back, and one turn completes once. If this ever has to change, the
-    gateway is stamping the wrong turn, not this guard being too loose."""
-    names, text, _ = _drive(
-        [
-            (0, {"type": "token.delta", "payload": {"text": "mine"}}),
-            (0, {"type": "message.complete", "payload": {"turn_id": "turn-1"}}),
-            (0, {"type": "token.delta", "payload": {"text": "AFTER"}}),
-        ]
-    )
-
-    assert "mine" in text and "AFTER" not in text, text
-    assert names[-1] == "ReplyEndEvent"
-
-
-def test_a_completion_with_no_turn_id_still_ends_the_turn():
-    """Only an older gateway omits the id. Ending is the conservative pre-guard
-    behaviour: ignoring it would trade a possibly-early end for a wait to the
-    clock, which is strictly worse for the user."""
-    names, text, _ = _drive(
-        [
-            (0, {"type": "token.delta", "payload": {"text": "mine"}}),
-            (0, _DONE),
-            (0, {"type": "token.delta", "payload": {"text": "AFTER"}}),
-        ]
-    )
-
-    assert "mine" in text and "AFTER" not in text, text
-    assert names[-1] == "ReplyEndEvent"
-
-
-def test_an_empty_own_turn_id_ends_the_turn_on_any_completion():
-    """`GatewayClient.send_turn` returns "" when the gateway omits the id, and with
-    nothing to compare against the guard has to fall back to ending the turn.
-    Deliberate, and unpinned until now -- every completion used to break."""
-    names, text, _ = _drive(
-        [
-            (0, {"type": "message.complete", "payload": {"turn_id": "turn-9"}}),
-            (0, {"type": "token.delta", "payload": {"text": "AFTER"}}),
-        ],
-        own_turn_id="",
-    )
-
-    assert "AFTER" not in text, text
-    assert names[-1] == "ReplyEndEvent"
-
-
-def test_a_foreign_completion_does_not_leave_this_turn_without_a_clock():
-    """Ignoring a foreign completion must not leave the turn waiting forever.
-
-    The foreign turn's blocking `tool.start` is what suspends the clock, and that
-    turn is now over -- one serial lane, so nothing of ours can be mid-call while
-    another turn on it ends. Left set, this turn waits on the blocking ceiling (or,
-    before there was one, on no clock at all) with nothing more coming.
-    """
-    started = time.monotonic()
-    names, _, _ = _drive(
-        [
-            (0, _start("run_subagent_dag", blocking=True)),
-            (0, {"type": "message.complete", "payload": {"turn_id": "turn-0"}}),
-        ],
-        blocking=_IDLE * 600,
-    )
-    elapsed = time.monotonic() - started
-
-    assert names[-1] == "ReplyEndEvent"
-    assert elapsed < _IDLE * 60, f"the idle clock did not take over; waited {elapsed:.2f}s"
-    # tool.start already opened a result block for that foreign tool, and
-    # _close_block only closes think/text -- so the reset has to close it too or the
-    # renderer holds a spinner on a tool whose turn is over.
-    assert "ToolResultEndEvent" in names, names
-
-
 # --------------------------------------------------------------- knowledge bases
 
 
@@ -365,8 +242,6 @@ def test_the_retrieved_context_reaches_the_gateway():
 
     assert sent, "the turn never reached the gateway"
     assert sent[0].startswith("[1] (source: kb > s)"), sent[0]
-
-
 # --- routing a shared subscription between the main reply and a direct chat ---
 
 

@@ -37,7 +37,6 @@ import IconMoon from '~icons/solar/moon-bold-duotone';
 import IconSettings from '~icons/solar/settings-bold-duotone';
 import IconPanel from '~icons/solar/siderbar-linear';
 import IconSun from '~icons/solar/sun-2-bold-duotone';
-import IconTools from '~icons/solar/tuning-2-bold-duotone';
 
 /**
  * One rail entry. Collapsed it is the bare icon with `label` as its tooltip;
@@ -168,33 +167,11 @@ export function AppSidebar() {
 				<SidebarGroup>
 					<SidebarGroupContent>
 						<SidebarMenu>
-							{/* Setup order, not arrival order. Two of these are hard
-							    dependencies rather than taste: the media tools borrow
-							    their key from `providers.openrouter`, so credentials
-							    precede tools; and a scheduled task delivers its result
-							    to a channel, so channels precede scheduled tasks. The
-							    rest runs least-to-most specialised -- what every turn
-							    uses, then what a turn can reach for, then what you
-							    teach it, then who it delegates to and where it speaks.
-							    A new entry belongs where its setup step falls, not at
-							    the end of the list. */}
 							<RailItem
 								icon={<IconKey />}
 								label={t('common.credential')}
 								isActive={location.pathname === '/credential'}
 								onClick={() => navigate('/credential')}
-							/>
-							<RailItem
-								icon={<IconEverOS />}
-								label={t('nav.everOS')}
-								isActive={location.pathname === '/everos'}
-								onClick={() => navigate('/everos')}
-							/>
-							<RailItem
-								icon={<IconTools />}
-								label={t('nav.ravenTools')}
-								isActive={location.pathname === '/tools'}
-								onClick={() => navigate('/tools')}
 							/>
 							<RailItem
 								icon={<IconBook />}
@@ -203,16 +180,16 @@ export function AppSidebar() {
 								onClick={() => navigate('/knowledge')}
 							/>
 							<RailItem
-								icon={<IconSkills />}
-								label={t('nav.ravenSkills')}
-								isActive={location.pathname.startsWith('/raven-skills')}
-								onClick={() => navigate('/raven-skills')}
-							/>
-							<RailItem
 								icon={<IconCpu className="icon-flip" />}
 								label={t('common.subagents')}
 								isActive={location.pathname === '/subagents'}
 								onClick={() => navigate('/subagents')}
+							/>
+							<RailItem
+								icon={<IconAlarm />}
+								label={t('nav.ravenCron')}
+								isActive={location.pathname === '/raven-cron'}
+								onClick={() => navigate('/raven-cron')}
 							/>
 							<RailItem
 								icon={<IconChannels />}
@@ -221,10 +198,16 @@ export function AppSidebar() {
 								onClick={() => navigate('/raven-channels')}
 							/>
 							<RailItem
-								icon={<IconAlarm />}
-								label={t('nav.ravenCron')}
-								isActive={location.pathname === '/raven-cron'}
-								onClick={() => navigate('/raven-cron')}
+								icon={<IconEverOS />}
+								label={t('nav.everOS')}
+								isActive={location.pathname === '/everos'}
+								onClick={() => navigate('/everos')}
+							/>
+							<RailItem
+								icon={<IconSkills />}
+								label={t('nav.ravenSkills')}
+								isActive={location.pathname.startsWith('/raven-skills')}
+								onClick={() => navigate('/raven-skills')}
 							/>
 						</SidebarMenu>
 					</SidebarGroupContent>

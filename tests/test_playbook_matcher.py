@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from raven.playbook import (
+from raven.memory_engine.playbook import (
     MatchCandidate,
     TriggerIndex,
     Triggers,
@@ -13,7 +13,7 @@ from raven.playbook import (
     gate,
     normalize,
 )
-from raven.playbook.types import ParamSpec
+from raven.memory_engine.playbook.types import ParamSpec
 
 
 class _ToolCall:
@@ -42,33 +42,17 @@ class ScriptedProvider:
         return _Response(payload)
 
 
-# CJK fixtures, written as unicode escapes to keep the source ASCII. The L1
-# funnel must match Chinese utterances by plain substring (no segmentation)
-# and fold full-width forms; these pin that behavior with real CJK data.
-SEARCH_RANKING = "\u641c\u7d22\u6392\u540d"  # sou suo pai ming: "search ranking"
-USER_FEEDBACK = "\u7528\u6237\u53cd\u9988"  # yong hu fan kui: "user feedback"
-FULL_WIDTH_SEO_ASK = (
-    "\u5e2e\u6211\u505a\u4e0b\uff33\uff25\uff2f\u4f18\u5316"  # "help me do some SEO tuning", with full-width SEO
-)
-MIXED_ASK = "\u6574\u7406\u4e00\u4e0b\u7528\u6237\u53cd\u9988,\u987a\u4fbf\u770b\u770b\u641c\u7d22\u6392\u540d"  # mentions both user feedback and search ranking
-LUNCH = "\u4e2d\u5348\u5403\u4ec0\u4e48"  # "what's for lunch"
-FULL_WIDTH_LINE = "\uff33\uff25\uff2f  Ranking\n\u63d0\u5347"  # ti sheng: "improve"
-FOLDED_LINE = "seo ranking \u63d0\u5347"
-
-#: Unrelated everyday messages for the generic-word filter. Three of the ten
-#: contain "article", so "article" hits 30% and is dropped by the data, not
-#: by anyone's intuition.
 NEGATIVE = [
-    "can you check why this code throws",
-    "tomorrow's standup moves to 3pm",
-    "this article is quite good, share it with the team",
-    "pull last week's article stats for me",
-    "what's for lunch",
-    "the second paragraph of the article has a logic hole",
-    "book me a ticket to shanghai",
-    "the server disk is full again",
-    "is that bug fixed yet",
-    "don't forget the weekly report",
+    "帮我看看这段代码为什么报错",
+    "明天上午的会改到下午三点",
+    "这篇文章写得挺好的,转给团队看看",
+    "把上周的文章数据统计一下",
+    "中午吃什么",
+    "文章里第二段逻辑有问题",
+    "帮我订一张去上海的票",
+    "服务器磁盘又满了",
+    "这个 bug 修了吗",
+    "周报别忘了写",
 ]
 
 
@@ -79,24 +63,24 @@ async def test_expansion_guards_drop_generic_and_short_entries():
     provider = ScriptedProvider(
         [
             {
-                "keywords": ["SEO", "article", "search ranking", "w", "indexing"],
-                "phrases": ["write one that ranks", "help"],
+                "keywords": ["SEO", "文章", "搜索排名", "写", "收录"],
+                "phrases": ["写一篇能被搜到的", "帮我"],
             }
         ]
     )
     trig = await expand_triggers(
         provider,
-        description="produce one SEO-optimized article for a given topic",
-        source_input="set me up an SEO workflow",
+        description="给定主题产出一篇 SEO 优化文章",
+        source_input="帮我搞一个 SEO 的工作流",
         negative_samples=NEGATIVE,
         rounds=1,
     )
     assert "seo" in trig.keywords  # normalized to lowercase
-    assert "search ranking" in trig.keywords
-    assert "write one that ranks" in trig.keywords  # phrases merge into the one list
-    assert "article" not in trig.keywords  # generic: hits 3/10 negatives
-    assert "w" not in trig.keywords  # rule filter: too short
-    assert "help" not in trig.keywords  # stopword
+    assert "搜索排名" in trig.keywords
+    assert "写一篇能被搜到的" in trig.keywords  # phrases merge into the one list
+    assert "文章" not in trig.keywords  # generic: hits 3/10 negatives
+    assert "写" not in trig.keywords  # rule filter: too short
+    assert "帮我" not in trig.keywords  # stopword
 
 
 async def test_expansion_keeps_seeds_unless_guards_drop_them():
@@ -104,28 +88,28 @@ async def test_expansion_keeps_seeds_unless_guards_drop_them():
     trig = await expand_triggers(
         provider,
         description="d" * 30,
-        seeds=Triggers(keywords=["proper-noun", "article"]),
+        seeds=Triggers(keywords=["专名词", "文章"]),
         negative_samples=NEGATIVE,
         rounds=1,
     )
-    assert trig.keywords == ["proper-noun"]
+    assert trig.keywords == ["专名词"]
 
 
 async def test_expansion_unions_multiple_rounds():
     provider = ScriptedProvider(
         [
-            {"keywords": ["post a tweet"]},
-            {"keywords": ["tweet text", "write one that ranks"]},
+            {"keywords": ["发推"]},
+            {"keywords": ["推文", "写一篇能被搜到的"]},
         ]
     )
     trig = await expand_triggers(provider, description="d" * 30, rounds=2)
-    assert set(trig.keywords) == {"post a tweet", "tweet text", "write one that ranks"}
+    assert set(trig.keywords) == {"发推", "推文", "写一篇能被搜到的"}
     assert len(provider.calls) == 2
 
 
 def test_find_collisions_reports_shared_entries():
     lib = {
-        "a": Triggers(keywords=["seo", "indexing"]),
+        "a": Triggers(keywords=["seo", "收录"]),
         "b": Triggers(keywords=["SEO"]),
     }
     collisions = find_collisions(lib)
@@ -138,18 +122,19 @@ def test_find_collisions_reports_shared_entries():
 def test_index_matches_normalized_substrings():
     idx = TriggerIndex(
         {
-            "seo": Triggers(keywords=["SEO", SEARCH_RANKING]),
-            "feedback": Triggers(keywords=[USER_FEEDBACK]),
+            "seo": Triggers(keywords=["SEO", "搜索排名", "写一篇能被搜到的"]),
+            "feedback": Triggers(keywords=["用户反馈"]),
         }
     )
-    assert idx.match(FULL_WIDTH_SEO_ASK) == ["seo"]  # full-width folded by NFKC
-    assert idx.match(MIXED_ASK) == ["seo", "feedback"]
-    assert idx.match(LUNCH) == []
+    assert idx.match("帮我做下ＳＥＯ优化") == ["seo"]  # full-width folded by NFKC
+    assert idx.match("写一篇能被搜到的向量数据库文章") == ["seo"]
+    assert idx.match("整理一下用户反馈,顺便看看搜索排名") == ["seo", "feedback"]
+    assert idx.match("中午吃什么") == []
     assert idx.match("") == []
 
 
 def test_normalize_folds_case_width_and_whitespace():
-    assert normalize(FULL_WIDTH_LINE) == FOLDED_LINE
+    assert normalize("ＳＥＯ  Ranking\n提升") == "seo ranking 提升"
 
 
 # ---------------------------------------------------------------- L2 gate
@@ -157,13 +142,13 @@ def test_normalize_folds_case_width_and_whitespace():
 CANDIDATES = [
     MatchCandidate(
         playbook_id="seo",
-        description="produce one SEO-optimized article for a given topic",
+        description="给定主题产出一篇 SEO 优化文章",
         params={
-            "topic": ParamSpec(required=True, description="what is the article about?"),
-            "word_count": ParamSpec(type="integer", default=1500, description="target word count"),
+            "topic": ParamSpec(required=True, description="文章主题"),
+            "word_count": ParamSpec(type="integer", default=1500, description="字数"),
         },
     ),
-    MatchCandidate(playbook_id="feedback", description="weekly user-feedback analysis"),
+    MatchCandidate(playbook_id="feedback", description="每周用户反馈分析"),
 ]
 
 
@@ -174,23 +159,23 @@ async def test_gate_returns_actionable_verdict_with_params():
                 {
                     "match": "seo",
                     "confidence": "high",
-                    "reason": "the user clearly wants an SEO article",
-                    "params": {"topic": "vector databases"},
+                    "reason": "用户明确要写SEO文章",
+                    "params": {"topic": "向量数据库"},
                     "missing": [],
                 }
             )
         ]
     )
-    verdict = await gate(provider, "write me an SEO article on vector databases", CANDIDATES)
+    verdict = await gate(provider, "帮我写篇向量数据库的SEO文章", CANDIDATES)
     assert verdict.actionable
-    assert verdict.params == {"topic": "vector databases"}
+    assert verdict.params == {"topic": "向量数据库"}
     # candidate params were rendered into the prompt
     assert "word_count" in provider.calls[0][0]["content"]
 
 
 async def test_gate_low_confidence_is_not_actionable():
-    provider = ScriptedProvider([{"match": "seo", "confidence": "low", "reason": "merely mentioned"}])
-    verdict = await gate(provider, "is seo even worth doing", CANDIDATES)
+    provider = ScriptedProvider([{"match": "seo", "confidence": "low", "reason": "只是聊到"}])
+    verdict = await gate(provider, "seo这东西有用吗", CANDIDATES)
     assert verdict.match == "seo"
     assert not verdict.actionable
 
@@ -207,13 +192,13 @@ async def test_gate_low_confidence_is_not_actionable():
 )
 async def test_gate_failures_resolve_to_pass_through(payload):
     provider = ScriptedProvider([payload])
-    verdict = await gate(provider, "write me an SEO article", CANDIDATES)
+    verdict = await gate(provider, "帮我写篇SEO文章", CANDIDATES)
     assert verdict.match is None
     assert not verdict.actionable
 
 
 async def test_gate_with_no_candidates_never_calls_the_model():
     provider = ScriptedProvider([])
-    verdict = await gate(provider, "just chatting", [])
+    verdict = await gate(provider, "随便聊聊", [])
     assert not verdict.actionable
     assert provider.calls == []

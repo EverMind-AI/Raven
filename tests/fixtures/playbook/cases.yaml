@@ -5,45 +5,47 @@
 # mode here — that divergence is deliberate and tracked in the design doc's
 # open questions.
 #
-# Consumed by tests/integration/test_playbook_real_llm.py, which runs only
-# with an OpenRouter credential (OPENROUTER_API_KEY or ~/.raven/config.json).
+# Consumed by test_playbook_live.py, which runs only with
+# RAVEN_PLAYBOOK_LIVE=1 and a configured provider.
 
 - id: twitter-one-liner            # product example 1 (was dag there)
-  input: "make me a playbook for posting content to twitter"
+  input: "帮我生成一个往推特发内容的 playbook"
   expect:
     mode: prompt
     prompts_required: true
 
 - id: weekly-feedback              # product example 2 (was dag there)
-  input: "give me a weekly user-feedback analysis"
+  input: "每周给我一份用户反馈分析"
   expect:
     mode: prompt
     prompts_required: true
 
 - id: issue-triage-with-pins       # product example 3 (was hybrid there)
   input: |
-    build a GitHub issue triage playbook:
-    - you must use the raven-issue-triage skill, do not invent your own criteria
-    - only P0 files a ticket; list P1s for me to decide manually
+    做一个 GitHub issue 分诊的 playbook:
+    - 必须用 raven-issue-triage 这个 skill,别自己发明判据
+    - 只有 P0 才提单,P1 列出来给我人工决定
   pinned_skills: [raven-issue-triage]
   expect:
     mode: prompt
     must_reference_skills: [raven-issue-triage]
+    specified_by_user_covers: [raven-issue-triage, P0]
 
 - id: due-diligence                # product example 5 (prompt there too)
-  input: "make me a due-diligence playbook"
+  input: "帮我做一个尽调 playbook"
   expect:
     mode: prompt
     prompts_required: true
 
 - id: email-underspecified         # product example 6
-  input: "automate handling my customer email"
+  input: "帮我自动化处理客户邮件"
   expect:
     mode: prompt
-    open_questions_min: 1
+    blocking_questions_min: 1
+    status: draft
 
 - id: competitor-scan-steps        # product example 7 (light step phrasing)
-  input: "build me a competitor research playbook: scan the market side and the technology side separately, then produce one report"
+  input: "帮我做个竞品调研的 playbook,市场面和技术面分头查,最后出一份报告"
   expect:
     mode: dag
     node_count: 3
@@ -51,10 +53,10 @@
 
 - id: explicit-sop                 # canonical dag path: user gives the steps
   input: |
-    weekly feedback analysis, the flow is fixed:
-    1. first pull the last 7 days of user feedback from slack and intercom
-    2. then cluster the feedback into themes
-    3. finally write a weekly report for the PM
+    每周反馈分析,流程固定:
+    1. 先从 slack 和 intercom 拉近7天的用户反馈
+    2. 然后把反馈聚类成主题
+    3. 最后写一份给 PM 的周报
   expect:
     mode: dag
     node_count: 3                  # faithful transcription: no invented steps

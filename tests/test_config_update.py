@@ -17,7 +17,6 @@ from raven.config.update import (
     reset_cron_config,
     set_default_model,
     set_memory_backend,
-    set_playbook_disabled,
     set_sandbox_backend,
     set_sentinel_nudge_quota,
     update_cron_config,
@@ -153,22 +152,16 @@ def test_set_default_model_creates_nested_structure_when_missing(cfg_path: Path)
 
 
 def test_update_cron_config_writes_into_empty_config(cfg_path: Path) -> None:
-    prev = update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+    prev = update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     assert prev is None
     data = _read(cfg_path)
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 def test_update_cron_config_returns_previous_value(cfg_path: Path) -> None:
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
-    prev = update_cron_config("forward_channels", ["feishu"], config_path=cfg_path)
-    assert prev == ["telegram"]
-    data = _read(cfg_path)
-    assert data["cron"]["forwardChannels"] == ["feishu"]
-
-
-def test_update_cron_config_default_timezone(cfg_path: Path) -> None:
-    update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
+    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
+    prev = update_cron_config("default_timezone", "America/Vancouver", config_path=cfg_path)
+    assert prev == "UTC"
     data = _read(cfg_path)
     assert data["cron"]["defaultTimezone"] == "America/Vancouver"
 
@@ -178,8 +171,12 @@ def test_update_cron_config_unknown_key_raises(cfg_path: Path) -> None:
         update_cron_config("nonexistent_key", "x", config_path=cfg_path)
 
 
+def test_update_cron_config_retired_forward_channels_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError, match="Unknown cron config key"):
+        update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+
+
 def test_reset_cron_config_removes_section(cfg_path: Path) -> None:
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
     update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     reset_cron_config(config_path=cfg_path)
     data = _read(cfg_path)
@@ -195,11 +192,11 @@ def test_update_cron_preserves_sibling_sections(cfg_path: Path) -> None:
             }
         )
     )
-    update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
+    update_cron_config("default_timezone", "UTC", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
     assert data["providers"]["openai"]["apiKey"] == "sk-keep-me"
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +277,7 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["weights"] == {
-        "local": 1.0,
+        "local": 0.96,
         "everos": 0.9,
         "hub": 0.85,
     }
@@ -361,37 +358,3 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     with pytest.raises(ConfigReadError):
         set_default_model("openrouter/x", config_path=cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == original
-
-
-# ---------------------------------------------------------------------------
-# set_playbook_disabled
-# ---------------------------------------------------------------------------
-
-
-def test_playbook_disable_adds_the_name(cfg_path: Path) -> None:
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["weekly-feedback"]
-
-
-def test_playbook_disable_is_idempotent(cfg_path: Path) -> None:
-    set_playbook_disabled("weekly-feedback", True, config_path=cfg_path)
-    before = cfg_path.read_text(encoding="utf-8")
-    assert set_playbook_disabled("weekly-feedback", True, config_path=cfg_path) is False
-    assert cfg_path.read_text(encoding="utf-8") == before
-
-
-def test_playbook_enable_removes_only_that_name(cfg_path: Path) -> None:
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    set_playbook_disabled("b", True, config_path=cfg_path)
-    assert set_playbook_disabled("a", False, config_path=cfg_path) is True
-    assert _read(cfg_path)["playbooks"]["disabled"] == ["b"]
-    # enabling a name that is not on the list is a no-op, not an error
-    assert set_playbook_disabled("ghost", False, config_path=cfg_path) is False
-
-
-def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
-    cfg_path.write_text('{"playbooks": {"enabled": true, "dir": "/x"}}', encoding="utf-8")
-    set_playbook_disabled("a", True, config_path=cfg_path)
-    data = _read(cfg_path)["playbooks"]
-    assert data["enabled"] is True and data["dir"] == "/x"
-    assert data["disabled"] == ["a"]

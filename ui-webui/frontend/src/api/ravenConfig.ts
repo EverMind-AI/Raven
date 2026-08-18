@@ -405,19 +405,6 @@ export const ravenConfigApi = {
 			fields,
 		}),
 
-	/** Tool credentials: the Serper key behind `web_search`, and each media
-	 *  tool's key/model. Read per call rather than cached — `registered` is the
-	 *  live loop's answer, and it only changes when the gateway restarts. */
-	listTools: (opts?: { silent?: boolean }) =>
-		client.get<{ tools: RavenToolCredential[] }>('/raven/tools', undefined, opts),
-
-	// Fields are the config model's snake_case names (`api_key`, `api_base`,
-	// `model`, `max_results`), matching what `raven.tools.set` validates against.
-	setTool: (kind: string, fields: Record<string, string | number>) =>
-		client.put<{ ok: boolean; restart_required?: boolean }>(`/raven/tools/${kind}`, {
-			fields,
-		}),
-
 	// Re-exec the gateway to apply restart-required config (channels). The gateway
 	// drops every connection when it restarts, so callers should reconnect after.
 	restartGateway: () => client.post<{ ok: boolean }>('/raven/gateway/restart', {}),
@@ -535,35 +522,6 @@ export const ravenConfigApi = {
 		},
 	},
 };
-
-/** Where a tool's key actually comes from, in the order the tool resolves them.
- *  `none` is the state the page turns into a prompt for one. */
-export type RavenToolKeySource = 'own' | 'env' | 'openrouter' | 'none';
-
-export interface RavenToolCredential {
-	/** Config section: `web_search`, or a media tool (`image` / `speech` / `video`). */
-	kind: string;
-	/** The name the model calls it by, e.g. `image_generate`. */
-	tool: string;
-	/** Whether the *running* gateway offers it. A save cannot change this — the
-	 *  tool is registered where the AgentLoop is built — which is why every save
-	 *  reports `restart_required`. */
-	registered: boolean;
-	/** Media only: whether the config alone would register it at the next start. */
-	configured?: boolean;
-	settingPath: string;
-	envKey: string;
-	/** `****set****` or `(empty)`; the key itself never reaches the browser. */
-	apiKey: string;
-	keySource: RavenToolKeySource;
-	/** web_search only. */
-	maxResults?: number;
-	/** Media only. */
-	apiBase?: string;
-	defaultApiBase?: string;
-	model?: string;
-	defaultModel?: string;
-}
 
 export interface RavenChannelFieldSpec {
 	type: string;

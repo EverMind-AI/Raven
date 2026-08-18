@@ -826,6 +826,21 @@ class SkillForgeConfig(_Base):
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
 
+    blocklist: list[str] = Field(default_factory=list)
+    """Skill names refused everywhere (config key ``skillForge.blocklist``):
+    dropped from the injection pool for every source and refused by
+    ``use_skill``. Matched case-insensitively against the skill's name,
+    slug, and native id."""
+
+    auto_install: Literal["auto", "prompt", "off"] = "auto"
+    """Consent policy for Hub bundle downloads (config key
+    ``skillForge.autoInstall``), applied on both install paths (context
+    auto-inject and ``use_skill``). ``auto`` installs silently (current
+    behavior); ``prompt`` asks for confirmation on an interactive
+    terminal and behaves like ``off`` when no TTY is attached; ``off``
+    skips the download with a one-line notice — skill bodies still
+    inject, only the on-disk bundle is withheld."""
+
     router: "SkillForgeRouterConfig" = Field(
         default_factory=lambda: SkillForgeRouterConfig(),
     )
@@ -1173,8 +1188,11 @@ class HubSourceConfig(_Base):
     """Per-request timeout (hot turn-path)."""
 
     min_safety: float = 0.7
-    """Skills with ``score_safety`` below this are filtered out of the
-    catalog (and refused by ``use_skill``)."""
+    """Skills with ``score_safety`` below this are dropped. Catalog hits
+    that carry a score are filtered by ``HubSkillSource``; the standard
+    catalog payload omits the score, so the authoritative check runs on
+    the detail metadata — ``SkillsSegmentBuilder`` drops low-scored hits
+    after the pre-gate hydrate, and ``use_skill`` refuses the install."""
 
     source: str = "raven"
     """Download ``source`` tag for Hub usage stats."""
@@ -1194,7 +1212,7 @@ class SkillForgeRouterConfig(_Base):
 
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "local": 1.0,
+            "local": 0.96,
             "everos": 0.9,
             "hub": 0.85,
         },
@@ -1202,7 +1220,18 @@ class SkillForgeRouterConfig(_Base):
     """Per-source RRF weight. Higher = more rank mass when the same skill
     surfaces from multiple sources. Local highest (hand-curated); Hub
     (the remote marketplace, replaces the retired Mass source) lowest as
-    imported/unvalidated; Everos in between (task-specific, auto-evolved)."""
+    imported/unvalidated; Everos in between (task-specific, auto-evolved).
+
+    Only the ratios matter -- scaling all three leaves the order unchanged.
+    Read them together with ``rrf_k``: the spread has to stay well inside
+    the rank ladder that ``rrf_k`` produces, or weight silently overrides
+    rank and each source becomes a strict tier."""
+
+    rrf_k: int = Field(default=10, ge=1)
+    """RRF damping constant, mirroring ``skill_forge.fusion.RRF_K``.
+    Lower = source-internal rank carries more weight relative to
+    ``weights``; higher = flatter, so cross-source agreement and source
+    identity dominate."""
 
     over_fetch_factor: int = 2
     """Each source is asked for ``top_k * factor`` hits before fusion

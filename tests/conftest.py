@@ -120,23 +120,3 @@ def _no_openrouter_network(tmp_path):
         model_catalog_cache._CACHE_PATH = original_path
         rates._OPENROUTER_CACHE.clear()
         rates._OPENROUTER_CACHE_TIME = 0.0
-
-
-@pytest.fixture(autouse=True)
-def _no_real_browser(monkeypatch):
-    """Keep the browser opener off the desktop of whoever runs the suite.
-
-    ``web`` and ``serve`` finish by opening the page they just brought up, so a
-    test that drives either one without stubbing the opener launches real tabs
-    on the machine running pytest -- pointed at a port nothing is listening on,
-    since the port under test is a fixture's invention. Raising here turns that
-    into a failure of the test that forgot to stub it, instead of a green run
-    that hijacks the screen.
-    """
-    import webbrowser
-
-    def _refuse(url, *_args, **_kwargs):
-        raise AssertionError(f"a test opened a real browser at {url}; stub the opener instead")
-
-    for name in ("open", "open_new", "open_new_tab"):
-        monkeypatch.setattr(webbrowser, name, _refuse)

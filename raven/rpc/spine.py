@@ -10,12 +10,10 @@ share one per-outlet FIFO. spine never imports rpc; rpc imports spine.
 Why ``message.complete`` is fired from the sink (not from a stream-close): it is
 an unconditional per-turn signal — the front-end clears its turn slot on it, so a
 turn that streams nothing (empty reply, tool-only) must still emit it or the UI
-wedges. The completion names the turn that ended, taken from the event: a turn the
-runtime submits onto a busy lane must not be reported under the id of the client
-turn queued behind it. The sink awaits ``wait_idle`` first so it lands after the
-turn's last ``token.delta``; an empty turn never built a queue, so the barrier
-returns at once. This is the REPL's ``result() -> wait_idle`` render barrier moved
-into the sink.
+wedges. The sink awaits ``wait_idle`` first so it lands after the turn's last
+``token.delta``; an empty turn never built a queue, so the barrier returns at
+once. This is the REPL's ``result() -> wait_idle`` render barrier moved into the
+sink.
 """
 
 from collections.abc import Awaitable, Callable
@@ -144,12 +142,14 @@ class RpcTurnRunner(AgentTurnRunner):
         agent_loop: Any,
         emitter: SubscriptionEmitter,
         usages: dict[str, dict[str, Any]],
+        turn_ids: dict[str, str],
         readback_texts: dict[str, str],
         approval_responder: ApprovalResponder | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
         self._usages = usages
+        self._turn_ids = turn_ids
         self._readback_texts = readback_texts
         self._approval_responder = approval_responder
 
@@ -165,7 +165,7 @@ class RpcTurnRunner(AgentTurnRunner):
             exec_tool.start_approval_turn(
                 self._approval_responder if req.origin is Origin.USER else None,
                 conversation_id=cid,
-                turn_id=req.turn_id or "",
+                turn_id=self._turn_ids.get(cid, ""),
             )
         # A CRON turn is not a user turn: it runs non-streaming (one reply, not a
         # token stream) and its reply text is captured for the cron fan-out, which
@@ -189,7 +189,7 @@ class RpcTurnRunner(AgentTurnRunner):
         # it lands in the turn's event stream ahead of TurnEnded.
         message_tool = self._loop.tools.get("message")
         if isinstance(message_tool, MessageTool) and message_tool.sent_in_turn:
-            turn_id = req.turn_id or ""
+            turn_id = self._turn_ids.get(cid, "")
             await emit(
                 ToolEvent(
                     phase=ToolPhase.COMPLETE,
@@ -333,16 +333,14 @@ class RpcOutlet:
     async def emit_complete(
         self,
         conversation_id: str,
-        turn_id: str,
+        turn_id: str | None,
         usage: dict[str, Any],
         target: dict[str, str] | None = None,
     ) -> None:
         # ``target`` is passed in rather than read from the map: the sink drops
         # the turn's slots before finalizing (so the next turn.send cannot race
         # a half-unwound turn), which means by this point the map no longer
-        # holds it. It is None for a turn the runtime submitted -- only
-        # ``turn.send`` ever binds a target, so such a turn was never addressed
-        # to an instance.
+        # holds it.
         payload: dict[str, Any] = {"turn_id": turn_id, "usage": usage}
         if target is not None:
             payload["target"] = target
@@ -390,31 +388,11 @@ def _make_rpc_sink(
         await hub.close_stream(conversation_id)
         await hub.wait_idle(channel)
 
-    def _owns_lane(conversation_id: str, turn_id: str) -> bool:
-        """Whether the ending turn is the one ``turn.send`` bound this lane to.
-
-        A lane is serial but its slots are per-lane, so a turn the runtime
-        submitted itself (a sub-agent announce, a deep-research delivery) can end
-        while a client's turn is still QUEUED behind it on the same lane.
-        Releasing the slots there opens the -32003 guard for a second send and
-        leaves the queued turn's own end with no binding to report against.
-        """
-        return bool(turn_id) and turn_ids.get(conversation_id) == turn_id
-
-    def _drop(conversation_id: str, *, owns: bool) -> dict[str, str] | None:
-        if not owns:
-            return None
-        # usages is keyed by lane like turn_ids/direct_targets, so it is gated the
-        # same way: a turn cancelled while queued shares this key with whichever
-        # turn is actually running, and popping unconditionally would drop that
-        # turn's just-written usage before its own TurnEnded reads it.
-        usages.pop(conversation_id, None)
+    def _drop(conversation_id: str) -> dict[str, str] | None:
         turn_ids.pop(conversation_id, None)
+        usages.pop(conversation_id, None)
         # Returned rather than only dropped: the turn's closing event still has
         # to name the view it belongs to, and this is where the binding ends.
-        # Note the coupling this puts on the caller: the tag now rides ownership,
-        # so a turn submitted without the id its lane was bound to completes
-        # untagged even when a target is registered for that lane.
         target = direct_targets.pop(conversation_id, None)
         if on_turn_end is not None:
             on_turn_end(conversation_id)
@@ -423,22 +401,18 @@ def _make_rpc_sink(
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnEnded):
             await _finish(event.conversation_id)
+            turn_id = turn_ids.get(event.conversation_id)
             usage = usages.get(event.conversation_id) or {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
             }
-            # Read before _drop pops the register.
-            owns = _owns_lane(event.conversation_id, event.turn_id)
-            target = _drop(event.conversation_id, owns=owns)
-            # The ending turn's own id, never the lane slot's current value: the
-            # slot may hold a client turn that has not started yet.
-            await outlet.emit_complete(event.conversation_id, event.turn_id, usage, target)
+            target = _drop(event.conversation_id)
+            await outlet.emit_complete(event.conversation_id, turn_id, usage, target)
             return
         if isinstance(event, TurnFailed):
             await _finish(event.conversation_id)
-            owns = _owns_lane(event.conversation_id, event.turn_id)
-            target = _drop(event.conversation_id, owns=owns)
+            target = _drop(event.conversation_id)
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
             if not event.cancelled:
@@ -475,11 +449,10 @@ def build_rpc_spine(
     """Wire the spine pieces a client turn flows through: a hub with the channel's
     RpcOutlet, and a Scheduler whose runner streams the agent loop and whose sink
     fires message.complete / error after the render barrier. Returns those plus
-    the ``turn_ids`` map (turn.send binds lane -> turn_id so the sink can tell
-    whether an ending turn is the one holding this lane's client-facing slots; the
-    id on ``message.complete`` comes from the turn itself) and a ``teardown`` the
-    caller awaits on exit (stop the scheduler, then close the hub's workers).
-    ``on_turn_end`` lets turn.send drop its active-turn slot at each turn exit.
+    the ``turn_ids`` map (turn.send binds conversation_id -> turn_id so the sink
+    can attach it to message.complete) and a ``teardown`` the caller awaits on
+    exit (stop the scheduler, then close the hub's workers). ``on_turn_end`` lets
+    turn.send drop its active-turn slot at each turn exit.
 
     ``direct_targets`` is the direct-chat map (conversation -> the sub-agent
     instance the in-flight turn was addressed to). Pass the same dict
@@ -509,6 +482,7 @@ def build_rpc_spine(
             agent_loop,
             emitter,
             usages,
+            turn_ids,
             readback_texts,
             approval_responder=approval_responder,
         ),

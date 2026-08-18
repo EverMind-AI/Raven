@@ -9,15 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.config import (
-    update_channels,
-    update_everos,
-    update_mcp,
-    update_providers,
-    update_skills,
-    update_subagents,
-    update_tools,
-)
+from raven.config import update_channels, update_everos, update_mcp, update_skills, update_subagents
 from raven.rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
 
@@ -330,7 +322,9 @@ async def test_everos_get_set_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # Nothing configured yet: every section present, secret shown as empty.
     got = await _dispatch(d, "raven.everos.get", {})
-    assert set(got["result"]["everos"]) == {"llm", "embedding", "rerank", "multimodal"}
+    from raven.config.update_everos import WRITABLE_SECTIONS
+
+    assert set(got["result"]["everos"]) == set(WRITABLE_SECTIONS)
     assert got["result"]["everos"]["llm"]["api_key"] == "(empty)"
 
     res = await _dispatch(
@@ -2176,148 +2170,3 @@ async def test_mcp_list_still_lists_the_good_servers_beside_a_broken_one(
     servers = {s["name"]: s for s in res["result"]["servers"]}
     assert servers["ok"]["command"] == "npx"
     assert servers["bad"]["error"]
-
-
-# ---------------------------------------------------------------------------
-# raven.tools.{list,set} -- the Serper key and the media tools' key/model.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def tool_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """One config file for both writers, and no ambient keys.
-
-    ``update_tools`` and ``update_providers`` each bound their own
-    ``get_config_path``, so both have to be pointed at it. The env vars matter
-    as much: ``keySource`` reports what would actually supply the key, so a
-    developer who exports one would see these assert the wrong branch.
-    """
-    path = tmp_path / "config.json"
-    monkeypatch.setattr(update_tools, "get_config_path", lambda: path)
-    monkeypatch.setattr(update_providers, "get_config_path", lambda: path)
-    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
-        monkeypatch.delenv(var, raising=False)
-    return path
-
-
-class _FakeToolNames:
-    """``AgentLoop.tools`` as far as ``raven.tools.list`` reads it."""
-
-    def __init__(self, *names: str) -> None:
-        self.tool_names = list(names)
-
-
-class _AgentWithTools:
-    def __init__(self, *names: str) -> None:
-        self.tools = _FakeToolNames(*names)
-
-
-async def test_tools_list_describes_what_is_not_configured(tool_cfg: Path) -> None:
-    d = Dispatcher()
-    register_config_methods(d)
-
-    rows = (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]
-    assert [r["kind"] for r in rows] == ["web_search", "image", "speech", "video"]
-
-    web = rows[0]
-    assert web["registered"] is False
-    assert web["apiKey"] == "(empty)"
-    assert web["keySource"] == "none"
-    # The page cannot tell the user where to put a key it has to name itself.
-    assert web["settingPath"] == "tools.web.search.apiKey"
-    assert web["envKey"] == "SERPER_API_KEY"
-
-    image = rows[1]
-    assert image["configured"] is False
-    # Read off the tool class, so the page offers the model the tool would
-    # actually pick rather than a copy that can drift from it.
-    assert image["defaultModel"] == "google/gemini-2.5-flash-image"
-    assert image["defaultApiBase"].startswith("https://openrouter.ai")
-    assert image["tool"] == "image_generate"
-
-
-async def test_tools_set_writes_and_says_a_restart_is_needed(tool_cfg: Path) -> None:
-    d = Dispatcher()
-    register_config_methods(d)
-
-    resp = await _dispatch(d, "raven.tools.set", {"kind": "web_search", "fields": {"api_key": "serper-abc"}})
-    assert "error" not in resp, resp
-    assert resp["result"]["restart_required"] is True
-    assert json.loads(tool_cfg.read_text())["tools"]["web"]["search"]["apiKey"] == "serper-abc"
-
-    web = (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"][0]
-    assert web["apiKey"] == "****set****"
-    assert web["keySource"] == "own"
-    # Still false, and that is the whole point of restart_required: the tool is
-    # registered where the loop is built, so this process never gains it.
-    assert web["registered"] is False
-
-
-async def test_tools_list_reads_the_live_registry_not_the_file(tool_cfg: Path) -> None:
-    # The inverse case of the one above: a key exported into the environment the
-    # gateway started with registers the tool while the config file stays empty.
-    d = Dispatcher()
-    register_config_methods(d, agent=_AgentWithTools("web_search", "image_generate"))
-
-    rows = (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]
-    by_kind = {r["kind"]: r for r in rows}
-    assert by_kind["web_search"]["registered"] is True
-    assert by_kind["web_search"]["apiKey"] == "(empty)"
-    assert by_kind["image"]["registered"] is True
-    assert by_kind["speech"]["registered"] is False
-
-
-async def test_media_borrows_the_openrouter_key_but_is_not_enabled_by_it(tool_cfg: Path) -> None:
-    update_providers.set_provider_fields("openrouter", {"api_key": "sk-or"})
-    d = Dispatcher()
-    register_config_methods(d)
-
-    image = {r["kind"]: r for r in (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]}["image"]
-    assert image["keySource"] == "openrouter"
-    # AgentLoop's rule, restated: an OpenRouter key set for chat never surfaces
-    # image/speech/video to the model. A model (or its own key) is what does.
-    assert image["configured"] is False
-
-    await _dispatch(d, "raven.tools.set", {"kind": "image", "fields": {"model": "google/gemini-2.5-flash-image"}})
-    image = {r["kind"]: r for r in (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]}["image"]
-    assert image["configured"] is True
-    assert image["keySource"] == "openrouter"  # still borrowed; it has none of its own
-
-
-async def test_tools_set_rejects_an_unknown_kind(tool_cfg: Path) -> None:
-    d = Dispatcher()
-    register_config_methods(d)
-    resp = await _dispatch(d, "raven.tools.set", {"kind": "music", "fields": {"model": "m"}})
-    assert "error" in resp
-    assert not tool_cfg.exists()
-
-
-async def test_tools_methods_are_served_by_the_gateway_registration(tool_cfg: Path) -> None:
-    """Registering them on a dispatcher this file built proves nothing about the
-    gateway. Driven through ``register_web_methods``, which is what the gateway
-    calls, so a group dropped there turns this red -- and the live loop has to
-    reach the handler, or ``registered`` is silently False for every tool.
-    """
-    from raven.web_rpc.methods import register_web_methods
-
-    class _Emitter:
-        async def emit(self, session_key: str, event: dict) -> None:  # pragma: no cover - unused
-            pass
-
-    d = Dispatcher()
-    register_web_methods(
-        d,
-        emitter=_Emitter(),
-        scheduler=None,
-        turn_ids={},
-        direct_targets={},
-        agent=_AgentWithTools("web_search"),
-        cron=None,
-        config=None,
-        channel_manager=None,
-        raven_config=None,
-    )
-    assert {"raven.tools.list", "raven.tools.set"} <= set(d.methods())
-
-    rows = (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]
-    assert rows[0]["registered"] is True, "the handler never reached the live loop"

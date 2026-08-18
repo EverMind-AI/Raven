@@ -302,7 +302,7 @@ async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(wor
 
 
 async def test_an_unbounded_caller_still_waits_for_the_whole_sync(workspace) -> None:
-    """`run()` has nothing else to do and keeps the old behaviour, which is also
+    """`_start` has nothing else to do and keeps the old behaviour, which is also
     what keeps a SandboxInitError reaching its handler there."""
     loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
 
@@ -312,82 +312,3 @@ async def test_an_unbounded_caller_still_waits_for_the_whole_sync(workspace) -> 
     assert loop.tools.has("mcp_svc_search")
     assert loop._mcp_connected is True
     assert loop._mcp_connecting is False
-
-
-# ── An unauthorized plugin says so in the turn's context ───────────
-
-
-async def test_an_auth_required_server_surfaces_in_the_tool_notices(workspace) -> None:
-    """A server whose tools are absent because it awaits authorization must be
-    named in the runtime context, or the model reads the gap as a missing
-    capability and tells the user it cannot be done."""
-    from raven.agent.tools.mcp_oauth import OAuthWaitTimeoutError
-
-    async def refused(name, cfg, registry, stack, executor=None, http_auth=None):
-        raise OAuthWaitTimeoutError("nobody clicked")
-
-    loop = _loop(workspace, {"asana": MCPServerConfig(url="https://asana.test/mcp", auth="oauth")})
-    with patch(_PATCH, new=refused):
-        await loop._connect_mcp()
-
-    assert loop.mcp_manager.status()[0]["state"] == "auth_required"
-    notes = loop._mcp_tool_notices()
-    assert len(notes) == 1
-    assert "asana" in notes[0]
-    assert "plugin panel" in notes[0]
-
-
-async def test_healthy_and_absent_managers_produce_no_notices(workspace) -> None:
-    loop = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
-    assert loop._mcp_tool_notices() == []
-
-    with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop._connect_mcp()
-    assert loop._mcp_tool_notices() == []
-
-
-async def test_tool_notices_ride_the_runtime_context_block(workspace) -> None:
-    from datetime import datetime
-
-    from raven.context_engine.segments import render
-
-    block = render.build_runtime_context(
-        lambda: datetime(2026, 8, 17, 12, 0),
-        "tui",
-        "abc",
-        tool_notices=["MCP plugin 'asana' is installed but awaiting authorization."],
-    )
-    assert block.startswith(render.RUNTIME_CONTEXT_TAG)
-    assert "awaiting authorization" in block
-
-    plain = render.build_runtime_context(lambda: datetime(2026, 8, 17, 12, 0), "tui", "abc")
-    assert "awaiting authorization" not in plain
-
-
-async def test_the_assembler_asks_the_loop_for_notices_each_turn(workspace) -> None:
-    from raven.context_engine.assembler import ContextAssembler
-    from raven.context_engine.base import AssemblyContext
-    from raven.memory_engine.base import TokenBudget
-
-    notes = ["MCP plugin 'x' is installed but awaiting authorization."]
-    asm = ContextAssembler([], get_tool_definitions=lambda: [], get_tool_notices=lambda: notes)
-    ctx = AssemblyContext(
-        session_key="tui:t",
-        current_message="hi",
-        media=None,
-        channel="tui",
-        chat_id="t",
-        session_messages=[],
-        budget=TokenBudget(
-            context_length=8192,
-            reserved_output=1024,
-            reserved_tools=0,
-            reserved_system=0,
-            available_history=4096,
-        ),
-    )
-    user = asm._build_user(ctx)
-    assert "awaiting authorization" in user["content"]
-
-    notes.clear()
-    assert "awaiting authorization" not in asm._build_user(ctx)["content"]

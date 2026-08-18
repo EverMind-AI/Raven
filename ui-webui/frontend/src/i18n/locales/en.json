@@ -723,7 +723,6 @@
 		"ravenSkills": "Skills",
 		"ravenCron": "Cron Jobs",
 		"ravenChannels": "Channels",
-		"ravenTools": "Tools",
 		"everOS": "Memory",
 		"expand": "Expand navigation",
 		"collapse": "Collapse navigation"
@@ -817,54 +816,6 @@
 			"mochat": "MoChat via Socket.IO",
 			"email": "Email: IMAP in, SMTP out"
 		}
-	},
-	"ravenTools": {
-		"kicker": "Configure · Tools",
-		"title": "Tool keys",
-		"subtitle": "Some tools only exist once they have a key. Set one here, restart the gateway, and the model can call them.",
-		"summary": "{{live}} of {{total}} live",
-		"statusLive": "Live",
-		"statusPending": "Needs restart",
-		"statusOff": "Off",
-		"names": {
-			"web_search": "Web search",
-			"image": "Image generation",
-			"speech": "Speech generation",
-			"video": "Video generation"
-		},
-		"blurbs": {
-			"web_search": "Lets the model search the web itself. Without a key it is not in the tool list at all — not broken, just unconfigured.",
-			"image": "Generates an image from a prompt into the session's working directory.",
-			"speech": "Reads text out into an audio file.",
-			"video": "Generates a short video from a prompt; takes minutes, and bills per clip."
-		},
-		"model": "Model",
-		"modelHint": "A model or a key is the on switch; left empty it uses the default shown in the box.",
-		"useDefaultModel": "Enable with the default model",
-		"apiKey": "API key",
-		"keyPlaceholder": "Paste a key",
-		"keySetPlaceholder": "Stored (leave empty to keep it)",
-		"clearKey": "Clear",
-		"keyCleared": "Key cleared",
-		"keyFromEnv": "Using the {{env}} environment variable.",
-		"keyFromOpenrouter": "Borrowing the OpenRouter key from the credentials page.",
-		"keyMissingSearch": "No key to use yet: paste one, or export {{env}}.",
-		"keyMissingMedia": "No key to use yet: paste one, or configure OpenRouter on the credentials page ({{env}} works too).",
-		"maxResults": "Results per search",
-		"maxResultsInvalid": "Results per search must be a whole number, 1 or more.",
-		"apiBase": "API base URL",
-		"showAdvanced": "Advanced",
-		"hideAdvanced": "Hide advanced",
-		"disable": "Turn off",
-		"disabled": "{{name}} turned off",
-		"enabled": "{{name}} enabled",
-		"saved": "{{name}} saved",
-		"nothingToSave": "Nothing changed to save.",
-		"saveFailed": "Save failed: {{error}}",
-		"loadFailed": "Load failed: {{error}}",
-		"restartBanner": "Saved. Tools are registered when the gateway starts, so this takes effect after a restart.",
-		"restartNow": "Restart now",
-		"restarting": "Restarting the gateway; this page reloads when it is back…"
 	},
 	"settings": {
 		"title": "Settings",

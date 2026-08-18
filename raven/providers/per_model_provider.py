@@ -74,6 +74,11 @@ class PerModelProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self._default
 
+    def wire_model_id(self, model: str) -> str:
+        """Asked of whichever endpoint would serve this model, since that is the
+        one whose wire decides the id -- the same routing that ``chat`` uses."""
+        return self._pick(model).wire_model_id(model)
+
     async def chat(
         self,
         messages: list[dict[str, Any]],

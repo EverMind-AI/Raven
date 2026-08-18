@@ -35,7 +35,7 @@ class _FakeHandle:
     async def result(self):
         return None
 
-    async def cancel(self) -> None:
+    def cancel(self) -> None:
         pass
 
 
