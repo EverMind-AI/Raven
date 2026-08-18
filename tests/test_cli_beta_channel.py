@@ -225,3 +225,81 @@ class TestPublishingLeavesTheCheckoutAsItFoundIt:
 
         assert 'version = "0.1.11"' in (tmp_path / "pyproject.toml").read_text(encoding="utf-8")
         assert 'version = "0.1.11"' in (tmp_path / "uv.lock").read_text(encoding="utf-8")
+
+
+class TestWatchingTheChannelIsNearlyFree:
+    """A one-minute poll is only affordable because an unchanged pointer answers
+    304 with no body: 23 bytes when something moved, a bare validator check when
+    nothing did. These pin both halves -- the validator goes back out, and a 304
+    is read as "keep what you already had" rather than parsed."""
+
+    @staticmethod
+    def _registry(status: int, *, etag: str | None, version: str = "0.1.12b6") -> tuple[httpx.Client, list[str | None]]:
+        """A registry that records the validator each request offered."""
+        offered: list[str | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            offered.append(request.headers.get("If-None-Match"))
+            headers = {"ETag": etag} if etag is not None else {}
+            if status == 304:
+                return httpx.Response(304, headers=headers)
+            return httpx.Response(status, json={"version": version}, headers=headers)
+
+        return httpx.Client(transport=httpx.MockTransport(handler)), offered
+
+    def test_a_first_read_offers_no_validator_and_brings_one_back(self, joined: beta_channel.BetaChannel):
+        client, offered = self._registry(200, etag='"c9b42d2d"')
+        with client:
+            read = beta_channel.read_pointer(joined, client=client)
+
+        assert offered == [None]
+        assert read.unchanged is False
+        assert read.release is not None
+        assert read.release.version == "0.1.12b6"
+        assert read.etag == '"c9b42d2d"', "without the validator the next poll cannot be conditional"
+
+    def test_a_known_validator_is_offered_back(self, joined: beta_channel.BetaChannel):
+        client, offered = self._registry(200, etag='"new"')
+        with client:
+            beta_channel.read_pointer(joined, client=client, etag='"old"')
+
+        assert offered == ['"old"']
+
+    def test_an_unchanged_pointer_is_not_parsed(self, joined: beta_channel.BetaChannel):
+        """A 304 has no body. Reading one as a pointer is the bug this rules out."""
+        client, offered = self._registry(304, etag='"same"')
+        with client:
+            read = beta_channel.read_pointer(joined, client=client, etag='"same"')
+
+        assert offered == ['"same"']
+        assert read.unchanged is True
+        assert read.release is None
+        assert read.etag == '"same"'
+
+    def test_a_304_that_repeats_no_validator_keeps_the_one_we_sent(self, joined: beta_channel.BetaChannel):
+        """Echoing the ETag on a 304 is conventional, not guaranteed. Dropping it
+        would make the next poll unconditional and pay for a body every minute."""
+        client, offered = self._registry(304, etag=None)
+        with client:
+            read = beta_channel.read_pointer(joined, client=client, etag='"same"')
+
+        assert read.unchanged is True
+        assert read.etag == '"same"'
+
+    def test_the_upgrade_path_never_asks_conditionally(self, joined: beta_channel.BetaChannel):
+        """`raven upgrade` has to name the version it will install, so the read
+        behind it may not be answerable with "unchanged"."""
+        client, offered = self._registry(200, etag='"c9b42d2d"')
+        with client:
+            release = beta_channel.fetch_latest(joined, client=client)
+
+        assert offered == [None]
+        assert release.version == "0.1.12b6"
+
+    def test_an_unasked_for_304_is_refused_rather_than_returned_empty(self, joined: beta_channel.BetaChannel):
+        """It cannot happen against a request that sent no validator, so if it
+        does, `fetch_latest` must raise rather than hand back a release-less read
+        that its callers would dereference."""
+        client, _offered = self._registry(304, etag=None)
+        with client, pytest.raises(UpgradeError):
+            beta_channel.fetch_latest(joined, client=client)

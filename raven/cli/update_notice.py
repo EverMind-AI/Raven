@@ -23,6 +23,13 @@ settings button -- a banner that names a version has to name the one the
 upgrade will install, which a day-old cache cannot promise. So the TTL bounds
 how often a *launch* touches the network, not how often this module does.
 
+The cache also holds the ETag of the last beta pointer it read, which is what
+lets a resident gateway poll that channel every minute (see
+``serve_commands._UPDATE_POLL_BETA_S``): the validator goes back out as
+``If-None-Match``, and an unchanged channel answers 304 with no body to parse.
+A 304 still stamps ``checked_at`` -- the check happened and its answer was
+"unchanged", which is exactly what the TTL wants to know.
+
 Set ``RAVEN_NO_UPDATE_CHECK=1`` to opt out of both the fetch and the hint.
 """
 
@@ -32,6 +39,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 _CACHE_NAME = "update_check.json"
 _REFRESH_TTL_SECONDS = 24 * 60 * 60
@@ -114,10 +122,12 @@ def _read_cache() -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _write_cache(latest_version: str | None, *, now: float) -> None:
+def _write_cache(latest_version: str | None, *, now: float, etag: str | None = None) -> None:
     payload: dict[str, object] = {"checked_at": now}
     if latest_version is not None:
         payload["latest_version"] = latest_version
+    if etag is not None:
+        payload["etag"] = etag
     try:
         path = _cache_path()
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -125,12 +135,24 @@ def _write_cache(latest_version: str | None, *, now: float) -> None:
         pass
 
 
-def _refresh() -> None:
+def _refresh() -> bool:
+    """Refresh the cached latest version. Returns whether the source answered.
+
+    ``False`` means the check never got an answer -- offline, refused, a draft
+    release. A caller pacing itself off failures needs that told apart from "the
+    check ran and nothing is newer", which also leaves the version alone.
+    """
     # Imported lazily: the GitHub client pulls in httpx, which we keep off the
     # session-create hot path (this runs in a daemon thread).
     cache = _read_cache() or {}
     previous = cache.get("latest_version")
     keep = previous if isinstance(previous, str) else None
+    seen = cache.get("etag")
+    # Only offer a validator we can still answer a 304 with. An etag left behind
+    # by a failed refresh that dropped the version would otherwise buy a 304
+    # meaning "unchanged from a version we no longer know", which pins the
+    # notice off until the pointer happens to move.
+    seen_etag = seen if isinstance(seen, str) and keep is not None else None
 
     try:
         from raven.cli import beta_channel
@@ -140,12 +162,21 @@ def _refresh() -> None:
         if chan is None:
             _write_cache(fetch_latest_version(), now=time.time())
         else:
-            _write_cache(beta_channel.fetch_latest(chan).version, now=time.time())
+            read = beta_channel.read_pointer(chan, etag=seen_etag)
+            # A 304 is a completed check, so checked_at moves with it either
+            # way: that stamp is what tells the next launch its cache is fresh,
+            # and a pointer confirmed unchanged is as fresh as an answer gets.
+            # `read.release` is None only on that path, where the version we
+            # already hold is the current one by definition.
+            version = keep if read.unchanged else read.release.version
+            _write_cache(version, now=time.time(), etag=read.etag)
     except Exception:
         # Offline, rate-limited, or the latest release is a draft/prerelease.
         # Stamp checked_at anyway so we back off for a full TTL instead of
         # refetching on every launch, and keep whatever version we had.
-        _write_cache(keep, now=time.time())
+        _write_cache(keep, now=time.time(), etag=seen_etag)
+        return False
+    return True
 
 
 def maybe_refresh_async() -> None:
@@ -185,23 +216,49 @@ def _upgrade_command_works() -> bool:
         return False
 
 
+class Checked(NamedTuple):
+    """The outcome of one live check.
+
+    ``latest`` is the newer version to offer, and is ``None`` both when nothing
+    is newer and when the check never reached its source. ``reached`` is what
+    tells those apart, which a caller pacing its own polling has to know: one
+    means "keep this cadence", the other means "slow down".
+    """
+
+    latest: str | None
+    reached: bool
+
+
+def check_now(current_version: str) -> Checked:
+    """``check_for_update``, plus whether the source answered at all. Blocking.
+
+    The silences that cost no request -- opted out, an install that cannot
+    upgrade -- report ``reached=True``: there is no failing source to back away
+    from, and a backoff there would only slow a loop that is already free.
+    """
+    if _disabled() or not _upgrade_command_works():
+        return Checked(None, reached=True)
+    reached = _refresh()
+    if update_notice(current_version) is None:
+        return Checked(None, reached=reached)
+    cache = _read_cache() or {}
+    latest = cache.get("latest_version")
+    return Checked(latest if isinstance(latest, str) else None, reached=reached)
+
+
 def check_for_update(current_version: str) -> str | None:
     """Fetch the latest release right now and name it if it is newer. Blocking.
 
     The cached path above trades freshness for startup speed: the notice shows
     one launch late. A resident gateway has no next launch to lean on, so its
-    periodic announcer calls this instead -- one live fetch, the same cache
-    written (a tab opened later still benefits), and the same silences: opted
-    out, an install that cannot upgrade, or nothing newer all answer ``None``.
+    periodic announcer checks instead -- one live fetch, the same cache written
+    (a tab opened later still benefits), and the same silences: opted out, an
+    install that cannot upgrade, or nothing newer all answer ``None``.
+
+    This is the answer on its own, for callers with nothing to pace: the
+    announcer wants ``check_now``, whose extra half says why a ``None`` is one.
     """
-    if _disabled() or not _upgrade_command_works():
-        return None
-    _refresh()
-    if update_notice(current_version) is None:
-        return None
-    cache = _read_cache() or {}
-    latest = cache.get("latest_version")
-    return latest if isinstance(latest, str) else None
+    return check_now(current_version).latest
 
 
 def update_notice(current_version: str) -> tuple[bool, str] | None:

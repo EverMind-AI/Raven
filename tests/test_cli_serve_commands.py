@@ -674,7 +674,9 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
     def fast_clock(self, monkeypatch):
         """Collapse the poll delays so the loop runs its ticks immediately."""
         monkeypatch.setattr(serve_commands, "_UPDATE_FIRST_CHECK_S", 0.001)
-        monkeypatch.setattr(serve_commands, "_UPDATE_POLL_S", 0.001)
+        monkeypatch.setattr(serve_commands, "_UPDATE_POLL_BETA_S", 0.001)
+        monkeypatch.setattr(serve_commands, "_UPDATE_POLL_STABLE_S", 0.001)
+        monkeypatch.setattr(serve_commands, "_UPDATE_BACKOFF_CEILING_S", 0.001)
 
     async def test_a_new_version_is_broadcast_once_not_every_poll(self, fast_clock, monkeypatch) -> None:
         frames: list[dict] = []
@@ -682,11 +684,11 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
 
         def _check(current):
             checks["n"] += 1
-            return "0.1.12b9"
+            return update_notice.Checked("0.1.12b9", reached=True)
 
         from raven.cli import update_notice
 
-        monkeypatch.setattr(update_notice, "check_for_update", _check)
+        monkeypatch.setattr(update_notice, "check_now", _check)
 
         async def _broadcast(frame):
             frames.append(frame)
@@ -715,11 +717,11 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
 
         def _check(current):
             checks["n"] += 1
-            return None
+            return update_notice.Checked(None, reached=True)
 
         from raven.cli import update_notice
 
-        monkeypatch.setattr(update_notice, "check_for_update", _check)
+        monkeypatch.setattr(update_notice, "check_now", _check)
 
         async def _broadcast(frame):
             frames.append(frame)
@@ -742,7 +744,7 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
 
         from raven.cli import update_notice
 
-        monkeypatch.setattr(update_notice, "check_for_update", _check)
+        monkeypatch.setattr(update_notice, "check_now", _check)
 
         async def _broadcast(frame):
             pass
@@ -755,6 +757,116 @@ class TestAResidentGatewayAnnouncesUpdatesItself:
         await serve_commands.asyncio.wait_for(task, timeout=5)
 
         assert checks["n"] >= 3, "one failed fetch ended the announcer"
+
+
+class TestThePollFollowsTheChannelItIsWatching:
+    """A beta reaches its testers by this poll and no other route, so it runs on
+    a minute. Stable does not: those releases land days apart and the check reads
+    GitHub's release page rather than our own registry, where a minute from every
+    install behind one egress would buy nothing."""
+
+    @pytest.fixture
+    def channel(self, monkeypatch):
+        """Put the install on, or off, the beta channel."""
+        from raven.cli import beta_channel
+
+        def _set(active: bool) -> None:
+            monkeypatch.setattr(beta_channel, "is_active", lambda: active)
+
+        return _set
+
+    def test_the_beta_channel_is_watched_every_minute(self, channel) -> None:
+        channel(True)
+        assert serve_commands._update_poll_seconds() == 60.0
+
+    def test_stable_keeps_its_half_hour(self, channel) -> None:
+        channel(False)
+        assert serve_commands._update_poll_seconds() == 30 * 60.0
+
+    def test_the_cadence_is_read_per_tick_not_at_startup(self, channel) -> None:
+        """Joining the channel is a file appearing; a resident gateway that
+        outlives that should follow it without a restart."""
+        channel(False)
+        assert serve_commands._update_poll_seconds() == 30 * 60.0
+        channel(True)
+        assert serve_commands._update_poll_seconds() == 60.0
+
+    def test_failures_double_the_wait_up_to_a_half_hour_ceiling(self, channel) -> None:
+        channel(True)
+        grown = [serve_commands._update_delay(n) for n in range(7)]
+
+        assert grown[:5] == [60.0, 120.0, 240.0, 480.0, 960.0]
+        assert grown[5] == 1800.0, "the ceiling is where an offline gateway settles"
+        assert grown[6] == 1800.0, "and it stops there"
+
+    def test_stable_is_already_at_the_ceiling_so_it_never_grows(self, channel) -> None:
+        channel(False)
+        assert serve_commands._update_delay(0) == serve_commands._update_delay(4) == 30 * 60.0
+
+    async def test_consecutive_failures_back_off_and_one_answer_resets(self, monkeypatch) -> None:
+        """The loop's own bookkeeping, read off what it asks to wait for next."""
+        from raven.cli import update_notice
+
+        monkeypatch.setattr(serve_commands, "_UPDATE_FIRST_CHECK_S", 0.001)
+        asked: list[int] = []
+        monkeypatch.setattr(serve_commands, "_update_delay", lambda failures: asked.append(failures) or 0.001)
+
+        answers = [
+            update_notice.Checked(None, reached=False),
+            update_notice.Checked(None, reached=False),
+            update_notice.Checked(None, reached=True),
+            update_notice.Checked(None, reached=False),
+        ]
+        checks = {"n": 0}
+
+        def _check(current):
+            checks["n"] += 1
+            if not answers:
+                return update_notice.Checked(None, reached=True)
+            return answers.pop(0)
+
+        monkeypatch.setattr(update_notice, "check_now", _check)
+
+        async def _broadcast(frame):
+            pass
+
+        stop = serve_commands.asyncio.Event()
+        task = serve_commands.asyncio.get_event_loop().create_task(serve_commands._announce_updates(_broadcast, stop))
+        while checks["n"] < 4:
+            await serve_commands.asyncio.sleep(0.002)
+        stop.set()
+        await serve_commands.asyncio.wait_for(task, timeout=5)
+
+        assert asked[:4] == [1, 2, 0, 1], f"backoff did not grow then reset: {asked[:4]}"
+
+    async def test_a_check_that_raises_counts_as_a_failure(self, monkeypatch) -> None:
+        """An exception out of the check is the offline case arriving by a second
+        route, so it has to slow the loop down the same way a reported one does."""
+        from raven.cli import update_notice
+
+        monkeypatch.setattr(serve_commands, "_UPDATE_FIRST_CHECK_S", 0.001)
+        asked: list[int] = []
+        monkeypatch.setattr(serve_commands, "_update_delay", lambda failures: asked.append(failures) or 0.001)
+
+        checks = {"n": 0}
+
+        def _check(current):
+            checks["n"] += 1
+            raise RuntimeError("offline")
+
+        monkeypatch.setattr(update_notice, "check_now", _check)
+
+        async def _broadcast(frame):
+            pass
+
+        stop = serve_commands.asyncio.Event()
+        task = serve_commands.asyncio.get_event_loop().create_task(serve_commands._announce_updates(_broadcast, stop))
+        while checks["n"] < 3:
+            await serve_commands.asyncio.sleep(0.002)
+        stop.set()
+        await serve_commands.asyncio.wait_for(task, timeout=5)
+
+        assert asked[:3] == [1, 2, 3]
 
 
 class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:

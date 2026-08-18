@@ -445,3 +445,84 @@ async def test_two_connections_keep_their_surfaces_apart() -> None:
 
     seen = await asyncio.gather(one_connection("page"), one_connection("tui"), one_connection(None))
     assert seen == ["page", "tui", None]
+
+
+async def _check_with(monkeypatch, *, latest: str | None, sink=None) -> tuple[dict, list]:
+    """Run an explicit check against a cache holding ``latest``, collecting frames."""
+    from raven.cli import update_notice as un
+    from raven.rpc.methods import system as system_mod
+
+    monkeypatch.setattr(un, "check_for_update", lambda _cur: latest)
+    monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade") if latest else None)
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": latest} if latest else {})
+
+    frames: list = []
+    if sink is None:
+
+        async def sink(frame):
+            frames.append(frame)
+
+    result = await system_mod.system_version({"check": True}, send_frame=sink)
+    return result, frames
+
+
+async def test_an_explicit_check_announces_a_newer_build_to_every_client(monkeypatch) -> None:
+    """``system.version`` answers the socket that asked. A check that nobody in a
+    tab asked for -- the one `make beta` triggers after moving the pointer -- has
+    no such socket to be useful on, so the newer build goes out as the same
+    notification the periodic announcer sends."""
+    result, frames = await _check_with(monkeypatch, latest="9.9.9")
+
+    assert result["update_available"] is True
+    assert frames == [{"method": "system.update_available", "params": {"latest_version": "9.9.9"}}]
+
+
+async def test_an_explicit_check_announces_nothing_when_up_to_date(monkeypatch) -> None:
+    result, frames = await _check_with(monkeypatch, latest=None)
+
+    assert "update_available" not in result
+    assert frames == []
+
+
+async def test_a_transport_with_no_sink_announces_nothing(monkeypatch) -> None:
+    """The TUI's single-socket transport and the web gateway register these
+    handlers without a broadcast sink; the check must behave as it did before."""
+    from raven.cli import update_notice as un
+    from raven.rpc.methods import system as system_mod
+
+    monkeypatch.setattr(un, "check_for_update", lambda _cur: "9.9.9")
+    monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+
+    async def _forbidden(*_args, **_kwargs):
+        raise AssertionError("announced with no sink wired")
+
+    monkeypatch.setattr(system_mod, "_announce_update", _forbidden)
+
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher)
+    response = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "system.version", "params": {"check": True}}
+    )
+
+    assert response["result"]["latest_version"] == "9.9.9"
+
+
+async def test_a_plain_version_call_never_announces(monkeypatch) -> None:
+    """Only an explicit check announces. Every open page asks for its versions at
+    boot, and a broadcast per boot would banner every other tab as well."""
+    from raven.cli import update_notice as un
+    from raven.rpc.methods import system as system_mod
+
+    monkeypatch.setattr(un, "update_notice", lambda _cur: (True, "raven upgrade"))
+    monkeypatch.setattr(un, "_read_cache", lambda: {"latest_version": "9.9.9"})
+
+    frames: list = []
+
+    async def sink(frame):
+        frames.append(frame)
+
+    result = await system_mod.system_version({}, send_frame=sink)
+
+    assert result["latest_version"] == "9.9.9"
+    assert frames == []
