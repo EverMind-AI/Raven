@@ -20,6 +20,7 @@ import { SkillDetailPage } from '@/pages/raven-skills/detail';
 import { SchedulePage } from '@/pages/schedule';
 import { SettingsPage } from '@/pages/settings';
 import { SubAgentsPage } from '@/pages/subagent';
+import { ToolsPage } from '@/pages/tools';
 
 const router = createBrowserRouter([
 	{
@@ -48,6 +49,7 @@ const router = createBrowserRouter([
 						{ path: '/everos', element: <EverOSPage /> },
 					{ path: '/raven-skills', element: <RavenSkillsPage /> },
 					{ path: '/raven-skills/detail', element: <SkillDetailPage /> },
+					{ path: '/tools', element: <ToolsPage /> },
 					{ path: '/settings', element: <SettingsPage /> },
 				],
 			},

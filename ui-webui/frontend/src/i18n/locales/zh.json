@@ -723,6 +723,7 @@
 		"ravenSkills": "技能",
 		"ravenCron": "定时任务",
 		"ravenChannels": "消息渠道",
+		"ravenTools": "工具",
 		"everOS": "记忆",
 		"expand": "展开导航栏",
 		"collapse": "收起导航栏"
@@ -816,6 +817,54 @@
 			"mochat": "MoChat，Socket.IO",
 			"email": "邮件：IMAP 收 / SMTP 发"
 		}
+	},
+	"ravenTools": {
+		"kicker": "配置 · 工具",
+		"title": "工具密钥",
+		"subtitle": "有些工具只有拿到密钥才存在。在这里配好，重启网关后模型就能调用它们。",
+		"summary": "运行中 {{live}} / {{total}}",
+		"statusLive": "运行中",
+		"statusPending": "待重启",
+		"statusOff": "未启用",
+		"names": {
+			"web_search": "网页搜索",
+			"image": "图像生成",
+			"speech": "语音生成",
+			"video": "视频生成"
+		},
+		"blurbs": {
+			"web_search": "让模型自己上网搜。没有密钥时它根本不会出现在工具列表里——不是坏了，是没配。",
+			"image": "按提示词生成图片，写进会话的工作目录。",
+			"speech": "把文字念成音频文件。",
+			"video": "按提示词生成短视频，耗时以分钟计。"
+		},
+		"model": "模型",
+		"modelHint": "填上模型或密钥就是这个工具的开关；留空则用框里那个默认模型。",
+		"useDefaultModel": "用默认模型启用",
+		"apiKey": "API Key",
+		"keyPlaceholder": "粘贴密钥",
+		"keySetPlaceholder": "已保存（留空则不改动）",
+		"clearKey": "清除",
+		"keyCleared": "密钥已清除",
+		"keyFromEnv": "当前用的是环境变量 {{env}}。",
+		"keyFromOpenrouter": "当前借用凭据页里 OpenRouter 的密钥。",
+		"keyMissingSearch": "还没有可用的密钥：填一个，或者导出 {{env}}。",
+		"keyMissingMedia": "还没有可用的密钥：填一个，或者在凭据页配置 OpenRouter（也可导出 {{env}}）。",
+		"maxResults": "结果条数",
+		"maxResultsInvalid": "结果条数要是一个不小于 1 的整数。",
+		"apiBase": "API 地址",
+		"showAdvanced": "高级选项",
+		"hideAdvanced": "收起高级选项",
+		"disable": "停用",
+		"disabled": "已停用 {{name}}",
+		"enabled": "已启用 {{name}}",
+		"saved": "已保存 {{name}}",
+		"nothingToSave": "没有改动需要保存。",
+		"saveFailed": "保存失败：{{error}}",
+		"loadFailed": "加载失败：{{error}}",
+		"restartBanner": "配置已保存。工具是在网关启动时注册的，重启后才会生效。",
+		"restartNow": "立即重启",
+		"restarting": "网关重启中，稍候页面会自动刷新…"
 	},
 	"settings": {
 		"title": "设置",

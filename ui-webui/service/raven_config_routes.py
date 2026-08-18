@@ -268,6 +268,21 @@ def build_raven_config_router() -> APIRouter:
         except Exception as exc:  # unknown field / validation / transport
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/tools")
+    async def list_tools() -> dict:
+        client = await GatewayClient.shared()
+        return await client.call("raven.tools.list", {})
+
+    @router.put("/tools/{kind}")
+    async def set_tool(kind: str, body: dict = Body(...)) -> dict:
+        """Patch one tool's credential/model. ``restart_required`` is always
+        true in the reply: both are read where the AgentLoop is built."""
+        client = await GatewayClient.shared()
+        try:
+            return await client.call("raven.tools.set", {"kind": kind, "fields": body.get("fields") or {}})
+        except Exception as exc:  # unknown kind / unknown field / transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.post("/gateway/restart")
     async def restart_gateway() -> dict:
         client = await GatewayClient.shared()
