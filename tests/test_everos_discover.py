@@ -36,7 +36,7 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root)
 
-        state = _discover._describe(root, owned=True)
+        state = _discover._describe(root)
 
         assert state.declared_url == "http://127.0.0.1:18791"
         assert state.configured is True
@@ -48,7 +48,7 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root, api=None)
 
-        state = _discover._describe(root, owned=True)
+        state = _discover._describe(root)
 
         assert state.declared_url is None
         assert state.alive is False
@@ -59,10 +59,10 @@ class TestDescribeOneRoot:
         root = tmp_path / "everos"
         _write_root(root, key="")
 
-        assert _discover._describe(root, owned=True).configured is False
+        assert _discover._describe(root).configured is False
 
     def test_an_absent_root_is_described_without_raising(self, tmp_path: Path, _quiet_probes) -> None:
-        state = _discover._describe(tmp_path / "nope", owned=True)
+        state = _discover._describe(tmp_path / "nope")
 
         assert state.exists is False
         assert state.configured is False
@@ -73,7 +73,7 @@ class TestDescribeOneRoot:
         root.mkdir()
         (root / "everos.toml").write_text("this is not toml {{{", encoding="utf-8")
 
-        assert _discover._describe(root, owned=True).configured is False
+        assert _discover._describe(root).configured is False
 
     def test_locked_but_silent_is_its_own_state(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Data served somewhere other than where it says -- the state that
@@ -84,7 +84,7 @@ class TestDescribeOneRoot:
         monkeypatch.setattr(_discover, "_probe_health", lambda _u: False)
         monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: True)
 
-        state = _discover._describe(root, owned=True)
+        state = _discover._describe(root)
 
         assert state.busy_elsewhere is True
         assert state.serving is False
@@ -95,7 +95,7 @@ class TestDescribeOneRoot:
         monkeypatch.setattr(_discover, "_probe_health", lambda _u: True)
         monkeypatch.setattr(_discover, "ome_lock_held", lambda _r: True)
 
-        state = _discover._describe(root, owned=True)
+        state = _discover._describe(root)
 
         assert state.serving is True
         assert state.busy_elsewhere is False
@@ -138,7 +138,6 @@ class TestDiscoveryOrder:
 
         assert picked is not None
         assert picked.root == self.legacy
-        assert picked.owned is True
 
     def test_nothing_configured_picks_nothing(self, _isolate) -> None:
         assert _discover.pick(_discover.discover()) is None
@@ -173,14 +172,24 @@ class TestDiscoveryOrder:
         roots = {s.root for s in _discover.discover()}
         assert roots <= {self.default, self.legacy}
 
-    def test_a_recorded_unowned_root_keeps_its_ownership(self, tmp_path: Path, _isolate) -> None:
+    def test_discovery_says_nothing_about_ownership(self, tmp_path: Path, _isolate) -> None:
+        """A recorded root is a candidate whatever the config recorded about it.
+
+        Ownership used to be carried on the candidate, so a root recorded as the
+        user's was offered as read-only and one of raven's was adopted before any
+        question appeared. It is now decided by the lane the user picks in the
+        wizard, and this module has no field for it.
+        """
         from raven.config import update_everos as ue
 
-        theirs = tmp_path / "theirs"
-        _write_root(theirs)
-        _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(theirs), "owned": False})
+        recorded = tmp_path / "recorded"
+        _write_root(recorded)
+        _isolate.setattr(ue, "_recorded_slice", lambda: {"root": str(recorded), "owned": False})
 
-        assert _discover.discover()[0].owned is False
+        state = _discover.discover()[0]
+
+        assert state.root == recorded
+        assert not hasattr(state, "owned")
 
     def test_no_duplicate_candidates(self, _isolate) -> None:
         from raven.config import update_everos as ue

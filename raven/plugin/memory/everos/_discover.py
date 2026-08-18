@@ -1,9 +1,14 @@
 """Find the EverOS roots on this machine and say what state each is in.
 
 raven used to assume there was exactly one root at one address and start a server
-whenever that address did not answer. Both assumptions were wrong in ways that
-cost users their memory: a root can already be served on another port, and a root
-can belong to the user rather than to raven.
+whenever that address did not answer. That cost users their memory: a root can
+already be served on another port, by a process this module has to notice rather
+than talk over.
+
+Ownership is deliberately not one of the questions. Only roots raven creates for
+itself are scanned, and whether raven may write to the one it picks is settled by
+the lane the user chose in the wizard -- a directory that happens to exist cannot
+answer that.
 
 Discovery answers four questions per candidate root, and deliberately keeps them
 apart because they fail independently:
@@ -42,7 +47,6 @@ class RootState:
     """One candidate EverOS root and what could be observed about it."""
 
     root: Path
-    owned: bool
     configured: bool
     declared_url: str | None
     alive: bool
@@ -69,7 +73,7 @@ class RootState:
         return self.lock_held and not self.alive
 
 
-def _describe(root: Path, *, owned: bool) -> RootState:
+def _describe(root: Path) -> RootState:
     from raven.config.update_everos import role_configured_in
 
     data = _read_toml(root)
@@ -79,7 +83,6 @@ def _describe(root: Path, *, owned: bool) -> RootState:
 
     return RootState(
         root=root,
-        owned=owned,
         # Through the ops layer rather than re-reading the fields here: one
         # definition of "configured", shared with the wizard and doctor.
         configured=role_configured_in(data, "llm"),
@@ -113,39 +116,30 @@ def discover() -> list[RootState]:
     even when it is in a worse state than another candidate, because switching
     roots behind the user's back would silently change which memories raven has.
 
-    Only roots raven creates for itself are scanned. An EverOS the user runs is
-    never discovered: finding one means offering it, offering it means asking
-    for a decision the user did not come to make, and the only answer raven can
-    honour -- read-only reuse -- is one it cannot infer from a path anyway.
-    Pointing raven at such a server is an explicit turn in the wizard where the
-    person who knows the address types it.
+    Only roots raven creates for itself are scanned, plus the one the config
+    records. An EverOS the user runs is never discovered: finding one means
+    offering it, and offering it means asking for a decision the user did not
+    come to make. Pointing raven at such a server is an explicit turn in the
+    wizard where the person who knows the address types it.
     """
-    from raven.config.update_everos import (
-        _recorded_slice,
-        applicable_legacy_root,
-        default_everos_root,
-        root_is_raven_owned,
-    )
+    from raven.config.update_everos import _recorded_slice, applicable_legacy_root, default_everos_root
 
     states: list[RootState] = []
     seen: set[Path] = set()
 
-    def add(root: Path, *, owned: bool) -> RootState:
-        state = _describe(root, owned=owned)
+    def add(root: Path) -> RootState:
+        state = _describe(root)
         states.append(state)
         seen.add(root)
         return state
 
-    slice_ = _recorded_slice()
-    recorded = slice_.get("root")
+    recorded = _recorded_slice().get("root")
     if recorded:
-        root = Path(str(recorded)).expanduser()
-        owned = bool(slice_["owned"]) if "owned" in slice_ else root_is_raven_owned(root)
-        add(root, owned=owned)
+        add(Path(str(recorded)).expanduser())
 
     for root in (default_everos_root(), applicable_legacy_root()):
         if root is not None and root not in seen:
-            add(root, owned=True)
+            add(root)
 
     return states
 
