@@ -43,29 +43,39 @@ class ProviderPool:
         return self._supplier()
 
     def _live_cache(self) -> dict[tuple[str, str], ModelBinding]:
-        """Drop cached providers when the credentials behind them changed.
+        """Drop cached bindings when anything they were built from changed.
 
         Not identity on the config object: a supplier that re-reads the file
         returns a new object every call, which would clear the cache every
-        time and defeat the pool. A fingerprint of what a provider is actually
+        time and defeat the pool. A fingerprint of what a binding is actually
         built from is the thing that has to match.
         """
-        fingerprint = self._credentials_fingerprint()
+        fingerprint = self._cache_fingerprint()
         if self._cache_key != fingerprint:
             self._cache_key = fingerprint
             self._cache = {}
         return self._cache
 
-    def _credentials_fingerprint(self) -> str:
-        """What a built provider depends on: the keys, bases and headers."""
+    def _cache_fingerprint(self) -> str:
+        """Everything a cached binding was built from.
+
+        The credentials, because that is what a provider is built out of -- and
+        also ``contextWindowTokens``, because ``bind`` copies it onto the binding.
+        A key that does not cover the value it caches means editing that number
+        leaves a stale binding serving the old one until a restart, which is
+        exactly the kind of "it did nothing" the pin ladder exists to avoid.
+        """
         import hashlib
         import json
 
         try:
-            providers = self.config.providers.model_dump(exclude_none=True)
+            material = {
+                "providers": self.config.providers.model_dump(exclude_none=True),
+                "window": self.config.agents.defaults.context_window_tokens,
+            }
         except Exception:
             return ""
-        return hashlib.sha256(json.dumps(providers, sort_keys=True, default=str).encode()).hexdigest()
+        return hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode()).hexdigest()
 
     def bind(self, model: str, provider_name: str | None = None) -> ModelBinding:
         """Build (or reuse) the provider that serves ``model``.
