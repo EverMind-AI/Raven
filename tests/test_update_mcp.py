@@ -184,3 +184,76 @@ def test_set_rejects_a_non_list_and_a_non_object_entry(tmp_path: Path) -> None:
         set_mcp_servers({"browser": {"command": "npx"}}, config_path=p)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="must be an object"):
         set_mcp_servers(["browser"], config_path=p)  # type: ignore[list-item]
+
+
+def test_a_no_op_panel_save_keeps_auth_and_enabled(tmp_path: Path) -> None:
+    """The panel round-trips the response it was handed, so a save that changes
+    nothing must change nothing. It used to drop both fields: ``auth`` went and
+    the plugin's stored OAuth tokens were orphaned with no way to re-authorize,
+    and ``enabled: false`` went and a shelved server turned itself back on."""
+    p = _write(
+        tmp_path,
+        {
+            "tools": {
+                "mcpServers": {
+                    "asana": {"url": "https://mcp.asana.test/sse", "auth": "oauth"},
+                    "shelved": {"url": "https://x.test/mcp", "enabled": False},
+                }
+            }
+        },
+    )
+    set_mcp_servers(get_mcp_servers(config_path=p), config_path=p)
+
+    block = _tools(p)["mcpServers"]
+    assert block["asana"]["auth"] == "oauth"
+    assert block["shelved"]["enabled"] is False
+
+
+def test_get_surfaces_auth_and_enabled_so_a_client_can_round_trip_them(tmp_path: Path) -> None:
+    p = _write(tmp_path, {"tools": {"mcpServers": {"svc": {"url": "https://x.test/mcp", "auth": "oauth"}}}})
+    (entry,) = get_mcp_servers(config_path=p)
+    assert entry["auth"] == "oauth"
+    assert entry["enabled"] is True
+
+
+def test_set_keeps_a_known_key_the_caller_never_mentioned(tmp_path: Path) -> None:
+    """The carry-through covers keys the schema knows too, not only unknown ones
+    -- a client that predates a field must not erase it by omission."""
+    p = _write(tmp_path, {"tools": {"mcpServers": {"svc": {"url": "https://x.test/mcp", "auth": "oauth"}}}})
+    set_mcp_servers([{"name": "svc", "url": "https://x.test/mcp"}], config_path=p)
+    assert _tools(p)["mcpServers"]["svc"]["auth"] == "oauth"
+
+
+def test_set_still_applies_a_deliberate_change_to_those_fields(tmp_path: Path) -> None:
+    """Carrying omitted keys must not freeze the ones the caller does send."""
+    p = _write(
+        tmp_path,
+        {"tools": {"mcpServers": {"svc": {"url": "https://x.test/mcp", "auth": "oauth", "enabled": False}}}},
+    )
+    set_mcp_servers([{"name": "svc", "url": "https://x.test/mcp", "auth": "none", "enabled": True}], config_path=p)
+
+    entry = _tools(p)["mcpServers"]["svc"]
+    # Both are back at their defaults, so exclude_defaults drops them from the file.
+    assert "auth" not in entry
+    assert "enabled" not in entry
+
+
+def test_a_caller_using_the_other_spelling_still_wins(tmp_path: Path) -> None:
+    """The two sides of the carry-through can spell one field differently.
+
+    plughub writes ``by_alias`` (``toolTimeout``); ``_KNOWN_KEYS`` deliberately
+    admits the snake_case spelling from a caller. Comparing raw keys made those
+    look like two fields, so the stored value was carried in beside the sent one
+    and pydantic's alias resolution let the stored one win -- a save that
+    silently did not do what it was asked.
+    """
+    p = _write(tmp_path, {"tools": {"mcpServers": {"svc": {"url": "https://x.test/mcp", "toolTimeout": 30}}}})
+    set_mcp_servers([{"name": "svc", "url": "https://x.test/mcp", "tool_timeout": 60}], config_path=p)
+    assert _tools(p)["mcpServers"]["svc"]["toolTimeout"] == 60
+
+
+def test_the_other_spelling_is_also_carried_when_the_caller_omits_it(tmp_path: Path) -> None:
+    """The canonicalisation must work in the carrying direction too."""
+    p = _write(tmp_path, {"tools": {"mcpServers": {"svc": {"url": "https://x.test/mcp", "tool_timeout": 45}}}})
+    set_mcp_servers([{"name": "svc", "url": "https://x.test/mcp"}], config_path=p)
+    assert _tools(p)["mcpServers"]["svc"]["toolTimeout"] == 45

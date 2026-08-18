@@ -21,11 +21,22 @@ from pydantic import ValidationError
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import MCPServerConfig
 
-_FIELDS = ("type", "command", "args", "env", "url", "headers", "toolTimeout")
+_FIELDS = ("type", "command", "args", "env", "url", "headers", "toolTimeout", "enabled", "auth")
 # Both spellings of every field. ``MCPServerConfig`` accepts snake_case and
 # camelCase alike (``populate_by_name``), so a filter that knows only one of
 # them would drop a caller's value without saying so.
 _KNOWN_KEYS = frozenset(MCPServerConfig.model_fields) | frozenset(_FIELDS) | {"name", "error"}
+
+#: Either spelling of a field -> the one field it names. The carry-through
+#: compares what the caller mentioned against what is on disk, and those two
+#: sides can spell the same field differently: plughub writes ``by_alias``
+#: (``toolTimeout``) while a caller may send ``tool_timeout``, which
+#: ``_KNOWN_KEYS`` deliberately admits. Comparing raw keys made the two look
+#: like different fields, so the stored one was carried alongside the caller's,
+#: pydantic resolved the alias first, and the caller's value lost.
+_CANONICAL_KEY = {
+    spelling: field for field, info in MCPServerConfig.model_fields.items() for spelling in (field, info.alias or field)
+}
 
 #: Keys ``raven.mcp.list`` merges into each server from the live runtime. They
 #: ride back in on every save because the panel round-trips that response, but
@@ -91,10 +102,11 @@ def set_mcp_servers(servers: list[dict], *, config_path: Path | None = None) -> 
     invalid state has to be fixed before the panel can save over it; that is
     deliberate, since the alternative is quietly dropping it.
 
-    Keys the schema does not know are carried through, both from the caller and
-    from the entry already on disk, so a save from the panel cannot erase a key
-    this build happens not to understand. :data:`MCP_RUNTIME_KEYS` is exempt
-    from that carry-through: it is live state, not configuration.
+    A key the caller does not mention is carried through from the entry already
+    on disk, so a save cannot erase a field the client that sent it never knew
+    about -- neither a key this build does not understand nor one it simply
+    does not surface. :data:`MCP_RUNTIME_KEYS` is exempt from that
+    carry-through: it is live state, not configuration.
     """
     path = config_path or get_config_path()
     data = _raw_config(path)
@@ -111,16 +123,28 @@ def set_mcp_servers(servers: list[dict], *, config_path: Path | None = None) -> 
             raise ValueError("every MCP server needs a name")
         if name in block:
             raise ValueError(f"duplicate MCP server name: {name!r}")
-        raw = {k: v for k, v in item.items() if k in _KNOWN_KEYS and k not in _NEVER_PERSISTED and v is not None}
+        # A stored value the caller did not mention AT ALL is carried through,
+        # whether or not the schema knows the key. Restricting this to unknown
+        # keys left a gap that a no-op save fell into: the panel round-trips the
+        # response it was given, that response never carried ``auth`` or
+        # ``enabled``, and neither did the carry-through -- so saving anything
+        # dropped ``auth: oauth`` (orphaning a plugin's stored tokens, with no
+        # way to re-authorize) and dropped ``enabled: false`` (silently turning
+        # a shelved server back on).
+        stored = existing.get(name) or {}
+        mentioned = {_CANONICAL_KEY.get(k, k) for k in item}
+        carried = {
+            k: v for k, v in stored.items() if _CANONICAL_KEY.get(k, k) not in mentioned and k not in _NEVER_PERSISTED
+        }
+        sent = {k: v for k, v in item.items() if k in _KNOWN_KEYS and k not in _NEVER_PERSISTED and v is not None}
+        raw = {**{k: v for k, v in carried.items() if k in _KNOWN_KEYS}, **sent}
         cfg = MCPServerConfig.model_validate(raw)  # raises on a bad type / field
         if not cfg.command and not cfg.url:
             raise ValueError(f"MCP server {name!r} needs a command (stdio) or a url (http/sse)")
         # Scrubbed on the way out of the file too, not just on the way in: a
         # config an earlier build already polluted heals on its next save
         # instead of carrying the stale state forward forever.
-        unknown = {
-            k: v for k, v in (existing.get(name) or {}).items() if k not in _KNOWN_KEYS and k not in _NEVER_PERSISTED
-        }
+        unknown = {k: v for k, v in carried.items() if k not in _KNOWN_KEYS}
         unknown.update({k: v for k, v in item.items() if k not in _KNOWN_KEYS and k not in _NEVER_PERSISTED})
         block[name] = {**unknown, **cfg.model_dump(by_alias=True, exclude_defaults=True)}
 
