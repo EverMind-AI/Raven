@@ -517,3 +517,62 @@ def test_save_config_keeps_every_value_the_user_chose(tmp_path: Path) -> None:
     assert reloaded.agents.defaults.model == "x/y"
     assert reloaded.providers.get("anthropic").api_key == "sk-a"
     assert reloaded.agents.defaults.max_tool_iterations == Config().agents.defaults.max_tool_iterations
+# ── The implicit provider ───────────────────────────────────────────────
+
+
+def test_an_auto_provider_is_written_down_as_what_it_resolved_to(tmp_path: Path) -> None:
+    """``auto`` never detected anything: a bare id walked PROVIDERS in registry
+    order and took the first configured claimant, so `gpt-4.1` went to
+    openrouter over openai on an array index. The migration writes down the same
+    answer -- behaviour unchanged, but now readable and arguable."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "openrouter": {"apiKey": "sk-o"}},
+            "agents": {"defaults": {"model": "gpt-4.1", "provider": "auto"}},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "openrouter"
+    assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "openrouter"
+
+
+def test_an_absent_provider_is_migrated_too(tmp_path: Path) -> None:
+    """Absent meant auto -- the field defaulted to it."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}},
+            "agents": {"defaults": {"model": "claude-opus-4-5"}},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+
+
+def test_an_explicit_provider_is_never_rewritten(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "openrouter": {"apiKey": "sk-o"}},
+            "agents": {"defaults": {"model": "gpt-4.1", "provider": "anthropic"}},
+        },
+    )
+    before = p.read_bytes()
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert p.read_bytes() == before
+
+
+def test_a_provider_that_cannot_be_resolved_is_left_blank(tmp_path: Path) -> None:
+    """No configured provider serves that model. Filling the blank with a vendor
+    picked to have something there is the guess this whole change removes; an
+    empty provider is reported where it is used instead."""
+    p = tmp_path / "config.json"
+    _write(p, {"providers": {}, "agents": {"defaults": {"model": "some/unknown-model", "provider": "auto"}}})
+
+    assert load_config(p).agents.defaults.provider in ("", "auto")
+    assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "auto"

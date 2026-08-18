@@ -253,7 +253,14 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
-    provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+    # The vendor whose credential serves ``model``. Required in practice: an id
+    # alone does not name a credential -- `openrouter` serving
+    # `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5`
+    # are both valid, name different keys and different bills, and the id does
+    # not distinguish them. Empty is what a config written before that rule
+    # carries; ``loader`` migrates those once, writing down whichever vendor
+    # they were in fact resolving to.
+    provider: str = ""
     # No maxTokens here on purpose. A number in a config file cannot be right
     # for every model -- too large is a 400, too small truncates silently --
     # so the ceiling is resolved per model from the catalogue
@@ -887,7 +894,22 @@ class Config(BaseSettings):
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
+        """The section serving ``model`` and its registry name.
+
+        An explicit ``agents.defaults.provider`` answers outright -- which,
+        since the provider became required, is every config the loader has
+        migrated. The derivation below stays for exactly two callers: that
+        migration, which needs to know what a pre-rule config was in fact
+        resolving to before it writes the answer down, and a config the
+        migration could not write to.
+
+        The derivation is worth reading once, because it is why the field is
+        required now. A prefixed id is answered by the provider it names, but a
+        *bare* id falls to keyword matching in ``PROVIDERS`` order -- so with
+        both anthropic and openrouter configured, ``gpt-4.1`` resolved to
+        openrouter over openai for no better reason than a list index. That is
+        a guess about whose key pays for the call.
+        """
         from raven.providers.registry import (
             PROVIDERS,
             canonical_provider_name,
@@ -897,7 +919,7 @@ class Config(BaseSettings):
         )
 
         forced = self.agents.defaults.provider
-        if forced != "auto":
+        if forced and forced != "auto":
             # Return the canonical name: callers look the spec up by it, and a
             # config still naming the provider the old way would find nothing.
             forced = canonical_provider_name(forced)

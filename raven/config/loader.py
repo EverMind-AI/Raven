@@ -16,7 +16,7 @@ from raven.config.schema import Config
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 1
+CURRENT_CONFIG_VERSION = 2
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -215,6 +215,60 @@ def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False
     return True
 
 
+def _migrate_auto_provider(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Write down the vendor an ``auto`` config was in fact resolving to.
+
+    ``agents.defaults.provider: "auto"`` never detected anything. For a bare
+    model id it walked ``PROVIDERS`` in registry order and took the first
+    configured one that claimed the id -- so with both anthropic and openrouter
+    keyed, ``gpt-4.1`` went to openrouter over openai because openrouter sits
+    third in a list and openai eighth. Which vendor's key paid for a call was
+    decided by an array index.
+
+    So the value is resolved once, here, and written down. Behaviour does not
+    change -- the answer is exactly what the old derivation would have given --
+    but it becomes something the user can read in their own file and argue
+    with. A config the resolution cannot answer for (no configured provider
+    serves that model) is left alone: an empty provider is reported where it is
+    used, which is a better failure than a vendor picked to fill the blank.
+    """
+    agents = data.get("agents")
+    defaults = agents.get("defaults") if isinstance(agents, dict) else None
+    if not isinstance(defaults, dict):
+        return False
+    current = defaults.get("provider")
+    if current not in (None, "", "auto"):
+        return False
+
+    try:
+        probe = dict(data)
+        probe_agents = dict(agents or {})
+        probe_defaults = dict(defaults)
+        probe_defaults["provider"] = "auto"
+        probe_agents["defaults"] = probe_defaults
+        probe["agents"] = probe_agents
+        for key in EXTENSION_KEYS:
+            probe.pop(key, None)
+        probe.pop("configVersion", None)
+        resolved = Config.model_validate(probe)._match_provider()[1]
+    except Exception as exc:
+        logging.getLogger(__name__).debug("could not resolve the implicit provider: %s", exc)
+        return False
+    if not resolved:
+        return False
+
+    defaults["provider"] = resolved
+    logging.getLogger(__name__).info("Migrated: agents.defaults.provider %r -> %r", current, resolved)
+    notice = (
+        f"Wrote `provider: {resolved}` into your config. It was unset, which used to mean "
+        "'pick one by walking a list' -- the same vendor you were already getting, now "
+        "written down instead of inferred. Change it if that is not the one you meant."
+    )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
+
+
 def _persist_migrations(path: Path) -> None:
     """Apply the stamped migrations to the file itself, then stamp. Best effort.
 
@@ -239,7 +293,13 @@ def _persist_migrations(path: Path) -> None:
     except ConfigReadError:
         return
 
-    if raw and _migrate_legacy_context_window(raw):
+    changed = False
+    if raw:
+        # Both run: a config can owe the file two edits, and the stamp covers
+        # every migration at once.
+        changed = _migrate_legacy_context_window(raw) or changed
+        changed = _migrate_auto_provider(raw) or changed
+    if changed:
         # PID in the name: two processes migrating at once would otherwise share
         # one temp path, and the second's truncating write could be read as an
         # empty config.json by anyone loading between it and the replace.
@@ -378,6 +438,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped:
 
     if run_stamped:
         _migrate_legacy_context_window(data, notify=True)
+        _migrate_auto_provider(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
     tools = data.get("tools", {})
