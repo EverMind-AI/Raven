@@ -15,8 +15,6 @@ Three entry points because their outcomes differ:
   before the same execution chain).
 - :func:`check_assets` — skills/mcps against the live inventories: unknown
   entries degrade into missing-capability notes, they never block.
-- :func:`check_immutable_region` — revise() must not lose what the user
-  explicitly specified.
 
 Nothing here calls an LLM or touches disk.
 """
@@ -26,7 +24,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from raven.memory_engine.playbook.types import BUILTIN_AGENTS, NodeSpec, PlaybookSpec
+from raven.playbook.types import BUILTIN_AGENTS, NodeSpec, PlaybookSpec
 
 _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
 _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
@@ -49,6 +47,7 @@ def validate_graph_nodes(
     param_names: set[str],
     *,
     known_agents: Iterable[str] = BUILTIN_AGENTS,
+    stateful_agents: Iterable[str] = (),
 ) -> list[str]:
     """Graph rules over a node list — a spec's own or a prompt-mode composed
     one (rule 11: same checks, same chain, no escape hatch)."""
@@ -73,6 +72,29 @@ def validate_graph_nodes(
         for ref in _PARAM_REF_RE.findall(node.prompt_template):
             if ref not in param_names:
                 errors.append(f"node {node.id!r}: ${{params.{ref}}} names no declared param")
+
+    # Rule 7, and the reason it is an error rather than a note: a handle on a
+    # stateless agent promises continuity the run cannot deliver, and the author
+    # only finds out by reading a downstream node that does not remember the
+    # upstream one. Cheaper to refuse the graph. ``stateful_agents`` is empty by
+    # default because every builtin runs in-process with no resume mechanism;
+    # the registry passes the real set once an agent can hold a session.
+    stateful = set(stateful_agents)
+    for node in nodes:
+        if node.instance and node.agent not in stateful:
+            errors.append(
+                f"node {node.id!r}: instance {node.instance!r} needs a stateful agent, "
+                f"and {node.agent!r} cannot hold a session -- drop the handle"
+            )
+        # A confirm gate exists to stop an irreversible step. Honouring it needs
+        # a pause/resume the executor does not have, and a note after the fact
+        # arrives once the step has already run -- so an unenforceable gate
+        # fails the graph instead of being downgraded to a warning.
+        if node.confirm:
+            errors.append(
+                f"node {node.id!r}: confirm is declared but this release cannot enforce a "
+                "node-level gate; remove it rather than rely on it"
+            )
 
     # Rules 8/9: nodes sharing an instance continue one session — they must
     # form a dependency chain (a shared session cannot run concurrently) and
@@ -152,10 +174,3 @@ def check_assets(
             if m not in mcp:
                 missing.append(f"mcp {m!r} (node {node.id}) not found in the current inventory")
     return [], sorted(set(missing))
-
-
-def check_immutable_region(old: PlaybookSpec, new: PlaybookSpec) -> list[str]:
-    """revise() guard: every user-specified fact must survive verbatim."""
-    kept = set(new.provenance.specified_by_user)
-    lost = [item for item in old.provenance.specified_by_user if item not in kept]
-    return [f"revision dropped user-specified fact: {item!r}" for item in lost]

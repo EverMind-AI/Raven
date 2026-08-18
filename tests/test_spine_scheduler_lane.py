@@ -233,6 +233,64 @@ async def test_turn_failed_carries_conversation_id():
     assert failed.conversation_id == "tg:9"
 
 
+async def test_worker_mints_a_turn_id_when_the_request_carries_none():
+    # Every submit path but turn.send leaves turn_id unset, so the lane is what
+    # makes those turns identifiable at all -- and a consumer that has to tell an
+    # announce turn's end from the client turn queued behind it on the same lane
+    # has nothing else to go on.
+    runner = SuccessRunner(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(_req())
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert started.turn_id
+    assert ended.turn_id == started.turn_id
+
+
+async def test_a_supplied_turn_id_is_not_re_minted():
+    # turn.send returns its id to the client and puts it on message.start, so the
+    # lifecycle events have to carry that same value or the client's correlation
+    # key stops matching the completion it is waiting for.
+    src = Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
+    runner = SuccessRunner(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(TurnRequest(origin=Origin.USER, source=src, text="hi", turn_id="t-known"))
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert started.turn_id == "t-known"
+    assert ended.turn_id == "t-known"
+
+
+async def test_a_failed_turn_reports_its_own_turn_id():
+    runner = FailingRunner()
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:9")
+    await lane.submit(_req())
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.turn_id and failed.turn_id == started.turn_id
+
+
+async def test_the_runner_sees_the_resolved_turn_id():
+    # The lane puts the id back on the request, so the runner and the lifecycle
+    # events agree on one value -- what lets the RPC runner stamp an approval
+    # binding and its synthetic tool_call_id from the turn instead of a side map.
+    seen: list[str | None] = []
+
+    class RecordingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            seen.append(req.turn_id)
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+    events, sink = _collector()
+    lane = Lane(runner=RecordingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(_req())
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert seen == [ended.turn_id] and seen[0]
+
+
 async def test_run_exception_yields_turn_failed_and_resolves_future():
     runner = FailingRunner()
     events, sink = _collector()
@@ -353,10 +411,12 @@ async def test_cancel_during_setup_window_stops_the_turn():
     assert ran == []  # and the turn never ran
 
 
-async def test_cancel_before_turnstarted_emits_no_lifecycle():
-    # A turn cancelled before it acquires the pool (hence before TurnStarted)
-    # emits no lifecycle at all — no orphan TurnFailed — and still resolves,
-    # consistent with a drained queued turn.
+async def test_cancel_before_turnstarted_still_reports_the_turns_end():
+    # A turn cancelled before it acquires the pool (hence before TurnStarted) still
+    # emits exactly one terminal event naming itself. It used to emit nothing, on
+    # the reasoning that an unpaired TurnFailed is an orphan -- but silence is worse
+    # than an orphan: a consumer that releases a turn's resources against the
+    # ending turn's id never learns this turn is over, and holds them for good.
     ran: list[str] = []
     events, sink = _collector()
     pools = OriginPools(user=1, system=1)
@@ -374,7 +434,32 @@ async def test_cancel_before_turnstarted_emits_no_lifecycle():
     assert await asyncio.wait_for(fut, timeout=1.0) is None
     assert stopped == 1
     assert ran == []
-    assert events == []  # no TurnStarted, so no orphan TurnFailed either
+    assert [type(e).__name__ for e in events] == ["TurnFailed"]  # its end, unpaired but named
+    assert events[0].cancelled is True
+    assert events[0].conversation_id == "c"
+    assert events[0].turn_id  # minted at submit, so it can name itself even here
+
+
+async def test_a_failure_before_turnstarted_still_reports_the_turns_end():
+    # Same class as the cancel above, one branch down: the pool acquire and the
+    # sink's own TurnStarted call both sit inside the try before ``started``, so a
+    # failure there used to emit nothing -- leaving a consumer holding this turn's
+    # slots and the client with a turn that never resolves. Latent in production
+    # (every origin is mapped and no production sink raises here), pinned so the
+    # branch cannot quietly go silent again.
+    events: list = []
+
+    async def sink(event) -> None:
+        if isinstance(event, TurnStarted):
+            raise RuntimeError("sink refused the start")
+        events.append(event)
+
+    lane = Lane(runner=SuccessRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    assert await lane.submit(_req()) is None
+    assert [type(e).__name__ for e in events] == ["TurnFailed"]
+    assert events[0].cancelled is False
+    assert "sink refused the start" in events[0].error
+    assert events[0].turn_id  # minted at submit, so it can name itself here too
 
 
 async def test_worker_exits_when_queue_drains():

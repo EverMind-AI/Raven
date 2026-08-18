@@ -2,10 +2,11 @@
 
 A playbook is one directory under the playbooks scan root holding a
 ``playbook.md`` (two-field frontmatter, human body, one fenced
-``yaml playbook-spec`` block) plus a generator-side ``.provenance.json``
-sidecar. The two modes differ only in where the graph comes from: ``dag``
-ships it, ``prompt`` ships assembly guidance a model turns into a graph at
-run time — same validation, same execution chain.
+``yaml playbook-spec`` block) — one file, no sidecar. The two modes differ
+only in where the graph comes from: ``dag`` ships it, ``prompt`` ships
+assembly guidance a model turns into a graph at run time — same validation,
+same execution chain. Whether a playbook is matchable on this machine is
+config (``playbooks.disabled``), never file content.
 
 Package layout:
 
@@ -15,38 +16,40 @@ Package layout:
 - ``matcher``    — L1 index and the LLM gate (L2)
 - ``validate``   — the field definition's rule table
 - ``prompt``     — generation / repair / revise / compose prompt assembly
-- ``store``      — playbook.md + sidecar persistence
+- ``store``      — playbook.md persistence
 - ``generator``  — :class:`PlaybookGenerator` (generate / revise)
 - ``executor``   — matched spec + params -> a running graph
 - ``runtime``    — the per-message funnel packaged for the agent loop
 """
 
-from raven.memory_engine.playbook.executor import ExecutionPlan, PlaybookExecutor, RoleBuildSpec
-from raven.memory_engine.playbook.generator import (
+from raven.playbook.executor import ExecutionPlan, PlaybookExecutor, RoleBuildSpec
+from raven.playbook.generator import (
     CapabilityInventory,
+    GeneratedPlaybook,
     PlaybookGenerationError,
     PlaybookGenerator,
     StaticInventory,
 )
-from raven.memory_engine.playbook.matcher import GateVerdict, MatchCandidate, TriggerIndex, gate
-from raven.memory_engine.playbook.role_pool import RoleBase, RolePoolError, agent_roster, base_of, load_role_pool
-from raven.memory_engine.playbook.runtime import PlaybookRuntime
-from raven.memory_engine.playbook.store import PlaybookExistsError, PlaybookStore
-from raven.memory_engine.playbook.triggers import expand_triggers, find_collisions, normalize
-from raven.memory_engine.playbook.types import (
+from raven.playbook.matcher import GateVerdict, MatchCandidate, TriggerIndex, gate
+from raven.playbook.role_pool import RoleBase, RolePoolError, agent_roster, base_of, load_role_pool
+from raven.playbook.runtime import PlaybookRuntime
+from raven.playbook.store import BUILTIN_ROOT, PlaybookExistsError, PlaybookOrigin, PlaybookStore
+from raven.playbook.triggers import expand_triggers, find_collisions, normalize
+from raven.playbook.types import (
     BUILTIN_AGENTS,
     NodeSpec,
     ParamSpec,
     PlaybookSpec,
-    Provenance,
     Triggers,
 )
 
 __all__ = [
     "BUILTIN_AGENTS",
+    "BUILTIN_ROOT",
     "CapabilityInventory",
     "ExecutionPlan",
     "GateVerdict",
+    "GeneratedPlaybook",
     "MatchCandidate",
     "NodeSpec",
     "ParamSpec",
@@ -54,10 +57,10 @@ __all__ = [
     "PlaybookExistsError",
     "PlaybookGenerationError",
     "PlaybookGenerator",
+    "PlaybookOrigin",
     "PlaybookRuntime",
     "PlaybookSpec",
     "PlaybookStore",
-    "Provenance",
     "RoleBase",
     "RoleBuildSpec",
     "RolePoolError",

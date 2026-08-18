@@ -71,12 +71,14 @@ def build_context_engine(
     model: str,
     context_window_tokens: int,
     get_tool_definitions: Callable[[], list[dict]],
+    get_tool_notices: Callable[[], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
+    playbook_listing: Callable[[], list[tuple[str, str]]] | None = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -114,7 +116,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace),
+        IdentitySegmentBuilder(workspace, playbook_listing=playbook_listing),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
@@ -150,7 +152,7 @@ def build_context_engine(
             now_fn=now_fn,
         ),
     ]
-    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)
+    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices)
 
 
 def _build_router(

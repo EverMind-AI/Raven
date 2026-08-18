@@ -37,6 +37,7 @@ import IconMoon from '~icons/solar/moon-bold-duotone';
 import IconSettings from '~icons/solar/settings-bold-duotone';
 import IconPanel from '~icons/solar/siderbar-linear';
 import IconSun from '~icons/solar/sun-2-bold-duotone';
+import IconTools from '~icons/solar/tuning-2-bold-duotone';
 
 /**
  * One rail entry. Collapsed it is the bare icon with `label` as its tooltip;
@@ -208,6 +209,12 @@ export function AppSidebar() {
 								label={t('nav.ravenSkills')}
 								isActive={location.pathname.startsWith('/raven-skills')}
 								onClick={() => navigate('/raven-skills')}
+							/>
+							<RailItem
+								icon={<IconTools />}
+								label={t('nav.ravenTools')}
+								isActive={location.pathname === '/tools'}
+								onClick={() => navigate('/tools')}
 							/>
 						</SidebarMenu>
 					</SidebarGroupContent>

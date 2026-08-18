@@ -241,7 +241,8 @@ class RavenLoopBackend:
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         # A resumed instance brings its own history, system prompt included;
-        # rebuilding the prompt here would append a second system turn.
+        # rebuilding the prompt here would append a second system turn. A
+        # fresh run's prompt carries the role's skill whitelist.
         messages: list[dict[str, Any]] = (
             list(history)
             if history

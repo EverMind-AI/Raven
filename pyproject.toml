@@ -165,8 +165,9 @@ include = [
     "raven/skills/**/*.sh",
     # Bundled model-label snapshot, so a fresh install labels models offline.
     "raven/providers/data/*.json",
-    # Playbook role-pool defaults.
-    "raven/memory_engine/playbook/*.yaml",
+    # Playbook role-pool defaults and the builtin playbook library.
+    "raven/playbook/*.yaml",
+    "raven/playbook/builtin/**/*.md",
     # Tracing dashboard viewer (dependency-free Node server + static client).
     "raven/tracing/viewer/**/*.js",
     "raven/tracing/viewer/**/*.css",
