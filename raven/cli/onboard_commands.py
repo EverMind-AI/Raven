@@ -1878,9 +1878,12 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 # re-pick instead of leaving a model whose provider has no key.
                 from raven.config.update import set_default_model
 
-                # The pin goes with it: left behind it would route the next model
-                # the user picks to the provider whose key was just removed.
-                set_default_model("", provider="auto")
+                # The provider goes with it: left behind it would route the next
+                # model the user picks to the vendor whose key was just removed.
+                # Cleared to "", not to "auto" -- that sentinel is retired, and
+                # the migration that rewrites it will not come back for a config
+                # already stamped at the current generation.
+                set_default_model("", provider="")
             console.print(
                 _t(
                     f"  [green]✓ Removed {_provider_label(target)}'s configuration.[/green]",

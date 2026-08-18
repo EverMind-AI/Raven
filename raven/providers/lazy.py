@@ -54,9 +54,13 @@ class LazyProvider(LLMProvider):
 
         Lets a caller that skipped the real provider's import at construction
         (see ``rates._try_litellm_context_window``'s ``allow_import``) correct
-        a value it answered cheaply once the real thing is on hand -- e.g.
-        ``AgentLoop.refresh_context_window``, so a window guessed before
-        LiteLLM was imported gets fixed once prewarm finishes it.
+        a value it answered cheaply once the real thing is on hand.
+
+        No production setter today. ``AgentLoop`` used this to fix up a window
+        it had resolved eagerly; the window now belongs to the binding and is
+        resolved on first read, by which time a turn is in flight and the
+        import has happened -- so there is nothing left to correct after the
+        fact. Kept for a caller with the same shape of problem.
         """
         return self._on_built
 

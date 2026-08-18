@@ -436,9 +436,12 @@ async def session_delete(
         config = load_config()
         mgr = _manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
-        if removed and agent_loop is not None:
-            # Overrides are per session and live for the process; a deleted
-            # session must not leave one behind.
+        if agent_loop is not None:
+            # Not gated on ``removed``: a session that switched model before its
+            # first save has a binding in memory and no file on disk, and
+            # ``delete`` answers False for exactly that case. Clearing what is
+            # not there costs nothing; leaving it behind leaks for the life of
+            # the process.
             clear = getattr(agent_loop, "clear_session_binding", None)
             if callable(clear):
                 clear(session_key)
