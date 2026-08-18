@@ -61,11 +61,13 @@ model and the provider serving it (`context.curator_model` +
 halves because an id alone is ambiguous the moment a gateway is configured:
 `openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
 `claude-haiku-4-5` are both valid and name different credentials. With the
-provider set nothing is derived; with it unset the vendor is guessed from the
-id, which is what configs predating the field get. A pin that cannot be paired
-is reported and dropped, and the subsystem follows the conversation's model --
-a bare pinned id sent on the conversation's key is exactly the mis-pairing
-above. Unset out of the box -- no subsystem ships a vendor default.
+provider set nothing is derived, and a named vendor without usable credentials
+is reported and dropped -- the subsystem then follows the conversation's model,
+because a bare pinned id sent on the conversation's key is exactly the
+mis-pairing above. With the provider unset the pin still binds: a configured
+gateway takes it (it serves whatever id it is handed, under its own
+credential), and only without one is the vendor guessed from the id. Unset out
+of the box -- no subsystem ships a vendor default.
 
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the
@@ -342,13 +344,16 @@ that is nobody's.
 _Avoid_: "pricing" for the resolution -- that names the arithmetic on top
 (`token_wise/pricing.py`), which is a different module for a reason.
 
-**Provider Pin**:
-`agents.defaults.provider`: an explicit override of the Provider a Model Ref names.
-Every surface that changes the model rewrites it by one rule
-(`providers/pin.py::resolve`), because a pin left behind routes the new model to the old
-vendor with the old vendor's key.
-_Avoid_: reading it as a provider *signal* -- a pinned name says which section to ask
-about, never that the section holds credentials.
+**Configured provider**:
+`agents.defaults.provider`: which vendor's credential serves `agents.defaults.model`.
+Said by the user, derived by nothing -- every surface that changes the model writes the
+pair, and `config.set model` refuses a model without one. A config predating that rule
+carries the empty string until the loader resolves it once and writes the answer down
+(`config/loader.py::_migrate_auto_provider`); until then the vendor is derived from the
+id, which is the guess the field exists to end.
+_Avoid_: "pin" for this -- **Subsystem pin** above is a different thing (a model for one
+subsystem, not for the conversation). Also avoid reading it as a provider *signal*: a
+name says which section to ask about, never that the section holds credentials.
 
 **Provider Endpoint**:
 One url/key/headers group a provider section offers, of possibly several

@@ -93,8 +93,11 @@ class ContextConfig(_Base):
     Set this whenever the id alone is ambiguous, which is most of the time
     once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
     and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
-    credentials and different bills, and only you know which was meant. Unset
-    falls back to deriving the vendor from the id."""
+    credentials and different bills, and only you know which was meant.
+
+    Unset, the pin goes to your configured gateway if you have one -- it serves
+    whatever id it is handed -- and only without a gateway is the vendor derived
+    from the id. Neither is a guess you should rely on."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -1008,8 +1011,9 @@ class SkillForgeConfig(_Base):
     """Which configured provider serves ``llm_gate_model``.
 
     Same rule as ``context.curator_provider``: set it when the id alone is
-    ambiguous (a gateway serving another vendor's model), leave it unset to
-    derive the vendor from the id."""
+    ambiguous (a gateway serving another vendor's model). Unset, a configured
+    gateway takes the pin and only without one is the vendor derived from the
+    id."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic

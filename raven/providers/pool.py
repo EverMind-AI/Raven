@@ -104,8 +104,12 @@ class ProviderPool:
         ``provider_name`` is the configured half of the pair, and when present
         nothing is derived: an id alone cannot say whether ``anthropic`` or a
         gateway reselling it is meant, and those are different credentials and
-        different bills. Absent, the vendor is guessed -- which is what a
-        config written before the provider field existed gets.
+        different bills. Absent, a configured gateway takes the pin and only
+        without one is the vendor derived from the id -- which is what a config
+        written before the provider field existed gets. Note the asymmetry: an
+        explicitly named vendor that turns out unusable is dropped, while the
+        gateway branch binds whatever it is handed, because a gateway having no
+        route for an id is not something this can see from here.
         """
         if not model:
             return None
