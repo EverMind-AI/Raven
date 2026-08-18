@@ -783,10 +783,11 @@ class AgentLoop:
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
-        # Media tools (image/speech/video) are opt-in: a tool is registered only
-        # when the user configured it (a model or apiKey under tools.media.<tool>),
-        # which Config.effective_media_config() surfaces as a resolved key/model.
-        # An OpenRouter key set for chat alone never enables them.
+        # Media tools (image/speech/voice_clone/video) are opt-in: a tool is
+        # registered only when the user configured it (a model or apiKey under
+        # tools.media.<tool>), which Config.effective_media_config() surfaces as
+        # a resolved key/model. An OpenRouter key set for chat alone never
+        # enables them.
         media = self.media_config
         media_tools = (
             (ImageGenerateTool, media.image),

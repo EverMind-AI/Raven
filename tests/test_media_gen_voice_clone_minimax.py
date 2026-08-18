@@ -145,3 +145,23 @@ def test_voice_clone_inherits_minimax_provider_key() -> None:
     resolved = config.effective_media_config().voice_clone
 
     assert resolved.api_key == "unit-key"
+
+
+def test_voice_clone_api_base_alone_is_not_configured() -> None:
+    """``apiBase`` alone must not count as configured.
+
+    Registration in ``AgentLoop`` gates media tools on ``api_key or model``, so
+    treating a bare ``apiBase`` as configured here would borrow a key for a tool
+    that never gets registered.
+    """
+    config = Config.model_validate(
+        {
+            "providers": {"minimax": {"apiKey": "unit-key"}},
+            "tools": {"media": {"voiceClone": {"apiBase": "https://api.minimaxi.com/v1"}}},
+        }
+    )
+
+    resolved = config.effective_media_config().voice_clone
+
+    assert resolved.api_key == ""
+    assert not (resolved.api_key or resolved.model)
