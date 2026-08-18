@@ -282,6 +282,11 @@ class LLMResponse:
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
+    # How long this call spent thinking: the first reasoning delta to the first
+    # non-reasoning output. Only a streamed call can know it -- a single-shot
+    # chat() sees one arrival time for the whole response -- so None means
+    # "not measured", never "instant".
+    reasoning_ms: int | None = None
 
     @property
     def has_tool_calls(self) -> bool:

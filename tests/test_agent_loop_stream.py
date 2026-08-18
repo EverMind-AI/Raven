@@ -8,6 +8,7 @@ AgentLoop and instead bind the helper to a minimal stand-in.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -740,3 +741,84 @@ async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     )
 
     assert response.tool_calls[0].run_meta is not None
+
+
+# ---------------------------------------------------------------------------
+# reasoning_ms -- how long the call spent thinking
+#
+# Measured here because this is the only layer that watches the deltas arrive.
+# A browser clock cannot stand in for it: it lives only as long as the page that
+# saw the stream, so a reload or a session switch has nothing left to read.
+# ---------------------------------------------------------------------------
+
+_GAP_S = 0.12
+
+
+class _PacedProvider:
+    """Yields chunks, sleeping ``_GAP_S`` wherever the script says ``None``."""
+
+    def __init__(self, script: list[StreamDelta | None]) -> None:
+        self._script = script
+
+    async def chat_stream(self, **kwargs: Any):
+        for step in self._script:
+            if step is None:
+                await asyncio.sleep(_GAP_S)
+                continue
+            yield step
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return False
+
+
+async def test_the_thinking_clock_runs_to_the_first_answer_token() -> None:
+    """It measures the thought, and stops when prose takes over -- the work that
+    follows the thought is not thinking time."""
+    response = await _bind_helper(
+        _PacedProvider(
+            [
+                StreamDelta(content=None, reasoning_content="let me"),
+                None,
+                StreamDelta(content="Hello"),
+                None,
+                None,
+                StreamDelta(content=" world"),
+            ]
+        )
+    )(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
+
+    assert response.reasoning_ms is not None
+    assert response.reasoning_ms >= _GAP_S * 1000 / 2
+    assert response.reasoning_ms < _GAP_S * 1000 * 2, "the clock kept running past the first token"
+
+
+async def test_the_thinking_clock_stops_at_the_first_tool_call() -> None:
+    """A call is the other thing that ends a thought."""
+    response = await _bind_helper(
+        _PacedProvider(
+            [
+                StreamDelta(content=None, reasoning_content="I need the file"),
+                None,
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "read_file", "arguments": "{}"}}]
+                    },
+                ),
+                None,
+                None,
+            ]
+        )
+    )(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
+
+    assert response.reasoning_ms is not None
+    assert _GAP_S * 1000 / 2 <= response.reasoning_ms < _GAP_S * 1000 * 2
+
+
+async def test_a_call_that_never_thought_reports_no_thinking_time() -> None:
+    """None is "not measured", which a reader must not draw as a zero."""
+    response = await _bind_helper(_FakeProvider([StreamDelta(content="hi")]))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.reasoning_ms is None

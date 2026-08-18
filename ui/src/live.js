@@ -395,9 +395,11 @@ function renderHistory(messages) {
         toolRun.hasThink = true;
         toolRun.cot.textContent = thought;
         toolRun.reveal();
-        /* 0, not the elapsed time: how long it thought was never stored, and a
-           clock counting from page load would be a lie. */
-        toolRun.thinkDone(0);
+        /* The server's own measurement of the thought, so a reloaded turn folds
+           to the same "thought - Ns" the live one did. Absent on a session
+           written before it was recorded, and on an unstreamed call: 0 there,
+           which prints no clock rather than inventing one. */
+        toolRun.thinkDone(m.reasoning_ms != null ? Math.round(m.reasoning_ms / 1000) : 0);
       }
       if (!text) return;
       if (isFinal[i]) {
@@ -435,8 +437,11 @@ function renderHistory(messages) {
       const h = toolRun.tool(parts.name, hit.args || null, parts.display || null);
       const preview = cleanPreview(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n');
       /* The stored diff is the live event's diff, written down: same argument,
-         same numbered rows after a reload as before it. */
-      h.done(okOf(m.name || '', preview), preview, 0, m.diff);
+         same numbered rows after a reload as before it -- and duration_ms is the
+         same for the clock, which a delegation card shows. 0 when the entry
+         predates it: an ordinary row draws no clock either way, and a card
+         reads 0 as "no time to show" rather than "took no time". */
+      h.done(okOf(m.name || '', preview), preview, m.duration_ms != null ? m.duration_ms : 0, m.diff);
     }
   });
   sealTools();

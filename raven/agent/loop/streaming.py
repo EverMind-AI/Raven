@@ -13,6 +13,7 @@ the provider and the two delta callbacks; what it does with them is its own.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Any
@@ -67,6 +68,20 @@ async def stream_llm_call(
     content_buf: list[str] = []
     reasoning_buf: list[str] = []
     tool_call_slots: list[dict[str, Any]] = []
+    # How long the model thought, measured here because this is the only layer
+    # that sees the deltas arrive. A browser clock cannot stand in for it: it
+    # only exists while the page that watched the stream is open, so a reload
+    # or a session switch has nothing left to read.
+    think_t0: float | None = None
+    reasoning_ms: int | None = None
+
+    def stop_thinking() -> int | None:
+        """Close the thinking clock at the first output that is not a thought."""
+        nonlocal reasoning_ms
+        if think_t0 is not None and reasoning_ms is None:
+            reasoning_ms = int((time.monotonic() - think_t0) * 1000)
+        return reasoning_ms
+
     final_usage: dict[str, Any] | None = None
     had_error = False
     error_content: str | None = None
@@ -102,14 +117,18 @@ async def stream_llm_call(
                         upstream_finish_reason = delta.finish_reason
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
+                        if think_t0 is None:
+                            think_t0 = time.monotonic()
                         reasoning_buf.append(reasoning_delta)
                         if on_reasoning_delta is not None:
                             await on_reasoning_delta(reasoning_delta)
                     if delta.content:
+                        stop_thinking()
                         content_buf.append(delta.content)
                         if on_token_delta is not None:
                             await on_token_delta(delta.content)
                     if delta.tool_call_delta:
+                        stop_thinking()
                         _merge_tool_call_fragments(
                             tool_call_slots,
                             delta.tool_call_delta,
@@ -169,6 +188,10 @@ async def stream_llm_call(
 
     finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
 
+    # A call that emitted nothing but thought still thought for a measurable
+    # time; the end of the stream is where that thought stopped.
+    stop_thinking()
+
     content = "".join(content_buf)
     reasoning_content = "".join(reasoning_buf) or None
     # getattr because the loop accepts duck-typed providers (test stubs and
@@ -187,6 +210,7 @@ async def stream_llm_call(
         reasoning_content=reasoning_content,
         truncated=truncated,
         max_tokens=sent_max_tokens,
+        reasoning_ms=reasoning_ms,
     )
 
 

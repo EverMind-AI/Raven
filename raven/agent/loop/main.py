@@ -91,6 +91,25 @@ _ABORTED_ACTION_REPLY = (
 # underscore keeps it out of the provider payload while the turn is live.
 _NOTICE_KEY = "_notice"
 
+# How long a turn's parts took, on the entry each one belongs to: the thinking
+# span on the assistant message that carries the thought, the execution span on
+# the tool result. Same underscore-then-rename convention as ``_diff`` -- these
+# are for a reader, and a message the provider sees must not grow a field
+# mid-turn. ``_save_turn`` writes them as ``reasoning_ms`` / ``duration_ms``.
+_REASONING_MS_KEY = "_reasoning_ms"
+_TOOL_DURATION_MS_KEY = "_duration_ms"
+
+
+def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put a model call's thinking span on the assistant entry it produced.
+
+    Absent when the call was not streamed: a single-shot ``chat()`` has one
+    arrival time for the whole response and cannot separate thought from answer.
+    """
+    reasoning_ms = getattr(response, "reasoning_ms", None)
+    if reasoning_ms is not None and messages:
+        messages[-1][_REASONING_MS_KEY] = int(reasoning_ms)
+
 
 def _first_line(text: str) -> str:
     """The one line of a tool error worth putting in front of a person."""
@@ -2726,6 +2745,7 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
+                _stamp_reasoning_ms(messages, response)
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -2808,6 +2828,12 @@ class AgentLoop:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
                         messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if messages:
+                        # Dispatch to result, on the entry that answers the call.
+                        # The live tool event was its only carrier, so a restored
+                        # transcript had to either invent a number or say nothing
+                        # about a call that took two minutes.
+                        messages[-1][_TOOL_DURATION_MS_KEY] = duration_ms
                     if (tool_diff := getattr(result, "diff", None)) and messages:
                         # Underscore-keyed while the turn is live so no provider
                         # payload grows a field mid-turn; `_save_turn` renames it
@@ -2977,6 +3003,7 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
+                _stamp_reasoning_ms(messages, response)
                 final_content = clean
                 break
 
@@ -3634,6 +3661,15 @@ class AgentLoop:
                 # live provider payload, the plain one is what session.resume
                 # maps onto the wire so a reloaded page can renumber the change.
                 entry["diff"] = tool_diff
+            for private_key, stored_key in (
+                (_REASONING_MS_KEY, "reasoning_ms"),
+                (_TOOL_DURATION_MS_KEY, "duration_ms"),
+            ):
+                # Renamed for the same reason as the diff above. A duration is a
+                # property of the part it measures, so it is written down with
+                # it: a clock started when a page loads can only ever guess.
+                if (took := entry.pop(private_key, None)) is not None:
+                    entry[stored_key] = took
             if role == "tool" and isinstance(content, list):
                 # A multimodal tool result. Images must never reach the JSONL:
                 # a single one adds megabytes that are then replayed on every

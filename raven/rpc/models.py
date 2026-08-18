@@ -1811,7 +1811,23 @@ class TranscriptMessage(_Strict):
     tool_call_id: str | None = None
     timestamp: str | None = None
     reasoning_content: str | None = None
+    reasoning_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long the thought on this assistant entry took, measured server-side from the "
+            "first reasoning delta to the first answer token or tool call. Absent means unknown "
+            "(an unstreamed call, or a session written before it was recorded) -- render the bare "
+            "header, never a zero."
+        ),
+    )
     tool_calls: list[TranscriptToolCall] | None = None
+    duration_ms: int | None = Field(
+        default=None,
+        description=(
+            "How long the call this role='tool' entry answers ran, dispatch to result. "
+            "Absent means unknown, same rule as reasoning_ms."
+        ),
+    )
     diff: str | None = Field(
         default=None,
         description="A file tool's unified diff of the change it made, on its role='tool' entry.",
