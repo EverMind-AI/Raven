@@ -552,10 +552,15 @@ def _register_config_commands(app: typer.Typer) -> None:
 
     @app.command("use")
     def provider_use_cmd(
-        model: str = typer.Argument(..., help="Model id, e.g. anthropic/claude-sonnet-5"),
-        provider: str = typer.Option("", "--provider", "-p", help="Provider whose credential serves it"),
+        model: str = typer.Argument(..., help="Model id, e.g. claude-sonnet-5"),
+        provider: str = typer.Option("", "--provider", "-p", help="Required: the provider whose credential serves it"),
     ):
-        """Make this the model the agent runs on.
+        """Make this the model the agent runs on. Requires --provider.
+
+        The pair, not the id alone: `openrouter` serving
+        `anthropic/claude-haiku-4-5` and `anthropic` serving
+        `claude-haiku-4-5` are both real and bill different accounts, and an id
+        cannot tell them apart. `raven provider list` shows the configured ones.
 
         Changing it used to mean re-running the whole wizard: the TUI picker and
         onboarding could both switch models and the CLI could not, so a user on a

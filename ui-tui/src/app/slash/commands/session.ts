@@ -83,7 +83,7 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'change or show model',
+    help: 'change model: <provider> <id>, or nothing to pick; --default sets new sessions',
     name: 'model',
     run: (arg, ctx) => {
       // No busy guard: the server captures the binding at turn entry, so a
