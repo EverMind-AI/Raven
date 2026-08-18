@@ -102,8 +102,10 @@ describe('createSlashHandler', () => {
 
     expect(createSlashHandler(ctx)('/model some-model --default')).toBe(true)
     expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    // Both spellings keep the flag: this assertion used to pin the version that
+    // dropped it, so following our own advice quietly downgraded the scope.
     expect(ctx.transcript.sys).toHaveBeenCalledWith(
-      '/model needs a provider. Run /model to pick one, or: /model <provider> some-model'
+      '/model needs a provider. Run /model --default to pick one, or: /model <provider> some-model --default'
     )
   })
 
@@ -204,6 +206,37 @@ describe('createSlashHandler', () => {
     const picker = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
     expect(createSlashHandler(picker)('/model --default')).toBe(true)
     expect(picker.gateway.rpc).not.toHaveBeenCalled()
+  })
+
+  it('carries --default into the picker it opens', () => {
+    // Dropped here, the picker's selection was a session-scoped switch while
+    // looking like it had changed the default. `useMainApp.onModelSelect` reads
+    // this value back to append the flag.
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+
+    expect(createSlashHandler(ctx)('/model --default')).toBe(true)
+    expect(getOverlayState().modelPicker).toBe('default')
+
+    resetOverlayState()
+    expect(createSlashHandler(ctx)('/model')).toBe(true)
+    expect(getOverlayState().modelPicker).toBe(true)
+  })
+
+  it('keeps --default in the refusal it tells the user to follow', () => {
+    // The refusal is advice, and advice that silently downgrades the scope is
+    // worse than no advice: the user follows it and is told the switch worked.
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+
+    expect(createSlashHandler(ctx)('/model gpt-4.1 --default')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+
+    const said = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
+    expect(said).toContain('/model <provider> gpt-4.1 --default')
+
+    const plain = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+    expect(createSlashHandler(plain)('/model gpt-4.1')).toBe(true)
+    const plainSaid = (plain.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
+    expect(plainSaid).not.toContain('--default')
   })
 
   it('parses a --provider suffix into a structured provider param', async () => {

@@ -824,10 +824,17 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [overlay.confirm, respondWith]
   )
 
-  const onModelSelect = useCallback((model: string, providerSlug: string) => {
-    patchOverlayState({ modelPicker: false })
-    slashRef.current(`/model ${model} --provider ${providerSlug}`)
-  }, [])
+  const onModelSelect = useCallback(
+    (model: string, providerSlug: string) => {
+      // Read the pending scope before clearing it: `/model --default` opens the
+      // picker, and without carrying the flag through here the selection was a
+      // session-scoped switch that looked like it had changed the default.
+      const asDefault = overlay.modelPicker === 'default'
+      patchOverlayState({ modelPicker: false })
+      slashRef.current(`/model ${model} --provider ${providerSlug}${asDefault ? ' --default' : ''}`)
+    },
+    [overlay.modelPicker]
+  )
 
   const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
 

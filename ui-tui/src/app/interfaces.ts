@@ -87,7 +87,10 @@ export interface OverlayState {
   approval: ApprovalReq | null
   clarify: ClarifyReq | null
   confirm: ConfirmReq | null
-  modelPicker: boolean
+  // `'default'` is `/model --default` with no id: the picker is open and the
+  // selection it makes must change the new-session default, not this
+  // conversation. Plain `true` is the session-scoped open.
+  modelPicker: boolean | 'default'
   pager: null | PagerState
   picker: boolean
   secret: null | SecretReq

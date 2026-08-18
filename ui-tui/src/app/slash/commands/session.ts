@@ -96,8 +96,11 @@ export const sessionCommands: SlashCommand[] = [
       const asDefault = /(^|\s)--default(\s|$)/.test(raw)
       const rest = raw.replace(/(^|\s)--default(?=\s|$)/g, '').trim()
       if (!rest) {
-        // `/model` and `/model --default` both mean "show me the choices".
-        return patchOverlayState({ modelPicker: true })
+        // `/model` and `/model --default` both mean "show me the choices" --
+        // but not the same choices, so the flag rides into the overlay state
+        // rather than being dropped here. Selecting a row used to send a
+        // session-scoped switch either way, which looked like it had worked.
+        return patchOverlayState({ modelPicker: asDefault ? 'default' : true })
       }
 
       const { provider, value } = parseModelArg(rest)
@@ -105,7 +108,13 @@ export const sessionCommands: SlashCommand[] = [
       if (!provider) {
         // Not a picker with the id pre-filled, and not a "there is only one
         // candidate so I picked it": both are the guess this refuses to make.
-        return ctx.transcript.sys(`/model needs a provider. Run /model to pick one, or: /model <provider> ${value}`)
+        // The flag rides into the suggestion. Without it the user follows our
+        // own advice, lands a session-scoped switch, and is told `model → x`
+        // for a default they asked to change and did not.
+        return ctx.transcript.sys(
+          `/model needs a provider. Run /model${asDefault ? ' --default' : ''} to pick one, ` +
+            `or: /model <provider> ${value}${asDefault ? ' --default' : ''}`
+        )
       }
 
       ctx.gateway
@@ -114,7 +123,7 @@ export const sessionCommands: SlashCommand[] = [
           session_id: ctx.sid,
           scope: asDefault ? 'default' : 'session',
           value,
-          ...(provider ? { provider } : {})
+          provider
         })
         .then(
           ctx.guarded<ConfigSetResponse>(r => {
@@ -142,7 +151,6 @@ export const sessionCommands: SlashCommand[] = [
             }
           })
         )
-        .catch(ctx.guardedErr)
         // Without this the rejection is unhandled, and setupGracefulExit writes
         // it raw to stderr over the Ink render: `/model` typed before the first
         // session.create resolves is refused by the server (session scope with
