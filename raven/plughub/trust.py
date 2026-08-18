@@ -360,6 +360,46 @@ def _check_runner_args(args: Any) -> None:
         raise HubTrustError("catalog entry names no package for its runner to execute")
 
 
+# The URLs an oauth block may name, in both spellings config.json accepts. Every
+# one is somewhere raven will send an authorization code or ask for a token, so
+# the catalogue does not get to point them at plaintext.
+_OAUTH_URL_KEYS = (
+    "issuer",
+    "authorization_endpoint",
+    "authorizationEndpoint",
+    "token_endpoint",
+    "tokenEndpoint",
+    "registration_endpoint",
+    "registrationEndpoint",
+    "resource",
+    "redirect_uri",
+    "redirectUri",
+)
+
+
+def _check_oauth(oauth: Any) -> None:
+    """The authorization-server facts a catalogue entry may pre-declare.
+
+    Two rules. Every URL is https (or loopback plaintext, which is what the
+    redirect is), because these are where an authorization code goes and where a
+    token comes back. And no client secret: raven authorizes as a public client,
+    so a secret arriving from a catalogue would be a shared secret published to
+    every user -- not a credential, just a value that makes the flow look
+    confidential while being anything but.
+    """
+    if oauth is None:
+        return
+    if not isinstance(oauth, dict):
+        raise HubTrustError("catalog entry 'oauth' must be an object")
+    for key in ("client_secret", "clientSecret"):
+        if oauth.get(key):
+            raise HubTrustError("catalog entry may not carry an oauth client secret; raven is a public client")
+    for key in _OAUTH_URL_KEYS:
+        value = oauth.get(key)
+        if value:
+            require_https(str(value), what=f"catalog entry oauth {key}")
+
+
 def validate_mcp_connection(cfg: dict) -> dict:
     """Return ``cfg`` unchanged, or raise :class:`HubTrustError`.
 
@@ -368,6 +408,7 @@ def validate_mcp_connection(cfg: dict) -> dict:
     """
     _check_env(cfg.get("env"))
     _check_headers(cfg.get("headers"))
+    _check_oauth(cfg.get("oauth"))
 
     kind = str(cfg.get("type") or "stdio")
     if kind == "stdio":

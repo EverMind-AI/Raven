@@ -823,6 +823,40 @@ class DeepResearchToolConfig(Base):
     model: str = ""  # defaults to mirothinker-1-7-deepresearch-mini
 
 
+class MCPOAuthConfig(Base):
+    """What an ``auth="oauth"`` server's authorization server already told us.
+
+    Every field restates something the OAuth handshake would otherwise learn
+    over the network: the RFC 8414 metadata document (``issuer`` through
+    ``scopes``), the RFC 9728 protected-resource document (``resource``,
+    ``scopes``), and an RFC 7591 registration's result (``client_id``). Filling
+    them in lets a connect go straight to the consent page; leaving them empty
+    is the discovery-and-register path, unchanged.
+
+    Written by a market install from the catalog entry, and hand-editable. Facts
+    only -- never a client secret: raven authorizes as a public client, and a
+    secret in ``config.json`` would be a secret in a world-readable file.
+    """
+
+    issuer: str = ""
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    registration_endpoint: str = ""
+    scopes: list[str] = Field(default_factory=list)
+    resource: str = ""
+    """The RFC 8707 audience the tokens are for. Seeding the protected-resource
+    document needs it, and it is checked against the server URL before use --
+    a value that moves the audience is refused rather than trusted."""
+    client_id: str = ""
+    """A client already registered with this service, so registration is skipped
+    and the consent page can name the service's own app instead of "Raven"."""
+    redirect_uri: str = ""
+    """The redirect ``client_id`` is registered under. Required with it, and
+    honoured exactly: raven's loopback port can move, and a pre-registered
+    client whose redirect no longer matches would send the browser to a port
+    nobody is listening on."""
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -841,6 +875,7 @@ class MCPServerConfig(Base):
     # to distinguish it: an apikey server that fails is broken, an oauth server
     # that fails may just be waiting for a human.
     auth: Literal["none", "apikey", "oauth"] = "none"
+    oauth: MCPOAuthConfig = Field(default_factory=MCPOAuthConfig)
 
 
 class ToolSearchConfig(Base):

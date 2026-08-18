@@ -389,3 +389,258 @@ async def test_a_superseded_authorization_link_goes_stale_immediately():
     matched, page = resolve_callback({"state": "old-state", "code": "c"})
     assert matched is False
     assert "stale" in page
+
+
+# ---------------------------------------------------------------------------
+# catalog-carried authorization-server facts: what stays off the wire, and
+# what happens when the facts are wrong
+# ---------------------------------------------------------------------------
+
+SERVER_URL = "https://mcp.example/mcp"
+PRM_URL = "https://mcp.example/.well-known/oauth-protected-resource/mcp"
+ENDPOINTS = {
+    "issuer": "https://as.example",
+    "authorization_endpoint": "https://as.example/authorize",
+    "token_endpoint": "https://as.example/token",
+    "registration_endpoint": "https://as.example/register",
+    "scopes": ["read"],
+    "resource": SERVER_URL,
+}
+
+
+def _server_cfg(url: str = SERVER_URL, **endpoints):
+    from raven.config.schema import MCPOAuthConfig, MCPServerConfig
+
+    return MCPServerConfig(url=url, auth="oauth", oauth=MCPOAuthConfig(**endpoints))
+
+
+def _unauthorized(request):
+    return httpx.Response(
+        401,
+        headers={"WWW-Authenticate": f'Bearer realm="OAuth", resource_metadata="{PRM_URL}"'},
+        request=request,
+    )
+
+
+async def _requests_before_the_browser(provider, *, replies=None):
+    """Drive one auth flow through the 401 and collect what it puts on the wire.
+
+    ``replies`` answers requests by URL; anything unanswered ends the drive, so
+    a test asserts on the request it stopped at.
+    """
+    replies = replies or {}
+    seen: list[str] = []
+    first = httpx.Request("POST", SERVER_URL)
+    flow = provider.async_auth_flow(first)
+    try:
+        outgoing = await flow.asend(None)
+        seen.append(str(outgoing.url))
+        reply = _unauthorized(outgoing)
+        while True:
+            outgoing = await flow.asend(reply)
+            seen.append(str(outgoing.url))
+            canned = replies.get(str(outgoing.url))
+            if canned is None:
+                return seen
+            reply = httpx.Response(200, json=canned, request=outgoing)
+    finally:
+        await flow.aclose()
+
+
+@pytest.fixture
+def _fixed_callback(monkeypatch):
+    monkeypatch.delenv(mcp_oauth.NO_SEED_ENV, raising=False)
+    monkeypatch.setattr(mcp_oauth, "_callback_base", "http://127.0.0.1:18792")
+    yield
+
+
+async def test_catalog_endpoints_keep_discovery_off_the_wire(_fixed_callback):
+    """The two discovery documents come from the config, so the browser opens
+    one round trip after the 401 instead of three."""
+    provider = await mcp_oauth.provider_for("srv", _server_cfg(**ENDPOINTS))
+    seen = await _requests_before_the_browser(provider)
+
+    assert not any("/.well-known/" in url for url in seen), seen
+    assert seen[-1] == "https://as.example/register"
+    assert str(provider.context.oauth_metadata.token_endpoint) == "https://as.example/token"
+    assert provider.context.protected_resource_metadata is not None
+    assert provider.context.client_metadata.scope == "read"
+
+
+async def test_a_server_without_catalog_endpoints_discovers_exactly_as_before(_fixed_callback):
+    from mcp.client.auth import OAuthClientProvider
+
+    provider = await mcp_oauth.provider_for("srv", _server_cfg())
+    assert type(provider) is OAuthClientProvider
+
+    seen = await _requests_before_the_browser(provider)
+    assert seen[-1] == PRM_URL
+
+
+async def test_the_kill_switch_puts_discovery_back_on_the_wire(monkeypatch, _fixed_callback):
+    monkeypatch.setenv(mcp_oauth.NO_SEED_ENV, "1")
+    provider = await mcp_oauth.provider_for("srv", _server_cfg(**ENDPOINTS))
+    seen = await _requests_before_the_browser(provider)
+    assert seen[-1] == PRM_URL
+
+
+async def test_endpoints_the_server_refuses_are_distrusted_next_time(_fixed_callback):
+    """A wrong entry costs one round trip, not a broken authorization.
+
+    The registration the seeded metadata pointed at 404s; the next connect for
+    the same server discovers instead of trusting the same facts again.
+    """
+    cfg = _server_cfg(**ENDPOINTS)
+    provider = await mcp_oauth.provider_for("srv", cfg)
+    first = httpx.Request("POST", SERVER_URL)
+    flow = provider.async_auth_flow(first)
+    outgoing = await flow.asend(None)
+    registration = await flow.asend(_unauthorized(outgoing))
+    assert str(registration.url) == "https://as.example/register"
+    with pytest.raises(Exception, match="[Rr]egistration"):
+        await flow.asend(httpx.Response(404, request=registration))
+    await flow.aclose()
+
+    from mcp.client.auth import OAuthClientProvider
+
+    retry = await mcp_oauth.provider_for("srv", cfg)
+    assert type(retry) is OAuthClientProvider
+    assert (await _requests_before_the_browser(retry))[-1] == PRM_URL
+
+
+async def test_corrected_endpoints_are_believed_again(_fixed_callback):
+    """The distrust is keyed to the facts that failed, not to the server."""
+    cfg = _server_cfg(**ENDPOINTS)
+    storage = FileTokenStorage("srv", REDIRECT)
+    storage.disarm_seed(mcp_oauth._fingerprint(cfg.oauth))
+    assert type(await mcp_oauth.provider_for("srv", cfg)).__name__ == "OAuthClientProvider"
+
+    fixed = _server_cfg(**{**ENDPOINTS, "registration_endpoint": "https://as.example/v2/register"})
+    seen = await _requests_before_the_browser(await mcp_oauth.provider_for("srv", fixed))
+    assert seen[-1] == "https://as.example/v2/register"
+
+
+async def _answer_the_silent_refresh(cfg, reply: httpx.Response | None = None, **response_kw):
+    """Drive a connect whose first request is the SDK's silent refresh.
+
+    The seeded ``token_endpoint`` here is the one the SDK computes on its own
+    when ``oauth_metadata`` is still None, which is what the shipped entries
+    look like on a cold start -- so the refusal lands on a watched URL.
+    """
+    storage = FileTokenStorage("srv", REDIRECT)
+    await storage.set_tokens(_tokens(expires_in=-1))
+    provider = await mcp_oauth.provider_for("srv", cfg)
+    flow = provider.async_auth_flow(httpx.Request("POST", SERVER_URL))
+    try:
+        refresh = await flow.asend(None)
+        assert str(refresh.url) == cfg.oauth.token_endpoint, str(refresh.url)
+        await flow.asend(reply or httpx.Response(request=refresh, **response_kw))
+    finally:
+        await flow.aclose()
+
+
+REFRESHABLE = {**ENDPOINTS, "token_endpoint": "https://mcp.example/token", "client_id": "pub-client"}
+
+
+async def test_a_dead_refresh_token_does_not_disarm_the_seed(_fixed_callback):
+    """`400 invalid_grant` is the most routine event in a token's life.
+
+    It says the stored refresh_token is finished, not that the catalog entry is
+    wrong; disarming on it would retire the optimization on every server whose
+    tokens ever expire out from under raven.
+    """
+    cfg = _server_cfg(**REFRESHABLE, redirect_uri=REDIRECT)
+    await _answer_the_silent_refresh(cfg, status_code=400, json={"error": "invalid_grant"})
+
+    assert not FileTokenStorage("srv", REDIRECT).seed_disarmed(mcp_oauth._fingerprint(cfg.oauth))
+    again = await mcp_oauth.provider_for("srv", cfg)
+    assert type(again).__name__ == "SeededOAuthClientProvider"
+
+
+async def test_a_token_endpoint_that_is_not_there_still_disarms_the_seed(_fixed_callback):
+    """The other side of the boundary: 404 is the entry naming a URL that is not
+    a token endpoint, which no re-authorization can fix."""
+    cfg = _server_cfg(**REFRESHABLE, redirect_uri=REDIRECT)
+    await _answer_the_silent_refresh(cfg, status_code=404)
+
+    assert FileTokenStorage("srv", REDIRECT).seed_disarmed(mcp_oauth._fingerprint(cfg.oauth))
+
+    from mcp.client.auth import OAuthClientProvider
+
+    assert type(await mcp_oauth.provider_for("srv", cfg)) is OAuthClientProvider
+
+
+async def _completed(code: str, state: list[str]):
+    return code, state[0]
+
+
+async def test_a_preregistered_client_skips_registration(_fixed_callback):
+    provider = await mcp_oauth.provider_for(
+        "srv", _server_cfg(**ENDPOINTS, client_id="pub-client", redirect_uri=REDIRECT)
+    )
+    state: list[str] = []
+
+    async def _redirect(url: str) -> None:
+        from urllib.parse import parse_qs, urlparse
+
+        assert url.startswith("https://as.example/authorize?")
+        state.append(parse_qs(urlparse(url).query)["state"][0])
+
+    provider.context.redirect_handler = _redirect
+    provider.context.callback_handler = lambda: _completed("code-1", state)
+
+    seen = await _requests_before_the_browser(provider)
+    assert "https://as.example/register" not in seen
+    assert seen[-1] == "https://as.example/token"
+    assert provider.context.client_info.client_id == "pub-client"
+
+
+async def test_a_preregistered_client_is_dropped_when_the_callback_port_moved(_fixed_callback):
+    """Its redirect is fixed at the service; ours walked the port ladder. Using
+    it would send the browser to a port nobody is listening on."""
+    provider = await mcp_oauth.provider_for(
+        "srv",
+        _server_cfg(**ENDPOINTS, client_id="pub-client", redirect_uri="http://127.0.0.1:19999/oauth/callback"),
+    )
+    seen = await _requests_before_the_browser(provider)
+    assert seen[-1] == "https://as.example/register"
+
+
+async def test_a_preregistered_client_survives_a_drifted_stored_registration():
+    """Drift kills a registration raven minted, not one declared against a
+    redirect that is still the one in use."""
+    store = FileTokenStorage("srv", REDIRECT)
+    await store.set_client_info(_client_info(["http://127.0.0.1:19999/oauth/callback"]))
+    assert (await store.get_client_info()) is None
+
+    store.use_preregistered_client(_client_info([REDIRECT]))
+    declared = await store.get_client_info()
+    assert declared is not None and str(declared.redirect_uris[0]) == REDIRECT
+
+
+async def test_a_resource_the_url_does_not_canonicalize_to_is_fetched_instead(_fixed_callback):
+    """The audience a token is minted for is never taken on trust: a declared
+    resource that would move it is refused, and that document goes on the wire."""
+    provider = await mcp_oauth.provider_for("srv", _server_cfg(url="https://mcp.example/sse", **ENDPOINTS))
+    prm_url = "https://mcp.example/.well-known/oauth-protected-resource/sse"
+    seen = await _requests_before_the_browser(
+        provider,
+        replies={
+            PRM_URL: {"resource": "https://mcp.example", "authorization_servers": ["https://as.example"]},
+            prm_url: {"resource": "https://mcp.example", "authorization_servers": ["https://as.example"]},
+        },
+    )
+    assert PRM_URL in seen
+    assert not any("oauth-authorization-server" in url for url in seen), seen
+    assert seen[-1] == "https://as.example/register"
+
+
+async def test_a_partial_endpoint_block_is_not_a_document(_fixed_callback):
+    """Two of the three required fields is not an RFC 8414 document, and the
+    third is not guessable -- that is what discovery is for."""
+    from mcp.client.auth import OAuthClientProvider
+
+    provider = await mcp_oauth.provider_for(
+        "srv", _server_cfg(issuer="https://as.example", token_endpoint="https://as.example/token")
+    )
+    assert type(provider) is OAuthClientProvider

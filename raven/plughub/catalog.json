@@ -273,7 +273,17 @@
             "scopes_hint": [
               "read",
               "write"
-            ]
+            ],
+            "endpoints": {
+              "issuer": "https://mcp.notion.com",
+              "authorizationEndpoint": "https://mcp.notion.com/authorize",
+              "tokenEndpoint": "https://mcp.notion.com/token",
+              "registrationEndpoint": "https://mcp.notion.com/register",
+              "scopes": [
+                "default"
+              ],
+              "resource": "https://mcp.notion.com/mcp"
+            }
           },
           "tools_preview": [
             "search",
@@ -415,7 +425,20 @@
             "scopes_hint": [
               "org:read",
               "project:read"
-            ]
+            ],
+            "endpoints": {
+              "issuer": "https://mcp.sentry.dev",
+              "authorizationEndpoint": "https://mcp.sentry.dev/oauth/authorize",
+              "tokenEndpoint": "https://mcp.sentry.dev/oauth/token",
+              "registrationEndpoint": "https://mcp.sentry.dev/oauth/register",
+              "scopes": [
+                "org:read",
+                "project:write",
+                "team:write",
+                "event:write"
+              ],
+              "resource": "https://mcp.sentry.dev/mcp"
+            }
           },
           "tools_preview": [
             "find_issues",
@@ -458,7 +481,13 @@
             "mode": "oauth",
             "scopes_hint": [
               "default"
-            ]
+            ],
+            "endpoints": {
+              "issuer": "https://mcp.asana.com",
+              "authorizationEndpoint": "https://mcp.asana.com/authorize",
+              "tokenEndpoint": "https://mcp.asana.com/token",
+              "registrationEndpoint": "https://mcp.asana.com/register"
+            }
           },
           "tools_preview": [
             "asana_create_task",
