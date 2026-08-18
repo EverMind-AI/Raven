@@ -436,12 +436,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
         "raven/agent/loop/main.py",
-        # The sub-agent loop asks the same question the main loop does, about the
-        # same tool: whether web_search resolved a Serper key, so an unusable
-        # search is withheld rather than offered and failed. It asks the built
-        # tool rather than the config because the tool resolves from either the
-        # constructor value or SERPER_API_KEY.
-        "raven/agent/subagent/backends/raven_loop.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
@@ -450,10 +444,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/cli/gateway_commands.py",
         "raven/cli/tui_commands.py",
         "raven/config/update_everos.py",
-        # The RPC surface that renders that EverOS section: the same key,
-        # reduced to a set/unset flag for the settings page. No verdict about
-        # a Raven provider is being made from it.
-        "raven/rpc/methods/console.py",
         "raven/config/update_tools.py",
         "raven/providers/transcription.py",
         # Reads a key in order to *use* it -- put it on the request, redact it
@@ -474,8 +464,8 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/providers/endpoints.py",
         "raven/cli/provider_commands.py",
         "raven/cli/status_commands.py",
-        "raven/rpc/methods/model.py",
-        "raven/rpc/methods/setup.py",
+        "raven/tui_rpc/methods/model.py",
+        "raven/tui_rpc/methods/setup.py",
         "raven/providers/azure_openai_provider.py",
         "raven/providers/base.py",
         "raven/providers/minimax_oauth_provider.py",
@@ -487,30 +477,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/evolver/judge/llm_client.py",
         "raven/plugin/memory/everos/backend.py",
         "raven/routing/generate_embeddings.py",
-        # A third-party sub-agent's own credential, not a provider section: the
-        # key goes on that agent's own Authorization header against its own
-        # base_url, so `providers.auth` has no verdict to give about it. The
-        # roster surfaces do gate on presence -- an openai entry with no key
-        # cannot answer a dispatch -- but that is a fact about one sub-agent
-        # entry, not about whether a Raven provider is set up.
-        "raven/agent/subagent/backends/__init__.py",
-        "raven/agent/subagent/backends/openai_api.py",
-        "raven/agent/subagent/probe.py",
-        "raven/rpc/methods/subagents.py",
-        # Two reads, neither an opinion on whether a Raven provider is set up.
-        # One copies this raven's OpenRouter key into a sub-agent's own `.env`, so
-        # a user who configured one in step 1 is not asked for a second copy; the
-        # verdict that the provider is usable comes from `_configured_providers`
-        # (which rules through auth) before that value is touched at all. The
-        # other mirrors `inherit_llm` in the launchers, which are stdlib-only
-        # scripts outside this package: they cannot import auth and accept only a
-        # literal key, so an OAuth host is configured by auth's rule and has
-        # nothing to lend by theirs. That question is "will inherit_llm return
-        # non-empty", and only inherit_llm's own rule answers it.
-        "raven/cli/subagent_setup.py",
-        # The skill hub's endpoint credential, read to store or forward it.
-        "raven/config/update_skills.py",
-        "raven/web_rpc/methods_config.py",
     }
 
     names = {"api_key", "api_key_list", "apiKey", "apiKeyList"}

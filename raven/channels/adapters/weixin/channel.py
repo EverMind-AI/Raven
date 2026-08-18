@@ -57,19 +57,9 @@ class WeixinChannel(ChannelBase):
         self._state_dir: Path | None = None
         self._poll_timeout_s: int = p.DEFAULT_LONG_POLL_TIMEOUT_S
         self._session_pause_until: float = 0.0
-        # The login QR (a scan URL) currently awaiting a scan, exposed so the web
-        # UI can render it instead of the user reading the gateway log. None once
-        # login is confirmed or the flow gives up.
-        self.pending_qr: str | None = None
         # The lambda resolves _post at call time (don't capture the bound
         # method: tests replace ch._post and the indicator must follow).
         self._typing = TypingIndicator(post=lambda *a, **kw: self._post(*a, **kw))
-
-    @property
-    def connected(self) -> bool:
-        """Whether an auth token is held, as opposed to the channel task merely
-        running (which is true before the login QR is even fetched)."""
-        return bool(self._token)
 
     # ── state persistence ─────────────────────────────────────────────
 
@@ -175,7 +165,6 @@ class WeixinChannel(ChannelBase):
     async def _qr_login(self) -> bool:
         try:
             qrcode_id, scan_url = await self._fetch_qr()
-            self.pending_qr = scan_url
             self._print_qr(scan_url)
             poll_base = self.config.base_url
             refreshes = 0
@@ -207,7 +196,6 @@ class WeixinChannel(ChannelBase):
                     if status_data.get("baseurl"):
                         self.config.base_url = status_data["baseurl"]
                     self._save_state()
-                    self.pending_qr = None
                     logger.info(
                         "login successful (bot_id={} user_id={})",
                         status_data.get("ilink_bot_id", ""),
@@ -226,7 +214,6 @@ class WeixinChannel(ChannelBase):
                         logger.warning("QR code expired too many times, giving up")
                         return False
                     qrcode_id, scan_url = await self._fetch_qr()
-                    self.pending_qr = scan_url
                     poll_base = self.config.base_url
                     self._print_qr(scan_url)
                     continue
@@ -249,7 +236,6 @@ class WeixinChannel(ChannelBase):
             return await self._qr_login()
         finally:
             self._running = False
-            self.pending_qr = None
             await self._close_client()
 
     # ── lifecycle ─────────────────────────────────────────────────────

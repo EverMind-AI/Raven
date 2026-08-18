@@ -571,14 +571,9 @@ def _turn_input(bound: dict[str, Any]) -> Any:
 
 
 def turn_seed(bound: dict[str, Any]) -> dict[str, Any]:
-    """Seed the root turn span's session identity so every child span inherits it.
-
-    ``surface`` rides along when the request's connection declared one (see
-    ``Source.surface``); ``None`` leaves the span on the process-wide fallback.
-    """
+    """Seed the root turn span's session identity so every child span inherits it."""
     sk, channel, chat_id = _turn_ids(bound)
-    surface = getattr(getattr(_turn_request(bound), "source", None), "surface", None)
-    return {"session_key": sk, "channel": channel, "chat_id": chat_id, "surface": surface}
+    return {"session_key": sk, "channel": channel, "chat_id": chat_id}
 
 
 def turn_open(span, bound: dict[str, Any]) -> None:

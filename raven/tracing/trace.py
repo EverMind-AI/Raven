@@ -59,15 +59,12 @@ class Span:
         "_session_key",
         "_channel",
         "_chat_id",
-        "_surface",
         "_perf0",
         "_cancelled",
         "_source",
     )
 
-    def __init__(
-        self, name, kind, *, trace_id, span_id, parent, session_key, channel, chat_id, start, source=None, surface=None
-    ):
+    def __init__(self, name, kind, *, trace_id, span_id, parent, session_key, channel, chat_id, start, source=None):
         self.name = name
         self.kind = kind
         self.trace_id = trace_id
@@ -76,7 +73,6 @@ class Span:
         self._session_key = session_key
         self._channel = channel
         self._chat_id = chat_id
-        self._surface = surface
         self._start = start
         self._source = source
         self._perf0 = time.monotonic()
@@ -165,7 +161,6 @@ class Span:
                     session_key=self._session_key,
                     channel=self._channel,
                     chat_id=self._chat_id,
-                    surface=self._surface,
                     start_time=self._start,
                     end_time=_spans.now_iso(),
                     status_code=self._status_code,
@@ -221,7 +216,6 @@ def span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
-    surface: str | None = None,
     detached: bool = False,
     **kw,
 ) -> Iterator[Any]:
@@ -245,7 +239,6 @@ def span(
         session_key = session_key if session_key is not None else (cur.session_key if cur else None)
         channel = channel if channel is not None else (cur.channel if cur else None)
         chat_id = chat_id if chat_id is not None else (cur.chat_id if cur else None)
-        surface = surface if surface is not None else (cur.surface if cur else None)
         span_id = _ctx.new_span_id()
         handle = Span(
             name,
@@ -256,7 +249,6 @@ def span(
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
-            surface=surface,
             start=_spans.now_iso(),
             source=cur.source if cur else None,
         )
@@ -276,7 +268,6 @@ def span(
                 session_key=session_key,
                 channel=channel,
                 chat_id=chat_id,
-                surface=surface,
             )
         )
     except Exception:  # noqa: BLE001 — open must never break the host
@@ -304,7 +295,6 @@ def span(
                         session_key=handle._session_key,
                         channel=handle._channel,
                         chat_id=handle._chat_id,
-                        surface=handle._surface,
                         start_time=handle._start,
                         end_time=_spans.now_iso(),
                         status_code=handle._status_code,

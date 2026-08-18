@@ -63,11 +63,3 @@ def test_media_carries_path_mime_kind_and_is_frozen():
     assert (m.path, m.mime, m.kind) == ("/tmp/a.jpg", "image/jpeg", "image")
     with pytest.raises(dataclasses.FrozenInstanceError):
         m.path = "/tmp/b.jpg"
-
-
-def test_source_surface_defaults_to_undeclared():
-    # Every existing constructor call keeps working unchanged; the field only
-    # exists for connections that named their front end at handshake.
-    s = Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM)
-    assert s.surface is None
-    assert Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM, surface="page").surface == "page"

@@ -295,7 +295,7 @@ class _StubProvider:
 
 @pytest.mark.asyncio
 async def test_discoverer_records_dispatched_into_feedback(tmp_path: Path):
-    workspace = tmp_path / "chanwork"
+    workspace = tmp_path / "ws"
     (workspace / "memory").mkdir(parents=True)
     memory = MemoryStore(workspace)
     memory.write_long_term("## User Information\n- name: Alice")

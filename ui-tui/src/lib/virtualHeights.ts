@@ -5,9 +5,8 @@
 
 import type { Msg } from '../types.js'
 
-import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { groupTools } from '../domain/episodeSummary.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
-import { hasMeaningfulReasoning } from './reasoning.js'
 import { boundedHistoryRenderText } from './text.js'
 
 const hashText = (text: string) => {
@@ -34,7 +33,12 @@ export const messageHeightKey = (msg: Msg) => {
   // the cache key — otherwise a stale height survives a step-count change.
   const epSig =
     msg.episodes
-      ?.map(ep => `${ep.narration?.length ?? 0}:${ep.tools.map(tool => foldedPreviewRows(tool) + 1).join(',')}`)
+      ?.map(
+        ep =>
+          `${ep.narration?.length ?? 0}:${ep.tools
+            .map(tool => (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length + 1 : 1))
+            .join(',')}`
+      )
       .join('\u0001') ?? ''
 
   return [
@@ -91,26 +95,41 @@ export const estimatedMsgHeight = (
   // virtualized transcript reserve too few rows and leave stale cells behind.
   if (msg.kind === 'episodes') {
     let h = 0
+    // episodeView spaces a step from the previous one with marginTop={1} when
+    // that previous step showed tool rows. Counting no row for it is what keeps
+    // this estimate low, and a low estimate is the stale-cell symptom.
+    let prevShowedTools = false
 
-    // A committed message is never live and never opened at first paint, so
-    // every stretch of work is exactly one row and every talk segment is its
-    // reasoning row plus its wrapped prose. episodeView separates segments with
-    // marginTop={1}; counting no row for that is what keeps the estimate low,
-    // and a low estimate is the stale-cell symptom.
-    for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
-      h += i > 0 ? 1 : 0
+    for (const ep of msg.episodes ?? []) {
+      const narration = (ep.narration ?? '').trim()
 
-      if (seg.kind === 'work') {
+      if (prevShowedTools) {
+        h++
+      }
+
+      prevShowedTools = ep.tools.length > 0
+
+      // A step with no narration collapses to a single summary row.
+      if (!narration) {
         h++
         continue
       }
 
-      const narration = (seg.episode.narration ?? '').trim()
-      const reasoning = (seg.episode.reasoning ?? '').trim()
+      // reasoning row + blank line + wrapped prose
+      h += 2 + wrappedLines(narration, bodyWidth)
 
-      // reasoning row (+ its own blank line above the prose)
-      h += hasMeaningfulReasoning(reasoning) ? 2 : 0
-      h += narration ? wrappedLines(narration, bodyWidth) : 0
+      if (ep.tools.length) {
+        h++ // blank line above the tool block
+
+        for (const group of groupTools(ep.tools)) {
+          // A multi-call run adds a header row above its children.
+          h += group.length > 1 ? 1 : 0
+          for (const tool of group) {
+            // 1 row for the call + one row per reported result line.
+            h += 1 + (tool.resultPreview ? tool.resultPreview.split('\n').filter(Boolean).length : 0)
+          }
+        }
+      }
     }
 
     if (msg.text) {

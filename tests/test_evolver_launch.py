@@ -421,7 +421,7 @@ class TestBatchTrialResume:
 
         class Args:
             config = "unused"
-            workspace = str(tmp_path / "chanwork")
+            workspace = str(tmp_path / "ws")
             experiment = "e"
             model = None
             env = ""
@@ -443,7 +443,7 @@ class TestBatchTrialResume:
 
         class Args:
             config = "unused"
-            workspace = str(tmp_path / "chanwork")
+            workspace = str(tmp_path / "ws")
             experiment = "e"
             model = None
             env = ""

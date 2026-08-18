@@ -472,24 +472,14 @@ class BoxliteExecutor(SandboxExecutor):
         return read_recv, write_send
 
     def _translate_cwd(self, cwd: str | None) -> str:
-        """Map a host path to its VM mount path.
-
-        Checks the primary workspace mount first, then each extra volume, so
-        a cwd under a second mounted root (e.g. agent home, mounted separately
-        when it isn't already covered by the workspace mount) also translates
-        instead of silently landing at /workspace.
-        """
+        """Map host workspace path → VM /workspace/... path."""
         if cwd is None:
             return self.WORKSPACE_MOUNT
         host_path = Path(cwd).resolve()
-        roots = [(self._workspace, self.WORKSPACE_MOUNT)]
-        roots.extend((Path(host), guest) for host, guest, _mode in self._extra_volumes)
-        for host_root, guest_root in roots:
-            try:
-                rel = host_path.relative_to(host_root.resolve())
-            except ValueError:
-                continue
+        try:
+            rel = host_path.relative_to(self._workspace.resolve())
             rel_str = str(rel)
-            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
-        logger.warning("cwd '%s' is outside every mounted volume; falling back to /workspace", cwd)
-        return self.WORKSPACE_MOUNT
+            return self.WORKSPACE_MOUNT if rel_str == "." else f"{self.WORKSPACE_MOUNT}/{rel_str}"
+        except ValueError:
+            logger.warning("cwd '%s' is outside workspace; falling back to /workspace", cwd)
+            return self.WORKSPACE_MOUNT

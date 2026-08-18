@@ -50,21 +50,10 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       continue
     }
 
-    const { context, duration_ms: durationMs, name, role, text } = row as TranscriptRow
+    const { context, name, role, text } = row as TranscriptRow
 
     if (role === 'tool') {
-      // The stored span, so a resumed trail line carries the same "(1.2s)" the
-      // live one did. Absent on an entry written before it was recorded --
-      // undefined, which prints no clock rather than a "(0.0s)" nothing ran in.
-      pending.push(
-        buildToolTrailLine(
-          name ?? 'tool',
-          context ?? '',
-          undefined,
-          undefined,
-          durationMs != null ? durationMs / 1000 : undefined
-        )
-      )
+      pending.push(buildToolTrailLine(name ?? 'tool', context ?? ''))
 
       continue
     }
@@ -102,7 +91,6 @@ interface ImageMeta {
 
 interface TranscriptRow {
   context?: string
-  duration_ms?: number
   name?: string
   role?: string
   text?: string

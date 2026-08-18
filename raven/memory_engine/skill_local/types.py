@@ -32,11 +32,6 @@ class SkillMeta:
     always: bool = False
     """Whether to force-inject into the system prompt every turn."""
 
-    inject: str = "full"
-    """How an ``always`` skill occupies the prompt: ``full`` body, or
-    ``description`` (a digest entry pointing at SKILL.md). Ignored when
-    ``always`` is false — routed skills always arrive as full bodies."""
-
     requires: dict = field(default_factory=dict)
     """Dependency declarations: ``{"bins": [...], "env": [...]}``."""
 

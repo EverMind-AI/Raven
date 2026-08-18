@@ -5,7 +5,7 @@
 > ChatStream, Composer, Slash Command System, …) — owner @sheng.zhao to select.
 
 The terminal front-end (`ui-tui/`, React/Ink). Renders the chat transcript and overlays;
-talks to the Runtime only via the RPC protocol. Single-session per client in v0.1.
+talks to the Runtime only via TUI-RPC. Single-session per client in v0.1.
 
 ## Language
 
@@ -19,33 +19,6 @@ overlay-store kind.
 The UI element rendering one transcript row in the chat view.
 _Avoid_: "chat stream" for the UI — chat stream is the data feed it renders
 
-**Episode**:
-One model call within a turn, opened by an `episode.start` event: its reasoning, its
-narration, and the tools it called. A turn is a list of episodes plus the final answer.
-_Avoid_: "turn" for a single call — a turn holds many episodes.
-
-**Segment**:
-What `EpisodeView` renders a turn as: an alternating stream of `talk` (one episode's
-reasoning and narration) and `work`. Episodes are the wire model; segments are the
-reading model.
-
-**Work Segment**:
-Every call made between two things the model said — so it spans episode boundaries.
-Folded it is one row ("listed .raven, read TOOLS.md, ran 4 commands (2.4s)"); opened, one
-row per call; a call opens further into its Detail Block. A single-call segment skips the
-middle depth, since its folded row already names the call.
-_Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this replaces.
-
-**Detail Block**:
-A call's full argument and its output, rendered on a filled background (a `▏` rule below
-256 colors). The only place the raw command, path, or URL appears; rows above it carry
-short labels only.
-
-**Activity Row**:
-A dim row naming machine work, with an inline duration and no fold glyph. Expandability is
-a property of the activity column, not marked per row; a failure is shown by coloring the
-row red, not by a marker.
-
 **Status Bar**:
 The status rule at the top or bottom of the layout, rendered by the `StatusRule` component;
 placement is set by `StatusBarMode` (`top` | `bottom` | `off`).
@@ -54,49 +27,6 @@ _Avoid_: "StatusRulePane" — the exported component is `StatusRule`, there is n
 **Agents Overlay**:
 The overlay showing the subagent tree (`SubagentNode` hierarchy with subtree
 token/cost aggregates); opened with `/agents`, including for past turns by history index.
-
-**Subagents Overlay**:
-The overlay for configuring third-party sub-agents - listing them by whether they can
-actually run, adding one from a preset, enabling, testing and deleting; opened with
-`/subagents`. A row with no binary on the login shell PATH is collected behind a single
-not-installed entry at the foot of the roster, which opens a list of its own. An un-added
-preset there is read-only, since there is nothing to configure until the binary exists; a
-configured agent whose binary went missing keeps every action, so a broken one can still
-be edited or removed. Only cli rows are filed that way - an openai row is placed on
-whether it was saved, so a preset needing just an api key stays directly addable. It edits
-`~/.raven/config.json` and hot-applies the result, so it changes what the model may
-dispatch to. Not to be confused with the Agents Overlay, which shows live delegation state
-and writes nothing.
-
-**Direct Chat** (`ui-tui/src/app/directChatStore.ts`):
-The mode in which the chat view is taken over by one sub-agent instance's own
-conversation: same composer, that instance's transcript, Esc to return. Tracked in
-`directChatStore`'s `active` field; `null` means the main Raven conversation. A direct-chat
-turn is `turn.send` with a `target`, and is never written to the session transcript - the
-main agent learns of it only through the Handoff Block. Its events are routed by their own
-`target`, not by which view is on screen, because Esc leaves without stopping the turn. The
-reply arrives as `token.delta` either way: an instance whose transport supports Reply
-Streaming fills the view as it answers, one whose transport does not lands in a single
-frame at the end, and the view treats both identically. Each instance runs on its own lane,
-so several can be answering at once and you can talk to one while another writes; what is
-refused is a *second* prompt to the instance already mid-reply, which would serialise on that
-instance's handle anyway. A sub-agent's turn is not cancellable: Ctrl+C means the main
-agent's turn, as it always did.
-_Avoid_: "sub-agent session" - that is the CLI-side session a handle resumes, not this view.
-
-**Instance Chip** (`ui-tui/src/components/instanceChips.tsx`):
-One entry in the strip above the composer, naming a sub-agent instance this session has
-used and switching to its Direct Chat when selected. The first chip is always the way back
-to the main agent, and it and the active chip are the two the strip never truncates away.
-Two independent marks: the chip you are *on* is painted in the theme's accent, and a chip
-whose instance is *replying* carries a bullet - the second can be any chip, including one
-you are not looking at. Ordered by when each instance first appeared and never resorted, so
-the accent never slides sideways while several instances answer at once. Drawn from the
-instance registry, re-read after any event that could have moved it; a *failed* re-read
-leaves the strip as it was rather than emptying it, since a quiet rpc reports "the call
-failed" and "there is nothing" the same way.
-_Avoid_: "agent chip" - a chip is one *instance* of an agent, and one agent can have
-several.
 
 **Confirm Overlay**:
 The countdown overlay a destructive Confirm Round-Trip presents; the answer resolves

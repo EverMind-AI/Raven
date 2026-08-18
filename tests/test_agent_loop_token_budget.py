@@ -61,13 +61,7 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     budget = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
 
     assert budget.reserved_output == 64_000, "what the reply may actually use"
-    # 129_000 rather than 130_000: `run_subagent_dag` is registered on every
-    # install now (the agent table always holds the built-in rows, so its roster is
-    # never empty), and its schema plus roster is about 1.5k tokens of tool
-    # surface a default install did not carry before. The bound here is about
-    # history not being squeezed toward zero, which is what the measured 0 in the
-    # docstring was; the exact figure moves whenever a tool is added.
-    assert budget.available_history > 129_000
+    assert budget.available_history > 130_000
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:

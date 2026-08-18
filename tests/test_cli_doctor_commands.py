@@ -23,15 +23,6 @@ from raven.config.schema import Config
 runner = CliRunner()
 
 
-@pytest.fixture(autouse=True)
-def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """`doctor` now inspects the installation on every run, which reads -- and
-    can clear -- the upgrade marker in the agent home. Left unisolated, this
-    file would report on, and tidy up after, a real upgrade in flight."""
-    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "agent-home"))
-    return tmp_path / "agent-home"
-
-
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     """Point the loader at a tmp config file; tests opt-in via save_config."""
@@ -431,11 +422,7 @@ def _run_doctor_subprocess(home: Path) -> tuple[str, int]:
     import subprocess
     import sys
 
-    # RAVEN_HOME is dropped rather than passed through: the point of this helper
-    # is a sandbox HOME, and an inherited RAVEN_HOME (the isolation fixture sets
-    # one) would out-rank it and send the subprocess to a different config.
-    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
-    env.update({"HOME": str(home), "COLUMNS": "250"})
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor"],
         stdin=subprocess.DEVNULL,
@@ -535,10 +522,7 @@ def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     import subprocess
     import sys
 
-    # Same reason as _run_doctor_subprocess: a sandbox HOME only decides where
-    # the config is read from while no RAVEN_HOME out-ranks it.
-    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
-    env.update({"HOME": str(home), "COLUMNS": "250"})
+    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor", "--json"],
         stdin=subprocess.DEVNULL,
@@ -682,65 +666,157 @@ class TestASelfManagedServerCanStillBeBroken:
         assert "rerank" not in info.unbuilt
 
 
-class TestTheInstallationSection:
-    """An upgrade killed part way through leaves an installation that answers
-    some questions and not others. Every later verdict in this report is then a
-    verdict about the wrong thing, so this one is checked first and, when it
-    fails, it is the only one printed."""
+# ── raven doctor --fix ──────────────────────────────────────────────────
+#
+# The migrations run at load, so nothing is ever "pending" by the time this
+# command looks. What is left to ask about is what they deliberately do not
+# decide: a window the user pinned below what the model holds, and a provider
+# nothing could resolve. Both are legitimate configurations, which is why they
+# are reported and only written with --fix.
 
-    def _fault(self, monkeypatch: pytest.MonkeyPatch, reason: str, detail: str, missing: list[str]) -> None:
-        from raven.cli import _install_guard
 
-        monkeypatch.setattr(_install_guard, "inspect_install", lambda: _install_guard.InstallFault(reason, detail))
-        monkeypatch.setattr(_install_guard, "missing_pieces", lambda: missing)
+def _pinned_config(home: Path, **defaults: object) -> Path:
+    cfg = home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps(
+            {
+                "providers": {"anthropic": {"apiKey": "sk-a"}},
+                "agents": {
+                    "defaults": {
+                        "model": "anthropic/claude-opus-4-5",
+                        "provider": "anthropic",
+                        **defaults,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg
 
-    def test_a_sound_installation_is_not_mentioned(self, healthy_config: Path) -> None:
-        r = runner.invoke(app, ["doctor"])
-        assert r.exit_code == 0, r.stdout
-        assert "Installation" not in r.stdout
 
-    def test_a_half_written_installation_fails_the_check(
-        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._fault(
-            monkeypatch,
-            "incomplete",
-            "this installation is missing the packaged page (raven/ui/dist)",
-            ["the packaged page (raven/ui/dist)"],
-        )
-        r = runner.invoke(app, ["doctor"])
+def test_doctor_reports_a_pin_that_caps_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
 
-        assert r.exit_code == 1, r.stdout
-        assert "incomplete" in r.stdout
-        assert "install.sh" in r.stdout
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
 
-    def test_it_outranks_a_config_that_also_looks_wrong(
-        self, tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """With no config at all, the report would normally stop at "not
-        configured" -- which is the wrong thing to send a reader to fix."""
-        self._fault(monkeypatch, "incomplete", "this installation is missing its own package metadata", ["x"])
-        r = runner.invoke(app, ["doctor"])
+    health = _inspect_config_health(load_config(cfg), fix=False)
 
-        assert r.exit_code == 1, r.stdout
-        assert "incomplete" in r.stdout
-        assert "raven onboard" not in r.stdout
+    assert any("32,768" in f and "1,000,000" in f for f in health.findings)
+    assert health.fixes and not health.applied
+    # Reported only: no consent, no write.
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
 
-    def test_a_running_upgrade_is_a_note_not_a_failure(
-        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Nothing is broken yet; the rest of the report is still worth reading."""
-        self._fault(monkeypatch, "upgrading", "an upgrade to 9.9.9 is replacing this installation", [])
-        r = runner.invoke(app, ["doctor"])
 
-        assert r.exit_code == 0, r.stdout
-        assert "9.9.9" in r.stdout
-        assert "anthropic" in r.stdout.lower()
+def test_doctor_fix_removes_the_pin_and_keeps_the_file_mode(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
 
-    def test_the_verdict_reaches_the_json_output(self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._fault(monkeypatch, "incomplete", "this installation is missing the packaged page", ["the page"])
-        r = runner.invoke(app, ["doctor", "--json"])
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    cfg.chmod(0o600)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
 
-        payload = json.loads(r.stdout[r.stdout.index("{") :])
-        assert payload["install"]["complete"] is False
-        assert payload["install"]["missing"] == ["the page"]
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert health.applied and not health.fixes
+    assert "contextWindowTokens" not in json.loads(cfg.read_text())["agents"]["defaults"]
+    # config.json holds providers.*.apiKey, so a replacing writer owns the mode.
+    assert cfg.stat().st_mode & 0o777 == 0o600
+
+
+def test_doctor_says_nothing_about_a_pin_that_matches_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=1_000_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    assert _inspect_config_health(load_config(cfg), fix=False).findings == []
+
+
+def test_doctor_fix_reports_a_write_it_could_not_make(tmp_path, monkeypatch) -> None:
+    """A read-only home is a reason to say so, not to crash the health check --
+    the rest of the report is still worth printing."""
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+    monkeypatch.setattr(
+        "raven.cli.doctor_commands._write_config_preserving_mode",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("read-only file system")),
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert any("could not write the fix" in f for f in health.findings)
+    assert health.applied == []
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_the_fix_writer_survives_a_mode_it_cannot_read(tmp_path, monkeypatch) -> None:
+    """Preserving the mode is best-effort: a filesystem that will not answer
+    `stat` is not a reason to leave the fix unwritten."""
+    from raven.cli.doctor_commands import _write_config_preserving_mode
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("os.chmod", lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+
+    _write_config_preserving_mode(cfg, {"agents": {"defaults": {"model": "x/y"}}})
+
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["model"] == "x/y"
+
+
+def test_doctor_prints_the_config_section_it_found(tmp_path, monkeypatch, capsys) -> None:
+    """The renderer, not just the check: a finding nothing prints is a finding
+    the user never gets."""
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(
+            findings=["contextWindowTokens is pinned to 32,768"],
+            fixes=["remove agents.defaults.contextWindowTokens"],
+        ),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "Config" in out
+    assert "pinned to 32,768" in out
+    assert "raven doctor --fix" in out
+    assert "remove agents.defaults.contextWindowTokens" in out
+
+
+def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(applied=["remove agents.defaults.contextWindowTokens"]),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "fixed" in out
+    assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"

@@ -8,7 +8,7 @@ from raven.cli._proactive_stack import _migrate_legacy_feedback_log
 
 
 def test_no_op_when_legacy_absent(tmp_path: Path) -> None:
-    legacy = tmp_path / "chanwork" / "sentinel_feedback.jsonl"
+    legacy = tmp_path / "ws" / "sentinel_feedback.jsonl"
     new = tmp_path / "sentinel" / "feedback.jsonl"
 
     _migrate_legacy_feedback_log(legacy, new)
@@ -18,7 +18,7 @@ def test_no_op_when_legacy_absent(tmp_path: Path) -> None:
 
 
 def test_simple_move_when_new_absent(tmp_path: Path) -> None:
-    legacy = tmp_path / "chanwork" / "sentinel_feedback.jsonl"
+    legacy = tmp_path / "ws" / "sentinel_feedback.jsonl"
     legacy.parent.mkdir(parents=True)
     legacy.write_text('{"signal": "dispatched"}\n', encoding="utf-8")
     new = tmp_path / "sentinel" / "feedback.jsonl"
@@ -30,7 +30,7 @@ def test_simple_move_when_new_absent(tmp_path: Path) -> None:
 
 
 def test_merge_when_both_exist(tmp_path: Path) -> None:
-    legacy = tmp_path / "chanwork" / "sentinel_feedback.jsonl"
+    legacy = tmp_path / "ws" / "sentinel_feedback.jsonl"
     legacy.parent.mkdir(parents=True)
     legacy.write_text(
         '{"signal": "dispatched", "ts": "2026-01-01"}\n',
@@ -55,7 +55,7 @@ def test_merge_when_both_exist(tmp_path: Path) -> None:
 
 
 def test_creates_new_parent_dir(tmp_path: Path) -> None:
-    legacy = tmp_path / "chanwork" / "sentinel_feedback.jsonl"
+    legacy = tmp_path / "ws" / "sentinel_feedback.jsonl"
     legacy.parent.mkdir(parents=True)
     legacy.write_text("{}\n", encoding="utf-8")
     new = tmp_path / "deep" / "nested" / "sentinel" / "feedback.jsonl"

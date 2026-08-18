@@ -22,7 +22,6 @@ export interface GatewayCompletionItem {
 
 export interface GatewayTranscriptMessage {
   context?: string
-  duration_ms?: number
   name?: string
   role: 'assistant' | 'system' | 'tool' | 'user'
   text?: string

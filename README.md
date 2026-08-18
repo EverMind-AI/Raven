@@ -61,14 +61,6 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-Run `./install.sh` from a clone and it also builds the sub-agents in
-`subagents/` - one venv each. Setup then asks about each of them and registers
-the ones you take up, on the model it is tuned for or on this raven's LLM. All
-three are tuned for models served through OpenRouter, so if you configured an
-OpenRouter key in step 1 there is no key to type again. The published installer
-cannot build them: the release artifacts carry `raven/` only. See
-[`subagents/README.md`](subagents/README.md).
-
 ### Onboard and run
 
 ```bash
@@ -237,27 +229,16 @@ The Python runtime and React/Ink TUI communicate only through typed TUI-RPC. The
 Key directories:
 
 ```text
-raven/
-├── spine/              # Per-turn backbone: submit -> lanes -> emit
-├── agent/              # Agent loop, tools, hooks, subagents, context builder
-├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
-├── rpc/                # Python side of the native TUI protocol
-├── providers/          # LLM provider adapters
-├── context_engine/     # Context assembly and Curator path
-├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
-├── memory_engine/      # EverOS memory, local skills, SkillForge
-├── playbook/           # Stored orchestrations: library, match funnel, executor
-├── token_wise/         # Usage tracking, cache placement, routing
-├── tracing/            # Span capture and local tracing dashboard
-├── evolver/            # Benchmark-driven harness self-evolution
-├── sandbox/            # Isolated command execution
-├── security/           # Trust boundaries and network checks
-├── cli/                # `raven` command line entry point
-└── config/             # Config schema and update helpers
-
-ui-tui/                 # React/Ink native terminal UI
-bridge/                 # WhatsApp TypeScript bridge
-benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
+raven/agent/             agent loop, tools, and subagents
+raven/channels/          messaging adapters
+raven/context_engine/    context assembly and token budgeting
+raven/memory_engine/     EverOS integration and local skill memory
+raven/proactive_engine/  sentinel, scheduling, and nudges
+raven/providers/         model providers and routing
+raven/skill_hub/         external skill retrieval
+raven/tracing/           instrumentation, storage, and viewer
+raven/tui_rpc/           typed runtime-to-TUI boundary
+ui-tui/                  React/Ink terminal interface
 ```
 
 <br>

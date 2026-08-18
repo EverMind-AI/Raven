@@ -17,39 +17,6 @@ SCHEMA_VERSION = "audit.span.v1"
 FRAMEWORK = "raven"
 
 _store: TraceStore | None = None
-_surface: str | None = None
-
-
-def set_surface(name: str | None) -> None:
-    """Declare which front end this process serves, as the process-wide default.
-
-    This used to be the whole story: ``raven tui`` ran one RPC server over a
-    pipe to its own child and ``raven serve`` ran one WebSocket app, so a
-    process served exactly one front end for as long as it lived. A gateway
-    that hosts the page now serves several at once -- the browser page, the
-    GUI shell, a relayed terminal -- so a turn may carry its own surface (see
-    ``build_span``'s ``surface`` argument, fed from ``Source.surface``). This
-    declaration remains the fallback for every span that does not: a host that
-    serves one front end keeps declaring it here and nothing else changes.
-
-    It exists because the terminal and the served page share the ``tui`` channel
-    deliberately -- one session pool, so the same person sees the same
-    conversations from either -- which leaves ``channel.id`` unable to tell a
-    trace from one apart from a trace from the other. This is the dimension that
-    can. Passing None clears it.
-    """
-    global _surface
-    _surface = name or None
-
-
-def surface_for(channel: str | None) -> str | None:
-    """What to stamp: the declared surface, else the channel the turn ran on.
-
-    Falling back rather than emitting nothing keeps the attribute populated for
-    every host that never declares one -- the gateway's channels (``qq``, ``web``,
-    ``cli``) already name the front end, and there is nothing to disambiguate.
-    """
-    return _surface or channel
 
 
 def _get_store() -> TraceStore:
@@ -73,7 +40,6 @@ def build_span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
-    surface: str | None = None,
     start_time: str,
     end_time: str | None = None,
     status_code: str = "OK",
@@ -91,10 +57,6 @@ def build_span(
         "session.key": session_key,
         "channel": channel,
         "channel.id": channel,
-        # Which front end produced this, where the channel cannot say: the
-        # terminal and the served page share one channel on purpose. A turn
-        # that declared its own surface wins over the process-wide default.
-        "surface": surface or surface_for(channel),
         "chat_id": chat_id,
         "audit.schema_version": SCHEMA_VERSION,
     }

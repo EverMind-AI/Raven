@@ -86,24 +86,6 @@ export const clipToWidth = (raw: string, width: number) => {
   return `${out}…`
 }
 
-export const TOOL_RESULT_PREVIEW_CHARS = 200
-
-// A tool's inline result preview. Cutting on a raw character budget alone split
-// the last line mid-token ("updat" for "updated", a table header whose body
-// never arrives), so drop that partial line instead. A preview that is one long
-// line has nowhere to break and still gets the ellipsis treatment.
-export const toolResultPreview = (raw: string, max = TOOL_RESULT_PREVIEW_CHARS) => {
-  const text = raw.trimEnd()
-
-  if (text.length <= max) {
-    return text
-  }
-
-  const lastBreak = text.slice(0, max).lastIndexOf('\n')
-
-  return lastBreak > 0 ? text.slice(0, lastBreak) : compactPreview(text, max)
-}
-
 // Like compactPreview but keeps the tail — for live-streaming text (reasoning)
 // where the most recent tokens matter, so the view follows the stream instead
 // of freezing on the first `max` chars.

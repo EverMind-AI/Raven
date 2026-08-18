@@ -113,7 +113,7 @@ def make_on_cron_job(
     spine ``submit`` as a CRON-origin turn.
 
     ``submit`` (required) is the spine entry (build_gateway / build_repl /
-    build_rpc_spine scheduler). The turn's source is the job's creation-time
+    build_tui scheduler). The turn's source is the job's creation-time
     binding ``(payload.channel, payload.to)`` — the single delivery target.
     The hub routes the reply to that channel's outlet; there is no
     trigger-time resolution, forwarding, or broadcast.

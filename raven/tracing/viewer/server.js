@@ -235,7 +235,6 @@ function normalizeSpan(span) {
     runId: attrs['run.id'] || null,
     trigger: attrs.trigger || null,
     channelId: attrs['channel.id'] || null,
-    surface: attrs.surface || null,
     displayTitle: buildSpanTitle(span.name, attrs),
     displaySubtitle: buildSpanSubtitle(span.name, attrs)
   };
@@ -742,9 +741,6 @@ function buildSessions() {
     const workspaceDir = pickMostFrequent(sessionSpans.map((span) => span.workspaceDir));
     const trigger = pickMostFrequent(sessionSpans.map((span) => span.trigger));
     const channelId = pickMostFrequent(sessionSpans.map((span) => span.channelId));
-    // Which front end produced it. The terminal and the served page share
-    // one channel, so channelId alone cannot tell them apart.
-    const surface = pickMostFrequent(sessionSpans.map((span) => span.surface));
     const sessionEvents = events.filter((event) => {
       if (event.sessionId && event.sessionId === sessionId) return true;
       if (sessionKey && event.sessionKey === sessionKey) return true;
@@ -777,7 +773,6 @@ function buildSessions() {
           workspaceDir,
           trigger,
           channelId,
-          surface,
           startTime: trace.startTime,
           endTime: trace.endTime,
           durationMs: durationMs(trace.startTime, trace.endTime),
@@ -798,7 +793,6 @@ function buildSessions() {
       workspaceDir,
       trigger,
       channelId,
-      surface,
       resumedFrom,
       resumedTo: null,
       startedAt: sessionSpans.map((span) => span.startTime).sort((a, b) => parseTime(a) - parseTime(b))[0] || null,

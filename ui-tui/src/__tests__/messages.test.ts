@@ -30,26 +30,6 @@ describe('toTranscriptMessages', () => {
     ])
     expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toContain('Search Files')
   })
-
-  it('carries a stored call duration onto the resumed trail line', () => {
-    const rows = [
-      { role: 'user', text: 'prompt' },
-      { duration_ms: 1240, name: 'search_files', role: 'tool', text: 'result' },
-      { role: 'assistant', text: 'answer' }
-    ]
-
-    expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toBe('Search Files (1.2s) ✓')
-  })
-
-  it('draws no clock for a call written before the duration was recorded', () => {
-    const rows = [
-      { role: 'user', text: 'prompt' },
-      { name: 'search_files', role: 'tool', text: 'result' },
-      { role: 'assistant', text: 'answer' }
-    ]
-
-    expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toBe('Search Files ✓')
-  })
 })
 
 describe('MessageLine', () => {

@@ -71,7 +71,6 @@ def build_context_engine(
     model: str,
     context_window_tokens: int,
     get_tool_definitions: Callable[[], list[dict]],
-    get_tool_notices: Callable[[], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
@@ -123,7 +122,7 @@ def build_context_engine(
             user_id=memory_config.user_id,
             memory_top_k=memory_config.memory_top_k,
         ),
-        ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
+        ActiveSkillsSegmentBuilder(builder.skills),
         SkillsSegmentBuilder(
             router,
             skill_top_k=skill_forge_router_config.top_k,
@@ -151,7 +150,7 @@ def build_context_engine(
             now_fn=now_fn,
         ),
     ]
-    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices)
+    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)
 
 
 def _build_router(
