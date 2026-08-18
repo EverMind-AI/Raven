@@ -188,8 +188,9 @@ class _NeedsPath(Tool):
 class TestUnparsableArguments:
     """A call whose arguments were not JSON must be told so.
 
-    The loop parks the raw text under ``_raw_arguments`` when ``json.loads``
-    fails. Reported through schema validation that reads as "missing required
+    The loop parks the raw text under ``_raw_arguments`` and flags the call with
+    ``run_meta.arguments_repaired`` when ``json.loads`` fails; the refusal is
+    driven by the flag and quotes the parked text back. Reported through schema validation that reads as "missing required
     path" -- and a caller told it forgot a field it did send re-sends the same
     malformed JSON forever. One observed session burned eighteen tool calls in
     this loop and the model ended up reasoning about ``_raw_arguments``, an
@@ -200,7 +201,11 @@ class TestUnparsableArguments:
     async def test_the_error_names_the_parse_failure_not_a_missing_field(self):
         reg = _registry(_NeedsPath())
 
-        result = await reg.execute("write_file", {"_raw_arguments": '{"path": "a.py", "content": "x'})
+        result = await reg.execute(
+            "write_file",
+            {"_raw_arguments": '{"path": "a.py", "content": "x'},
+            run_meta=RunMeta(arguments_repaired=True),
+        )
 
         assert "not valid JSON" in result
         assert "missing required" not in result
@@ -221,7 +226,11 @@ class TestUnparsableArguments:
     async def test_a_long_argument_blob_is_capped(self):
         reg = _registry(_NeedsPath())
 
-        result = await reg.execute("write_file", {"_raw_arguments": "x" * 5000})
+        result = await reg.execute(
+            "write_file",
+            {"_raw_arguments": "x" * 5000},
+            run_meta=RunMeta(arguments_repaired=True),
+        )
 
         assert result.endswith("...")
         assert len(result) < 1000
