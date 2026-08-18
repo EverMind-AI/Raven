@@ -53,6 +53,10 @@ const STATUS_STYLE: Record<DagNodeStatus, { box: string; icon: ReactNode }> = {
 		box: 'border-dashed border-border text-muted-foreground opacity-60',
 		icon: <MinusCircle className="size-3 shrink-0" />,
 	},
+	cancelled: {
+		box: 'border-destructive/70 text-destructive/90',
+		icon: <MinusCircle className="size-3 shrink-0" />,
+	},
 	interrupted: {
 		box: 'border-dashed border-destructive/60 text-destructive/80',
 		icon: <MinusCircle className="size-3 shrink-0" />,

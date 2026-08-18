@@ -41,6 +41,7 @@ export interface DagRunSummary {
   completed?: number
   failed?: number
   skipped?: number
+  cancelled?: number
 }
 
 export interface DagRunState {

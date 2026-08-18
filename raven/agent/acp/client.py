@@ -38,6 +38,53 @@ _STDERR_LINES = 200
 _REFUSAL_MEMORY = 64
 _STDERR_LINE_CAP = 500
 
+_CANCEL_SETTLE_S = 5.0
+"""How long a cancelled turn is given to settle with ``stopReason: cancelled``.
+
+A ceiling, not an expectation. The agent's obligation on ``session/cancel`` is
+to stop model requests and abort tool calls "as soon as possible" -- the same
+class of work raven's own process-group kill finishes in milliseconds.
+Exceeding it is a handled state (the caller unbinds the session instead of
+prompting it again), which is what lets the bound stay short.
+
+Measured mid-tool-call, three runs each, all settling with ``cancelled``:
+claude-agent-acp@0.66.0 at 0.007s / 0.017s / 0.018s, codex-acp@1.1.14 at
+0.089s / 0.144s / 17.060s. The budget deliberately does not stretch to that
+last one: it is a lone spike beside two sub-200ms runs on the same adapter,
+and widening the bound to cover it would put every interactive stop behind a
+half-minute wait to spare one session a quarantine that costs it only a fresh
+session id.
+"""
+
+_DRAINING = False
+
+
+def begin_drain() -> None:
+    """Stop waiting for cancelled turns to settle: the process is going away.
+
+    The pool teardown that follows kills every server, so the wait buys nothing
+    there. The notification is still sent, so an adapter that persists session
+    state can record the turn as cancelled rather than have it truncated.
+
+    Process-global because asyncio delivers cancellation as a bare
+    ``CancelledError`` into the target task: the canceller cannot hand an
+    argument or a contextvar to the code that handles it.
+    """
+    global _DRAINING
+    _DRAINING = True
+
+
+def end_drain() -> None:
+    """Leave drain mode. Called by ``close_pool``, which ends the teardown."""
+    global _DRAINING
+    _DRAINING = False
+
+
+def is_draining() -> bool:
+    """Whether cancelled turns are currently abandoned rather than awaited."""
+    return _DRAINING
+
+
 UNHANDLED: Any = object()
 """A request handler's way of saying "not mine", answered as ``method not found``.
 
@@ -82,6 +129,7 @@ class AcpClient:
         self._refused_logged: set[str] = set()
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
+        self._unsettled_cancels: set[str] = set()
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._closed = False
         self._reader_task: asyncio.Task | None = None
@@ -236,14 +284,45 @@ class AcpClient:
         text = "\n".join(self._stderr)
         return text[-max_chars:] if len(text) > max_chars else text
 
+    def take_unsettled_cancel(self, session_id: str) -> bool:
+        """Whether this session's cancel went unanswered. Consumes the flag.
+
+        Consumed rather than sticky: the caller acts on it by dropping the
+        session binding, and a second reader acting on the same fact would
+        unbind a session that has already been replaced.
+        """
+        if session_id in self._unsettled_cancels:
+            self._unsettled_cancels.remove(session_id)
+            return True
+        return False
+
     # ---- messaging -------------------------------------------------------
 
-    async def request(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> Any:
+    async def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+        cancel_session: str | None = None,
+    ) -> Any:
         """Send a request and await its result.
 
         Raises :class:`AcpRemoteError` if the agent answers with an error,
         :class:`AcpTimeoutError` on budget expiry, :class:`AcpConnectionError` if
         the connection is gone.
+
+        ``cancel_session`` names the session to stop if *this* request is
+        cancelled. Without it a cancelled prompt is only abandoned locally and
+        the agent runs the turn to completion, answering an id nobody is
+        waiting on.
+
+        Awaited through :func:`asyncio.shield`: cancelling this call cancels
+        only the wait, not ``future`` itself. Without the shield, cancelling
+        the caller's task cancels whatever bare future it is suspended on as
+        the very mechanism that delivers the ``CancelledError`` -- so by the
+        time the handler below ran, ``future`` would already read as done, and
+        ``_cancel_turn`` could never tell a real settlement from that.
         """
         if not self.alive:
             raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
@@ -254,12 +333,48 @@ class AcpClient:
         try:
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
-                return await future
-            return await asyncio.wait_for(future, timeout=timeout)
+                return await asyncio.shield(future)
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
             raise AcpTimeoutError(f"acp agent {self.name!r}: {method} timed out after {timeout}s") from None
+        except asyncio.CancelledError:
+            if cancel_session is not None:
+                await self._cancel_turn(cancel_session, future)
+            raise
         finally:
             self._pending.pop(request_id, None)
+
+    async def _cancel_turn(self, session_id: str, future: asyncio.Future) -> None:
+        """Tell the agent to stop this turn, and give it a bounded chance to.
+
+        Killing the process is not available here the way it is for the cli
+        transport: one connection carries every session of this agent, so a kill
+        would abort unrelated in-flight work.
+
+        Awaiting inside a cancel handler is sound because every canceller in
+        this codebase cancels once and then gathers -- the same property
+        ``CliAgentBackend._kill_process_group`` relies on to await the child.
+        """
+        try:
+            await self.notify("session/cancel", {"sessionId": session_id})
+        except Exception:  # noqa: BLE001 - a connection already gone has nothing to settle
+            return
+        if is_draining():
+            return
+        done, _ = await asyncio.wait({future}, timeout=_CANCEL_SETTLE_S)
+        if done:
+            # Retrieve the exception so a connection that died inside the settle window does
+            # not log "Future exception was never retrieved" at GC time.
+            if not future.cancelled():
+                future.exception()
+            return
+        self._unsettled_cancels.add(session_id)
+        logger.warning(
+            "acp agent {!r}: session {!r} did not settle within {}s of session/cancel",
+            self.name,
+            session_id,
+            _CANCEL_SETTLE_S,
+        )
 
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         await self._send(protocol.notification(method, params))
@@ -426,4 +541,12 @@ class AcpClient:
         self._pending.clear()
 
 
-__all__ = ["UNHANDLED", "AcpClient", "NotificationHandler", "RequestHandler"]
+__all__ = [
+    "begin_drain",
+    "end_drain",
+    "is_draining",
+    "UNHANDLED",
+    "AcpClient",
+    "NotificationHandler",
+    "RequestHandler",
+]

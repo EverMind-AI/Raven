@@ -815,6 +815,16 @@ async def _run_rpc_server_until_done(
             from loguru import logger as _logger
 
             _logger.exception("tui: browser close failed; continuing shutdown")
+        try:
+            from raven.agent.acp.client import begin_drain
+
+            begin_drain()
+            if agent_loop is not None:
+                await agent_loop.subagents.cancel_all()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: cancelling in-flight sub-agents failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:

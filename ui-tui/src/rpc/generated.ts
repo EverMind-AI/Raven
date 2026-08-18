@@ -23,14 +23,21 @@ export type JsonValue = string | number | boolean | null | unknown[] | {};
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagNodeStatus".
  */
-export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 /**
  * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagSnapshotNodeStatus".
  */
-export type DagSnapshotNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'interrupted';
+export type DagSnapshotNodeStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'interrupted';
 /**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  *
@@ -1217,6 +1224,7 @@ export interface DagRunSnapshot {
     completed?: number;
     failed?: number;
     skipped?: number;
+    cancelled?: number;
   };
 }
 /**
@@ -1237,7 +1245,7 @@ export interface DagNodeDetail {
   /**
    * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.
    */
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */
@@ -1303,6 +1311,7 @@ export interface DagRunCompletedEvent {
       completed?: number;
       failed?: number;
       skipped?: number;
+      cancelled?: number;
     };
     files: {
       node: string;

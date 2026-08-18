@@ -19,6 +19,7 @@ Two consequences worth stating, because they are what the transport buys:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -379,7 +380,21 @@ class AcpAgentBackend:
                         "session/prompt",
                         {"sessionId": session_id, "prompt": [{"type": "text", "text": task}]},
                         timeout=self.timeout,
+                        cancel_session=session_id,
                     )
+                except asyncio.CancelledError:
+                    # The turn outlived its cancel budget, so it is still running
+                    # on the agent while this lock is about to be released --
+                    # prompting the same session again would collide with it.
+                    # Dropping the binding is the same recovery `_open_session`
+                    # makes when a resume fails: the instance keeps its handle
+                    # and the next dispatch opens a fresh session under it.
+                    # Evaluated in this order so take_unsettled_cancel -- a
+                    # consuming read -- always clears the flag; skipping it for a
+                    # stateless agent would leak it.
+                    if client.take_unsettled_cancel(session_id) and self.is_stateful:
+                        await self._registry.unbind(skey, self.name, handle)
+                    raise
                 finally:
                     connection.router.detach(session_id, collector)
 

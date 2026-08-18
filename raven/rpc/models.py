@@ -388,7 +388,7 @@ class SubagentDeliveredEvent(_Strict):
     payload: SubagentDeliveredPayload
 
 
-DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled"]
 
 
 class DagRunStartedNode(_Strict):
@@ -428,6 +428,7 @@ class DagRunSummary(_Strict):
     completed: int | None = None
     failed: int | None = None
     skipped: int | None = None
+    cancelled: int | None = None
 
 
 class DagRunFile(_Strict):
@@ -456,8 +457,9 @@ class DagRunCompletedEvent(_Strict):
 
 # Wider than DagNodeStatus: a snapshot can report ``interrupted``, which the
 # server infers for a node the registry still calls running on a run nothing is
-# executing. Nothing on the event wire may claim that.
-DagSnapshotNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "interrupted"]
+# executing. Nothing on the event wire may claim that. ``cancelled`` is the
+# opposite kind of fact -- the runner recorded it -- so both surfaces carry it.
+DagSnapshotNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted"]
 
 
 class DagSnapshotNode(_Strict):

@@ -137,9 +137,9 @@ class SessionNodes:
         owner (`dict[str, str]`):
             Node id to the run that claimed it.
         state (`dict[str, str]`):
-            Node id to ``"completed"``, ``"failed"``, ``"skipped"``, or one of
-            :data:`RUNNING` / :data:`UNRECORDED` for a run whose per-node
-            outcome the index does not carry.
+            Node id to ``"completed"``, ``"failed"``, ``"skipped"``,
+            ``"cancelled"``, or one of :data:`RUNNING` / :data:`UNRECORDED` for
+            a run whose per-node outcome the index does not carry.
     """
 
     owner: dict[str, str] = field(default_factory=dict)

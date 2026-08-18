@@ -548,6 +548,7 @@
 			"completed": "已完成",
 			"failed": "失败",
 			"skipped": "已跳过",
+			"cancelled": "已停止",
 			"interrupted": "已中断",
 			"reused": "已复用"
 		},

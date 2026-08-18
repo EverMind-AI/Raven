@@ -9,7 +9,10 @@ import type { DagNodeDetail } from '../rpc/index.js'
 
 import { DAG_STATUS_GLYPH, dagRunHeadline, formatDagNodeDetail } from '../lib/dagStatus.js'
 
-const ALL_STATUSES: DagRunNodeStatus[] = ['pending', 'running', 'completed', 'failed', 'skipped', 'interrupted']
+// Derived from DAG_STATUS_GLYPH's own keys, not hand-copied: its `Record<DagRunNodeStatus, …>`
+// type already forces that object to have exactly one entry per status, so this can never
+// drift out of sync with a status the type gains.
+const ALL_STATUSES = Object.keys(DAG_STATUS_GLYPH) as DagRunNodeStatus[]
 
 const run = (over: Partial<DagRunState> = {}): DagRunState => ({
   runId: 'dag-1',

@@ -135,6 +135,7 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
             "completed": statuses.count("completed"),
             "failed": statuses.count("failed"),
             "skipped": statuses.count("skipped"),
+            "cancelled": statuses.count("cancelled"),
         },
     }
 

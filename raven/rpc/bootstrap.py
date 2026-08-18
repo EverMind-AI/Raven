@@ -182,6 +182,17 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
+        # Same order every host follows: drain, cancel, then close. Cancelling
+        # after the pool closed would report each in-flight turn as a connection
+        # failure instead of as the stop it is.
+        try:
+            from raven.agent.acp.client import begin_drain
+
+            begin_drain()
+            if agent_loop is not None:
+                await agent_loop.subagents.cancel_all()
+        except Exception:
+            logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         # Chromium is a child process too, and a persistent-profile one: leaving
         # it running holds the profile lock the next launch needs.
         try:

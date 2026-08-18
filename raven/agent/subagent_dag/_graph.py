@@ -330,6 +330,8 @@ def _unreadable(node_id: str, what: str, target: str, known: SessionNodes) -> st
         return f"node '{node_id}' references {what}, which failed in run '{owner}' and wrote no output. Re-do it under a new id"
     if state == "skipped":
         return f"node '{node_id}' references {what}, which run '{owner}' skipped, so it wrote no output. Re-do it under a new id"
+    if state == "cancelled":
+        return f"node '{node_id}' references {what}, which was stopped mid-run in run '{owner}', so it wrote no output. Re-do it under a new id"
     if state == RUNNING:
         # Deliberately not "put both in one graph": that node's id is taken, so
         # this graph cannot re-create it, and suggesting otherwise sends the

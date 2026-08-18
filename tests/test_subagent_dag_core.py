@@ -338,7 +338,7 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3")
 
     assert run["finalized"] is True
-    assert run["summary"] == {"total": 2, "completed": 1, "failed": 1, "skipped": 0}
+    assert run["summary"] == {"total": 2, "completed": 1, "failed": 1, "skipped": 0, "cancelled": 0}
     a, b = run["files"]
     assert (a["node"], a["status"], a["started_at"], a["ended_at"]) == ("a", "completed", 1000, 3000)
     assert a["prompt_template"] == "do {{ inputs.k }}"

@@ -197,6 +197,7 @@ _DAG_WIRE_STATUS = {
     "completed": "ok",
     "failed": "error",
     "skipped": "skipped",
+    "cancelled": "cancelled",
     "interrupted": "error",
 }
 
@@ -273,7 +274,9 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             # A skipped node never ran: it has no transcript, no cost and no
             # clock -- a row for it pads the list with entries that open onto
             # nothing. The graph view still shows it, where "skipped because
-            # its upstream failed" is legible structure rather than noise.
+            # its upstream failed" is legible structure rather than noise. A
+            # cancelled node is the opposite case: it ran, so its row opens
+            # onto a real transcript and stays.
             if status == "skipped":
                 continue
             tools = entry.get("tool_calls")

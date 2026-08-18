@@ -24,7 +24,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.acp import protocol
-from raven.agent.acp.client import AcpClient
+from raven.agent.acp.client import AcpClient, end_drain
 from raven.agent.acp.permissions import auto_approver
 
 # Budget for the one `initialize` a new connection owes, when the caller does
@@ -267,9 +267,12 @@ async def close_pool() -> None:
     """Close every pooled connection and forget the pool.
 
     Separate from ``close_all`` so a test can return the process to a clean
-    state, rather than leaving a pool whose connections are all dead.
+    state, rather than leaving a pool whose connections are all dead. Leaving
+    drain mode is part of that clean state: the flag is process-global, so a
+    test that set it would otherwise change how the next one cancels.
     """
     global _POOL
+    end_drain()
     if _POOL is not None:
         await _POOL.close_all()
         _POOL = None

@@ -471,6 +471,8 @@ class SubAgentDagTool(Tool):
         if failed:
             elided = f" +{len(failed) - 3}" if len(failed) > 3 else ""
             parts.append(f"{len(failed)} failed ({', '.join(failed[:3])}{elided})")
+        if cancelled := summary.get("cancelled", 0):
+            parts.append(f"{cancelled} cancelled")
         if skipped := summary.get("skipped", 0):
             parts.append(f"{skipped} skipped")
         return f"DAG {result.run_id}: {', '.join(parts)} -- outputs in {result.dir}"
@@ -682,9 +684,10 @@ class SubAgentDagTool(Tool):
         result = await self._run(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
-            # with every unfinished node skipped, but announcing that would
-            # spend a turn narrating what they just cancelled -- which is why
-            # a cancelled spawn stays silent too.
+            # with a running node recorded ``cancelled`` and a pending one
+            # skipped, but announcing that would spend a turn narrating what
+            # they just cancelled -- which is why a cancelled spawn stays
+            # silent too.
             logger.info("DAG run {} was stopped; not announcing a result", run_id)
             return
         if self._announce is None:
@@ -800,6 +803,7 @@ class SubAgentDagTool(Tool):
             f"DAG run {result.run_id} finished: "
             f"{result.summary.get('completed', 0)} completed, "
             f"{result.summary.get('failed', 0)} failed, "
+            f"{result.summary.get('cancelled', 0)} cancelled, "
             f"{result.summary.get('skipped', 0)} skipped (of {result.summary.get('total', 0)}).",
             f"Run dir: {result.dir}",
             "",
