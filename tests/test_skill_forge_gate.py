@@ -145,8 +145,24 @@ async def test_tools_block_absent_when_tools_none() -> None:
     assert "# Agent Tools" not in prompt
 
 
-async def test_filter_passes_explicit_model_to_provider() -> None:
+async def test_an_unpaired_gate_model_is_never_sent() -> None:
+    """``skill_forge.llm_gate_model`` without credentials of its own is a bare
+    id. Forwarding it would post it on whatever key this provider holds, which
+    is the mis-pairing the pool exists to prevent; the gate follows the turn
+    instead and names no model."""
     provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
     gate = LLMGateFilter(provider, model="gpt-4o")
     await gate.filter("task", [_hit("local/a", "a")])
-    assert provider.calls[0]["model"] == "gpt-4o"
+    assert provider.calls[0]["model"] is None
+
+
+async def test_a_paired_gate_pin_is_used_as_given() -> None:
+    """With the pin paired by the pool, both halves are the gate's own."""
+    from raven.providers.binding import ModelBinding
+
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    pinned = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    gate = LLMGateFilter(provider, model="gpt-4o", pin=ModelBinding(pinned, "gpt-4o"))
+    await gate.filter("task", [_hit("local/a", "a")])
+    assert provider.calls == []
+    assert pinned.calls[0]["model"] == "gpt-4o"

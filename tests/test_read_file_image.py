@@ -1457,10 +1457,13 @@ def test_the_loop_hands_the_verdict_to_the_context_engine(monkeypatch) -> None:
     """`can_see_images` is decided in the loop and consumed three layers down.
     Nothing else asserts the hand-off, so dropping it would be silent."""
     from raven.agent.loop.main import AgentLoop
+    from raven.providers.binding import ModelBinding
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    loop.model = "some/model"
+    # The model is the binding's now, so a bare loop gets one the same way a
+    # real one does: through the default binding it falls back to.
+    loop._default_binding = ModelBinding(object(), "some/model")
     monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: False)
     monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: "understand_media")
 
@@ -1499,11 +1502,12 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
     whole fix: without it the two halves of one turn disagree and nothing fails.
     """
     from raven.agent.loop.main import AgentLoop
+    from raven.providers.binding import ModelBinding
 
     asked: list[str | None] = []
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    loop.model = "configured/model"
+    loop._default_binding = ModelBinding(object(), "configured/model")
     monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: asked.append(m) or True)
     monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: None)
 
@@ -1946,11 +1950,11 @@ def test_a_cold_verdict_is_not_cached_for_the_life_of_the_loop(monkeypatch) -> N
     remembered."""
     from raven.agent.loop.main import AgentLoop
     from raven.providers import rates as pricing
+    from raven.providers.binding import ModelBinding
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    loop.model = "deepseek/deepseek-v4-pro"
-    loop.provider = None
+    loop._default_binding = ModelBinding(None, "deepseek/deepseek-v4-pro")
 
     monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
     monkeypatch.setattr(pricing, "_WARM_AT", 0.0)

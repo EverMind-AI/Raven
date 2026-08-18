@@ -68,7 +68,6 @@ class QueryRewriter:
         self,
         provider: "LLMProvider",
         *,
-        model: str | None = None,
         max_tokens: int = 8192,
         temperature: float = 0.3,
     ) -> None:

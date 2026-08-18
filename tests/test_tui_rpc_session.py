@@ -1152,8 +1152,9 @@ async def test_session_info_reports_this_sessions_model_not_the_default(monkeypa
     # MagicMock so the unrelated skills/tools enumeration in the bundle works;
     # only ``session_model`` is under test.
     loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
     loop.session_model = lambda key: "vendor-a/model" if key == "tui:a" else "boot/model"
-    info = session_mod._default_session_info(loop, session_mod.load_config(), "tui:a")
+    info = await session_mod._default_session_info(loop, session_mod.load_config(), "tui:a")
 
     assert info["model"] == "vendor-a/model"
     assert info["model_id"] == "vendor-a/model"
@@ -1169,8 +1170,9 @@ async def test_session_info_without_a_session_reports_the_default() -> None:
 
     config = session_mod.load_config()
     loop = MagicMock()
+    loop.model = "vendor-a/model"  # the usage baseline resolves a window from it
     loop.session_model = lambda key: "vendor-a/model"
-    info = session_mod._default_session_info(loop, config, None)
+    info = await session_mod._default_session_info(loop, config, None)
 
     assert info["model"] == config.agents.defaults.model
 
@@ -1193,6 +1195,9 @@ async def test_session_resume_puts_the_session_back_on_its_stored_model(tmp_path
     restored: list[tuple[str, str, str | None]] = []
     loop = MagicMock()
     loop.sessions = sessions
+    # A real id, not the MagicMock default: the init bundle resolves a window
+    # from whatever the loop reports as its model.
+    loop.model = "vendor-a/model"
     loop.restore_session_model = lambda key, model, provider=None: restored.append((key, model, provider))
     loop.session_model = lambda key: "vendor-a/model"
 
@@ -1213,6 +1218,7 @@ async def test_session_resume_without_a_stored_model_restores_nothing(tmp_path) 
     restored: list[object] = []
     loop = MagicMock()
     loop.sessions = sessions
+    loop.model = "vendor-a/model"
     loop.restore_session_model = lambda *a, **k: restored.append(a)
     loop.session_model = lambda key: "boot/model"
 
