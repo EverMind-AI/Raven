@@ -148,3 +148,61 @@ os._exit(0 if ok else 2)
     )
     assert result.returncode == 0, result.stderr
     assert "LITELLM_NOT_IMPORTED" in result.stdout, result.stdout + result.stderr
+
+
+def test_the_first_turn_s_token_budget_never_imports_litellm() -> None:
+    """Construction was guarded; the turn right after it was not.
+
+    ``_make_token_budget`` runs per turn from ``_assemble_context_messages``
+    and reserves the model's output ceiling, which reaches the same catalogue
+    lookup the construction path takes care to keep cheap -- but with the
+    fetching tier left on. The deferred import lands on the first turn instead
+    of on construction, which is a different place to stall, not one fewer.
+
+    Only the first call would pay, and a litellm-backed provider has usually
+    imported it already -- but azure / codex / everos backends have not.
+    """
+    script = """
+import sys
+import tempfile
+from pathlib import Path
+
+from raven.agent.loop import AgentLoop
+from raven.providers import model_catalog_cache
+from raven.providers.base import GenerationSettings, LLMProvider
+from raven.providers.lazy import LazyProvider
+
+
+class _StubProvider(LLMProvider):
+    def get_default_model(self):
+        return "openrouter/deepseek/deepseek-v4-pro"
+
+
+assert "litellm" not in sys.modules, "litellm already imported -- test is not isolated"
+
+with tempfile.TemporaryDirectory() as td:
+    model_catalog_cache._CACHE_PATH = Path(td) / "model-catalog.json"
+    lazy = LazyProvider(
+        factory=lambda: _StubProvider(),
+        default_model="openrouter/deepseek/deepseek-v4-pro",
+        generation=GenerationSettings(),
+    )
+    agent = AgentLoop(
+        provider=lazy,
+        workspace=Path(td),
+        model="openrouter/deepseek/deepseek-v4-pro",
+        max_iterations=2,
+        restrict_to_workspace=True,
+    )
+    budget = agent._make_token_budget()
+    assert budget.reserved_output > 0, "a budget still has to come out of it"
+
+ok = "litellm" not in sys.modules
+print("LITELLM_NOT_IMPORTED" if ok else "LITELLM_IMPORTED", flush=True)
+
+import os
+os._exit(0 if ok else 2)
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "LITELLM_NOT_IMPORTED" in result.stdout, result.stdout + result.stderr

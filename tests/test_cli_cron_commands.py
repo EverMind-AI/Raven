@@ -39,19 +39,28 @@ def populated_cron(fake_cron_dir: Path) -> CronService:
         name="morning meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="妈妈吃药提醒：早晨",
-        deliver=True,
-        channel="cli",
+        channel="tui",
         to="direct",
     )
     svc.add_job(
         name="lunch break",
         schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
         message="水分提醒",
-        deliver=True,
         channel="feishu",
         to="ou_xxx",
     )
     return svc
+
+
+@pytest.fixture
+def feishu_enabled(monkeypatch):
+    """Make 'feishu' a legal --channel target without touching real config."""
+    from raven.config.schema import Config
+
+    cfg = Config()
+    cfg.channels.feishu.enabled = True
+    monkeypatch.setattr("raven.config.loader.load_config", lambda *a, **k: cfg)
+    return cfg
 
 
 # ── list ─────────────────────────────────────────────────────────────
@@ -99,6 +108,20 @@ def test_list_all_includes_disabled(runner, populated_cron):
         assert j.id in result.stdout
 
 
+def test_list_shows_silent_column(runner, populated_cron):
+    """The Silent column surfaces the anti-runaway counter; counts >= 5
+    carry a warning marker so runaway recurring jobs stand out."""
+    jobs = populated_cron.list_jobs()
+    hot = next(j for j in jobs if j.schedule.kind == "every")
+    for _ in range(7):
+        populated_cron.record_fire(hot.id)
+
+    result = runner.invoke(cron_app, ["list"])
+    assert result.exit_code == 0
+    assert "Silent" in result.stdout
+    assert "7 ⚠" in result.stdout
+
+
 # ── get ──────────────────────────────────────────────────────────────
 
 
@@ -126,8 +149,7 @@ def test_get_shows_topic_tag(runner, fake_cron_dir):
         name="meds",
         schedule=CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Shanghai"),
         message="吃药",
-        deliver=True,
-        channel="cli",
+        channel="tui",
         to="direct",
         topic_tag="medication_morning",
     )
@@ -153,6 +175,21 @@ def test_get_shows_topic_tag_dash_when_absent(runner, populated_cron):
     )
     assert topic_line is not None
     assert "-" in topic_line
+
+
+def test_get_shows_silent_fire_fields(runner, populated_cron):
+    """``cron get`` renders the anti-runaway counter and its limit so an
+    operator can see how close a recurring job is to auto-disable."""
+    job = next(j for j in populated_cron.list_jobs() if j.schedule.kind == "every")
+    for _ in range(3):
+        populated_cron.record_fire(job.id)
+
+    result = runner.invoke(cron_app, ["get", job.id])
+    assert result.exit_code == 0
+    assert "silent_fire_count" in result.stdout.replace("\n", "")
+    assert "silent_fire_limit" in result.stdout.replace("\n", "")
+    assert "3" in result.stdout
+    assert "12" in result.stdout
 
 
 def test_get_prefix_match(runner, populated_cron):
@@ -181,7 +218,7 @@ def test_get_ambiguous_prefix(runner, fake_cron_dir):
                             "kind": "agent_turn",
                             "message": "x",
                             "deliver": True,
-                            "channel": "cli",
+                            "channel": "tui",
                             "to": "direct",
                         },
                         "state": {"nextRunAtMs": 1, "silentFireCount": 0},
@@ -195,7 +232,7 @@ def test_get_ambiguous_prefix(runner, fake_cron_dir):
                             "kind": "agent_turn",
                             "message": "y",
                             "deliver": True,
-                            "channel": "cli",
+                            "channel": "tui",
                             "to": "direct",
                         },
                         "state": {"nextRunAtMs": 1, "silentFireCount": 0},
@@ -323,8 +360,7 @@ def test_run_warns_when_active_claim_present(
         name="x",
         schedule=_Sched(kind="every", every_ms=60_000),
         message="m",
-        deliver=True,
-        channel="cli",
+        channel="tui",
         to="direct",
     )
     # Hand-poke a fresh claim by another pid (simulate gateway running).
@@ -357,8 +393,7 @@ def test_run_one_shot_at_with_delete_warns_about_removal(
         name="future thing",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),  # year 2033
         message="x",
-        deliver=True,
-        channel="cli",
+        channel="tui",
         to="direct",
         delete_after_run=True,  # this is the default for at-kind
     )
@@ -383,8 +418,7 @@ def test_run_one_shot_at_without_delete_warns_about_disable(
         name="future demo",
         schedule=_Sched(kind="at", at_ms=2_000_000_000_000),
         message="x",
-        deliver=True,
-        channel="cli",
+        channel="tui",
         to="direct",
         delete_after_run=False,
     )
@@ -476,7 +510,7 @@ def test_add_requires_exactly_one_schedule(runner, fake_cron_dir, monkeypatch):
     assert r.exit_code == 2
 
 
-def test_add_cron(runner, fake_cron_dir, monkeypatch):
+def test_add_cron(runner, fake_cron_dir, feishu_enabled):
     r = runner.invoke(
         cron_app,
         [
@@ -503,7 +537,7 @@ def test_add_cron(runner, fake_cron_dir, monkeypatch):
     assert jobs[0].schedule.expr == "0 9 * * *"
 
 
-def test_add_at(runner, fake_cron_dir, monkeypatch):
+def test_add_at(runner, fake_cron_dir, feishu_enabled):
     r = runner.invoke(
         cron_app,
         [
@@ -525,7 +559,7 @@ def test_add_at(runner, fake_cron_dir, monkeypatch):
     assert svc.list_jobs()[0].schedule.kind == "at"
 
 
-def test_add_every(runner, fake_cron_dir, monkeypatch):
+def test_add_every(runner, fake_cron_dir, feishu_enabled):
     r = runner.invoke(
         cron_app,
         [
@@ -598,7 +632,7 @@ def test_add_invalid_cron(runner, fake_cron_dir, monkeypatch):
     assert svc.list_jobs() == []
 
 
-def test_add_past_at_rejected(runner, fake_cron_dir, monkeypatch):
+def test_add_past_at_rejected(runner, fake_cron_dir, feishu_enabled):
     """A past ``--at`` is rejected (the service raises) rather than creating a
     job that silently never fires — the CLI surfaces the service error."""
     r = runner.invoke(
@@ -644,6 +678,113 @@ def test_add_invalid_tz(runner, fake_cron_dir, monkeypatch):
     )
     assert r.exit_code == 2
     assert "Unknown timezone" in r.stdout
+
+
+# ── add: creation-time delivery binding ──────────────────────────────
+
+
+def test_add_channel_is_required(runner, fake_cron_dir):
+    r = runner.invoke(
+        cron_app,
+        ["add", "--name", "x", "--message", "y", "--every", "5m"],
+    )
+    assert r.exit_code == 2
+
+
+def test_add_unknown_channel_rejected_with_legal_list(runner, fake_cron_dir, feishu_enabled):
+    r = runner.invoke(
+        cron_app,
+        ["add", "--name", "x", "--message", "y", "--every", "5m", "--channel", "telegramm"],
+    )
+    assert r.exit_code == 2
+    assert "Valid channels" in r.stdout
+    assert "feishu" in r.stdout
+    assert "tui" in r.stdout
+    svc = CronService(fake_cron_dir / "jobs.json")
+    assert svc.list_jobs() == []
+
+
+def test_add_tui_defaults_to_direct_and_echoes_binding(runner, fake_cron_dir, feishu_enabled):
+    r = runner.invoke(
+        cron_app,
+        ["add", "--name", "x", "--message", "y", "--every", "5m", "--channel", "tui"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "only while one is open" in r.stdout
+    job = CronService(fake_cron_dir / "jobs.json").list_jobs()[0]
+    assert job.payload.channel == "tui"
+    assert job.payload.to == "direct"
+
+
+def test_add_im_channel_resolves_recent_session_and_echoes(runner, fake_cron_dir, feishu_enabled, monkeypatch):
+    class _Mgr:
+        def __init__(self, workspace):
+            pass
+
+        def find_most_recent_chat_id(self, channel):
+            return "ou_recent" if channel == "feishu" else None
+
+    monkeypatch.setattr("raven.session.manager.SessionManager", _Mgr)
+
+    r = runner.invoke(
+        cron_app,
+        ["add", "--name", "x", "--message", "y", "--every", "5m", "--channel", "feishu"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "ou_recent" in r.stdout
+    job = CronService(fake_cron_dir / "jobs.json").list_jobs()[0]
+    assert job.payload.to == "ou_recent"
+
+
+def test_add_im_channel_unresolvable_to_errors_with_hint(runner, fake_cron_dir, feishu_enabled, monkeypatch):
+    class _Mgr:
+        def __init__(self, workspace):
+            pass
+
+        def find_most_recent_chat_id(self, channel):
+            return None
+
+    monkeypatch.setattr("raven.session.manager.SessionManager", _Mgr)
+
+    r = runner.invoke(
+        cron_app,
+        ["add", "--name", "x", "--message", "y", "--every", "5m", "--channel", "feishu"],
+    )
+    assert r.exit_code == 2
+    assert "--to" in r.stdout
+    assert CronService(fake_cron_dir / "jobs.json").list_jobs() == []
+
+
+# ── list: runner visibility ──────────────────────────────────────────
+
+
+def test_list_warns_im_jobs_without_gateway(runner, populated_cron, feishu_enabled, monkeypatch):
+    monkeypatch.setattr("raven.cli._gateway_lock.read_status", lambda now: None)
+
+    r = runner.invoke(cron_app, ["list"])
+    assert r.exit_code == 0
+    assert "Runners: none" in r.stdout
+    assert "raven gateway" in r.stdout  # the IM-jobs warning names the fix
+
+
+def test_list_shows_gateway_and_warns_disabled_channel(runner, populated_cron, monkeypatch):
+    from raven.cli._gateway_lock import LockInfo
+
+    # No channels enabled in config → the populated feishu job is bound to a
+    # disabled channel; gateway itself is up.
+    monkeypatch.setattr(
+        "raven.cli._gateway_lock.read_status",
+        lambda now: LockInfo(pid=4242, started_at=0.0, config_path=""),
+    )
+    from raven.config.schema import Config
+
+    monkeypatch.setattr("raven.config.loader.load_config", lambda *a, **k: Config())
+
+    r = runner.invoke(cron_app, ["list"])
+    assert r.exit_code == 0
+    assert "4242" in r.stdout
+    assert "disabled channel" in r.stdout
+    assert "feishu" in r.stdout
 
 
 # ── _parse_duration ─────────────────────────────────────────────────
@@ -719,61 +860,24 @@ def test_config_get_all_shows_defaults(runner, isolated_config):
     """No flags → ``cron config get`` lists schema defaults as a table."""
     r = runner.invoke(cron_app, ["config", "get"])
     assert r.exit_code == 0, r.output
-    assert "forward_channels" in r.stdout
-    assert "*" in r.stdout
     assert "default_timezone" in r.stdout
     assert "Asia/Shanghai" in r.stdout
 
 
 def test_config_get_single_flag(runner, isolated_config):
-    """``--forward-channels`` flag prints just that key's value."""
-    r = runner.invoke(cron_app, ["config", "get", "--forward-channels"])
-    assert r.exit_code == 0, r.output
-    assert "*" in r.stdout
-    # Single-flag mode: no table header → no 'default_timezone' row leaks in
-    assert "Asia/Shanghai" not in r.stdout
-
-
-def test_config_get_both_flags(runner, isolated_config):
-    """Multiple flags → one value per line, no table."""
-    r = runner.invoke(
-        cron_app,
-        ["config", "get", "--forward-channels", "--default-timezone"],
-    )
+    """``--default-timezone`` flag prints just that key's value, no table."""
+    r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
-    assert lines == ["*", "Asia/Shanghai"]
+    assert lines == ["Asia/Shanghai"]
 
 
-def test_config_set_forward_channels_star(runner, isolated_config):
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "*"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["*"]
-
-
-def test_config_set_forward_channels_csv(runner, isolated_config):
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "telegram,feishu"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram", "feishu"]
-
-
-def test_config_set_forward_channels_none(runner, isolated_config):
-    """``none`` (sentinel) → empty list = no broadcast on next cron fire."""
-    r = runner.invoke(
-        cron_app,
-        ["config", "set", "--forward-channels", "none"],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == []
+def test_config_retired_forward_channels_flag_rejected(runner, isolated_config):
+    """forward_channels died with trigger-time routing — the flag is gone
+    and must fail as an unknown option, never write anything."""
+    r = runner.invoke(cron_app, ["config", "set", "--forward-channels", "*"])
+    assert r.exit_code == 2
+    assert not isolated_config.exists()
 
 
 def test_config_set_default_timezone_valid(runner, isolated_config):
@@ -807,56 +911,12 @@ def test_config_set_no_flags_errors(runner, isolated_config):
     assert not isolated_config.exists()
 
 
-def test_config_set_multiple_flags_one_call(runner, isolated_config):
-    """Setting two keys in one invocation patches both atomically (well,
-    serially; each write is atomic, and parse failures abort before any
-    write so a single bad value never corrupts state)."""
-    r = runner.invoke(
-        cron_app,
-        [
-            "config",
-            "set",
-            "--forward-channels",
-            "telegram",
-            "--default-timezone",
-            "UTC",
-        ],
-    )
-    assert r.exit_code == 0, r.output
-    data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram"]
-    assert data["cron"]["defaultTimezone"] == "UTC"
-
-
-def test_config_set_multiple_flags_invalid_one_aborts_all(
-    runner,
-    isolated_config,
-):
-    """If any flag's value fails validation, NO key is written — pre-parse
-    pass guarantees we never half-write."""
-    r = runner.invoke(
-        cron_app,
-        [
-            "config",
-            "set",
-            "--forward-channels",
-            "telegram",  # valid
-            "--default-timezone",
-            "Mars/Olympus",  # invalid
-        ],
-    )
-    assert r.exit_code == 1
-    assert "Invalid value" in r.stdout or "unknown timezone" in r.stdout
-    # No file written: pre-parse pass aborted before any update_cron_config call
-    assert not isolated_config.exists()
-
-
 def test_config_reset_with_yes(runner, isolated_config):
     """Reset removes the entire cron section from disk."""
     isolated_config.write_text(
         json.dumps(
             {
-                "cron": {"forwardChannels": ["telegram"], "defaultTimezone": "UTC"},
+                "cron": {"defaultTimezone": "UTC"},
                 "agents": {"defaults": {"model": "kept"}},
             }
         )
@@ -873,7 +933,7 @@ def test_config_reset_aborts_on_no(runner, isolated_config):
     isolated_config.write_text(
         json.dumps(
             {
-                "cron": {"forwardChannels": ["telegram"]},
+                "cron": {"defaultTimezone": "UTC"},
             }
         )
     )
@@ -881,15 +941,63 @@ def test_config_reset_aborts_on_no(runner, isolated_config):
     assert r.exit_code == 0
     assert "Aborted" in r.stdout
     data = json.loads(isolated_config.read_text())
-    assert data["cron"]["forwardChannels"] == ["telegram"]
+    assert data["cron"]["defaultTimezone"] == "UTC"
 
 
 def test_config_set_then_get_round_trip(runner, isolated_config):
     """Set, then get, returns the new value (dynamic reload)."""
     runner.invoke(
         cron_app,
-        ["config", "set", "--forward-channels", "telegram"],
+        ["config", "set", "--default-timezone", "America/New_York"],
     )
-    r = runner.invoke(cron_app, ["config", "get", "--forward-channels"])
+    r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
-    assert "telegram" in r.stdout
+    assert "America/New_York" in r.stdout
+
+
+def test_list_default_view_hints_hidden_auto_disabled(runner, fake_cron_dir):
+    """An auto-disabled reminder is hidden by the default view but must not
+    vanish without a trace: the default view prints a hint naming it, and
+    --all still lists the job itself."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 2
+    svc._save_store()
+    svc.record_fire(job.id)
+    assert svc.record_fire(job.id) is True  # auto-disabled at the limit
+
+    r = runner.invoke(cron_app, ["list"])
+    assert r.exit_code == 0
+    assert "auto-disabled" in r.stdout
+    assert job.id in r.stdout  # named in the hint even though hidden from the table
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert job.id in r_all.stdout
+
+
+def test_list_all_view_shows_no_auto_disabled_hint(runner, fake_cron_dir):
+    """--all already shows the job row itself; the hint is default-view-only."""
+    svc = CronService(fake_cron_dir / "jobs.json")
+    job = svc.add_job(
+        name="daily meds",
+        schedule=CronSchedule(kind="every", every_ms=3600 * 1000),
+        message="take meds",
+        channel="tui",
+        to="direct",
+    )
+    stored = next(j for j in svc._load_store().jobs if j.id == job.id)
+    stored.silent_fire_limit = 1
+    svc._save_store()
+    svc.record_fire(job.id)
+
+    r_all = runner.invoke(cron_app, ["list", "--all"])
+    assert r_all.exit_code == 0
+    assert "auto-disabled after repeated" not in r_all.stdout

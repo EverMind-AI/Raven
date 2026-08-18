@@ -324,3 +324,92 @@ async def test_recovery_disabled_falls_back_immediately(workspace):
     assert out is not None
     assert provider.calls == 1  # no retries when disabled
     assert "no response" in out[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tag debris counts as empty, so recovery still runs
+# ---------------------------------------------------------------------------
+
+
+def test_lone_closing_think_tag_reads_as_empty() -> None:
+    """A cut-off inline reasoning block leaves an opener-less closing tag.
+
+    The paired-block substitution finds nothing to remove, so an
+    eleven-character string reaches the recovery check looking like a real
+    answer -- recovery is skipped and the tag is what the user sees.
+    """
+    for debris in ("</mm:think>", "</think>", "</thinking>", "</mm:think></mm:think>"):
+        assert AgentLoop._strip_think(debris) is None, debris
+
+
+def test_paired_namespaced_block_reads_as_empty() -> None:
+    """A complete but empty namespaced block is debris too."""
+    assert AgentLoop._strip_think("<mm:think></mm:think>") is None
+
+
+def test_text_mentioning_a_tag_is_left_alone() -> None:
+    """Debris detection must not eat an answer that talks about tags.
+
+    The check asks whether anything survives removing the tags, and does not
+    rewrite the text it returns.
+    """
+    said = "The model emits </think> at the end of its reasoning."
+    assert AgentLoop._strip_think(said) == said
+
+
+def test_real_content_after_a_think_block_survives() -> None:
+    """The existing paired-block behaviour is unchanged."""
+    assert AgentLoop._strip_think("<think>reasoning</think>the answer") == "the answer"
+
+
+# ---------------------------------------------------------------------------
+# Inline-thinking detection: namespaced and orphan spellings
+# ---------------------------------------------------------------------------
+
+
+def test_inline_thinking_detects_namespaced_and_orphan_tags() -> None:
+    """The scan decides whether a turn produced reasoning at all.
+
+    An opener-only pattern misses both shapes a truncated turn actually
+    produces: a vendor-namespaced tag, and a closing tag whose opener the
+    backend swallowed. Missing them classifies a reasoning-only turn as a real
+    answer, which is exactly the recovery this module exists to trigger.
+    """
+    from raven.agent.loop.recovery import has_inline_thinking
+
+    assert has_inline_thinking("<mm:think>weighing options</mm:think>")
+    assert has_inline_thinking("weighing options</think>")
+    assert has_inline_thinking("<think>weighing options</think>")
+
+
+def test_inline_thinking_ignores_prose_about_thinking() -> None:
+    """No tag, no detection -- the word alone must not trigger recovery."""
+    from raven.agent.loop.recovery import has_inline_thinking
+
+    assert not has_inline_thinking("I was thinking about the reasoning behind it")
+    assert not has_inline_thinking("")
+    assert not has_inline_thinking(None)
+
+
+def test_paired_namespaced_block_is_stripped_not_shown() -> None:
+    """A complete block must not reach the user because of its prefix.
+
+    Debris detection and the orphan split both match tags by shape, so a
+    literal-only pattern here was the one place a vendor spelling still got
+    through -- and it got through in the worst form: a whole reasoning block
+    rendered as if it were the answer.
+    """
+    assert AgentLoop._strip_think("<mm:think>weighing options</mm:think>the answer") == "the answer"
+    assert AgentLoop._strip_think("<thinking>weighing</thinking>the answer") == "the answer"
+
+
+def test_a_mismatched_pair_is_not_treated_as_a_block() -> None:
+    """Deleting between two unrelated tags would take real content with it."""
+    text = "<think>weighing</thinking>the answer"
+
+    assert AgentLoop._strip_think(text) == text
+
+
+def test_one_end_namespaced_is_still_one_block() -> None:
+    """A backend that stamps only one end still wrote a single block."""
+    assert AgentLoop._strip_think("<mm:think>weighing</think>the answer") == "the answer"

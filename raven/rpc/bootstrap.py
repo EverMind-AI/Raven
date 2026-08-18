@@ -110,12 +110,10 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
     direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
-        from types import SimpleNamespace
-
         from raven.cli._cron_handler import make_on_cron_job
 
         cron_readback: dict[str, str] = {}
-        turn_scheduler, turn_hub, turn_ids, turn_teardown = build_rpc_spine(
+        turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_rpc_spine(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
@@ -126,12 +124,10 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
         agent_loop.subagents.set_submit(turn_scheduler.submit)
         if agent_loop.cron_service is not None:
             base_on_cron = make_on_cron_job(
-                agent_loop,
-                turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
-                channel_manager=SimpleNamespace(enabled_channels=[LOCAL_CHANNEL]),
                 default_channel=LOCAL_CHANNEL,
+                cron_service=agent_loop.cron_service,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()

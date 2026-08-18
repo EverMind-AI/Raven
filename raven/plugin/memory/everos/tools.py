@@ -125,10 +125,21 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     del ctx
     # Point EverOS at raven's ~/.everos/raven home before any everos import
     # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+    from raven.config.update_everos import (
+        configure_everos_env,
+        ensure_everos_home,
+        everos_owned,
+        everos_root,
+    )
 
-    configure_everos_env()
-    ensure_everos_home()
+    root = everos_root()
+    configure_everos_env(root)
+    # Templates only into a root raven owns. Multimodal parsing reads the same
+    # EverOS config the memory does -- one machine, one user, one set of keys --
+    # but reusing a root the user manages must not write to it, and "the files
+    # are usually already there" is not a basis for that promise.
+    if everos_owned():
+        ensure_everos_home(root)
     if not _multimodal_available():
         return None
     return UnderstandMediaTool()

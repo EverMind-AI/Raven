@@ -181,6 +181,16 @@ async def run_import(
     )
 
 
+class MemoryWriteDroppedError(RuntimeError):
+    """A batch was not written, and the backend said so rather than raising.
+
+    Raised here rather than returned so the per-source loop keeps deciding what
+    a failure means: it already marks the source failed, records the reason,
+    and moves on. Only the signal was lost when the backend stopped raising --
+    the policy around it was, and stays, correct.
+    """
+
+
 async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
     if not session.messages:
         return
@@ -192,7 +202,11 @@ async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
         nonlocal batch, batch_chars
         metadata: dict[str, Any] = {"is_final": is_final}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
-        await backend.store(session.session_id, batch, metadata=metadata)
+        landed = await backend.store(session.session_id, batch, metadata=metadata)
+        if landed is False:
+            raise MemoryWriteDroppedError(
+                f"memory service did not accept a batch for {session.session_id}; source left unsubmitted"
+            )
         logger.debug("store completed: session_id={}", session.session_id)
         batch = []
         batch_chars = 0

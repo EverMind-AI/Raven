@@ -151,7 +151,10 @@ async def test_settings_everos(workspace: Path, tmp_path: Path, monkeypatch: pyt
     from raven.config import update_everos
     from raven.rpc.methods import console
 
-    monkeypatch.setattr(update_everos, "_EVEROS_CONFIG", tmp_path / "everos.toml")
+    monkeypatch.setattr(update_everos, "everos_root", lambda: tmp_path)
+    # Upstream gates the write primitives on root ownership; a tmp root is not
+    # one raven created, so declare it owned for the test.
+    monkeypatch.setattr(update_everos, "everos_owned", lambda: True)
     _check("settings.everos", await console.settings_everos({}))
     _check(
         "settings.everosSet",

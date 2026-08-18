@@ -76,3 +76,23 @@ def test_mismatched_thinking_open_think_close_is_left_untouched():
     text = "<thinking>raw reasoning</think>\nfinal answer"
 
     assert split_orphan_think(text) == (None, text)
+
+
+def test_namespaced_orphan_close_tag_is_recognized():
+    """Vendors prefix the tag with their own namespace (MiniMax: ``<mm:think>``).
+
+    Which prefix a backend picked is not knowable in advance, so the pattern
+    matches the shape rather than a list of spellings. Missing one costs a
+    reasoning block rendered to the user as if it were the answer.
+    """
+    reasoning, content = split_orphan_think("raw reasoning text</mm:think>\nfinal answer")
+
+    assert reasoning == "raw reasoning text"
+    assert content == "final answer"
+
+
+def test_prose_mentioning_a_close_tag_still_splits_only_on_the_tag():
+    """The pattern stays anchored to a tag, not to the word inside it."""
+    text = "the model writes think and thinking a lot\nno tags here"
+
+    assert split_orphan_think(text) == (None, text)

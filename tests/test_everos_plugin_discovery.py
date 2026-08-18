@@ -145,7 +145,7 @@ class TestActivationAndFactory:
 
 @pytest.fixture
 def backend(tmp_path: Path):
-    from raven.plugin.memory.everos.backend import _NoOpAdapter
+    from raven.plugin.memory.everos.backend import ServiceState, _NoOpAdapter
 
     reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
     be = reg.build_memory_backend(
@@ -154,6 +154,11 @@ def backend(tmp_path: Path):
         services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
     )
     be._adapter = _NoOpAdapter()
+    # Swapping the adapter after construction is a test-only move; the
+    # constructor's adapter= argument is what tells a backend its transport is
+    # someone else's problem. Say the same thing here, or the backend keeps
+    # treating the service as unproven and refuses to write through the stub.
+    be._state = ServiceState.READY
     return be
 
 
@@ -170,12 +175,15 @@ class TestStubBehavior:
         assert isinstance(hits, list)
         assert all(isinstance(h, Memory) for h in hits)
 
-    async def test_store_returns_none(self, backend) -> None:
+    async def test_store_reports_that_it_landed(self, backend) -> None:
+        """store answers whether the slice was written. The stub accepts
+        everything, so it answers True -- a caller that checks the result must
+        not read the stub as a permanent failure."""
         result = await backend.store(
             "session-1",
             [{"role": "user", "content": "hi"}],
         )
-        assert result is None
+        assert result is True
 
     async def test_feedback_accepts_any_dict(self, backend) -> None:
         await backend.feedback({})

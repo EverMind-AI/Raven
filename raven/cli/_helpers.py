@@ -93,12 +93,43 @@ def check_provider_credentials(config: Config, model: str | None = None) -> None
             "no provider configured",
             # A command, not a config path: the old text pointed at
             # ~/.raven/config.json, the layout the CLI exists to hide.
-            remedy="Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>",
+            remedy=(
+                "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
+                "Or run `raven onboard` for guided setup."
+            ),
         )
 
     status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
-    if not status.ok:
-        raise MissingCredentialsError(status.summary, provider=provider_name)
+    if status.ok:
+        return
+
+    # A first run fails this check while naming a provider the user never chose:
+    # with nothing configured, routing falls back to the schema's default model,
+    # whose vendor then gets reported as the thing to go fix. Sending someone who
+    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
+    # so answer the wizard instead. Both halves are required -- a user who picked
+    # this model, or who has some other provider working, gets the specific
+    # verdict, which for the OAuth families names a sign-in rather than a key.
+    # Names come from the declared fields *and* the extras: an undeclared
+    # provider key is a supported shape, and `ProvidersConfig.get` is the only
+    # place allowed to resolve either kind, so route both through it rather than
+    # reading `__dict__` -- which sees no extras and would call a user whose one
+    # working credential lives there unconfigured.
+    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
+    if not chose_a_model and not any(
+        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
+    ):
+        raise MissingCredentialsError(
+            "no provider is configured yet -- run `raven onboard` for guided setup",
+            remedy="Already have a key? raven provider set <name> --api-key <key>",
+        )
+
+    raise MissingCredentialsError(
+        status.summary,
+        provider=provider_name,
+        remedy="Run `raven onboard` for guided setup.",
+    )
 
 
 def make_provider(config: Config, model: str | None = None):
@@ -202,7 +233,6 @@ def make_provider(config: Config, model: str | None = None):
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(
         temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
     )
@@ -229,7 +259,6 @@ def make_lazy_provider(config: Config):
         default_model=defaults.model,
         generation=GenerationSettings(
             temperature=defaults.temperature,
-            max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
         ),
@@ -398,9 +427,21 @@ def build_model_routing(config, provider):
     return router, provider
 
 
+def print_config_migration_notices() -> None:
+    """Tell the user about any config line a migration just changed for them.
+
+    The migrations run inside the loader, which has no terminal; this is the
+    place that does. Call it after the config is loaded and before the command
+    takes over the screen -- once printed, the notices are gone.
+    """
+    from raven.config.loader import drain_migration_notices
+
+    for notice in drain_migration_notices():
+        console.print(f"[yellow]Config updated:[/yellow] {notice}")
+
+
 __all__ = [
     "DEFAULT_PROBE_MESSAGE",
-    "warn_about_pending_cli_reminders",
     "make_provider",
     "send_probe",
     "print_probe_troubleshooting",
@@ -408,4 +449,5 @@ __all__ = [
     "build_model_routing",
     "parse_fake_now",
     "print_deprecated_memory_window_notice",
+    "print_config_migration_notices",
 ]

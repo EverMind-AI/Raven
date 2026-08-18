@@ -17,6 +17,7 @@ from typing import Any, Optional
 import typer
 
 from raven.agent.tools.deep_research import DEFAULT_MODEL
+from raven.cli._tty_guard import die_if_not_tty
 from raven.config.update_tools import ConfigReadError, get_deep_research, reset_deep_research, set_deep_research
 
 SIGNUP_URL = "https://platform.miromind.ai/console/api-keys"
@@ -189,6 +190,7 @@ def enable_cmd(
     console = Console()
 
     if key is None and model is None and api_base is None:
+        die_if_not_tty("raven deep-research enable --key <key>")
         configure_deep_research(non_interactive=False)
         return
 

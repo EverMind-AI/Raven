@@ -38,7 +38,7 @@ def test_tui_check_node_missing(monkeypatch):
     result = runner.invoke(app, ["tui", "--check"])
     assert result.exit_code == 1
     assert "Node" in result.output
-    assert "legacy-repl" in result.output
+    assert "raven agent -m" in result.output
 
 
 def test_tui_check_node_too_old(monkeypatch):

@@ -33,7 +33,15 @@ from raven.providers.base import LLMResponse
 # the reasoning in ``content`` as <think>…</think> rather than in the structured
 # reasoning_content field, so a content scan is required — checking only the
 # structured fields would miss them.
-_THINK_TAG_RE = re.compile(r"<think>|<thinking>|<reasoning>", re.IGNORECASE)
+# Matches an opening or a closing tag, with or without a vendor namespace
+# prefix (``<mm:think>``). A turn cut off inside an inlined block arrives as
+# a lone closing tag, so an opener-only pattern reads it as ordinary prose.
+_THINK_TAG_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
+_NS = r"(?:[a-z][\w.-]{0,15}:)?"
+_THINK_BLOCK_RE = re.compile(
+    rf"<{_NS}(think|thinking|reasoning)>[\s\S]*?</{_NS}\1>",
+    re.IGNORECASE,
+)
 
 POST_TOOL_NUDGE = (
     "You executed tool calls but returned an empty response. Use the tool "
@@ -72,6 +80,34 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
         thinking_prefill_max_retries=getattr(defaults, "thinking_prefill_max_retries", 2),
         empty_content_max_retries=getattr(defaults, "empty_content_max_retries", 3),
     )
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove paired think blocks. Debris is left in place for the check below.
+
+    Matched by the same shape as ``_THINK_TAG_RE``: any of the three tag names,
+    with or without a vendor namespace prefix. A single spelling here would let
+    a complete ``<mm:think>...</mm:think>`` block through to the user in full,
+    which is the one outcome stripping exists to prevent.
+
+    The backreference keeps the two ends the same tag -- ``<think>x</thinking>``
+    is a malformed pair, and deleting everything between two unrelated tags
+    would take real content with it. The prefixes are not tied to each other:
+    a backend that stamps one end and not the other still wrote one block.
+    """
+    return _THINK_BLOCK_RE.sub("", text).strip()
+
+
+def is_only_think_debris(text: str) -> bool:
+    """True when the text is nothing but think tags once they are removed.
+
+    The shape a turn cut off inside an inlined reasoning block arrives in: a
+    lone closing tag with no opener, which pairs with nothing and so survives
+    ``strip_think_blocks`` as an eleven-character string that reads like a real
+    answer. Asked of the residue rather than of vendor spellings -- which
+    prefix a backend picked is not knowable in advance.
+    """
+    return bool(text) and not _THINK_TAG_RE.sub("", text).strip()
 
 
 def has_inline_thinking(content: str | None) -> bool:

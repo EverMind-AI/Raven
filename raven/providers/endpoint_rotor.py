@@ -349,6 +349,12 @@ class EndpointRotorProvider(LLMProvider):
         of its wire is one answer, not one per endpoint."""
         return self._inners[0].emits_unparsed_reasoning()
 
+    def wire_model_id(self, model: str) -> str:
+        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+        which id a request goes out under is a property of the wire, and every
+        endpoint under one rotor shares it."""
+        return self._inners[0].wire_model_id(model)
+
     @property
     def model_overrides(self) -> dict[str, dict[str, Any]]:
         """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:

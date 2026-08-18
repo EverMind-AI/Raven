@@ -7,21 +7,31 @@ Read-only inspection (registry-level):
 - ``skill list``                — list skills visible to SkillForge
 - ``skill get <name>``          — show one skill's metadata (and optionally body)
 
+Lifecycle management (Hub install policy):
+
+- ``skill block <name>``        — add to skillForge.blocklist (refused everywhere)
+- ``skill unblock <name>``      — remove from skillForge.blocklist
+- ``skill remove <name>``       — delete an installed Hub bundle from the workspace
+
 ``commands.py`` imports :data:`skill_app` and registers it on the top-level
 ``app`` via ``app.add_typer(skill_app, name="skill")``.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
+from rich.text import Text
 
 console = Console()
 
 
-skill_app = typer.Typer(help="Inspect SkillForge registry (read-only)")
+skill_app = typer.Typer(help="Inspect and manage SkillForge skills")
 
 
 def _build_skill_service():
@@ -30,8 +40,39 @@ def _build_skill_service():
 
     config = load_config()
     workspace = config.workspace_path
-    sf_cfg = getattr(config, "skill_forge", None)
+    sf_cfg = _load_skill_forge_config() or getattr(config, "skill_forge", None)
     return LocalSkillCatalog(workspace, config=sf_cfg, start_watcher=False)
+
+
+def _load_skill_forge_config():
+    """The on-disk extension-block SkillForgeConfig, or ``None``.
+
+    The base ``Config.skill_forge`` property only ever returns defaults —
+    user-set fields like ``blocklist`` live in the extension block that
+    ``load_raven_config`` reads.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+
+        return load_raven_config().skill_forge
+    except Exception:
+        return None
+
+
+def _install_meta_cell(skill_md_path) -> str:
+    """``YYYY-MM-DD (source)`` from the skill dir's ``.install-meta.json``,
+    or an empty cell for skills without an install stamp."""
+    if not skill_md_path:
+        return ""
+    try:
+        record = json.loads(
+            (Path(str(skill_md_path)).parent / ".install-meta.json").read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError):
+        return ""
+    installed_at = str(record.get("installed_at") or "")[:10]
+    source = str(record.get("source") or "hub")
+    return f"{installed_at} ({source})" if installed_at else f"({source})"
 
 
 @skill_app.command("list")
@@ -52,13 +93,20 @@ def skill_list(
         console.print("[dim]No skills found.[/dim]")
         return
 
+    from raven.skill_hub.policy import is_blocked, normalize_blocklist
+
+    blocked = normalize_blocklist(getattr(_load_skill_forge_config(), "blocklist", None))
     table = Table(title=f"Skills ({len(metas)})")
     table.add_column("Name", style="cyan")
     table.add_column("Source", style="green")
     table.add_column("Description", overflow="fold")
+    table.add_column("Installed", style="dim")
     for m in metas:
         desc = (m.description or "")[:120]
-        table.add_row(m.name, m.source, desc)
+        name_cell = Text(m.name)
+        if is_blocked(blocked, m.name):
+            name_cell.append(" [blocked]", style="bold red")
+        table.add_row(name_cell, m.source, desc, _install_meta_cell(getattr(m, "path", None)))
     console.print(table)
 
 
@@ -83,6 +131,56 @@ def skill_get(
         if body:
             console.print("\n[bold]── SKILL.md ──[/bold]")
             console.print(Markdown(body))
+
+
+@skill_app.command("block")
+def skill_block(name: str = typer.Argument(..., help="Skill name / slug to refuse everywhere")):
+    """Add a skill to skillForge.blocklist (dropped from the injection pool
+    and refused by use_skill on the next agent/gateway start)."""
+    from raven.config.update import set_skill_blocked
+
+    blocklist = set_skill_blocked(name, True)
+    console.print(f"[green]Blocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
+
+
+@skill_app.command("unblock")
+def skill_unblock(name: str = typer.Argument(..., help="Skill name / slug to allow again")):
+    """Remove a skill from skillForge.blocklist."""
+    from raven.config.update import set_skill_blocked
+
+    blocklist = set_skill_blocked(name, False)
+    console.print(f"[green]Unblocked[/green] {name!r}. skillForge.blocklist = {blocklist}")
+    console.print("[dim]Takes effect on the next agent/gateway start.[/dim]")
+
+
+@skill_app.command("remove")
+def skill_remove(
+    name: str = typer.Argument(..., help="Installed Hub skill slug to delete"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+):
+    """Delete an installed Hub bundle (<workspace>/skills/hub/<slug>@<version>).
+
+    Removal alone does not stop a re-install on the next catalog hit —
+    pair it with ``skill block`` to keep the skill out."""
+    import shutil
+
+    from raven.config.loader import load_config
+
+    hub_dir = load_config().workspace_path / "skills" / "hub"
+    matches = [d for d in hub_dir.glob("*@*") if d.is_dir() and d.name.rsplit("@", 1)[0].casefold() == name.casefold()]
+    if not matches:
+        console.print(f"[red]No installed Hub bundle found for {name!r} under {hub_dir}[/red]")
+        raise typer.Exit(1)
+
+    for d in matches:
+        console.print(f"  {d}")
+    if not yes and not typer.confirm(f"Delete {len(matches)} bundle dir(s)?"):
+        raise typer.Exit(1)
+    for d in matches:
+        shutil.rmtree(d)
+    console.print(f"[green]Removed[/green] {len(matches)} bundle(s) of {name!r}.")
+    console.print("[dim]Tip: `raven skill block " + name + "` prevents silent re-install.[/dim]")
 
 
 __all__ = ["skill_app"]

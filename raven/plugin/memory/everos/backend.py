@@ -30,6 +30,7 @@ import asyncio
 import logging
 import re
 import time
+from enum import Enum
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
 
@@ -121,6 +122,54 @@ def _jsonify(obj: Any) -> Any:
 
 _DEFAULT_HTTP_TIMEOUT_S: float = 60.0
 _MEMORIZE_TIMEOUT_S: float = 360.0
+
+# Per-operation budgets. One flat 60s covered both reads and writes, which made
+# every turn hostage to a service that answers slowly or not at all. These are
+# sized by what the caller loses when they run out: a read that overruns costs
+# the turn its recalled memory, a write that overruns costs that turn's memory
+# permanently, and neither is worth a minute of the user's time.
+_RECALL_TIMEOUT_S: float = 8.0
+_STORE_TIMEOUT_S: float = 10.0
+
+
+class ServiceState(Enum):
+    """Whether the memory service is usable, and what would change that.
+
+    Two axes are folded into one enum because callers only ever act on the
+    combination: may I send a request, and is it worth probing again. The
+    states that answer "no" to both -- ``UNCONFIGURED`` and ``NO_BINARY`` --
+    describe the installation rather than the process, so no amount of probing
+    resolves them and a stray success must not clear them.
+    """
+
+    UNKNOWN = "unknown"
+    READY = "ready"
+    STARTING = "starting"
+    FAILED = "failed"
+    UNRESPONSIVE = "unresponsive"
+    UNCONFIGURED = "unconfigured"
+    NO_BINARY = "no_binary"
+    FOREIGN = "foreign"
+
+
+# Probing cannot change these: they are facts about the install, not the
+# process. Letting a probe promote out of them would hide a missing binary
+# behind somebody else's server answering on the same port.
+_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+
+# Only the opening state may spawn. Every other non-ready state has already
+# either spawned once (STARTING / FAILED), found the data occupied
+# (UNRESPONSIVE), been told not to (FOREIGN), or knows a spawn cannot succeed.
+_SPAWNABLE_STATES = frozenset({ServiceState.UNKNOWN})
+
+# Minimum gap between out-of-band probes. Coarse on purpose: this exists to
+# stop a task per turn from piling up, not to schedule anything.
+_PROBE_MIN_INTERVAL_S: float = 2.0
+
+# States where no write was ever going to land, so nothing was lost. Reporting
+# a loss here would tell an install that never configured a memory LLM that it
+# dropped turns of memory it never had.
+_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
 
 
 class _HttpEverosAdapter:
@@ -320,6 +369,21 @@ class EverosBackend:
         )
         self._turn_counts: dict[str, int] = {}
         self._feedback_noop_logged = False
+        # An injected adapter comes from a caller supplying its own transport,
+        # which is also a caller that owns whatever is on the other end: there
+        # is no server for this backend to probe or spawn. Production never
+        # takes this branch (``make_backend`` passes no adapter), so the state
+        # machine still governs every real session.
+        self._state: ServiceState = ServiceState.READY if adapter is not None else ServiceState.UNKNOWN
+        # The child raven spawned, when it spawned one. Kept past the start
+        # window so a later failure can ask "is it still booting or did it
+        # die" instead of guessing from how long it has been.
+        self._proc: Any | None = None
+        self._reported: set[ServiceState] = set()
+        self._probe_task: asyncio.Task | None = None
+        self._last_probe_at: float = 0.0
+        self._store_inflight: set[asyncio.Task] = set()
+        self._dropped_writes = 0
 
         if adapter is not None:
             self._adapter: _Adapter | None = adapter
@@ -342,6 +406,111 @@ class EverosBackend:
             api_key=api_key,
             timeout_s=timeout_s,
         )
+
+    # ── Service state ───────────────────────────────────────────────
+
+    def _apply_probe(self, result: Any) -> None:
+        """Move the state to whatever the probe just proved.
+
+        ``REFUSED`` is the only result that needs a second question. Nothing is
+        listening, but that is true both of a child still binding its port and
+        of one that exited a second ago, and the two want opposite responses --
+        wait, or stop and report. The child's exit code separates them; there is
+        no timing heuristic that does.
+        """
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        if self._state in _TERMINAL_STATES:
+            return
+        if result is ProbeResult.OK:
+            self._state = ServiceState.READY
+            return
+        if result is ProbeResult.TIMEOUT:
+            self._state = ServiceState.UNRESPONSIVE
+            return
+        if result is ProbeResult.REFUSED:
+            self._state = self._state_from_child()
+            return
+        self._state = ServiceState.UNRESPONSIVE
+
+    def _state_from_child(self) -> ServiceState:
+        """``STARTING`` or ``FAILED``, per the spawned child's exit code.
+
+        ``None`` means no child of ours: either nothing was spawned yet, or
+        another process holds the spawn lock and is starting one. Neither is a
+        failure of ours to report, so both read as still starting.
+        """
+        if self._proc is None or self._proc.poll() is None:
+            return ServiceState.STARTING
+        return ServiceState.FAILED
+
+    def _remember_child(self, proc: Any) -> None:
+        """Hold the spawned child, even if the start it belongs to then fails."""
+        self._proc = proc
+
+    def _may_spawn(self) -> bool:
+        """Whether starting a server could still help.
+
+        Guards against the loop where a child that dies on startup is spawned
+        again on the next turn, and again, filling the log with identical
+        tracebacks while the user waits.
+        """
+        return self._state in _SPAWNABLE_STATES
+
+    def _should_report(self) -> bool:
+        """True once per state per session, so a warning stays a warning."""
+        if self._state in self._reported:
+            return False
+        self._reported.add(self._state)
+        return True
+
+    def _kick_probe(self) -> None:
+        """Start an out-of-band probe, if one is not already due or running.
+
+        Fire-and-forget on purpose: the caller has already decided this turn
+        has no memory, and making it wait for confirmation would reintroduce
+        the stall the state machine exists to remove. The result lands in
+        ``_state`` and the next call benefits.
+        """
+        import time as _time
+
+        if self._state in _TERMINAL_STATES:
+            return
+        if self._probe_task is not None and not self._probe_task.done():
+            return
+        now = _time.monotonic()
+        if now - self._last_probe_at < _PROBE_MIN_INTERVAL_S:
+            return
+        self._last_probe_at = now
+        try:
+            self._probe_task = asyncio.get_running_loop().create_task(self._probe_once())
+        except RuntimeError:  # no running loop (sync context / teardown)
+            self._probe_task = None
+
+    async def _probe_once(self) -> None:
+        from raven.plugin.memory.everos._server import probe_health
+
+        base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
+        result = await asyncio.to_thread(probe_health, base_url)
+        self._apply_probe(result)
+
+    def _demote_from_exception(self, exc: BaseException) -> None:
+        """Classify a request failure the same way a probe would.
+
+        A read that fails and a probe that fails are the same observation
+        arriving through different doors, so they must not disagree about what
+        state the service is in.
+        """
+        import httpx
+
+        from raven.plugin.memory.everos._server import ProbeResult
+
+        if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+            self._apply_probe(ProbeResult.TIMEOUT)
+        elif isinstance(exc, httpx.ConnectError):
+            self._apply_probe(ProbeResult.REFUSED)
+        else:
+            self._apply_probe(ProbeResult.ERROR)
 
     def _warn_stale_identity_keys(self) -> None:
         """Surface a config left over from before identity moved to the host.
@@ -398,20 +567,117 @@ class EverosBackend:
                 self._adapter = _NoOpAdapter()
                 return
 
-            from raven.plugin.memory.everos._server import ensure_everos_server
+            from rich.console import Console
 
+            from raven.config.update_everos import everos_owned
+            from raven.plugin.memory.everos._server import (
+                EverosBinaryMissingError,
+                EverosNotConfiguredError,
+                ensure_everos_server,
+            )
+
+            stderr = Console(stderr=True)
             base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
-            try:
-                await ensure_everos_server(base_url)
-            except Exception as e:
-                self._logger.error(
-                    "EverosBackend: failed to start EverOS server (%s)",
-                    e,
+
+            if not everos_owned():
+                # A root the user manages: connect if a server is up, never start
+                # one. Starting it would take the OME jobstore lock exclusively,
+                # which is theirs to grant, not raven's to assume.
+                from raven.plugin.memory.everos._server import ProbeResult, probe_health
+
+                if await asyncio.to_thread(probe_health, base_url) is ProbeResult.OK:
+                    self._state = ServiceState.READY
+                    # Say what it can actually do, exactly as the owned path
+                    # does. The argument for the warning is stronger here, not
+                    # weaker: raven cannot repair someone else's embedding
+                    # config, so telling them is the only move it has.
+                    await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
+                    return
+                # FOREIGN, not NoOp: raven still must not start this server, but
+                # the user may start it themselves mid-session, and the probe
+                # that notices needs an adapter left to use.
+                self._state = ServiceState.FOREIGN
+                stderr.print(
+                    f"[yellow]Long-term memory is off: the EverOS you manage is not running at {base_url}.[/yellow]\n"
+                    "[dim]Start it yourself and Raven will use it; Raven does not start or stop it.[/dim]"
                 )
-                raise
+                return
+
+            try:
+                # Narrate only a real wait. ``on_wait`` does not fire when a
+                # server is already answering, which is the common case -- a line
+                # there would be noise on every single session, and a healthy
+                # start is meant to be silent.
+                # on_proc rather than the return value: when the child dies on
+                # startup the call raises, and an assignment from its result
+                # never happens -- leaving the handler unable to tell a dead
+                # child from one still booting.
+                self._proc = await ensure_everos_server(
+                    base_url,
+                    on_wait=lambda: stderr.print("[dim]Starting memory service...[/dim]"),
+                    on_proc=self._remember_child,
+                )
+                self._state = ServiceState.READY
+            except EverosNotConfiguredError:
+                # Reachable out of the box: memory.backend defaults to "everos"
+                # while the shipped everos.toml has an empty [llm] api_key. The
+                # user can act on this, so say it here rather than only in the
+                # log the caller writes.
+                self._state = ServiceState.UNCONFIGURED
+                stderr.print(
+                    "[yellow]Long-term memory is off: its LLM is not configured.[/yellow]\n"
+                    "[dim]Run `raven onboard` to set it up.[/dim]"
+                )
+                return
+            except EverosBinaryMissingError as e:
+                # An install problem, not a startup problem: no probe and no
+                # retry can resolve it, so it must not be filed with the states
+                # that keep trying.
+                self._state = ServiceState.NO_BINARY
+                stderr.print(
+                    f"[yellow]Long-term memory is off: {e}[/yellow]\n"
+                    "[dim]Install the everos CLI, then start a new session.[/dim]"
+                )
+                return
+            except Exception as e:
+                # Not raised on: the session continues without memory, and the
+                # state machine keeps probing in case the server comes up. The
+                # old ``raise`` cost the caller a traceback for a degradation it
+                # already handles.
+                self._state = self._state_from_child()
+                self._logger.error(
+                    "EverosBackend: failed to start EverOS server (%s); state=%s",
+                    e,
+                    self._state.value,
+                )
+                stderr.print(
+                    f"[yellow]Memory service unavailable: {e}[/yellow]\n"
+                    "[dim]This session starts without long-term memory; Raven retries in the background.[/dim]"
+                )
+                return
             # Off-thread: the probe and the config read below are both blocking
             # IO, and start() runs on the loop every session begins on.
             await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
+
+    @staticmethod
+    def _warn_unowned_recall(base_url: str, report: Any) -> None:
+        """Say what a server the user runs cannot do, on its own authority.
+
+        No log path in the message: the log raven knows about is the one it
+        writes for servers it starts, and this is not one of those. Silence
+        from a server too old to report capabilities stays silence rather than
+        becoming a verdict.
+        """
+        if not report.reports_capabilities or report.available("embedding") is not False:
+            return
+        from rich.console import Console
+
+        Console(stderr=True).print(
+            "[yellow]The EverOS you run is up but embedding is unavailable: recall falls back "
+            "to keyword matching.[/yellow]\n"
+            "[dim]Memories are still stored. Fix the embedding provider in that server's own\n"
+            "config and restart it -- Raven follows along.[/dim]"
+        )
 
     @staticmethod
     def _warn_if_recall_cannot_work(base_url: str) -> None:
@@ -428,9 +694,18 @@ class EverosBackend:
         the user never configured is a choice they already know about, and
         repeating it every start would be noise.
         """
+        from raven.config.update_everos import everos_owned
         from raven.plugin.memory.everos._health import probe_capabilities
 
         report = probe_capabilities(base_url)
+        if not everos_owned():
+            # Their server, so the local toml is not evidence about it: no root
+            # is recorded, and everos_role_configured would read the fallback
+            # one -- the fabricated root doctor was fixed to stop trusting. It
+            # usually does not exist, so the gate read False and this warning,
+            # the only move raven has left on this path, never fired at all.
+            EverosBackend._warn_unowned_recall(base_url, report)
+            return
         from raven.config.update_everos import everos_role_configured
 
         if not (everos_role_configured("embedding") and report.available("embedding") is False):
@@ -448,6 +723,19 @@ class EverosBackend:
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")
+        if self._probe_task is not None and not self._probe_task.done():
+            self._probe_task.cancel()
+        if self._dropped_writes:
+            # Said out loud, once, at the only moment it is still actionable.
+            # A dropped write is a conversation the user will never be able to
+            # recall, and until now that fact lived only in a log file the TUI
+            # does not even print to the terminal.
+            from rich.console import Console
+
+            Console(stderr=True).print(
+                f"[yellow]{self._dropped_writes} turn(s) were not written to long-term memory "
+                "because the memory service was unavailable.[/yellow]"
+            )
         aclose = getattr(self._adapter, "aclose", None)
         if aclose is not None:
             try:
@@ -488,17 +776,29 @@ class EverosBackend:
         owner_type: _OwnerType = "user" if user_id is not None else "agent"
         if self._adapter is None:
             return []  # adapter still building (start() not finished); degrade to no hits
+        if self._state is not ServiceState.READY:
+            # Nothing to wait for and nothing to pay: the turn gets no memory,
+            # and a probe goes out of band so the next turn might. This is what
+            # replaces swapping in a no-op adapter, which ended the session's
+            # chance of recovering the moment one start failed.
+            self._kick_probe()
+            return []
         try:
-            data = await self._adapter.search(
-                user_id=user_id,
-                agent_id=agent_id,
-                query=query,
-                top_k=top_k,
+            data = await asyncio.wait_for(
+                self._adapter.search(
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    query=query,
+                    top_k=top_k,
+                ),
+                timeout=_RECALL_TIMEOUT_S,
             )
-        except Exception as e:
+        except (Exception, asyncio.TimeoutError) as e:
+            self._demote_from_exception(e)
             self._logger.warning(
-                "EverosBackend.recall failed (%s); returning empty",
+                "EverosBackend.recall failed (%s); state=%s; returning empty",
                 e,
+                self._state.value,
             )
             return []
         if data is None:
@@ -511,8 +811,13 @@ class EverosBackend:
         messages: list[dict[str, Any]],
         *,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         """Forward a turn's messages to EverOS for indexing.
+
+        Returns whether the slice landed. A caller that cannot act on the answer
+        is free to discard it -- the protocol is still fire-and-forget per call
+        -- but one whose resume state marks a source done needs to know, or a
+        dropped write erases the only record that the source is still pending.
 
         EverOS partitions internally by message sender (user-track vs
         agent-track); we don't need to specify ``owner_type`` here. We
@@ -526,16 +831,30 @@ class EverosBackend:
         skip the adapter call entirely.
         """
         if not messages:
-            return
+            return True
         payload = self._convert_messages(
             messages,
             agent_id=self._agent_id,
             user_id=self._user_id,
         )
         if not payload:
-            return
+            # Nothing to write is not a failed write: the conversion drops
+            # system messages, and a slice that is empty afterwards must not
+            # be reported as a source that needs retrying.
+            return True
         if self._adapter is None:
-            return
+            return False
+        if self._state is not ServiceState.READY:
+            # Counted rather than logged and forgotten: a dropped write is a
+            # turn the user will never be able to recall, and the only place
+            # that fact can still be told to them is the end of the session.
+            # Not counted when the service was never configured or installed --
+            # there was no memory to lose, and saying otherwise tells a fresh
+            # install it lost something it never had.
+            if self._state not in _NEVER_HAD_MEMORY:
+                self._dropped_writes += 1
+            self._kick_probe()
+            return False
         if metadata and "is_final" in metadata:
             is_final = bool(metadata["is_final"])
         else:
@@ -543,13 +862,41 @@ class EverosBackend:
             self._turn_counts[session_id] = n
             is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
 
-        await self._adapter.memorize(
-            session_id,
-            payload,
-            is_final=is_final,
-            app_id=metadata.get("app_id") if metadata else None,
-            project_id=metadata.get("project_id") if metadata else None,
-        )
+        # A per-turn append must not hold a turn open; a final flush is the call
+        # that makes EverOS extract, which is what the six-minute budget was
+        # sized for. One number for both silently overrode the other.
+        budget = _MEMORIZE_TIMEOUT_S if is_final else _STORE_TIMEOUT_S
+        try:
+            await asyncio.wait_for(
+                self._adapter.memorize(
+                    session_id,
+                    payload,
+                    is_final=is_final,
+                    app_id=metadata.get("app_id") if metadata else None,
+                    project_id=metadata.get("project_id") if metadata else None,
+                ),
+                timeout=budget,
+            )
+        except asyncio.TimeoutError:
+            # Deliberately not a demotion: an extraction that outran its budget
+            # is slow, not absent, and demoting would drop the next write too --
+            # turning one slow batch into the loss of the batch behind it.
+            self._dropped_writes += 1
+            self._logger.warning(
+                "EverosBackend.store timed out after %ss; this turn was not indexed",
+                budget,
+            )
+            return False
+        except Exception as e:
+            self._demote_from_exception(e)
+            self._dropped_writes += 1
+            self._logger.warning(
+                "EverosBackend.store failed (%s); state=%s; this turn was not indexed",
+                e,
+                self._state.value,
+            )
+            return False
+        return True
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Deliberate no-op pending an upstream everos feedback sink.
@@ -800,10 +1147,19 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
     after manifest activation. Sync construction only — async setup
     happens in ``EverosBackend.start()``."""
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+    from raven.config.update_everos import (
+        configure_everos_env,
+        ensure_everos_home,
+        everos_owned,
+        everos_root,
+    )
 
-    configure_everos_env()
-    ensure_everos_home()
+    root = everos_root()
+    configure_everos_env(root)
+    # See tools.py: a root the user manages is read-only, template files
+    # included.
+    if everos_owned():
+        ensure_everos_home(root)
     return EverosBackend(ctx)
 
 

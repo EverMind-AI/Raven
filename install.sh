@@ -4,6 +4,9 @@
 #   Remote (website):   curl -fsSL https://raven.evermind.ai/install.sh | sh
 #   Local (dev clone):  git clone ... && cd raven && ./install.sh
 #
+# A piped run always installs the published release wheel, even from inside a
+# clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
+#
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
 # is already present and only fills the gaps:
@@ -146,11 +149,32 @@ ensure_node() {
 }
 
 # --- 3. install raven ------------------------------------------------------
+# True when $1 holds a raven source checkout (its own pyproject, not a dep's).
+is_raven_source() {
+  [ -f "$1/pyproject.toml" ] && grep -q '^name = "raven"' "$1/pyproject.toml" 2>/dev/null
+}
+
 install_raven() {
   # Local mode: run from a raven source checkout -> editable install of the
-  # working tree (what a developer wants). Otherwise install from git.
-  script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-  if [ -f "$script_dir/pyproject.toml" ] && grep -q '^name = "raven"' "$script_dir/pyproject.toml" 2>/dev/null; then
+  # working tree (what a developer wants). Otherwise install the release wheel.
+  #
+  # "$0" names a real file only when this script runs as a file
+  # (./install.sh). Piped through `curl ... | sh` the script arrives on stdin,
+  # "$0" is "sh" and dirname "$0" is "." -- taking that as the source dir turns
+  # a one-line install started from inside a clone into a silent editable
+  # install of that working tree, whatever it happens to contain. So local mode
+  # requires "$0" to be a file; RAVEN_LOCAL_SRC is the explicit opt-in for a
+  # piped run.
+  script_dir=""
+  if [ -n "${RAVEN_LOCAL_SRC:-}" ]; then
+    script_dir="$(CDPATH= cd -- "$RAVEN_LOCAL_SRC" 2>/dev/null && pwd || true)"
+    [ -n "$script_dir" ] || die "RAVEN_LOCAL_SRC is not a directory: $RAVEN_LOCAL_SRC"
+    is_raven_source "$script_dir" || die "RAVEN_LOCAL_SRC is not a raven source checkout: $script_dir"
+  elif [ -f "$0" ]; then
+    script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+    is_raven_source "$script_dir" || script_dir=""
+  fi
+  if [ -n "$script_dir" ]; then
     info "Local raven source detected; editable install: $script_dir"
     # The TUI bundle must exist before first run. In a dev checkout it isn't
     # committed, so build it now if Node is available.
@@ -189,10 +213,42 @@ install_raven() {
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/raven/releases/latest" 2>/dev/null \
+      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null \
         | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
     fi
-    [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
+    if [ -z "$wheel_url" ]; then
+      # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
+      # shared egress can exhaust it. The release page carries no API quota: its
+      # redirect names the latest stable tag, and the wheel URL is derived from it.
+      warn "GitHub API returned no release wheel; falling back to the release page."
+      tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
+        "https://github.com/EverMind-AI/Raven/releases/latest")" || tag=""
+      # Same shape the CLI and install.ps1 enforce: the redirect must land on this
+      # repository's tag page, and the version must be exactly three numeric fields
+      # with no leading zeros.
+      case "$tag" in
+        https://github.com/EverMind-AI/Raven/releases/tag/v*) version="${tag##*/}" ;;
+        *) version="" ;;
+      esac
+      version="${version#v}"
+      case "$version" in
+        *.*.*.*) version="" ;;
+        *.*.*) ;;
+        *) version="" ;;
+      esac
+      if [ -n "$version" ]; then
+        v_rest="${version#*.}"
+        for field in "${version%%.*}" "${v_rest%%.*}" "${v_rest#*.}"; do
+          case "$field" in
+            ""|*[!0-9]*|0[0-9]*) version="" ;;
+          esac
+        done
+      fi
+      if [ -n "$version" ]; then
+        wheel_url="https://github.com/EverMind-AI/Raven/releases/download/v${version}/raven-${version}-py3-none-any.whl"
+      fi
+    fi
+    [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
     # Derive the locked-constraints URL from the wheel URL (same release dir) so
     # the constraints always match the wheel being installed, including when
     # RAVEN_WHEEL_URL pins an older wheel. Missing asset / download failure ->
@@ -227,15 +283,27 @@ install_raven() {
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
+  # Read before installing so the closing hint can tell a first run from an
+  # upgrade; the install itself never writes config.json (the wizard does).
+  if [ -f "$RAVEN_HOME/config.json" ]; then
+    had_config=1
+  else
+    had_config=0
+  fi
   detect_platform
   ensure_uv
   ensure_node
   install_raven
 
   printf '\n'
-  ok "All set! Open a new terminal (or source your shell profile), then run:"
-  printf '\n    \033[1mraven\033[0m            # enter the TUI\n'
-  printf '    \033[1mraven agent\033[0m -m "hello"\n\n'
+  if [ "$had_config" = 1 ]; then
+    ok "Raven updated. Your config in $RAVEN_HOME is unchanged."
+    printf '\n    \033[1mraven\033[0m    # continue where you left off\n\n'
+    printf '  tip: next time you can upgrade in place with \033[1mraven upgrade\033[0m\n\n'
+  else
+    ok "All set! Open a new terminal (or source your shell profile), then run:"
+    printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
+  fi
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
   fi
