@@ -53,6 +53,39 @@ _current_config_path: Path | None = None
 # load_config calls (status/doctor load more than once) warn only once.
 _warned_paths: set[str] = set()
 
+# Migration lines already logged in this process. The strips below rewrite the
+# in-memory copy only, so an unmigrated file re-emits every line on every load
+# -- and a running gateway loads once per cron fire, which turned a one-time
+# notice into steady log noise.
+_logged_migrations: set[str] = set()
+
+
+class _MigrationLog:
+    """Logger proxy emitting each distinct migration line once per process."""
+
+    def __init__(self, inner: logging.Logger) -> None:
+        self._inner = inner
+
+    def info(self, message: str, *args: Any) -> None:
+        # A record the logger would drop was never told to anyone. The gateway
+        # loads its config before it installs a sink, so counting that first
+        # dropped line as already-logged would silence the copy that reaches
+        # the log file -- turning the noise this dedup fixes into silence.
+        if not self._inner.isEnabledFor(logging.INFO):
+            return
+        rendered = message % args if args else message
+        if rendered in _logged_migrations:
+            return
+        _logged_migrations.add(rendered)
+        self._inner.info(message, *args)
+
+
+# Module-level: the context-window migration logs from its own function, and it
+# runs twice per command (load_config's read plus the persist pass re-reading
+# the raw file), so it needs the same dedup the in-loader migrations get.
+_migration_log = _MigrationLog(logging.getLogger(__name__))
+
+
 # User-facing lines produced by a migration that actually changed something,
 # waiting to be printed by whichever CLI entry point owns the terminal.
 # Migrations run inside the loader, which has no console of its own and whose
@@ -193,7 +226,7 @@ def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False
         if defaults.get(legacy_key) == LEGACY_CONTEXT_WINDOW_TOKENS:
             defaults.pop(legacy_key)
             changed = True
-            logging.getLogger(__name__).info(
+            _migration_log.info(
                 "Migrated: dropped agents.defaults.%s (the retired 65536 default)",
                 legacy_key,
             )
@@ -360,9 +393,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped:
     the config path -- the one that can read the watermark and write it back --
     opts in; the shims below are idempotent and always run.
     """
-    import logging as _logging
 
-    _log = _logging.getLogger(__name__)
+    _log = _migration_log
 
     if run_stamped:
         _migrate_legacy_context_window(data, notify=True)

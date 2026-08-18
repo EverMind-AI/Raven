@@ -664,3 +664,61 @@ class TestASelfManagedServerCanStillBeBroken:
 
         assert "rerank" not in info.configured
         assert "rerank" not in info.unbuilt
+
+
+def test_doctor_reports_which_everos_binary_it_resolved(healthy_config: Path, no_memory_server, tmp_path) -> None:
+    """Which everos raven resolved was invisible from every command, so a
+    memory install that looks configured but will not start had nothing to
+    check. The resolver prefers the interpreter's own directory, which is the
+    detail that matters when PATH holds a different environment's copy."""
+    from raven.config import update_everos as ue
+    from raven.plugin.memory.everos import _server
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
+    no_memory_server.setattr(ue, "everos_owned", lambda: True)
+    no_memory_server.setattr(_server, "_everos_executable", lambda: "/opt/venv/bin/everos")
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "Binary:" in r.stdout
+    assert "everos" in r.stdout
+
+
+def test_doctor_says_when_no_everos_binary_resolves(healthy_config: Path, no_memory_server, tmp_path) -> None:
+    """A missing binary is reported, not raised: doctor's job is to describe a
+    broken install rather than fail on it."""
+    from raven.config import update_everos as ue
+    from raven.plugin.memory.everos import _server
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
+    no_memory_server.setattr(ue, "everos_owned", lambda: True)
+
+    def _missing() -> str:
+        raise _server.EverosBinaryMissingError("everos not found next to /x/bin or on PATH.")
+
+    no_memory_server.setattr(_server, "_everos_executable", _missing)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "Binary:" in r.stdout
+    assert "not found" in r.stdout
+
+
+def test_doctor_omits_the_binary_line_for_a_server_raven_does_not_run(healthy_config: Path, no_memory_server) -> None:
+    """Raven never spawns a server it does not own, so which binary it would
+    have used is not a fact about that install."""
+    from raven.config import update_everos as ue
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_owned", lambda: False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert "Binary:" not in r.stdout

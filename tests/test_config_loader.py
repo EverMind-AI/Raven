@@ -481,3 +481,108 @@ def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
         loader.Path.write_text = original  # type: ignore[method-assign]
 
     assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)
+
+
+def test_migration_logs_once_per_process(caplog) -> None:
+    """The strips rewrite the in-memory copy only, so an unmigrated file
+    re-emits every migration line on every load. A gateway loads once per cron
+    fire, which turned a one-time notice into steady log noise."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_config
+
+    _logged_migrations.clear()
+    raw = {"cron": {"forwardChannels": []}}
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        _migrate_config(copy.deepcopy(raw))
+        _migrate_config(copy.deepcopy(raw))
+
+    lines = [r.getMessage() for r in caplog.records if "cron.forwardChannels" in r.getMessage()]
+    assert len(lines) == 1, lines
+
+
+def test_migration_dedup_is_per_distinct_line(caplog) -> None:
+    """Two different retired keys are two different notices; deduping by
+    rendered message must not collapse them into one."""
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_config
+
+    _logged_migrations.clear()
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        _migrate_config({"cron": {"forwardChannels": []}, "sentinel": {"monitors": []}})
+
+    dropped = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Migrated: dropped")]
+    assert len(dropped) == 2, dropped
+    assert len(dropped) == len(set(dropped))
+
+
+def test_migration_notice_survives_a_load_before_the_sink_exists(caplog) -> None:
+    """The gateway loads its config before it installs a log sink, so the first
+    load's INFO records are dropped. Counting a dropped line as already-logged
+    silences the only copy that would have reached the log file."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_config
+
+    _logged_migrations.clear()
+    raw = {"cron": {"forwardChannels": []}}
+
+    log = logging.getLogger("raven.config.loader")
+    log.setLevel(logging.WARNING)  # no sink yet: INFO goes nowhere
+    try:
+        _migrate_config(copy.deepcopy(raw))
+    finally:
+        log.setLevel(logging.NOTSET)
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        _migrate_config(copy.deepcopy(raw))
+
+    lines = [r.getMessage() for r in caplog.records if "cron.forwardChannels" in r.getMessage()]
+    assert len(lines) == 1, "a load whose records were dropped must not consume the notice"
+
+
+def test_context_window_migration_logs_once_across_both_passes(caplog) -> None:
+    """This migration logs from its own function, and one command walks it
+    twice: load_config's read, then the persist pass re-reading the raw file.
+    Its stamp is best-effort (_write_migration_version swallows OSError), so a
+    config dir that cannot take the stamp leaves it re-running on every load --
+    the same repeat this dedup exists to stop."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_legacy_context_window
+
+    _logged_migrations.clear()
+    raw = {"agents": {"defaults": {"contextWindowTokens": 65536}}}
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        assert _migrate_legacy_context_window(copy.deepcopy(raw), notify=True) is True
+        assert _migrate_legacy_context_window(copy.deepcopy(raw)) is True
+
+    lines = [r.getMessage() for r in caplog.records if "contextWindowTokens" in r.getMessage()]
+    assert len(lines) == 1, lines
+
+
+def test_stamped_migration_pass_dedupes_too(caplog) -> None:
+    """The stamped path runs a migration the unstamped one does not, so it needs
+    its own coverage: deduping only what `run_stamped=False` reaches would leave
+    that line repeating."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_config
+
+    _logged_migrations.clear()
+    raw = {"agents": {"defaults": {"contextWindowTokens": 65536}}}
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        _migrate_config(copy.deepcopy(raw), run_stamped=True)
+        _migrate_config(copy.deepcopy(raw), run_stamped=True)
+
+    lines = [r.getMessage() for r in caplog.records if "contextWindowTokens" in r.getMessage()]
+    assert len(lines) == 1, lines

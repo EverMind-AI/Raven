@@ -21,6 +21,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 from raven.config.paths import get_logs_dir
+from raven.utils.log_redaction import combine_filters, redacting_filter
 
 
 def redirect_loguru_to_file(
@@ -44,13 +45,17 @@ def redirect_loguru_to_file(
 
     log_path = get_logs_dir() / filename
 
+    # Every sink redacts: the file is what gets attached to a bug report, and
+    # the terminal is what gets pasted into one.
+    file_filter = combine_filters(redacting_filter, record_filter)
+
     logger.remove()
     logger.add(
         str(log_path),
         level=file_level,
         rotation=rotation,
         retention=retention,
-        filter=record_filter,
+        filter=file_filter,
         enqueue=True,  # thread-safe writes from channel threads + asyncio
         # diagnose=True would annotate tracebacks with local variable values,
         # writing secrets (API tokens, etc.) into a persisted, retained file.
@@ -58,9 +63,9 @@ def redirect_loguru_to_file(
         diagnose=False,
     )
     if terminal_level is not None:
-        logger.add(sys.stderr, level=terminal_level)
+        logger.add(sys.stderr, level=terminal_level, filter=redacting_filter)
     if os.environ.get("RAVEN_CLI_DEBUG"):
-        logger.add(sys.stderr, level="DEBUG")
+        logger.add(sys.stderr, level="DEBUG", filter=redacting_filter)
 
     _intercept_stdlib_logging(logger)
     _strip_tty_stream_handlers()
