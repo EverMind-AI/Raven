@@ -316,19 +316,15 @@ function callIndex(messages) {
    in English and hands it over as a KIND, so the sentence is chosen here, in
    the reader's language -- the old canned string was pushed down the token
    stream and arrived as the model's answer, in English, in whatever paragraph
-   the model happened to be mid-way through. */
-function noticeRow(kind, detail) {
-  const box = mk('div', 'rnote in');
-  const hd = mk('div', 'hd');
-  hd.appendChild(ico('M12 8.5v4M12 16h.01M10.3 3.9 2.6 17.2A1.6 1.6 0 0 0 4 19.6h16a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z'));
-  hd.appendChild(mk('span', '', T('gui.notice.by_raven')));
-  box.appendChild(hd);
-  /* An unknown kind still gets a row: a client one release behind the runtime
-     should say something happened rather than drop it on the floor. */
-  box.appendChild(mk('div', 'tx', T('gui.notice.' + kind, null, kind)));
-  if (detail) box.appendChild(mk('div', 'why', detail));
-  return box;
-}
+   the model happened to be mid-way through.
+
+   Quiet: the runtime reporting a decision it made is not a failure, and the
+   card this used to be -- clay stripe, warning triangle, its own header --
+   shouted louder than the failures further down the same transcript. */
+/* An unknown kind still gets a row: a client one release behind the runtime
+   should say something happened rather than drop it on the floor. */
+const noticeRow = (kind, detail) =>
+  noteRow(T('gui.notice.' + kind, null, kind), detail, { quiet: true });
 
 function renderHistory(messages) {
   /* Drawing somebody else's run into the panel says nothing about whether
@@ -366,7 +362,7 @@ function renderHistory(messages) {
       sealTools();
       const endAt = msOf(m.timestamp);
       collapseTurn(turnAt && endAt && endAt - turnAt >= 1000 ? dur(endAt - turnAt) : null);
-      stageBox().appendChild(noticeRow(m.notice.kind || '', m.notice.detail || ''));
+      noticeRow(m.notice.kind || '', m.notice.detail || '');
       return;
     }
     if (m.role === 'assistant' && m.turn_ended) {
@@ -376,12 +372,14 @@ function renderHistory(messages) {
       sealTools();
       const endAt = msOf(m.timestamp);
       collapseTurn(turnAt && endAt && endAt - turnAt >= 1000 ? dur(endAt - turnAt) : null);
-      const r = mk('div', 'act in');
-      const note = m.turn_ended.status === 'cancelled'
-        ? T('gui.halted')
-        : T('gui.turn_died', { e: firstErrLine(m.turn_ended.reason || '') || '' });
-      r.append(mk('span', 'g'), mk('span', 'arg', note));
-      stageBox().appendChild(r);
+      const stopped = m.turn_ended.status === 'cancelled';
+      /* The catalogue entry carries its own separator before {e}; the row draws
+         that separator itself, so the reason is handed over as the detail and
+         the entry is emptied down to its label -- same shape as gui.compress.fail
+         below. Handing over the formatted string instead would leave the reason
+         inside the label, where nothing can keep the untruncated text. */
+      noteRow(stopped ? T('gui.halted') : T('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, ''),
+        stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped });
       return;
     }
     if (m.role === 'assistant') {
@@ -533,11 +531,7 @@ function onEvent(ev) {
        comes next. */
     if (live.st) { live.st.seal(); live.st = null; }
     flushSay();
-    const host = stageBox();
-    /* Before the live glyph, like every other row that lands mid-turn -- after
-       it the notice would sit under the spinner still claiming to be working. */
-    host.insertBefore(noticeRow(p.kind || '', p.detail || ''), host.querySelector(':scope > .turnlive'));
-    down();
+    noticeRow(p.kind || '', p.detail || '');
   } else if (ev.type === 'thinking.delta') {
     killStatus();
     const st = ensureStep();
@@ -592,7 +586,8 @@ function onEvent(ev) {
     /* A turn that died upstream (a provider timeout, a rate limit) is the one
        error worth offering to re-run, and re-running means the message that
        started it -- not a fresh guess at what the user wanted. */
-    errLine(p.message || 'error', p.detail || p.reason || '', lastAsk ? () => send(lastAsk) : null);
+    noteRow(p.message || 'error', p.detail || p.reason || '',
+      lastAsk ? { retry: () => send(lastAsk) } : null);
     goState(); drawMeter(); drawList();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
@@ -1161,7 +1156,7 @@ const mediaOf = (text) => {
 
 send = function (text) {
   const pending = atts.filter((a) => a.uploading).length;
-  if (pending) { errLine(T('gui.att.pending'), T('gui.att.pending_body', { n: pending })); return; }
+  if (pending) { noteRow(T('gui.att.pending'), T('gui.att.pending_body', { n: pending })); return; }
   if (atts.length) {
     const list = atts.map((a) => `- ${a.path}`).join('\n');
     /* Handing over a file with nothing typed is a message in itself; the note
@@ -1183,8 +1178,8 @@ send = function (text) {
   const failed = (e) => {
     killStatus();
     busy = false;
-    errLine(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)),
-      () => send(text));
+    noteRow(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)),
+      { retry: () => send(text) });
     goState(); drawMeter();
   };
   if (!draft) {
@@ -1220,11 +1215,9 @@ function softStop() {
   if (live.st) live.st.seal();
   collapseTurn(turnDur());
   stop_(); busy = false;
-  const r = mk('div', 'act in');
-  r.append(mk('span', 'g'), mk('span', 'arg', T('gui.halted')));
-  $('#stage').appendChild(r);
+  noteRow(T('gui.halted'), '', { quiet: true, host: $('#stage') });
   resetTurnState();
-  drawMeter(); goState(); drawList(); down();
+  drawMeter(); goState(); drawList();
 }
 
 /* Queued messages were waiting for the engine, and a stop is the engine coming
@@ -5074,7 +5067,7 @@ function addFiles(fileList) {
           const i = atts.indexOf(entry);
           if (i >= 0) atts.splice(i, 1);
           drawAtts();
-          errLine(T('gui.att.fail', { name: file.name }), (e.data && e.data.detail) || e.message || String(e));
+          noteRow(T('gui.att.fail', { name: file.name }), (e.data && e.data.detail) || e.message || String(e));
         });
     };
     reader.onerror = () => {
@@ -5187,7 +5180,7 @@ SLASH.forEach((x) => {
           const s = sess(cur); if (s) s.last = T('gui.sess.cleared');
           use = null; drawMeter(); drawList();
         })
-        .catch((e) => errLine(T('gui.clear_title'), (e.data && e.data.detail) || e.message || String(e)));
+        .catch((e) => noteRow(T('gui.clear_title'), (e.data && e.data.detail) || e.message || String(e)));
     });
   }
   if (x.id === 'gui.compress') x.fn = compressNow;
@@ -5198,18 +5191,15 @@ SLASH.forEach((x) => {
    earlier half of a session has stopped being useful. */
 async function compressNow() {
   if (!cur || draft) return;
-  const line = mk('div', 'act in');
-  line.append(mk('span', 'g'), mk('span', 'arg', T('gui.compress.running')));
-  $('#stage').appendChild(line); down();
+  const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') });
   try {
     const r = await rpc.call('session.compress', { session_id: cur });
-    const arg = line.querySelector('.arg');
-    arg.textContent = r.removed
+    noteSay(line, r.removed
       ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
-      : T('gui.compress.noop');
+      : T('gui.compress.noop'), '');
   } catch (e) {
     line.remove();
-    errLine(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''),
+    noteRow(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''),
       (e.data && e.data.detail) || e.message || String(e));
   }
   down();

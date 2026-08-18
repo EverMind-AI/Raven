@@ -673,7 +673,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    model's call count is not something the reader should feel. */
 .step + .step { margin-top: 12px; }
 
-/* legacy quiet notice row (halt) */
+/* quiet mono row: the subagent panel's running glyph and the hub card footer.
+   The transcript's own notices left for .tnote -- a stop and a failure reading
+   as two different kinds of row was the thing that split. */
 .act {
   display: flex; align-items: baseline; gap: 7px;
   font-family: var(--mono); font-size: var(--step--1); color: var(--muted);
@@ -818,28 +820,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sdlv.err .ic { stroke: var(--clay); }
 .sdlv.err .tx { color: var(--clay); }
-
-/* Raven speaking, not the model. Everything here is chosen to stop it reading
-   as an answer: no prose column, no copy/branch actions, a rule down the left
-   like a quotation from somewhere else, and the reason on its own line -- the
-   thing the canned sentence never said. Rendering it as an answer was the bug:
-   it inherited the model's voice and glued itself to the model's last words. */
-.rnote {
-  margin: 12px 0 2px; padding: 9px 12px; border-left: 2px solid var(--clay);
-  background: var(--surface); border-radius: 0 6px 6px 0;
-  font-size: 12px; line-height: 1.55; color: var(--muted);
-}
-.rnote .hd {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; color: var(--clay); margin-bottom: 3px;
-}
-.rnote .hd svg { width: 12px; height: 12px; flex: none; stroke: var(--clay); fill: none; stroke-width: 1.7; }
-/* The blocked command itself, so the reader can see what was refused rather
-   than only that something was. */
-.rnote .why {
-  margin-top: 5px; font-family: var(--mono); font-size: 11px;
-  color: var(--faint); word-break: break-word;
-}
 
 /* an empty target would still spend a flex gap, opening a hole after the verb */
 .wrow .ar:empty { display: none; }
@@ -1154,22 +1134,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 
-.errline {
-  display: flex; align-items: center; gap: 9px; margin: 16px 0;
-  border: 1px solid var(--line); border-left: 2px solid var(--clay);
-  border-radius: 0 8px 8px 0; background: var(--surface); padding: 9px 13px; font-size: 12.5px;
+/* Everything raven itself says in the transcript -- a failure, or a fixed note
+   about what the runtime just did -- is this one row. It was three: a card with
+   a ground, a left stripe and a bold red lead word for failures; a second card
+   with an icon and a "Raven" header for runtime notices; a bare quiet line for
+   a stop. The card was the bug: a dropped upload got the visual weight of an
+   answer, and three failed uploads in a row buried the conversation under
+   panels. So: one line, the same metrics as a tool row, truncated at the
+   column's edge rather than wrapping, and colour as the only difference --
+   clay when something broke and the reader may have to act, faint when the
+   runtime is only reporting its own state. Same red as a failed tool row.
+
+   center, not baseline: an overflow:hidden child takes its bottom edge as its
+   baseline, so baseline alignment padded every row with a phantom descender. */
+.tnote {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  margin: 12px 0 2px; padding-left: 7px;
+  font-family: var(--mono); font-size: var(--step--1); line-height: 1.6; color: var(--faint);
 }
-.errline .m { flex: 1; color: var(--muted); }
-.errline b { color: var(--clay); font-family: var(--mono); font-size: 11.5px; }
-/* The summary line and its buttons stay one row; the opened detail takes the
-   full width beneath them, so a long traceback does not squeeze the row. */
-.errline { flex-wrap: wrap; }
-.errline .errfull {
-  flex-basis: 100%; margin: 8px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto;
-  background: var(--raised); border-radius: 6px;
-  font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--faint);
-  white-space: pre-wrap; overflow-wrap: break-word;
-}
+.tnote.bad { color: var(--clay); }
+.tnote .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The one action a failed row can offer. Plain text so the row stays a line:
+   a bordered button would rebuild the card one corner at a time. */
+.tnote .rt { flex: none; color: inherit; opacity: .75; text-decoration: underline; text-underline-offset: 2px; }
+.tnote .rt:hover { opacity: 1; }
 
 
 /* prose */
@@ -5484,7 +5472,7 @@ function openSession(s) {
     ask(r.ask); replay(r, true);
   } else if (s.status === 'err') {
     ask('把支付回调那块拆成两个 handler');
-    errLine('找不到模块 stripe（internal/pay/callback.go:12）', '装上依赖或改用内置 http 客户端后重试。');
+    noteRow('找不到模块 stripe（internal/pay/callback.go:12）', '装上依赖或改用内置 http 客户端后重试。');
   } else {
     pitch();
   }
@@ -5673,40 +5661,67 @@ function ask(text, when) {
   stageBox().appendChild(w); down();
 }
 
-/* A failure reports in two registers: one line a person can act on, and the
-   provider's own text for whoever has to debug it. Printing the whole thing
-   inline was neither -- a mid-stream litellm timeout arrives as a paragraph
-   that repeats the same sentence three times inside two nested tracebacks,
-   and the one fact in it (the upstream timed out) is buried.
+/* Writes what the row shows and what it can give back, together. Both have to
+   move as one: a caller that rewrites the visible line and leaves the recoverable
+   text behind (compressNow swapping its result over "Compacting...") would strand
+   the row holding the wrong thing.
 
-   `retry` is the caller's: an error card cannot know what should happen next,
-   and guessing was worse than not offering. Omit it and no button appears. */
-function errLine(what, how, retry) {
-  const w = mk('div', 'errline in');
-  w.append(mk('b', null, T('gui.fail')));
-  const full = String(how || '');
+   `title` goes up unconditionally rather than only when the line is measured to
+   overflow. A measurement at insert is a snapshot of a layout that keeps moving:
+   opening the workspace re-lays the chat column and its divider drags, so a row
+   that fitted the full column when it landed is ellipsised with nothing to hover
+   the moment the panel opens -- the recovery path disappearing exactly when the
+   truncation arrives. A tooltip duplicating a fully visible line costs nothing;
+   it is only ever drawn on hover. */
+function noteSay(row, label, detail) {
+  const head = String(label || '');
+  const full = String(detail || '');
   const brief = firstErrLine(full, 140) || full;
-  w.appendChild(mk('span', 'm', brief ? `${what} — ${brief}` : String(what)));
-  /* Only when the short form actually dropped something. A disclosure that
-     opens onto the line already shown is a lie about there being more. */
-  if (full && brief !== full) {
-    const more = mk('button', 'mini', T('gui.err.detail'));
-    const pre = mk('pre', 'errfull', full);
-    pre.hidden = true;
-    more.onclick = () => {
-      pre.hidden = !pre.hidden;
-      more.textContent = T(pre.hidden ? 'gui.err.detail' : 'gui.err.detail_hide');
-      down();
-    };
-    w.appendChild(more);
-    w.appendChild(pre);
-  }
-  if (typeof retry === 'function') {
-    const b = mk('button', 'mini', T('gui.retry'));
-    b.onclick = () => { w.remove(); retry(); };
+  row.querySelector('.tx').textContent = brief ? `${head} · ${brief}` : head;
+  row.title = full ? `${head} · ${full}` : head;
+}
+
+/* The one row for everything raven says about itself in the transcript, so a
+   new kind of notice cannot arrive wearing its own shape. `label` leads, the
+   detail follows after a `·`, and the whole thing is one line: a failure and a
+   framework note differ only in colour.
+
+   A failure still reports in two registers -- one line a person can act on, and
+   the provider's own text for whoever has to debug it -- and the second one no
+   longer costs a panel, but it does need to survive as text and not just as a
+   tooltip: a hover cannot be selected or copied and does not exist on touch,
+   and the visible line is capped at 140 characters. So the row carries the same
+   right-click Copy the answer bubble does, over the UNTRUNCATED text -- which is
+   what someone pasting a litellm traceback into an issue actually needs, since
+   that paragraph repeats itself inside two nested tracebacks and the line can
+   only ever hold the one fact in it.
+
+   Options: `quiet` for a framework note (no failure happened, so no red),
+   `host` for a caller that must write to the main stage even while a delegated
+   transcript owns stageBox(), and `retry`, which is the caller's -- this row
+   cannot know what should happen next, and guessing was worse than not
+   offering. Omit it and no action appears. */
+function noteRow(label, detail, opts) {
+  const o = opts || {};
+  const w = mk('div', 'tnote in' + (o.quiet ? '' : ' bad'));
+  w.appendChild(mk('span', 'tx'));
+  noteSay(w, label, detail);
+  /* `title` is the whole text by construction, so it is also what Copy hands
+     over -- no second copy of the string to fall out of step with the row. */
+  ctxMenu(w, () => [
+    { label: T('gui.answer.copy'), fn: () => copyToClip(w.title, T('gui.answer.copied')) },
+  ]);
+  if (typeof o.retry === 'function') {
+    const b = mk('button', 'rt', T('gui.retry'));
+    b.onclick = () => { w.remove(); o.retry(); };
     w.appendChild(b);
   }
-  stageBox().appendChild(w); down();
+  /* Above the live glyph, like every other row that lands mid-turn -- under it
+     the note would sit beneath a spinner still claiming to be working. */
+  const host = o.host || stageBox();
+  host.insertBefore(w, host.querySelector(':scope > .turnlive'));
+  down();
+  return w;
 }
 
 /* ══ transcript: three voices, three folding depths ═══════════════
@@ -6961,10 +6976,8 @@ function send(text) {
 
 function halt() {
   stop_(); busy = false;
-  const r = mk('div', 'act in');
-  r.append(mk('span', 'g'), mk('span', 'arg', '已中断 · 上面的步骤保留'));
-  $('#stage').appendChild(r);
-  drawMeter(); goState(); drawList(); down();
+  noteRow('已中断 · 上面的步骤保留', '', { quiet: true, host: $('#stage') });
+  drawMeter(); goState(); drawList();
 }
 
 /* ══ workspace ════════════════════════════════════════════════════
@@ -9944,7 +9957,7 @@ function openRun(j, run) {
   if (!run.ok) {
     $('#stage').innerHTML = '';
     ask(j.what);
-    errLine(run.note, T('gui.cron.rerun_note'));
+    noteRow(run.note, T('gui.cron.rerun_note'));
   }
   toast(`打开了 ${run.at} 那次运行`);
 }
