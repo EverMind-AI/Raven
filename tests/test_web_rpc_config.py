@@ -115,6 +115,39 @@ async def test_presets_list_set_and_hotapply(cfg_path: Path) -> None:
     assert [a["name"] for a in resp["result"]["agents"]] == ["claude_code"]
 
 
+async def test_list_reports_stateful_names_as_a_sibling_key(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`statefulNames` must sit beside `agents`, never inside one of its entries: an
+    acp entry carrying it would fail `reject_unsupported_acp_fields` on the next
+    `set`. A cli agent's `resumeCommand` makes it stateful; an acp agent with no
+    recorded capability snapshot is the documented caveat -- stateless, not
+    defaulted to stateful just because it is acp.
+    """
+    monkeypatch.setattr("raven.agent.acp.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    await _dispatch(
+        d,
+        "raven.subagents.set",
+        {
+            "agents": [
+                {
+                    "name": "claude_code",
+                    "kind": "cli",
+                    "command": "claude -p {prompt} --session-id {agent_id}",
+                    "resumeCommand": "claude --resume {agent_id} {prompt}",
+                },
+                {"name": "unprobed_acp", "kind": "acp", "command": "acp-agent serve"},
+            ]
+        },
+    )
+
+    resp = await _dispatch(d, "raven.subagents.list", {})
+    assert [a["name"] for a in resp["result"]["agents"]] == ["claude_code", "unprobed_acp"]
+    assert resp["result"]["statefulNames"] == ["claude_code"]
+
+
 async def test_set_invalid_returns_error_and_does_not_apply(cfg_path: Path) -> None:
     agent = _FakeAgent()
     d = Dispatcher()

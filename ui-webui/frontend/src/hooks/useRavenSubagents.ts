@@ -17,6 +17,10 @@ import type { RavenSubagentProbe, RavenThirdPartySubagent } from '@/api';
 export function useRavenSubagents() {
 	const [agents, setAgents] = useState<RavenThirdPartySubagent[]>([]);
 	const [presets, setPresets] = useState<RavenThirdPartySubagent[]>([]);
+	// `undefined` (never coerced to `[]`) means the gateway sent no `statefulNames`
+	// key at all; SubagentInstanceMonitor tells that apart from "sent, and
+	// empty" to decide whether to fall back to its own cli-only guess.
+	const [statefulNames, setStatefulNames] = useState<string[] | undefined>(undefined);
 	const [probes, setProbes] = useState<Record<string, RavenSubagentProbe>>({});
 	const [loading, setLoading] = useState(true);
 	const [probing, setProbing] = useState(false);
@@ -50,11 +54,13 @@ export function useRavenSubagents() {
 			]);
 			setAgents(a.agents ?? []);
 			setPresets(p.presets ?? []);
+			setStatefulNames(a.statefulNames);
 			void reprobe();
 		} catch (e) {
 			toast.error(`Failed to load subagents: ${e instanceof Error ? e.message : String(e)}`);
 			setAgents([]);
 			setPresets([]);
+			setStatefulNames(undefined);
 		} finally {
 			setLoading(false);
 		}
@@ -75,5 +81,16 @@ export function useRavenSubagents() {
 		[reprobe],
 	);
 
-	return { agents, presets, probes, probesLoaded, loading, probing, reload, reprobe, save };
+	return {
+		agents,
+		presets,
+		statefulNames,
+		probes,
+		probesLoaded,
+		loading,
+		probing,
+		reload,
+		reprobe,
+		save,
+	};
 }

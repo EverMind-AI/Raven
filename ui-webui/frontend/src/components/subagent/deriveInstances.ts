@@ -72,17 +72,22 @@ interface CallNode {
  *    contributes an exchange. Nodes sharing an ``instance`` handle fold into
  *    one multi-turn row (that is what the handle means: the same conversation,
  *    resumed); a node without one is its own single-turn row, keyed by run and
- *    node id. Structure comes from the **call arguments**, not the manifest or
- *    the live overlay: the args carry the ``prompt_template`` neither of the
- *    other two does, and they are in the transcript, so they are the only
- *    source that is there before the run starts and still there after a reload.
- *    A node's output is not in the transcript at all — the exchange records
- *    where to fetch it from instead (see ``Exchange.source``).
+ *    node id. Structure comes from the **call arguments**: the args carry the
+ *    ``prompt_template`` neither the manifest nor the live overlay does, and
+ *    they are in the transcript, so they are the only source that is there
+ *    before the run starts and still there after a reload. A node's own
+ *    handle falls back to the live overlay when the call carries none, because
+ *    minting happens inside the tool, after those arguments were recorded;
+ *    the overlay is rebuilt from the durable run manifest, so that fallback
+ *    survives a reload too. A node's output is not in the transcript at all —
+ *    the exchange records where to fetch it from instead (see
+ *    ``Exchange.source``).
  *
  * @param statefulNames - Prototypes configured with a resume command, i.e. the
  *   ones an instance handle can actually resume.
  * @param liveDagRuns - Live per-run DAG overlay keyed by ``run_id`` (from
- *   ``DagRunsContext``), used only to bind each DAG call to its run id.
+ *   ``DagRunsContext``), used to bind each DAG call to its run id and as the
+ *   fallback source for a node's minted instance handle.
  */
 export function deriveInstances(
 	msgs: Msg[],
@@ -124,9 +129,14 @@ export function deriveInstances(
 		const input = parseInput(call.input);
 		const prototype = typeof input.agent === 'string' ? input.agent : undefined;
 		if (!prototype || !statefulNames.has(prototype)) continue;
-		const handle = typeof input.instance === 'string' ? input.instance : undefined;
-		if (!handle) continue;
 		const meta = (results.get(call.id)?.metadata ?? {}) as Record<string, unknown>;
+		// The handle may have been minted inside the tool, which happens after
+		// the model's arguments were recorded -- so the input carries none and
+		// the tool hands it back through the result's metadata instead.
+		const handle =
+			(typeof input.instance === 'string' && input.instance ? input.instance : undefined) ??
+			(typeof meta.instance === 'string' ? meta.instance : undefined);
+		if (!handle) continue;
 		record(
 			{
 				key: `${prototype}/${handle}`,
@@ -151,7 +161,18 @@ export function deriveInstances(
 		const nodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
 		for (const n of nodes) {
 			if (typeof n.id !== 'string' || typeof n.subagent !== 'string') continue;
-			const handle = typeof n.instance === 'string' && n.instance ? n.instance : null;
+			const overlayNode = runId
+				? liveDagRuns[runId]?.nodes.find((o) => o.id === n.id)
+				: undefined;
+			// A minted handle is not in the call arguments -- minting happens inside the
+			// tool, after those arguments were recorded -- so fall back to the live DAG
+			// overlay, which restoreDagRuns.ts rebuilds from the durable manifest too.
+			const handle =
+				(typeof n.instance === 'string' && n.instance ? n.instance : undefined) ??
+				(typeof overlayNode?.instance === 'string' && overlayNode.instance
+					? overlayNode.instance
+					: undefined) ??
+				null;
 			record(
 				{
 					// A stateful node folds into its handle's row across runs; a

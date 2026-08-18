@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
+from raven.agent.subagent.instances import mint_handle
+from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX
 from raven.agent.tools.base import Tool
 
 if TYPE_CHECKING:
@@ -41,6 +43,10 @@ class SpawnTool(Tool):
         self._manager = manager
         self._default = _SpawnOrigin(channel="cli", chat_id="direct", session_key="cli:direct")
         self._origin: ContextVar[_SpawnOrigin] = ContextVar("spawn_origin")
+        # Written by execute and popped by take_metadata in the loop's own task,
+        # so the handoff cannot rely on a ContextVar write propagating upward.
+        # Keyed by session so concurrent turns never read each other's handle.
+        self._pending: dict[str, dict[str, Any]] = {}
 
     def _cur(self) -> _SpawnOrigin:
         return self._origin.get(None) or self._default
@@ -48,6 +54,9 @@ class SpawnTool(Tool):
     def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
         self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key))
+
+    def take_metadata(self) -> dict[str, Any] | None:
+        return self._pending.pop(self._cur().session_key, None)
 
     @property
     def name(self) -> str:
@@ -107,22 +116,46 @@ class SpawnTool(Tool):
                 ),
             }
         stateful_names = [a.name for a in agents if a.stateful]
+        # Declared whatever the roster holds, because the default sub-agent is
+        # resumable on its own (its transcript is persisted per handle) and is the
+        # only target a default install has. Gating this on a stateful third-party
+        # agent existing left that install unable to name a handle at all, while
+        # `execute` minted one anyway and the announcement told the model to pass it
+        # back -- pointing it at an argument it was never offered.
+        targets = "the default sub-agent (omit `agent`)"
         if stateful_names:
-            props["instance"] = {
-                "type": "string",
-                "description": (
-                    "Optional: a short semantic handle (e.g. 'refactor-auth') naming a "
-                    "conversation with a stateful third-party agent. Reuse the same handle "
-                    "to continue that session; omit it to start a fresh one. Only for "
-                    f"`agent` in {stateful_names} -- elsewhere a handle continues nothing "
-                    "and the call is rejected."
-                ),
-            }
+            targets += f", and `agent` in {stateful_names}"
+        props["instance"] = {
+            "type": "string",
+            "description": (
+                "Optional: a short semantic handle (e.g. 'refactor-auth') naming a "
+                "conversation with a resumable sub-agent. Reuse the same handle to "
+                "continue that session. Omit it and one is assigned automatically and "
+                "reported when the call finishes, so any run can be continued later. "
+                f"Accepted for {targets} -- against any other `agent` a handle continues "
+                "nothing and the call is rejected."
+            ),
+        }
         return {
             "type": "object",
             "properties": props,
             "required": ["task"],
         }
+
+    def _is_stateful(self, agent: str | None) -> bool:
+        """Whether this target can continue a handle handed back to it.
+
+        The single predicate behind both the refusal below and the minting in
+        ``execute``, so the two can never disagree about what a handle is worth.
+        ``agent is None`` is the built-in in-process sub-agent, whose transcript
+        is persisted per handle (raven/agent/subagent/instance_state.py); an
+        unknown name is left to the manager to reject rather than pre-judged
+        here.
+        """
+        if agent is None:
+            return True
+        meta = next((a for a in self._third_party_agents() if a.name == agent), None)
+        return meta is None or meta.stateful
 
     def _reject_useless_instance(self, agent: str | None, instance: str | None) -> str | None:
         """Why this handle cannot work, or ``None`` when it can.
@@ -134,17 +167,9 @@ class SpawnTool(Tool):
         reads as the sub-agent forgetting rather than as a rejected argument.
         Refused before the spawn so nothing runs under the false expectation.
         """
-        if not instance:
+        if not instance or self._is_stateful(agent):
             return None
-        roster = {a.name: a for a in self._third_party_agents()}
-        if agent is None:
-            # A default Raven sub-agent is resumable now: its transcript is
-            # persisted per handle (raven/agent/subagent/instance_state.py).
-            return None
-        meta = roster.get(agent)
-        if meta is None or meta.stateful:
-            return None
-        names = sorted(name for name, a in roster.items() if a.stateful)
+        names = sorted(a.name for a in self._third_party_agents() if a.stateful)
         alt = f" Sub-agents that can: {names}." if names else ""
         return (
             f"Error: sub-agent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
@@ -163,8 +188,19 @@ class SpawnTool(Tool):
         """Spawn a subagent to execute the given task."""
         if (refusal := self._reject_useless_instance(agent, instance)) is not None:
             return refusal
+        # Minted rather than left empty so every run of a resumable sub-agent is
+        # addressable afterwards. Filling the field the model would have filled
+        # is what keeps the rest of the dispatch path unchanged.
+        minted = not instance and self._is_stateful(agent)
+        if minted:
+            instance = mint_handle(label or task, fallback=agent or "raven")
         org = self._cur()
-        return await self._manager.spawn(
+        # Cleared before the call rather than only on the stateless path: an earlier
+        # stateful call whose metadata went uncollected (no tool-event sink on this
+        # channel) must not have its handle popped and reported as this call's own,
+        # and that is just as true when this call is refused below.
+        self._pending.pop(org.session_key, None)
+        result = await self._manager.spawn(
             task=task,
             label=label,
             origin_channel=org.channel,
@@ -172,5 +208,14 @@ class SpawnTool(Tool):
             session_key=org.session_key,
             agent=agent,
             instance=instance,
+            instance_auto=minted,
             workspace=workdir.current(),
         )
+        # Published only once the manager has taken the spawn. A refusal (delegation
+        # paused, hourly cap) comes back as the result rather than as an exception,
+        # and a handle announced for one would draw an instance row and a `new` badge
+        # for a run that never started -- for every refused call, now that an unnamed
+        # one carries a handle too.
+        if instance and not result.startswith(SPAWN_REFUSED_PREFIX):
+            self._pending[org.session_key] = {"instance": instance, "instance_auto": minted}
+        return result

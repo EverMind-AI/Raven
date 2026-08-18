@@ -103,7 +103,8 @@ flag (default `true`) is described above.
 A handle reaches beyond one run: two graphs in the same conversation that name the same
 handle share one sub-agent session, in whichever order they reach it. Reuse a handle across
 runs only when you mean to continue that conversation; give the later graph a different one
-otherwise. A node with no `instance` always starts from a clean session, whatever its id.
+otherwise. Omitting `instance` does not mean no session: one is assigned automatically per node
+and reported in the run summary when it finishes, so that node can be continued later too.
 
 ### Sub-agent capability tags
 

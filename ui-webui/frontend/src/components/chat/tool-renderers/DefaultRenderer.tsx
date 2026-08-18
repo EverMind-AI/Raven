@@ -11,15 +11,22 @@ export function defaultGetDisplayName(call: ToolCallBlock): string {
 
 /**
  * A compact `handle · new|resumed` badge for a stateful sub-agent call.
- * Handle comes from the call input; the create/resume action from the
- * result metadata. Returns null when the call carries no instance handle
- * (stateless sub-agent) so stateless calls look unchanged.
+ * Handle comes from the call input, falling back to the result metadata for
+ * a handle minted inside the tool; the create/resume action always comes
+ * from the result metadata. Returns null when the call carries no instance
+ * handle (stateless sub-agent) so stateless calls look unchanged.
  */
 export function subagentBadge(pair: ToolCallWithResult, t: TFunction): ReactNode {
 	const input = parseInput(pair.call.input);
-	const handle = typeof input.instance === 'string' ? input.instance : undefined;
+	const meta = pair.result?.metadata;
+	// A minted handle is not in the call input -- minting happens inside the
+	// tool, after the input was recorded -- so fall back to the result's
+	// metadata, the same way deriveInstances.ts does for the instance strip.
+	const handle =
+		(typeof input.instance === 'string' && input.instance ? input.instance : undefined) ??
+		(typeof meta?.instance === 'string' ? meta.instance : undefined);
 	if (!handle) return null;
-	const action = pair.result?.metadata?.action;
+	const action = meta?.action;
 	const label =
 		action === 'resume'
 			? t('tool.subagentResumed')

@@ -687,3 +687,49 @@ def test_build_subagent_prompt_skills_allow_stacks_with_the_tool_filter(tmp_path
 
     assert "subagent-dag-orchestration" not in prompt
     assert "weather" in prompt
+
+
+def _spawn_origin(agent: str | None, instance: str | None) -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "chat_id": "default",
+        "session_key": "web:sess1",
+        "agent": agent,
+        "instance": instance,
+        "handle": instance or "abcd1234",
+    }
+
+
+async def test_announcement_carries_the_instance_handle() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        "abcd1234", "Refactor", "do it", "done", _spawn_origin("claude_code", "refactor-auth-a3f9c1"), "ok"
+    )
+
+    assert "Instance handle: refactor-auth-a3f9c1" in submitted[0].text
+
+
+async def test_announcement_omits_the_handle_line_for_a_stateless_call() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "One shot", "do it", "done", _spawn_origin("oneshot", None), "ok")
+
+    assert "Instance handle" not in submitted[0].text
+
+
+async def test_announcement_no_longer_tells_the_model_to_drop_technical_detail() -> None:
+    """The old wording made the handle a forbidden 'technical detail', which
+    would have had the model discard the thing it was just handed."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "Summarize", "do it", "done", _spawn_origin(None, "summarize-a1b2c3"), "ok")
+
+    assert 'Do not mention technical details like "subagent" or task IDs' not in submitted[0].text
+    assert "out of what you say to the user" in submitted[0].text

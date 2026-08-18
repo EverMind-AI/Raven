@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -25,6 +27,30 @@ from loguru import logger
 _FILENAME = "subagent_instances.json"
 
 _Key = tuple[str, str, str]
+
+_SLUG_SEPARATORS_RE = re.compile(r"[^a-z0-9]+")
+_MAX_SLUG_CHARS = 32
+
+
+def _slug(seed: str) -> str:
+    return _SLUG_SEPARATORS_RE.sub("-", seed.lower()).strip("-")[:_MAX_SLUG_CHARS].strip("-")
+
+
+def mint_handle(seed: str, *, fallback: str = "agent") -> str:
+    """A fresh handle for a stateful call that named no instance.
+
+    The six hex characters are what make it addressable rather than merely
+    unique: a handle repeated across two DAG runs would otherwise share one
+    session between graphs that asked for nothing of the sort, and a handle
+    equal to a name the model might also choose would shadow it. Reading the
+    slug is the only reason the seed is carried at all -- nothing keys on it.
+    ``fallback`` keeps the handle readable when the seed itself slugifies to
+    nothing, which a non-Latin label does routinely rather than as an edge
+    case; it is slugified the same way, and ``"agent"`` remains the last
+    resort when the fallback reduces to nothing too.
+    """
+    slug = _slug(seed) or _slug(fallback) or "agent"
+    return f"{slug}-{uuid.uuid4().hex[:6]}"
 
 
 def default_registry_path() -> Path:
