@@ -80,6 +80,12 @@ class _MigrationLog:
         self._inner.info(message, *args)
 
 
+# Module-level: the context-window migration logs from its own function, and it
+# runs twice per command (load_config's read plus the persist pass re-reading
+# the raw file), so it needs the same dedup the in-loader migrations get.
+_migration_log = _MigrationLog(logging.getLogger(__name__))
+
+
 # User-facing lines produced by a migration that actually changed something,
 # waiting to be printed by whichever CLI entry point owns the terminal.
 # Migrations run inside the loader, which has no console of its own and whose
@@ -220,7 +226,7 @@ def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False
         if defaults.get(legacy_key) == LEGACY_CONTEXT_WINDOW_TOKENS:
             defaults.pop(legacy_key)
             changed = True
-            logging.getLogger(__name__).info(
+            _migration_log.info(
                 "Migrated: dropped agents.defaults.%s (the retired 65536 default)",
                 legacy_key,
             )
@@ -387,9 +393,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped:
     the config path -- the one that can read the watermark and write it back --
     opts in; the shims below are idempotent and always run.
     """
-    import logging as _logging
 
-    _log = _MigrationLog(_logging.getLogger(__name__))
+    _log = _migration_log
 
     if run_stamped:
         _migrate_legacy_context_window(data, notify=True)
