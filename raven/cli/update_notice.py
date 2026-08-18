@@ -17,6 +17,12 @@ the first launch after a release lands refreshes the cache and the notice appear
 on the next launch. Any network or parse failure is swallowed -- an update nudge
 must never break startup.
 
+That TTL governs the cached path only. ``check_for_update`` bypasses it on
+purpose, and the served page calls it on every boot as well as behind its
+settings button -- a banner that names a version has to name the one the
+upgrade will install, which a day-old cache cannot promise. So the TTL bounds
+how often a *launch* touches the network, not how often this module does.
+
 Set ``RAVEN_NO_UPDATE_CHECK=1`` to opt out of both the fetch and the hint.
 """
 

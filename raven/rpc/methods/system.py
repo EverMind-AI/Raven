@@ -127,9 +127,12 @@ async def system_version(params: dict) -> dict:
     """`system.version` — versions for diagnostics, plus any pending upgrade.
 
     ``check: true`` fetches the latest release before answering, off the event
-    loop. The cached answer can be a poll interval old, which is fine for the
-    banner at boot and wrong for the button labelled "check for updates" -- a
-    person who just clicked it is asking about now.
+    loop. The cached answer can be a poll interval old, and a reader acting on a
+    version number needs it to be the number they will get -- so the served page
+    asks with ``check: true`` twice over: once behind the settings button, and
+    once on every boot, after its first paint has already gone out on the cached
+    answer. Anything tuning this path (a throttle, a spinner, a quota guard) is
+    tuning something that runs per page load, not one button.
     """
     result = {
         "server_version": SERVER_VERSION,
