@@ -3332,7 +3332,7 @@
     },
     {
       "name": "fs.upload",
-      "summary": "Store an uploaded file in the working directory and return its path.",
+      "summary": "Store an uploaded file under agent home and return its workspace-relative path.",
       "params": [
         {
           "name": "name",
