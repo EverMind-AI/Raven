@@ -20,6 +20,7 @@ from raven.providers.openai_codex_provider import (
     _consume_sse,
     _convert_messages,
     _convert_tool_output,
+    _convert_usage,
     _friendly_error,
     _iter_sse,
 )
@@ -405,10 +406,97 @@ async def test_arguments_that_needed_repair_are_reported_as_such():
         completed = {"type": "response.completed", "response": {"status": "completed"}}
         return _EndingStream([f"data: {json.dumps(done)}", "", f"data: {json.dumps(completed)}", ""])
 
-    _, whole, _ = await _consume_sse(stream('{"path": "a.py", "content": "done"}'), timeout=1.0)
+    _, whole, _, _ = await _consume_sse(stream('{"path": "a.py", "content": "done"}'), timeout=1.0)
     assert whole[0].run_meta is None
 
-    _, cut, _ = await _consume_sse(stream('{"path": "a.py", "content": "import ran'), timeout=1.0)
+    _, cut, _, _ = await _consume_sse(stream('{"path": "a.py", "content": "import ran'), timeout=1.0)
     assert cut[0].run_meta is not None
     assert cut[0].run_meta.arguments_repaired is True
     assert cut[0].arguments["content"] == "import ran", "repaired, not stuffed into a raw blob"
+
+
+# --- usage reporting -------------------------------------------------------
+
+
+def test_convert_usage_maps_the_responses_shape_onto_loop_keys():
+    """`input_tokens` counts cached tokens, matching the OpenRouter/LiteLLM
+    convention `_build_usage_snapshot` normalizes -- so it passes through as
+    `prompt_tokens` rather than being pre-subtracted here."""
+    mapped = _convert_usage(
+        {
+            "input_tokens": 1200,
+            "input_tokens_details": {"cached_tokens": 800, "cache_write_tokens": 100},
+            "output_tokens": 42,
+            "output_tokens_details": {"reasoning_tokens": 9},
+            "total_tokens": 1242,
+        }
+    )
+    assert mapped == {
+        "prompt_tokens": 1200,
+        "completion_tokens": 42,
+        "total_tokens": 1242,
+        "cache_read_input_tokens": 800,
+        "cache_creation_input_tokens": 100,
+    }
+
+
+@pytest.mark.parametrize("raw", [None, "nope", {}, {"input_tokens": None}])
+def test_convert_usage_survives_a_missing_or_malformed_block(raw):
+    """A usage block that never arrives must not break the turn."""
+    assert isinstance(_convert_usage(raw), dict)
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_carries_usage_off_the_completed_event():
+    """The backend reports usage only on `response.completed`. Ignoring that
+    event's usage left every codex turn reporting zero tokens, which silently
+    disabled the per-turn cost summary and starved token budgeting."""
+
+    class _EndingStream:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = lines
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    completed = {
+        "type": "response.completed",
+        "response": {
+            "status": "completed",
+            "usage": {
+                "input_tokens": 11,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 9,
+                "total_tokens": 20,
+            },
+        },
+    }
+    text = {"type": "response.output_text.delta", "delta": "hi"}
+    stream = _EndingStream([f"data: {json.dumps(text)}", "", f"data: {json.dumps(completed)}", ""])
+
+    content, _tool_calls, finish_reason, usage = await _consume_sse(stream, timeout=1.0)
+    assert content == "hi"
+    assert finish_reason == "stop"
+    assert usage["prompt_tokens"] == 11
+    assert usage["completion_tokens"] == 9
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_without_a_completed_event_reports_no_usage():
+    """Absent usage stays empty rather than becoming a fabricated zero-cost
+    reading that looks like a real measurement."""
+
+    class _EndingStream:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = lines
+
+        async def aiter_lines(self):
+            for line in self._lines:
+                yield line
+
+    text = {"type": "response.output_text.delta", "delta": "hi"}
+    stream = _EndingStream([f"data: {json.dumps(text)}", ""])
+
+    _content, _tool_calls, _finish, usage = await _consume_sse(stream, timeout=1.0)
+    assert usage == {}

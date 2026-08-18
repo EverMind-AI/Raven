@@ -53,6 +53,33 @@ _current_config_path: Path | None = None
 # load_config calls (status/doctor load more than once) warn only once.
 _warned_paths: set[str] = set()
 
+# Migration lines already logged in this process. The strips below rewrite the
+# in-memory copy only, so an unmigrated file re-emits every line on every load
+# -- and a running gateway loads once per cron fire, which turned a one-time
+# notice into steady log noise.
+_logged_migrations: set[str] = set()
+
+
+class _MigrationLog:
+    """Logger proxy emitting each distinct migration line once per process."""
+
+    def __init__(self, inner: logging.Logger) -> None:
+        self._inner = inner
+
+    def info(self, message: str, *args: Any) -> None:
+        # A record the logger would drop was never told to anyone. The gateway
+        # loads its config before it installs a sink, so counting that first
+        # dropped line as already-logged would silence the copy that reaches
+        # the log file -- turning the noise this dedup fixes into silence.
+        if not self._inner.isEnabledFor(logging.INFO):
+            return
+        rendered = message % args if args else message
+        if rendered in _logged_migrations:
+            return
+        _logged_migrations.add(rendered)
+        self._inner.info(message, *args)
+
+
 # User-facing lines produced by a migration that actually changed something,
 # waiting to be printed by whichever CLI entry point owns the terminal.
 # Migrations run inside the loader, which has no console of its own and whose
@@ -362,7 +389,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped:
     """
     import logging as _logging
 
-    _log = _logging.getLogger(__name__)
+    _log = _MigrationLog(_logging.getLogger(__name__))
 
     if run_stamped:
         _migrate_legacy_context_window(data, notify=True)
