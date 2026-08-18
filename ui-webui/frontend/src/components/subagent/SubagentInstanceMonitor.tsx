@@ -45,6 +45,15 @@ interface SubagentInstanceMonitorProps {
 	msgs: Msg[];
 	sessionId: string | null;
 	subagents: RavenThirdPartySubagent[];
+	/**
+	 * Prototype names the gateway reports as stateful (the `statefulNames`
+	 * sibling key on `/raven/subagents`), which is where the real predicate for
+	 * an acp agent's resumability lives -- `subagents` alone cannot say it.
+	 * `undefined` -- not an empty array -- means an older gateway sent no such
+	 * key, and only then does this monitor fall back to guessing from
+	 * `subagents` itself.
+	 */
+	statefulNames?: string[];
 	/** The chat's own reply lifecycle; used as one of the "something is live"
 	 *  signals that keeps the registry polling (see the fetch effects below). */
 	phase: ReplyPhase;
@@ -196,6 +205,7 @@ export function SubagentInstanceMonitor({
 	onEnterDirect,
 	sessionId,
 	subagents,
+	statefulNames: serverStatefulNames,
 	phase,
 }: SubagentInstanceMonitorProps) {
 	const { t } = useTranslation();
@@ -268,13 +278,17 @@ export function SubagentInstanceMonitor({
 		return () => clearInterval(id);
 	}, [sessionKey, anyLive, fetchRegistry]);
 
-	const statefulNames = useMemo(
-		() =>
-			new Set(
-				subagents.filter((s) => s.kind === 'cli' && s.resumeCommand).map((s) => s.name),
-			),
-		[subagents],
-	);
+	// The server resolves each prototype's real stateful-ness -- an acp agent's
+	// own `sessionCapabilities.resume`, not just "is it cli" -- so its answer is
+	// used whenever present. The cli-only guess below is only a fallback for an
+	// older gateway that sends no `statefulNames` key at all: without it, every
+	// acp prototype would read as stateless and lose its row's exchange history.
+	const statefulNames = useMemo(() => {
+		if (serverStatefulNames) return new Set(serverStatefulNames);
+		return new Set(
+			subagents.filter((s) => s.kind === 'cli' && s.resumeCommand).map((s) => s.name),
+		);
+	}, [serverStatefulNames, subagents]);
 	const derived = useMemo(
 		() => deriveInstances(msgs, statefulNames, dagRuns),
 		[msgs, statefulNames, dagRuns],

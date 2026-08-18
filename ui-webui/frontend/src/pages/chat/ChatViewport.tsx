@@ -88,6 +88,13 @@ interface ChatViewportProps {
 	 */
 	subagents: RavenThirdPartySubagent[];
 	/**
+	 * Prototype names the gateway reports as stateful (the `statefulNames`
+	 * sibling key on `/raven/subagents`), passed through to `SubagentInstanceMonitor`.
+	 * `undefined` when the connected gateway predates that key, in which case
+	 * the monitor falls back to its own cli-only guess from `subagents`.
+	 */
+	statefulNames?: string[];
+	/**
 	 * Optional hook invoked when a team membership change arrives on
 	 * this viewport's SSE stream. The outer page owns the session list
 	 * that backs the team sidebar, so it must be told to refetch too;
@@ -199,7 +206,13 @@ function contentText(content: { type?: string; text?: string }[]): string {
 		.join('\n');
 }
 
-export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: ChatViewportProps) {
+export function ChatViewport({
+	agentId,
+	sessionId,
+	subagents,
+	statefulNames,
+	onTeamUpdated,
+}: ChatViewportProps) {
 	const { t } = useTranslation();
 	const { sessions, refetch: refetchSessions } = useSessions(agentId);
 	const { groups: ravenGroups, loading: ravenLoading } = useRavenModels();
@@ -558,6 +571,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 						onEnterDirect={enterDirect}
 						sessionId={sessionId}
 						subagents={subagents}
+						statefulNames={statefulNames}
 						phase={phase}
 					/>
 				),
@@ -628,6 +642,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 			injectedSkills,
 			msgs,
 			subagents,
+			statefulNames,
 			phase,
 			permissionContext,
 			knowledgeBases,

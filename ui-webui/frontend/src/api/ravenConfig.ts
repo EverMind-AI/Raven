@@ -308,7 +308,12 @@ export interface RavenHubItem {
 }
 
 export const ravenConfigApi = {
-	listSubagents: () => client.get<{ agents: RavenThirdPartySubagent[] }>('/raven/subagents'),
+	// `statefulNames` is a sibling of `agents`, not a field on each entry: the gateway
+	// resolves an acp agent's real resumability from its own capability snapshot,
+	// which an older gateway does not send at all -- absent, not empty, is what
+	// tells a caller to fall back to guessing from `agents` itself.
+	listSubagents: () =>
+		client.get<{ agents: RavenThirdPartySubagent[]; statefulNames?: string[] }>('/raven/subagents'),
 
 	presets: () => client.get<{ presets: RavenThirdPartySubagent[] }>('/raven/subagents/presets'),
 

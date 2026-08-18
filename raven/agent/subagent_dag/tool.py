@@ -39,7 +39,8 @@ from raven.agent.subagent.backends import (
     third_party_agent_meta,
 )
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
-from raven.agent.subagent_dag import SubAgentDagSpec, make_run_id, parse_dag_spec
+from raven.agent.subagent.instances import mint_handle
+from raven.agent.subagent_dag import DagNodeSpec, SubAgentDagSpec, make_run_id, parse_dag_spec
 from raven.agent.subagent_dag._capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import validate_and_order
@@ -163,8 +164,9 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
                 "session, including across separate runs in this conversation. Only give the same "
                 "handle to several nodes of a sub-agent the roster tags [stateful] -- elsewhere it "
-                "carries no context and the graph is rejected. Omit it and the node starts from a "
-                "clean session every time. To order nodes without sharing a session, use depends_on."
+                "carries no context and the graph is rejected. Omit it and one is assigned "
+                "automatically and reported in the run summary when the node finishes, so any node "
+                "can be continued later. To order nodes without sharing a session, use depends_on."
             ),
         },
     },
@@ -568,6 +570,34 @@ class SubAgentDagTool(Tool):
             )
         return message
 
+    def _mint_missing_instances(
+        self, spec: SubAgentDagSpec, capabilities: dict[str, AgentCapabilities]
+    ) -> tuple[SubAgentDagSpec, frozenset[str]]:
+        """Give every stateful node that named no instance a fresh handle.
+
+        ``capabilities`` must be the map the caller is actually dispatching
+        against (``self._capabilities`` merged with any ``extra_capabilities``,
+        as ``_execute`` builds it) -- a role known only through the merge, like
+        a playbook's ``pb-`` roles, is invisible to ``self._capabilities`` alone
+        and would otherwise fall back to ``AgentCapabilities()``'s permissive
+        default and get minted against its own declared ``stateful=False``.
+
+        Returns the rewritten spec and the ids it minted for. The ids travel
+        separately because the handle itself carries no mark: once it is in the
+        `instance` field, a minted one and a chosen one are the same string, and
+        the manifest is the only place that difference is still worth having.
+        """
+        minted: set[str] = set()
+        nodes: list[DagNodeSpec] = []
+        for node in spec.nodes:
+            caps = capabilities.get(node.subagent, AgentCapabilities())
+            if node.instance or not caps.stateful:
+                nodes.append(node)
+                continue
+            minted.add(node.id)
+            nodes.append(node.model_copy(update={"instance": mint_handle(node.id)}))
+        return spec.model_copy(update={"nodes": nodes}), frozenset(minted)
+
     async def execute(self, nodes: list[dict], background: bool = True, **kwargs: Any) -> str:
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
@@ -649,14 +679,17 @@ class SubAgentDagTool(Tool):
             return refusal
         call_id = self._tool_call_id.get()
         run_id = make_run_id()
+        # After validation so a rejected graph mints nothing, and before either
+        # mode starts so the foreground and background paths share one site.
+        spec, auto_instances = self._mint_missing_instances(spec, capabilities)
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
         if not background:
-            return await self._run(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
+            return await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
 
         task = asyncio.create_task(
-            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
+            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
         )
         self._runs[run_id] = task
         task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
@@ -678,10 +711,11 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         dirs: _RunDirs,
         call_id: str | None,
+        auto_instances: frozenset[str],
         subagents: dict[str, Any] | None = None,
     ) -> None:
         """Run a backgrounded graph, then send its summary back as a turn."""
-        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, subagents=subagents)
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
             # with a running node recorded ``cancelled`` and a pending one
@@ -738,6 +772,7 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         dirs: _RunDirs,
         call_id: str | None,
+        auto_instances: frozenset[str],
         subagents: dict[str, Any] | None = None,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
@@ -756,6 +791,7 @@ class SubAgentDagTool(Tool):
                 state_for=self._state_for,
                 run_id=run_id,
                 cancel=cancel,
+                auto_instances=auto_instances,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -811,7 +847,9 @@ class SubAgentDagTool(Tool):
         ]
         for entry in result.files:
             of = entry.get("output_file") or "(no output file)"
-            lines.append(f"- {entry['node']} [{entry['status']}]: {of}")
+            handle = entry.get("instance")
+            tag = f" (instance: {handle})" if handle else ""
+            lines.append(f"- {entry['node']} [{entry['status']}]{tag}: {of}")
             if entry.get("error"):
                 lines.append(f"    error: {entry['error']}")
         if result.terminal_outputs:

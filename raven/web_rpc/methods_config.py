@@ -107,6 +107,7 @@ def register_config_methods(
       ahead of the policy default on the *next* turn. ``set`` refuses while
       the session has a subagent in flight.
     """
+    from raven.agent.subagent.backends import third_party_agent_meta
     from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
     from raven.agent.subagent.presets import third_party_subagent_presets
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
@@ -123,7 +124,13 @@ def register_config_methods(
     from raven.rpc.errors import RpcError
 
     async def _list(params: dict) -> dict:
-        return {"agents": get_third_party_subagents()}
+        agents = get_third_party_subagents()
+        # `statefulNames` is a sibling of `agents`, not a field inside each entry:
+        # `_set` below runs `reject_unsupported_acp_fields`, which would reject
+        # this computed value the moment it showed up inside an acp agent's own
+        # object on a later save.
+        stateful = [meta.name for cfg in _as_configs(agents) if (meta := third_party_agent_meta(cfg)).stateful]
+        return {"agents": agents, "statefulNames": stateful}
 
     async def _set(params: dict) -> dict:
         agents = params.get("agents") or []

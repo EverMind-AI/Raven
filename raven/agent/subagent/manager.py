@@ -44,6 +44,11 @@ _REGISTRY_WRITE_TIMEOUT_S = 2.0
 # A default spawn has no third-party agent name, but it still needs an identity
 # for a direct chat to address it by.
 RAVEN_LOOP_AGENT = "raven"
+# ``spawn`` reports a refusal by returning its reason rather than raising, so a
+# caller that has to tell "dispatched" from "declined" has only the string. Both
+# refusals below open with this, and the spawn tool tests for it before publishing
+# anything that presumes the run exists.
+SPAWN_REFUSED_PREFIX = "Spawn refused: "
 
 
 async def _write_spawn_status(session_key: str | None, agent: str | None, handle: str, status: str) -> None:
@@ -312,6 +317,7 @@ class SubagentManager:
         session_key: str | None = None,
         agent: str | None = None,
         instance: str | None = None,
+        instance_auto: bool = False,
         workspace: Path | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background.
@@ -324,7 +330,7 @@ class SubagentManager:
         if self._paused:
             logger.info("Spawn refused: delegation is paused")
             return (
-                "Spawn refused: delegation is paused. The user paused sub-agent "
+                f"{SPAWN_REFUSED_PREFIX}delegation is paused. The user paused sub-agent "
                 "spawning; do the work in this turn instead, or ask them to resume."
             )
         quota_key = session_key or "default"
@@ -335,7 +341,7 @@ class SubagentManager:
                 self._max_spawns_per_hour,
             )
             return (
-                f"Spawn refused: this session hit its subagent spawn rate limit "
+                f"{SPAWN_REFUSED_PREFIX}this session hit its subagent spawn rate limit "
                 f"({self._max_spawns_per_hour} per hour). It recovers automatically "
                 f"as earlier spawns age out — if this is unexpected, the task may "
                 f"be looping; reconsider the approach instead of spawning again."
@@ -353,6 +359,7 @@ class SubagentManager:
             "session_key": quota_key,
             "agent": agent,
             "instance": instance,
+            "instance_auto": instance_auto,
             "handle": handle,
             "workspace": effective_workspace,
         }
@@ -651,6 +658,7 @@ class SubagentManager:
                 "agent": agent,
                 "label": label,
                 "instance": origin.get("instance"),
+                "instance_auto": origin.get("instance_auto", False),
                 "handle": handle,
                 "working_directory": str(effective_workspace),
             },
@@ -671,10 +679,14 @@ class SubagentManager:
                 # spawn from empty and wrote nothing back, so reusing a handle read
                 # as the sub-agent having forgotten the earlier turns.
                 #
-                # Only when the caller named an `instance`. A plain spawn's handle is
-                # a fresh task id, so a transcript written under it is addressable by
-                # nobody and reclaimed by nothing -- pure growth on disk for a
-                # conversation that has no second turn by construction.
+                # Only when the call carries an `instance` -- named by the caller, or
+                # minted for it by the spawn tool when the target is resumable. With
+                # neither, the handle is a fresh task id: a transcript written under it
+                # would be addressable by nobody and reclaimed by nothing, pure growth
+                # for a conversation that has no second turn by construction. Minting
+                # is what opens this gate for a spawn nobody named, and the growth that
+                # follows is the price of every such run being continuable -- accepted
+                # deliberately, with reclaiming it left as follow-up work.
                 state = self.instance_state(session_key or "", agent, handle) if origin.get("instance") else None
                 state_kwargs: dict[str, Any] = (
                     {"history": state.load(), "on_messages": state.save} if state is not None else {}
@@ -756,14 +768,23 @@ class SubagentManager:
         # web pages / read files), so fence it as untrusted before it re-enters
         # the main agent's context.
         fenced_result = wrap_untrusted(result, source="subagent")
+        # Only a named or minted instance is addressable; a stateless call's
+        # handle continues nothing, so offering it would invite a call the
+        # spawn tool then refuses.
+        handle_line = (
+            f"\nInstance handle: {origin['instance']} -- pass it as spawn's `instance` "
+            "to continue this same conversation.\n"
+            if origin.get("instance")
+            else ""
+        )
         announce_content = f"""[Subagent '{label}' {status_text}]
 
 Task: {task}
-
+{handle_line}
 Result:
 {fenced_result}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
+Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
 
         assert self._submit is not None
         self._inject(announce_content, origin)

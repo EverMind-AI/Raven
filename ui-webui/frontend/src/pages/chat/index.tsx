@@ -110,7 +110,7 @@ const ChatPageInner = () => {
 	const [renameSession, setRenameSession] = useState<SessionRecord | null>(null);
 	const [deleteSessionOpen, setDeleteSessionOpen] = useState(false);
 	const [sessionToDelete, setSessionToDelete] = useState<SessionRecord | null>(null);
-	const { agents: subagents } = useRavenSubagents();
+	const { agents: subagents, statefulNames } = useRavenSubagents();
 
 	const selectedAgent = agents.find((a) => a.id === urlAgentId) ?? null;
 	const currentView = sessions.find((v) => v.session.id === urlSessionId) ?? null;
@@ -395,6 +395,7 @@ const ChatPageInner = () => {
 					agentId={effectiveAgentId}
 					sessionId={effectiveSessionId}
 					subagents={subagents}
+					statefulNames={statefulNames}
 					onTeamUpdated={refetchSessions}
 				/>
 			</div>

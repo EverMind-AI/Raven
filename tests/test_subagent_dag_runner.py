@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import posixpath
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ import pytest
 from raven.agent import workdir
 from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
-from raven.agent.subagent_dag import DagValidationError, parse_dag_spec
+from raven.agent.subagent_dag import AgentCapabilities, DagValidationError, parse_dag_spec
 from raven.agent.subagent_dag._store import read_session_nodes
 from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import run_dag
@@ -467,6 +468,7 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     )
     assert "2 completed" in out.model_text
     assert "hello world" in out.model_text  # a's output flowed to b (the sink) and back
+    assert "(instance:" not in out.model_text  # stateless nodes must not include instance tags
 
 
 async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path: Path) -> None:
@@ -2474,3 +2476,96 @@ async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() ->
             backend,
             "/hist/mas_dag",
         )
+
+
+def test_dag_mints_an_instance_for_a_stateful_node(tmp_path: Path) -> None:
+    cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[cfg])
+    spec = parse_dag_spec({"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]})
+    minted_spec, auto = tool._mint_missing_instances(spec, tool._capabilities)
+    assert auto == frozenset({"research"})
+    assert re.fullmatch(r"research-[0-9a-f]{6}", minted_spec.nodes[0].instance)
+
+
+def test_dag_leaves_a_stateless_node_without_an_instance(tmp_path: Path) -> None:
+    cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat")
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[cfg])
+    spec = parse_dag_spec({"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]})
+    minted_spec, auto = tool._mint_missing_instances(spec, tool._capabilities)
+    assert auto == frozenset()
+    assert minted_spec.nodes[0].instance is None
+
+
+def test_dag_never_overwrites_an_instance_the_model_chose(tmp_path: Path) -> None:
+    cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[cfg])
+    spec = parse_dag_spec(
+        {"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go", "instance": "author"}]}
+    )
+    minted_spec, auto = tool._mint_missing_instances(spec, tool._capabilities)
+    assert auto == frozenset()
+    assert minted_spec.nodes[0].instance == "author"
+
+
+def test_dag_minting_does_not_repeat_across_two_submissions(tmp_path: Path) -> None:
+    """The regression lock on cross-run collision: two graphs whose nodes share
+    an id must not share a session."""
+    cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[cfg])
+    raw = {"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]}
+    first, _ = tool._mint_missing_instances(parse_dag_spec(raw), tool._capabilities)
+    second, _ = tool._mint_missing_instances(parse_dag_spec(raw), tool._capabilities)
+    assert first.nodes[0].instance != second.nodes[0].instance
+
+
+async def test_run_with_roles_a_role_declared_stateless_only_via_extra_capabilities_mints_nothing(
+    tmp_path: Path,
+) -> None:
+    """``run_with_roles`` is the playbook executor's entry: its roles exist only
+    in ``extra_capabilities``, never in the tool's own roster. Minting must
+    honour that role's own declared ``stateful=False`` rather than falling
+    back to the permissive default a name absent from the base roster gets."""
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[])
+    out = await tool.run_with_roles(
+        [{"id": "step", "subagent": "pb-step", "prompt_template": "go"}],
+        roles={"pb-step": _FakeExec()},
+        role_capabilities={"pb-step": AgentCapabilities(stateful=False)},
+        background=False,
+    )
+
+    assert isinstance(out, ToolResult), f"gate rejected the graph: {out}"
+    assert "instance:" not in out.model_text
+
+
+async def test_run_dag_records_whether_each_instance_was_minted() -> None:
+    spec = parse_dag_spec(
+        {
+            "nodes": [
+                {"id": "a", "subagent": "x", "prompt_template": "go", "instance": "chosen"},
+                {"id": "b", "subagent": "x", "prompt_template": "go", "instance": "b-abc123"},
+            ]
+        }
+    )
+
+    result = await run_dag(
+        spec,
+        subagents={"x": _FakeExec()},
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        auto_instances=frozenset({"b"}),
+    )
+
+    by_node = {entry["node"]: entry for entry in result.files}
+    assert by_node["a"]["instance_auto"] is False
+    assert by_node["b"]["instance_auto"] is True
+
+
+async def test_dag_summary_names_each_stateful_node_handle(tmp_path: Path) -> None:
+    cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[cfg])
+    result = await tool.execute(
+        nodes=[{"id": "research", "subagent": "worker", "prompt_template": "go"}],
+        background=False,
+    )
+    assert re.search(r"- research \[\w+\] \(instance: research-[0-9a-f]{6}\):", str(result))

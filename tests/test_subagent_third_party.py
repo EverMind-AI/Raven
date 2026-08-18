@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -28,7 +29,7 @@ from raven.agent.subagent.backends import (
     third_party_agent_meta,
 )
 from raven.agent.subagent.backends.env import login_shell_env
-from raven.agent.subagent.manager import SubagentManager
+from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
 from raven.agent.tools.spawn import SpawnTool
 from raven.config.schema import (
@@ -697,9 +698,20 @@ async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
     assert captured["task"] == "do it"
 
 
-def test_spawn_tool_exposes_instance_param_only_when_stateful(tmp_path: Path) -> None:
-    stateless = ThirdPartyCliSubagentConfig(name="codex", command="codex exec {prompt}")
-    assert "instance" not in SpawnTool(manager=_mgr(tmp_path, [stateless])).parameters["properties"]
+def test_spawn_tool_always_exposes_the_instance_param(tmp_path: Path) -> None:
+    """The default sub-agent is resumable per handle whatever the roster holds, so
+    the parameter is always offered and the description names who may receive it.
+    This assertion used to read `not in` for a roster with nothing stateful, which
+    left an empty-roster install minting handles the model was never able to pass
+    back.
+    """
+    for roster in ([], [ThirdPartyCliSubagentConfig(name="codex", command="codex exec {prompt}")]):
+        props = SpawnTool(manager=_mgr(tmp_path, roster)).parameters["properties"]
+        assert "instance" in props
+        assert props["instance"]["type"] == "string"
+        assert "the default sub-agent" in props["instance"]["description"]
+        # Nothing stateful on the roster, so no third-party name is offered a handle.
+        assert "codex" not in props["instance"]["description"]
 
     stateful = ThirdPartyCliSubagentConfig(
         name="claude_code",
@@ -709,7 +721,7 @@ def test_spawn_tool_exposes_instance_param_only_when_stateful(tmp_path: Path) ->
     props = SpawnTool(manager=_mgr(tmp_path, [stateful])).parameters["properties"]
     assert "instance" in props
     assert props["instance"]["type"] == "string"
-    # With a mixed roster the param exists, so it names who may receive it.
+    # With a mixed roster the param names who else may receive it, beside the default.
     assert "['claude_code']" in props["instance"]["description"]
 
 
@@ -806,6 +818,111 @@ async def test_manager_forwards_instance_to_backend(tmp_path: Path) -> None:
     for task in list(mgr._running_tasks.values()):
         await task
     assert seen == {"session_key": "web:s1", "instance": "refactor-auth"}
+
+
+async def test_spawn_marks_a_minted_instance_as_automatic(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    mgr = _mgr(tmp_path, [cli])
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(**kwargs):
+        captured.update(kwargs)
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+    await tool.execute(task="do it", agent="claude_code")
+    assert captured["instance_auto"] is True
+    await tool.execute(task="do it", agent="claude_code", instance="author")
+    assert captured["instance_auto"] is False
+
+
+async def test_spawn_hands_the_minted_handle_to_the_turn_stream(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    mgr = _mgr(tmp_path, [cli])
+
+    async def fake_spawn(**kwargs):
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+    await tool.execute(task="do it", label="Refactor Auth", agent="claude_code")
+    meta = tool.take_metadata()
+    assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", meta["instance"])
+    assert meta["instance_auto"] is True
+    assert tool.take_metadata() is None
+
+
+async def test_spawn_publishes_no_metadata_for_a_stateless_agent(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(name="oneshot", command="cat")
+    mgr = _mgr(tmp_path, [cli])
+
+    async def fake_spawn(**kwargs):
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+    await tool.execute(task="do it", agent="oneshot")
+    assert tool.take_metadata() is None
+
+
+async def test_spawn_does_not_leak_an_uncollected_handle_to_a_later_stateless_call(
+    tmp_path: Path,
+) -> None:
+    """A stateless call must not pop and report an earlier stateful call's
+    handle just because nobody collected it (e.g. no tool-event sink)."""
+    stateful = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    stateless = ThirdPartyCliSubagentConfig(name="oneshot", command="cat")
+    mgr = _mgr(tmp_path, [stateful, stateless])
+
+    async def fake_spawn(**kwargs):
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+    await tool.execute(task="do it", agent="claude_code")
+    await tool.execute(task="do it", agent="oneshot")
+    assert tool.take_metadata() is None
+
+
+async def test_spawn_publishes_no_handle_for_a_call_the_manager_refused(tmp_path: Path) -> None:
+    """A refusal comes back as the result, not as an exception, so publishing the
+    handle before the call meant every refused spawn still announced one -- an
+    instance row and a `new` badge for a run that never started. Minting is what
+    makes that reach unnamed calls too, i.e. every refused spawn.
+    """
+    mgr = _mgr(tmp_path, [])
+    mgr.set_paused(True)
+    tool = SpawnTool(manager=mgr)
+
+    result = await tool.execute(task="summarize the log")
+
+    assert result.startswith(SPAWN_REFUSED_PREFIX)
+    assert tool.take_metadata() is None
+
+
+async def test_spawn_publishes_the_handle_once_the_manager_takes_the_call(tmp_path: Path) -> None:
+    """The positive half, so the refusal test above cannot pass by publishing
+    nothing at all."""
+    mgr = _mgr(tmp_path, [])
+
+    async def fake_spawn(**kwargs):
+        return "Spawned task abc12345"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+
+    await tool.execute(task="summarize the log")
+
+    meta = tool.take_metadata()
+    assert meta is not None
+    assert meta["instance"].startswith("summarize-the-log-")
 
 
 # --- presets -------------------------------------------------------------
@@ -2800,3 +2917,114 @@ async def test_the_line_pump_leaves_no_task_behind_when_the_sink_raises(tmp_path
     finally:
         proc.kill()
         await proc.wait()
+
+
+def test_mint_handle_slugifies_the_seed_and_appends_a_unique_suffix() -> None:
+    handle = instances_mod.mint_handle("Refactor Auth!")
+    assert handle.startswith("refactor-auth-")
+    assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", handle)
+
+
+def test_mint_handle_never_repeats() -> None:
+    seen = {instances_mod.mint_handle("research") for _ in range(200)}
+    assert len(seen) == 200
+
+
+def test_mint_handle_bounds_the_slug_and_trims_a_dangling_separator() -> None:
+    handle = instances_mod.mint_handle("a" * 40)
+    slug = handle.rsplit("-", 1)[0]
+    assert slug == "a" * 32
+    handle = instances_mod.mint_handle("x" * 32 + " tail")
+    assert handle.rsplit("-", 1)[0] == "x" * 32
+
+
+def test_mint_handle_falls_back_when_the_seed_carries_no_usable_characters() -> None:
+    assert instances_mod.mint_handle("!!! ???").startswith("agent-")
+    assert instances_mod.mint_handle("").startswith("agent-")
+
+
+def test_mint_handle_falls_back_to_the_agent_name_for_a_non_ascii_seed() -> None:
+    handle = instances_mod.mint_handle("重构认证", fallback="claude_code")
+    assert re.fullmatch(r"claude-code-[0-9a-f]{6}", handle)
+
+
+def test_mint_handle_falls_back_to_agent_when_the_fallback_is_also_non_ascii() -> None:
+    handle = instances_mod.mint_handle("重构认证", fallback="重构认证")
+    assert handle.startswith("agent-")
+
+
+async def test_spawn_mints_an_instance_for_a_stateful_agent(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    mgr = _mgr(tmp_path, [cli])
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(**kwargs):
+        captured.update(kwargs)
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    await SpawnTool(manager=mgr).execute(task="do it", label="Refactor Auth", agent="claude_code")
+    assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", captured["instance"])
+
+
+async def test_spawn_leaves_a_stateless_agent_without_an_instance(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(name="oneshot", command="cat")
+    mgr = _mgr(tmp_path, [cli])
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(**kwargs):
+        captured.update(kwargs)
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    await SpawnTool(manager=mgr).execute(task="do it", agent="oneshot")
+    assert captured["instance"] is None
+
+
+async def test_spawn_never_overwrites_an_instance_the_model_chose(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    mgr = _mgr(tmp_path, [cli])
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(**kwargs):
+        captured.update(kwargs)
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    await SpawnTool(manager=mgr).execute(task="do it", agent="claude_code", instance="author")
+    assert captured["instance"] == "author"
+
+
+async def test_spawn_mints_for_the_built_in_sub_agent_too(tmp_path: Path) -> None:
+    """`agent=None` is the in-process sub-agent, which resumes per handle.
+
+    The roster is empty, which is the default install -- so this also pins the read
+    back: the handle it mints is only worth minting if the same schema offers the
+    parameter the announcement then tells the model to pass it back in.
+    """
+    mgr = _mgr(tmp_path, [])
+    captured: dict[str, Any] = {}
+
+    async def fake_spawn(**kwargs):
+        captured.update(kwargs)
+        return "started"
+
+    mgr.spawn = fake_spawn  # type: ignore[method-assign]
+    tool = SpawnTool(manager=mgr)
+    await tool.execute(task="summarize the log")
+    assert captured["instance"]
+    assert captured["instance"].startswith("summarize-the-log-")
+    assert "instance" in tool.parameters["properties"]
+
+
+def test_spawn_instance_description_states_that_omission_assigns_one(tmp_path: Path) -> None:
+    cli = ThirdPartyCliSubagentConfig(
+        name="claude_code", command="cat {agent_id}", resume_command="cat --resume {agent_id}"
+    )
+    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).parameters["properties"]["instance"]["description"]
+    assert "assigned automatically" in desc
+    assert "start a fresh one" not in desc

@@ -112,6 +112,7 @@ async def run_dag(
     run_id: str | None = None,
     cancel: asyncio.Event | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
+    auto_instances: frozenset[str] = frozenset(),
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -312,6 +313,7 @@ async def run_dag(
             node_activity,
             store,
             session_key,
+            auto_instances,
         )
     except asyncio.CancelledError:
         # `/stop` and the shutdown sweep stop a background run by cancelling its
@@ -616,6 +618,7 @@ async def _finalize(
     node_activity: dict[str, dict],
     store: DagRunStore,
     session_key: str | None = None,
+    auto_instances: frozenset[str] = frozenset(),
 ) -> DagRunResult:
     """Assemble the result, write the manifest, and append the index.
 
@@ -642,6 +645,7 @@ async def _finalize(
                 "subagent": node.subagent,
                 "depends_on": node.depends_on,
                 "instance": node.instance,
+                "instance_auto": nid in auto_instances,
                 "status": status[nid],
                 "started_at": node_started_at.get(nid),
                 "ended_at": node_ended_at.get(nid),
@@ -655,6 +659,7 @@ async def _finalize(
             "subagent": node.subagent,
             "depends_on": node.depends_on,
             "instance": node.instance,
+            "instance_auto": nid in auto_instances,
             "started_at": node_started_at.get(nid),
             "ended_at": node_ended_at.get(nid),
             "prompt_file": prompt_file,
