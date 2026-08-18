@@ -77,6 +77,7 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
+    playbook_listing: Callable[[], list[tuple[str, str]]] | None = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -114,7 +115,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace),
+        IdentitySegmentBuilder(workspace, playbook_listing=playbook_listing),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,

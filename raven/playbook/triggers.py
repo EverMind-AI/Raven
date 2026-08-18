@@ -1,12 +1,12 @@
-"""Offline trigger expansion — build a playbook's L1 match vocabulary.
+"""Offline trigger expansion -- build a playbook's L1 match vocabulary.
 
 Runs once per playbook at compile time (never per user message): one LLM
 call expands the description, the user's original wording and any author
 seeds into candidate keywords/phrases, then two automatic guards cut what
 would poison the L1 funnel:
 
-- **rule filter** — too-short entries and bare function words;
-- **generic-word filter** — the load-bearing one. A candidate is matched
+- **rule filter** -- too-short entries and bare function words;
+- **generic-word filter** -- the load-bearing one. A candidate is matched
   against a corpus of unrelated everyday messages exactly the way L1 will
   match it; hitting more than ``max_hit_rate`` of them means the word is
   generic (an IDF argument), and a generic entry costs an LLM gate call on
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.memory_engine.playbook.types import Triggers
+from raven.playbook.types import Triggers
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -37,23 +37,25 @@ _MIN_KEYWORD_CHARS = 2
 _DEFAULT_MAX_HIT_RATE = 0.02
 
 # Bare function words that survive the length rule but carry no task signal.
-# Domain-generic words ("文章", "报告") are NOT listed here on purpose — the
-# negative-sample filter judges those from data, not from anyone's intuition.
+# Domain-generic words ("article", "report") are NOT listed here on purpose --
+# the negative-sample filter judges those from data, not from anyone's
+# intuition. Chinese entries are written as unicode escapes to keep the
+# source ASCII; each carries its pinyin and meaning.
 _STOPWORDS = {
-    "帮我",
-    "给我",
-    "我要",
-    "我想",
-    "一个",
-    "一下",
-    "一份",
-    "这个",
-    "那个",
-    "什么",
-    "怎么",
-    "可以",
-    "需要",
-    "麻烦",
+    "\u5e2e\u6211",  # bang wo: "help me"
+    "\u7ed9\u6211",  # gei wo: "give me"
+    "\u6211\u8981",  # wo yao: "I want"
+    "\u6211\u60f3",  # wo xiang: "I'd like"
+    "\u4e00\u4e2a",  # yi ge: "a/one"
+    "\u4e00\u4e0b",  # yi xia: "briefly"
+    "\u4e00\u4efd",  # yi fen: "a copy of"
+    "\u8fd9\u4e2a",  # zhe ge: "this"
+    "\u90a3\u4e2a",  # na ge: "that"
+    "\u4ec0\u4e48",  # shen me: "what"
+    "\u600e\u4e48",  # zen me: "how"
+    "\u53ef\u4ee5",  # ke yi: "can/may"
+    "\u9700\u8981",  # xu yao: "need"
+    "\u9ebb\u70e6",  # ma fan: "please/trouble you"
     "the",
     "and",
     "for",
@@ -68,40 +70,52 @@ _STOPWORDS = {
     "template",
     "framework",
     "process",
-    "模板",
-    "流程",
-    "方案",
-    "自动化",
-    "工作流",
+    "\u6a21\u677f",  # mu ban: "template"
+    "\u6d41\u7a0b",  # liu cheng: "process/flow"
+    "\u65b9\u6848",  # fang an: "plan/scheme"
+    "\u81ea\u52a8\u5316",  # zi dong hua: "automation"
+    "\u5de5\u4f5c\u6d41",  # gong zuo liu: "workflow"
 }
 
 _EXPAND_PROMPT = """\
-你在为一个任务模板（playbook）建立触发词表。用户消息中出现这些词/短语时，该 playbook 会成为候选。
+You are building the trigger vocabulary for a task template (playbook).
+When a user message contains one of these words/phrases, the playbook
+becomes a match candidate.
 
-Playbook 意图：{description}
-当初的用户原话：{source_input}
-已有种子词：{seeds}
+Playbook intent: {description}
+The user's original wording: {source_input}
+Existing seed entries: {seeds}
 
-核心方法：想象 20 个不同的用户想要**这个任务的结果**时会怎么开口——他们说的是想要的效果
-（"发条推""帮我看看用户都在吐槽什么""对比一下A和B"），不是任务的学名（"内容生产流水线"）。
-从这些开口方式里提词。
+Core method: imagine how 20 different users would open their mouth when
+they want THIS task's result -- they name the outcome they want ("post a
+tweet", "see what users are complaining about", "compare A and B"), not
+the task's formal name ("content production pipeline"). Draw the entries
+from those openings.
 
-沿五个维度扩充，产出 20~40 个 keywords（单词和短语都放这一个列表）：
-1. 动作短语（最重要）："动词+宾语"的短组合，如"发推""写周报""对比竞品"——
-   两三个字的动作组合是用户最常说的形态。**每个动作短语同时给出量词插入变体**：
-   "发推"→同时收"发条推""发个推"；"写周报"→"写份周报"（中文动宾之间常插量词，
-   子串匹配跨不过去，必须显式列出）；
-2. 同义近义词（上位词最多取一层，宁可不取）；
-3. 口语化说法（含吐槽/抱怨/夸赞等情绪化表达，如果任务与之相关）；
-4. 中英对照（用户常混用英文术语，如 twitter/tweet 与 推特/推文 并收）；
-5. 强指向的场景词。
+Expand along five axes into 20-40 keywords (words and phrases share the
+one list):
+1. Action phrases (most important): short verb+object pairs -- two or
+   three character combinations are the most common way users phrase a
+   request. For Chinese action phrases also emit classifier-inserted
+   variants: Chinese often inserts a classifier between verb and object
+   ("\u53d1\u63a8" -> also list "\u53d1\u6761\u63a8" and "\u53d1\u4e2a\u63a8"), and substring matching
+   cannot bridge the insertion, so list every variant explicitly;
+2. Synonyms and near-synonyms (at most one hypernym level up, prefer none);
+3. Colloquial phrasings (including emotional wording -- complaints,
+   praise -- when relevant to the task);
+4. Chinese/English pairs (users mix English terms, e.g. twitter/tweet
+   next to their Chinese equivalents);
+5. Strongly indicative scenario words.
 
-硬性要求：
-- 禁收机制词：playbook、workflow、模板、流程、pipeline、方案、自动化——这些描述的是
-  "怎么做"的机制，任何任务的用户原话里都可能出现，不指向本任务；
-- 只收专指性强的词；"文章""报告""数据"这类日常高频词绝对不收；
-- 短语要像用户真实说话的片段，不要完整句子；
-- 全部小写。"""
+Hard requirements:
+- No mechanism words (playbook, workflow, template, pipeline, automation
+  and their Chinese equivalents): they describe how the system works, can
+  appear in any task's wording, and point at no particular task;
+- Only strongly specific entries; everyday high-frequency words like
+  "article", "report", "data" are never acceptable;
+- Phrases must read like fragments of real user speech, not full
+  sentences;
+- All lowercase."""
 
 
 def normalize(text: str) -> str:
@@ -178,7 +192,7 @@ async def _expand_once(
                 "role": "user",
                 "content": _EXPAND_PROMPT.format(
                     description=description,
-                    source_input=source_input or "（无）",
+                    source_input=source_input or "(none)",
                     seeds=json.dumps(seeds, ensure_ascii=False),
                 ),
             }
@@ -218,7 +232,7 @@ async def expand_triggers(
     a single sample is high-variance (a word present in one run vanishes in
     the next), and recall lost at L1 is unrecoverable downstream, while an
     extra entry only costs a filtered candidate. Union first, guard after.
-    Seeds are kept unless a guard drops them — the guards outrank the
+    Seeds are kept unless a guard drops them -- the guards outrank the
     author, because a generic seed hurts the same as a generic expansion."""
     seed_words = list(seeds.keywords) if seeds is not None else []
     raw: list[str] = []

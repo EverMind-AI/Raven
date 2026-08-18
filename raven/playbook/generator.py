@@ -6,12 +6,15 @@ Flow (one strong call, then only repair rounds):
     checks -> on error: feed the numbered errors back, ask for a minimal
     edit -> on pass: fill the code-owned fields and return.
 
-Unknown skills/mcps degrade into ``provenance.missing_capabilities`` (the
-playbook stays usable, just annotated); an unknown agent name is a hard
-error (nothing could run the node). ``revise`` reuses the same loop with
-the immutable-region check added.
+Unknown skills/mcps degrade into review notes (the playbook stays usable,
+just annotated); an unknown agent name is a hard error (nothing could run
+the node). ``revise`` reuses the same loop over an existing spec plus the
+user's feedback. The model's self-report (open questions, assumptions)
+rides the same tool call but never enters the machine fields — it comes
+back as :attr:`GeneratedPlaybook.notes` for the store to render into the
+body's review section.
 
-No prompt text lives here — see :mod:`raven.memory_engine.playbook.prompt`.
+No prompt text lives here — see :mod:`raven.playbook.prompt`.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.memory_engine.playbook.prompt import (
+from raven.playbook.prompt import (
     EMIT_TOOL_NAME,
     SYSTEM_PROMPT,
     build_generation_prompt,
@@ -32,13 +35,9 @@ from raven.memory_engine.playbook.prompt import (
     build_revise_prompt,
     emit_tool,
 )
-from raven.memory_engine.playbook.triggers import TriggerGuardError, guard_triggers
-from raven.memory_engine.playbook.types import BUILTIN_AGENTS, PlaybookSpec, slugify
-from raven.memory_engine.playbook.validate import (
-    check_assets,
-    check_immutable_region,
-    validate_structure,
-)
+from raven.playbook.triggers import TriggerGuardError, guard_triggers
+from raven.playbook.types import BUILTIN_AGENTS, PlaybookSpec, slugify
+from raven.playbook.validate import check_assets, validate_structure
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import SkillForgeRouter
@@ -78,6 +77,17 @@ class PlaybookGenerationError(RuntimeError):
         self.errors = errors
 
 
+@dataclass
+class GeneratedPlaybook:
+    """A validated spec plus the review notes that belong in the body."""
+
+    spec: PlaybookSpec
+    notes: list[str] = field(default_factory=list)
+    """Open questions, assumptions and missing capabilities, one line each —
+    rendered by the store into the body's review section, never into the
+    machine block."""
+
+
 class PlaybookGenerator:
     """Generate and revise playbook drafts. Stateless between calls.
 
@@ -101,7 +111,7 @@ class PlaybookGenerator:
         self._inventory = inventory
         self._model = model
 
-    async def generate(self, user_input: str, skills: list[str] | None = None) -> PlaybookSpec:
+    async def generate(self, user_input: str, skills: list[str] | None = None) -> GeneratedPlaybook:
         """One draft from user input plus optional pinned skills.
 
         ``skills`` entries are names, or paths to a skill file whose content
@@ -123,14 +133,12 @@ class PlaybookGenerator:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg},
             ],
-            source_input=user_input,
             known_skills=known_skills,
             fixed_name=None,
-            previous=None,
         )
 
-    async def revise(self, spec: PlaybookSpec, user_feedback: str) -> PlaybookSpec:
-        """One revision round: immutable region enforced, name fixed."""
+    async def revise(self, spec: PlaybookSpec, user_feedback: str) -> GeneratedPlaybook:
+        """One revision round over an existing spec; the name stays fixed."""
         candidates = await self._retrieve_candidates(spec.description + "\n" + user_feedback)
         known_skills = [name for name, _ in candidates]
         known_skills += [s for node in spec.nodes or [] for s in node.skills]
@@ -139,10 +147,8 @@ class PlaybookGenerator:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": build_revise_prompt(spec, user_feedback)},
             ],
-            source_input=spec.provenance.source_input,
             known_skills=known_skills,
             fixed_name=spec.name,
-            previous=spec,
         )
 
     async def _retrieve_candidates(self, query: str) -> list[tuple[str, str]]:
@@ -155,11 +161,9 @@ class PlaybookGenerator:
         self,
         *,
         messages: list[dict[str, Any]],
-        source_input: str,
         known_skills: list[str],
         fixed_name: str | None,
-        previous: PlaybookSpec | None,
-    ) -> PlaybookSpec:
+    ) -> GeneratedPlaybook:
         errors: list[str] = []
         for round_no in range(1 + _MAX_REPAIR_ROUNDS):
             response = await self._provider.chat_with_retry(
@@ -174,58 +178,50 @@ class PlaybookGenerator:
                 messages.append({"role": "user", "content": build_repair_prompt({}, errors)})
                 continue
 
-            spec, errors, missing = self._check(args, source_input, known_skills, fixed_name)
-            if spec is not None and previous is not None:
-                errors = errors + check_immutable_region(previous, spec)
+            spec, errors, missing, reported = self._check(args, known_skills, fixed_name)
             if spec is not None and not errors:
                 # The model proposes the L1 vocabulary; the guards decide what
                 # is indexable. Without this the schema hands the model a
-                # direct write to the index, and stop words ("帮我"), entries
-                # below the length rule, and duplicate case variants reach it
-                # unfiltered -- each one costing a gate call on every message
-                # that contains it, for as long as the playbook exists.
+                # direct write to the index, and stop words ("help me"),
+                # entries below the length rule, and duplicate case variants
+                # reach it unfiltered -- each one costing a gate call on every
+                # message that contains it, for as long as the playbook exists.
                 try:
                     spec = spec.model_copy(update={"triggers": guard_triggers(spec.triggers, what=spec.name)})
                 except TriggerGuardError as exc:
                     errors = [str(exc)]
                     messages.append({"role": "user", "content": build_repair_prompt(args, errors)})
                     continue
-                if missing:
-                    spec = spec.model_copy(
-                        update={"provenance": spec.provenance.model_copy(update={"missing_capabilities": missing})}
-                    )
+                questions, assumptions = reported
+                notes = [f"Open question: {q}" for q in questions]
+                notes += [f"Assumption: {a}" for a in assumptions]
+                notes += [f"Missing capability: {m}" for m in missing]
                 logger.info("playbook {} generated in {} round(s)", spec.name, round_no + 1)
-                return spec
+                return GeneratedPlaybook(spec=spec, notes=notes)
             messages.append({"role": "user", "content": build_repair_prompt(args, errors)})
         raise PlaybookGenerationError(errors)
 
     def _check(
         self,
         args: dict[str, Any],
-        source_input: str,
         known_skills: list[str],
         fixed_name: str | None,
-    ) -> tuple[PlaybookSpec | None, list[str], list[str]]:
+    ) -> tuple[PlaybookSpec | None, list[str], list[str], tuple[list[str], list[str]]]:
         """Fill code-owned fields, then run all validation layers."""
         data = dict(args)
         # Weaker models sometimes wrap the whole spec in one envelope key.
         if len(data) == 1 and isinstance(next(iter(data.values())), dict):
             data = dict(next(iter(data.values())))
-        for key in ("version", "status"):
-            data.pop(key, None)
-        provenance = dict(data.get("provenance") or {})
-        provenance["sourceInput"] = source_input
-        provenance.pop("source_input", None)
-        provenance.pop("missingCapabilities", None)
-        provenance.pop("missing_capabilities", None)
-        data["provenance"] = provenance
+        questions = [str(q) for q in data.pop("blockingQuestions", None) or []]
+        assumptions = [str(a) for a in data.pop("assumptions", None) or []]
+        data.pop("version", None)
         data["name"] = fixed_name or slugify(str(data.get("name", "")))
 
         try:
             spec = PlaybookSpec.model_validate(data)
         except ValidationError as exc:
             errors = [f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}" for e in exc.errors()]
-            return None, errors[:20], []
+            return None, errors[:20], [], (questions, assumptions)
 
         errors = validate_structure(spec, known_agents=self._roster.keys() or BUILTIN_AGENTS)
         asset_errors, missing = check_assets(
@@ -233,7 +229,7 @@ class PlaybookGenerator:
             known_skills=known_skills,
             known_mcp=self._inventory.known_mcp(),
         )
-        return spec, errors + asset_errors, missing
+        return spec, errors + asset_errors, missing, (questions, assumptions)
 
 
 def _split_skill_refs(refs: list[str]) -> tuple[list[str], list[tuple[str, str]]]:

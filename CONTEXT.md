@@ -512,24 +512,45 @@ replays pieces or just deletes a config stanza.
 _Avoid_: "manifest" -- that is the plugin's own declaration; a ledger is the record of one
 install of it.
 
-**Playbook** (`memory_engine/playbook/`):
-A task-family-level orchestration template a `PlaybookGenerator` derives from one
-user input: role configs cast from the four capability bases (research / code /
-data / content) plus either an explicit step graph (`mode="dag"`, emitted only
-when the user's input itself spells the steps out — faithful transcription, never
-invented) or orchestration principles for the runtime main agent (`mode="prompt"`,
-the default). Persisted as a skill-shaped SKILL.md (contract in a fenced yaml
-block) so the skill_local registry indexes it. Generation is one forced tool call
-plus a bounded validation-repair loop; `status` starts at `draft` and open
-`blocking_questions` pin it there. Discovery is a two-stage funnel: `triggers`
-(a compile-time-expanded, generic-word-filtered keyword/phrase vocabulary,
-substring-matched per message at zero cost) nominates candidates, and one
-LLM gate call judges intent, extracts runtime-input values and adjudicates
-between overlapping candidates — any gate failure resolves to no match, so
-the conversation falls through untouched.
-_Avoid_: conflating with a Skill (a playbook is a structured skill subtype — the
-runtime-enforced form of the same flow knowledge) and with the sub-agent DAG run
-(`run_subagent_dag` executes a graph once; a playbook stores one for reuse).
+**Playbook** (`raven/playbook/`):
+A stored, reusable orchestration for a family of tasks: one `playbook.md` per
+directory under a playbook root, in three regions — a two-field frontmatter
+(`name` / `description`), a human-readable body, and one fenced
+`yaml playbook-spec` block holding every machine field. Being under a root is
+what makes it a playbook, so no marker field can disagree with where the file
+sits — one directory, one file, no sidecar and no lifecycle fields. The library
+is two such roots layered: `raven/playbook/builtin/` ships with the package and
+has no write path, and `<agent_home>/playbooks/` (override: `playbooks.dir`) is
+where both creation entries — `raven playbook create` and the `create_playbook`
+tool — land their product, disabled for review; a user directory reusing a
+builtin's name shadows it, with a load warning. A generator's open questions and
+assumptions go into the body (its `## Open questions` section) for a human to
+read; whether a playbook is matchable on this machine is config (the
+`playbooks.disabled` deny list — absent means on, disabling only mutes the
+passive funnel and explicit runs still work), because the file is the
+distribution unit and local state must not travel with it.
+
+The two modes differ only in where the graph comes from: `dag` ships it as
+`nodes`; `prompt` ships assembly guidance as `prompts` and a model composes the
+graph at run time. Both then pass the same validation and reach the same
+dispatch — a node list handed to `SubAgentDagTool.run_with_roles` with a backend
+built per node, running in the background and announcing its own result. A field
+the release cannot honour is refused rather than noted: `nodes[].confirm` and an
+`instance` handle on a stateless agent fail validation, because a gate reported
+after the step ran is worse than no gate.
+
+Discovery is a two-stage funnel: `triggers.keywords` (guarded against stop
+words, short entries and generic words, then substring-matched per message at
+zero cost) nominates candidates, and one LLM gate judges intent, extracts
+`params` and adjudicates between overlapping candidates. Any gate failure
+resolves to no match, so the conversation falls through untouched. The
+`run_playbook` tool is the agent's own entry for what that funnel structurally
+cannot catch — a request that never says a trigger word, and an answer supplied
+after a run asked for it.
+_Avoid_: calling it a Skill or a SKILL.md — a playbook has its own root, its own
+file name and its own loader, and is not indexed by `skill_local`. Also avoid
+conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
+model just wrote; a playbook stores one for reuse).
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.

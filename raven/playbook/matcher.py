@@ -1,6 +1,6 @@
 """The two-stage playbook match funnel — L1 vocabulary index, L2 LLM gate.
 
-Per message: normalize once, substring-match the whole ready library's
+Per message: normalize once, substring-match the whole matchable library's
 vocabulary (L1, pure code, no model); zero hits means the message flows on
 untouched — that is the common case and it must stay free. Hits become
 candidates for one gate call (L2) that judges intent, extracts params and
@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from raven.memory_engine.playbook.triggers import normalize
-from raven.memory_engine.playbook.types import ParamSpec, Triggers
+from raven.playbook.triggers import normalize
+from raven.playbook.types import ParamSpec, Triggers
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -49,6 +49,9 @@ class GateVerdict(BaseModel):
     reason: str = ""
     params: dict[str, Any] = Field(default_factory=dict)
     missing: list[str] = Field(default_factory=list)
+    contenders: list[str] = Field(default_factory=list)
+    """Filled only on a too-close-to-call null match: the candidate ids the
+    gate could not separate, for the funnel to hand the user as a choice."""
 
     @property
     def actionable(self) -> bool:
@@ -83,20 +86,26 @@ class TriggerIndex:
 
 
 _GATE_PROMPT = """\
-用户消息：
+User message:
 {message}
 
-候选任务模板（按触发词初筛得到，可能全都不对）：
+Candidate task templates (nominated by trigger words; possibly all wrong):
 {candidates}
 
-判断：用户这句话是不是明确想执行其中某个模板的任务？
+Decide: is this message clearly asking to run one of these templates?
 
-规则：
-- 用户只是聊到相关话题、提问、或表达不确定 → match 填 null。宁可放过，不可错配：
-  错配会启动一整套后台执行，放过只是走普通对话；
-- 多个候选都沾边时选任务契合度最高的一个；难分高下 → match 填 null 并在 reason 里说明；
-- 命中时按该模板的参数表从原句抽取参数值：抽得到的进 params，必填但原句里没有的进 missing；
-- confidence 只在"用户明确要干这件事"时填 high。"""
+Rules:
+- The user merely mentions a related topic, asks a question, or sounds
+  unsure -> set match to null. Prefer letting go over mismatching: a
+  mismatch launches a whole background run, a pass-through only continues
+  the normal conversation;
+- When several candidates apply, pick the single best task fit; too close
+  to call -> set match to null, say so in reason, and list the contending
+  template ids in contenders so the user can be asked to choose;
+- On a match, extract param values from the original message per that
+  template's param table: extracted values go into params; required params
+  absent from the message go into missing;
+- confidence is "high" only when the user clearly wants this done."""
 
 
 def _gate_tool() -> list[dict[str, Any]]:
@@ -114,6 +123,7 @@ def _gate_tool() -> list[dict[str, Any]]:
                         "reason": {"type": "string"},
                         "params": {"type": "object"},
                         "missing": {"type": "array", "items": {"type": "string"}},
+                        "contenders": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["match", "confidence", "reason"],
                 },
@@ -125,11 +135,11 @@ def _gate_tool() -> list[dict[str, Any]]:
 def _render_candidates(candidates: list[MatchCandidate]) -> str:
     blocks = []
     for c in candidates:
-        lines = [f"- id: {c.playbook_id}", f"  意图: {c.description}"]
+        lines = [f"- id: {c.playbook_id}", f"  intent: {c.description}"]
         if c.params:
-            lines.append("  参数表:")
+            lines.append("  params:")
             for name, p in c.params.items():
-                need = "必填" if p.required and p.default is None else f"默认={p.default!r}"
+                need = "required" if p.required and p.default is None else f"default={p.default!r}"
                 lines.append(f"    - {name} ({p.type}, {need}): {p.description}")
         blocks.append("\n".join(lines))
     return "\n".join(blocks)

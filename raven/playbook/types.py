@@ -6,14 +6,12 @@ Naming: python attributes are snake_case; the on-disk block is camelCase
 (``promptTemplate`` / ``dependsOn``), handled by field aliases — dump with
 ``by_alias=True`` to get the wire shape.
 
-Two families of fields:
-
-- **Contract fields**: exactly what the field definition allows inside
-  ``playbook.md``.
-- **Generator-side fields** (``status``, ``provenance``): our generation
-  lifecycle needs them (draft gating, the immutable region for revise), but
-  the field definition gives them no home — they persist in a
-  ``.provenance.json`` sidecar next to ``playbook.md``, never inside it.
+Every field is a contract field: exactly what the field definition allows
+inside ``playbook.md``. There is no lifecycle state here — a generator's
+assumptions and open questions go into the human body (the
+``## Open questions`` section), and whether a playbook is matchable on this
+machine lives in config (``playbooks.disabled``), because the file is the
+distribution unit and local state must not travel with it.
 
 The two modes differ only in where the graph comes from: ``dag`` ships it in
 ``nodes``; ``prompt`` ships assembly guidance in ``prompts`` and a model
@@ -31,7 +29,12 @@ from pydantic.alias_generators import to_camel
 
 SPEC_VERSION = 1
 
-_NAME_RE = r"^[a-z0-9][a-z0-9-]*$"
+NAME_RE = r"^[a-z0-9][a-z0-9-]*$"
+"""The one field the whole on-disk layout hangs off: a playbook's name is its
+directory name, so everything that writes must hold values to this shape --
+the schema alone cannot (``model_copy`` skips validators, and the tool
+argument validator has no ``pattern`` support)."""
+_NAME_RE = NAME_RE
 _NODE_ID_RE = r"^[A-Za-z0-9_-]+$"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -101,23 +104,11 @@ class NodeSpec(CamelBase):
     cannot stop the middle of a run."""
 
 
-class Provenance(CamelBase):
-    """Generator-side lifecycle record — sidecar only, never in playbook.md."""
-
-    source_input: str = ""
-    specified_by_user: list[str] = Field(default_factory=list)
-    inferred: list[dict[str, Any]] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    blocking_questions: list[str] = Field(default_factory=list)
-    missing_capabilities: list[str] = Field(default_factory=list)
-
-
 class PlaybookSpec(CamelBase):
     """One whole playbook. ``name``/``description`` live in the frontmatter,
-    the rest in the fenced block; ``status``/``provenance`` go to the
-    sidecar (see :meth:`block_dump` / the store)."""
+    the rest in the fenced block (see :meth:`block_dump` / the store)."""
 
-    SIDE_FIELDS: ClassVar[tuple[str, ...]] = ("name", "description", "status", "provenance")
+    FRONTMATTER_FIELDS: ClassVar[tuple[str, ...]] = ("name", "description")
 
     name: str = Field(pattern=_NAME_RE)
     """Unique id; equals the directory name."""
@@ -135,9 +126,6 @@ class PlaybookSpec(CamelBase):
     """prompt mode: how to assemble the graph (layers, agents, per-node
     skills/mcps, dependencies) — never runtime decision rules; a composed
     graph is fixed once assembled."""
-
-    status: Literal["draft", "ready", "deprecated"] = "draft"
-    provenance: Provenance = Field(default_factory=Provenance)
 
     @model_validator(mode="after")
     def _mode_section_pairing(self) -> "PlaybookSpec":
@@ -160,16 +148,10 @@ class PlaybookSpec(CamelBase):
                 raise ValueError(f"param name {pname!r} must be an identifier")
         return self
 
-    @model_validator(mode="after")
-    def _blocking_questions_force_draft(self) -> "PlaybookSpec":
-        if self.provenance.blocking_questions and self.status != "draft":
-            raise ValueError("status must stay 'draft' while blocking_questions are open")
-        return self
-
     def block_dump(self) -> dict[str, Any]:
         """The ``yaml playbook-spec`` block content: machine fields only,
-        camelCase; frontmatter and sidecar fields excluded."""
+        camelCase; frontmatter fields excluded."""
         data = self.model_dump(by_alias=True, exclude_none=True)
-        for key in self.SIDE_FIELDS:
+        for key in self.FRONTMATTER_FIELDS:
             data.pop(key, None)
         return data
