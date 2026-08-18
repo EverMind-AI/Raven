@@ -36,8 +36,20 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/ui-webui" && pwd)"
 # tool env holding the editable `raven`. start_service() locates it from the
 # `raven` entrypoint; SERVICE_PYTHON overrides it.
 REDIS_CONTAINER="ravenx-redis"
-SERVICE_PORT=8000      # python agent service (uvicorn), see service/main.py
-FRONTEND_PORT=5173     # vite dev server, see frontend/
+SERVICE_PORT="${SERVICE_PORT:-8000}"  # python agent service (uvicorn), see service/main.py
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"  # vite dev server, see frontend/
+# What our own service and frontend look like in `ps`, used to tell a holder we
+# started from an unrelated program that happens to sit on the same port.
+# Keep the pattern narrow: the service's uvicorn reload worker holds the socket
+# under a multiprocessing spawn-stub argv, but EVERY uvicorn --reload produces
+# that argv, so matching it would adopt (or half-kill) an unrelated dev server.
+# The ppid fallback in holder_is_ours covers the worker by lineage instead. An
+# orphaned worker (parent gone, ppid 1) has no lineage left to vouch for it and
+# deliberately reads as a stranger: claim_port stops hard and names the pid,
+# which costs the user one `kill` -- cheaper than a false claim.
+SERVICE_PATTERN='main[.]py'
+FRONTEND_PATTERN='vite|pnpm'
+
 # The chat always runs through a persistent `raven gateway` web channel; the
 # service has no other backend (see service/main.py).
 #
@@ -81,7 +93,11 @@ port_in_use() {
   local p="$1"
   if command -v ss >/dev/null 2>&1; then
     ss -ltn 2>/dev/null | grep -qE "[:.]$p\b"
+  elif command -v lsof >/dev/null 2>&1; then
+    [[ -n "$(lsof -nP -tiTCP:"$p" -sTCP:LISTEN 2>/dev/null)" ]]
   else
+    # Last resort, and family-blind: it dials one address, so a listener bound
+    # only to ::1 -- which is what Vite does by default -- reads as down here.
     (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null && { exec 3>&-; return 0; } || return 1
   fi
 }
@@ -94,24 +110,87 @@ pids_on_port() {
   { if command -v ss >/dev/null 2>&1; then
       ss -ltnpH 2>/dev/null | grep -E "[:.]$p\b" \
         | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+    elif command -v lsof >/dev/null 2>&1; then
+      lsof -nP -tiTCP:"$p" -sTCP:LISTEN 2>/dev/null | sort -u
     elif command -v fuser >/dev/null 2>&1; then
       fuser "$p/tcp" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' | sort -u
     fi; } || true
 }
 
+# The command line of a pid, or empty if it is gone. `ps` rather than
+# /proc/<pid>/cmdline: macOS has no /proc, so every reader built on it answered
+# "unknown" there -- which made every port holder look foreign and every
+# ownership check below fail closed.
+cmd_of_pid() {
+  ps -o command= -p "$1" 2>/dev/null || true
+}
+
+# Whether the process on a port is the one this launcher would have started for
+# it. Two decisions depend on it and neither may be taken on a stranger: killing
+# the holder, and reusing it as if we had started it ourselves.
+holder_is_ours() {
+  local pid="$1" pattern="$2" cmd
+  cmd="$(cmd_of_pid "$pid")"
+  [[ -n "$cmd" && "$cmd" =~ $pattern ]] && return 0
+  # A worker our process spawned (e.g. uvicorn's reloader child) may carry an
+  # argv the pattern does not know; if its live parent matches, it is ours.
+  local ppid
+  ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [[ -n "$ppid" && "$ppid" != 1 ]] && [[ "$(cmd_of_pid "$ppid")" =~ $pattern ]]
+}
+
 # Forcefully free a port: TERM the holders, wait, then escalate to KILL.
 # Re-resolves PIDs each round so we catch children that outlive the leader.
+# <pattern> matches the command line of a holder this app owns; anything else on
+# the port is reported and left alone, the same discipline stop_gateway applies
+# to the gateway port. Killing blind is how an unrelated service dies here:
+# :8000 is a popular default and the process sitting on it is often not ours.
 free_port() {
-  local p="$1" sig=TERM pids
+  local p="$1" pattern="$2" sig=TERM pids mine foreign pid
   for round in 1 2; do
     pids="$(pids_on_port "$p")" || true
     [[ -n "$pids" ]] || return 0
-    echo "[port $p] SIG$sig -> $(echo $pids | tr '\n' ' ')"
-    kill -"$sig" $pids 2>/dev/null || true
+    mine=(); foreign=()
+    for pid in $pids; do
+      if holder_is_ours "$pid" "$pattern"; then mine+=("$pid"); else foreign+=("$pid"); fi
+    done
+    for pid in ${foreign[@]+"${foreign[@]}"}; do
+      echo "[port $p] WARNING: held by an unrelated pid $pid ($(cmd_of_pid "$pid")) -- not killing it" >&2
+    done
+    (( ${#mine[@]} )) || return 0
+    echo "[port $p] SIG$sig -> ${mine[*]}"
+    kill -"$sig" "${mine[@]}" 2>/dev/null || true
     for _ in $(seq 1 8); do sleep 1; port_in_use "$p" || return 0; done
     sig=KILL
   done
   port_in_use "$p" && echo "[port $p] WARNING: still in use after SIGKILL" || true
+}
+
+# Decide whether <name> may start on <port>. Returns 0 when the port is free,
+# 1 when something we own already serves it (so the caller skips starting a
+# second one), and exits when a stranger holds it: attaching to that would point
+# the app at whatever answers there, which is silent and wrong -- the UI would
+# talk to it as if it were the service, and `stop` would later try to kill it.
+claim_port() {
+  local name="$1" port="$2" pattern="$3" pid pids
+  port_in_use "$port" || return 0
+  pids="$(pids_on_port "$port")" || true
+  if [[ -z "$pids" ]]; then
+    echo "[$name] :$port is in use but the holder cannot be identified" \
+         "(no ss/lsof/fuser) -- leaving it as is" >&2
+    return 1
+  fi
+  for pid in $pids; do
+    if holder_is_ours "$pid" "$pattern"; then
+      echo "[$name] :$port already served by pid $pid -- reusing it"
+      return 1
+    fi
+  done
+  echo "[$name] FATAL: :$port is held by an unrelated process" >&2
+  for pid in $pids; do echo "          pid $pid: $(cmd_of_pid "$pid")" >&2; done
+  echo "          Not ours to stop. Kill it yourself (kill ${pids//$'\n'/ }) if it is a leftover," >&2
+  echo "          or run with $(echo "$name" | tr 'a-z' 'A-Z')_PORT=<port> to move this app." >&2
+  exit 1
 }
 
 # A zombie keeps answering `kill -0` until its parent reaps it, and `restart`
@@ -121,8 +200,12 @@ free_port() {
 pid_alive() {
   local pid="$1" state
   kill -0 "$pid" 2>/dev/null || return 1
-  state="$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f1)"
-  [[ -z "$state" || "$state" != Z ]]
+  if [[ -r "/proc/$pid/stat" ]]; then
+    state="$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f1)"
+  else
+    state="$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')"
+  fi
+  [[ -z "$state" || "${state:0:1}" != Z ]]
 }
 
 wait_pid_gone() {
@@ -140,14 +223,30 @@ wait_pid_gone() {
 # of killed. Matching the raw cmdline as one string would false-positive on the
 # agent service, whose env block carries RAVEN_GATEWAY_WS_URL.
 is_raven_gateway() {
-  local pid="$1" args=() a saw_raven=0 saw_gateway=0
-  [[ -r "/proc/$pid/cmdline" ]] || return 1
-  mapfile -d '' -t args <"/proc/$pid/cmdline" 2>/dev/null || return 1
-  for a in "${args[@]}"; do
-    [[ "$a" == raven || "$a" == */raven ]] && saw_raven=1
-    [[ "$a" == gateway ]] && saw_gateway=1
-  done
-  (( saw_raven && saw_gateway ))
+  local cmd
+  cmd="$(cmd_of_pid "$1")"
+  # Two independent matches rather than one expression: a single regex spanning
+  # both words would consume the separator between them, so `raven gateway`
+  # would not match its own second half.
+  [[ "$cmd" =~ (^|/|[[:space:]])raven([[:space:]]|$) ]] &&
+    [[ "$cmd" =~ (^|[[:space:]])gateway([[:space:]]|$) ]]
+}
+
+# Start a command in its own session, so stop_pid_file can signal the whole
+# process group later. macOS ships no setsid, and without this every start_*
+# below died with one "setsid: command not found" line in its own log while the
+# launcher reported only "not up yet". python3 is already a hard requirement
+# here (sync_gateway_web_config and the service itself need it), so it stands in.
+# Only call this backgrounded (`spawn_session ... &`): both branches exec, so a
+# foreground call would replace the launcher. The exec is load-bearing -- it
+# turns the backgrounded subshell into the session leader itself, so the `$!`
+# the caller records is the pid whose process group stop_pid_file signals.
+spawn_session() {
+  if command -v setsid >/dev/null 2>&1; then
+    exec setsid "$@"
+  else
+    exec python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+  fi
 }
 
 ensure_redis() {
@@ -315,16 +414,13 @@ start_gateway() {
     exit 1
   fi
   echo "[gateway] starting raven gateway, web channel on :$GATEWAY_WS_PORT   (log: $LOG_DIR/gateway.log)"
-  setsid bash -c "exec raven gateway --config '$RAVEN_CONFIG'" \
+  spawn_session bash -c "exec raven gateway --config '$RAVEN_CONFIG'" \
     >"$LOG_DIR/gateway.log" 2>&1 &
   echo $! >"$GATEWAY_PID_FILE"
 }
 
 start_service() {
-  if port_in_use "$SERVICE_PORT"; then
-    echo "[service] :$SERVICE_PORT already in use — leaving it as is"
-    return 0
-  fi
+  claim_port service "$SERVICE_PORT" "$SERVICE_PATTERN" || return 0
   echo "[service] main agent = raven gateway web channel  ($RAVEN_GATEWAY_WS_URL)"
   echo "[service] starting agent service on :$SERVICE_PORT   (log: $LOG_DIR/service.log)"
   # The service runs on the same interpreter as the gateway: the uv tool env that
@@ -356,8 +452,8 @@ start_service() {
   # `agentscope` lives in service/ alongside main.py, so the interpreter finds it
   # via sys.path[0] (the script's own directory) -- which precedes site-packages,
   # so the in-repo copy wins over any agentscope installed in the environment.
-  local svc_env="RAVEN_GATEWAY_WS_URL='$RAVEN_GATEWAY_WS_URL' RAVEN_GATEWAY_WS_TOKEN='$RAVEN_GATEWAY_WS_TOKEN' PYTHONUTF8=1"
-  setsid bash -c "cd '$REPO_ROOT/service' && exec env $svc_env '$svc_py' main.py" \
+  local svc_env="RAVEN_GATEWAY_WS_URL='$RAVEN_GATEWAY_WS_URL' RAVEN_GATEWAY_WS_TOKEN='$RAVEN_GATEWAY_WS_TOKEN' SERVICE_PORT='$SERVICE_PORT' PYTHONUTF8=1"
+  spawn_session bash -c "cd '$REPO_ROOT/service' && exec env $svc_env '$svc_py' main.py" \
     >"$LOG_DIR/service.log" 2>&1 &
   echo $! >"$SERVICE_PID_FILE"
 }
@@ -365,15 +461,16 @@ start_service() {
 
 start_frontend() {
   command -v pnpm >/dev/null 2>&1 || { echo "[frontend] pnpm not found — skipping" >&2; return 0; }
-  if port_in_use "$FRONTEND_PORT"; then
-    echo "[frontend] :$FRONTEND_PORT already in use — leaving it as is"
-    return 0
-  fi
+  claim_port frontend "$FRONTEND_PORT" "$FRONTEND_PATTERN" || return 0
   echo "[frontend] starting Vite on :$FRONTEND_PORT   (log: $LOG_DIR/frontend.log)"
   # VITE_SERVICE_PORT is baked into the bundle at dev-server start: the UI
   # derives the service URL from it instead of asking the user, so a changed
   # SERVICE_PORT here needs no browser-side re-entry.
-  setsid bash -c "cd '$REPO_ROOT' && VITE_SERVICE_PORT='$SERVICE_PORT' exec pnpm --filter frontend dev" \
+  # --port hands FRONTEND_PORT to Vite itself (it reads no env fallback), and
+  # --strictPort stops its auto-increment from drifting to a port nothing here
+  # watches when the requested one gets taken between claim_port and the bind.
+  # No `--` before them: pnpm forwards it literally, and Vite then ignores both.
+  spawn_session bash -c "cd '$REPO_ROOT' && VITE_SERVICE_PORT='$SERVICE_PORT' exec pnpm --filter frontend dev --port '$FRONTEND_PORT' --strictPort" \
     >"$LOG_DIR/frontend.log" 2>&1 &
   echo $! >"$FRONTEND_PID_FILE"
 }
@@ -422,7 +519,7 @@ stop_gateway() {
   done
   for pid in ${foreign[@]+"${foreign[@]}"}; do
     echo "[gateway] WARNING: :$GATEWAY_WS_PORT held by non-gateway pid $pid" \
-         "($(ps -o cmd= -p "$pid" 2>/dev/null)) — not killing it" >&2
+         "($(cmd_of_pid "$pid")) — not killing it" >&2
   done
   (( ${#pids[@]} )) || return 0
   echo "[gateway] adopting orphaned gateway (pid ${pids[*]}, no pid file) — restarting it"
@@ -453,8 +550,8 @@ free_all_ports() {
   fi
   stop_pid_file "$SERVICE_PID_FILE"  service  || true
   stop_pid_file "$FRONTEND_PID_FILE" frontend || true
-  free_port "$SERVICE_PORT"
-  free_port "$FRONTEND_PORT"
+  free_port "$SERVICE_PORT" "$SERVICE_PATTERN"
+  free_port "$FRONTEND_PORT" "$FRONTEND_PATTERN"
 }
 
 stop_all() {
