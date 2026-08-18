@@ -33,7 +33,6 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.cli._helpers import load_runtime_config, make_provider
-from raven.providers import pin
 from raven.providers.auth import MissingCredentialsError
 from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
@@ -308,25 +307,23 @@ def _set_model(
             "config.set model provider must be a string",
             data={"field": "provider", "got": repr(new_provider)},
         )
-    # Bare `/model <name>` carries no provider; derive it from the model so a
-    # previously-forced provider does not silently mis-route the new model. The
-    # picker always sends one, so this is the hand-typed path. The rule itself is
-    # `providers.pin`, which `raven provider use` asks too.
-    if new_provider is None:
-        new_provider = pin.resolve(raw_value, pinned=_get_nested(_load_config(), "agents.defaults.provider") or "")
-        if new_provider is None:
-            raise ConfigValidationError(
-                f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
-                data={"field": "value", "got": raw_value},
-            )
+    # Required, not derived. A model id does not name whose credential serves
+    # it -- `openrouter` serving `anthropic/claude-haiku-4-5` and `anthropic`
+    # serving `claude-haiku-4-5` are both real and bill different accounts --
+    # and a prefix is LiteLLM routing syntax rather than evidence about a key.
+    # The picker sends one, `/model` refuses without one, and this is the same
+    # rule at the boundary where it can actually be enforced.
+    if not new_provider:
+        raise ConfigValidationError(
+            f"config.set model needs a provider: {raw_value!r} does not name whose credential serves it",
+            data={"field": "provider", "model": raw_value},
+        )
 
     # Stored the way every other surface stores it -- naming its provider -- so
     # the three cannot disagree about what was chosen. A hand-typed bare id used
     # to be written raw here while the wizard qualified the same input, which is
-    # the spelling drift the storage rule exists to end. `auto` names nobody,
-    # so there is no prefix to add.
-    if new_provider and new_provider != pin.AUTO:
-        raw_value = stored_model_id(new_provider, raw_value)
+    # the spelling drift the storage rule exists to end.
+    raw_value = stored_model_id(new_provider, raw_value)
 
     session_id = params.get("session_id")
     scope = params.get("scope")

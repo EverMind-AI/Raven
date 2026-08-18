@@ -212,22 +212,37 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
 
 
-async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
-    # A bare `/model <name>` carries no provider; _set_model must derive it from
-    # the model so a previously-forced provider does not silently mis-route.
-    # Configured, because an id naming a vendor with no section is deliberately
-    # left on `auto`: pinning it would stop routing before the fallback that lets
-    # a gateway serve that vendor's models.
-    _pin(fake_home, "auto", {"anthropic": {"api_key": "sk-ant"}})
+async def test_config_set_model_without_a_provider_is_refused(fake_home: Path) -> None:
+    """The boundary where the rule can actually be enforced. A model id does not
+    name whose credential serves it -- `openrouter` serving
+    `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5` are
+    both real and bill different accounts -- and a prefix is LiteLLM routing
+    syntax, not evidence about a key. This used to derive one."""
+    _pin(fake_home, "anthropic", {"anthropic": {"api_key": "sk-ant"}})
+
+    with pytest.raises(ConfigValidationError, match="needs a provider"):
+        await config_set(
+            {"key": "model", "value": "anthropic/claude-opus-4-8"},
+            agent_loop_factory=lambda: None,
+        )
+
+    # And nothing was written: a refused switch leaves the config alone.
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"].get("model") != "anthropic/claude-opus-4-8"
+
+
+async def test_config_set_model_with_a_provider_writes_the_pair(fake_home: Path) -> None:
+    _pin(fake_home, "anthropic", {"anthropic": {"api_key": "sk-ant"}})
 
     result = await config_set(
-        {"key": "model", "value": "anthropic/claude-opus-4-8"},
+        {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
         agent_loop_factory=lambda: None,
     )
+
     assert result["applied"] is True
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
 
 
 async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: Path, monkeypatch) -> None:
@@ -319,6 +334,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
             {
                 "key": "model",
                 "value": "broken/model",
+                "provider": "broken",
                 "session_id": "tui:default",
             },
             agent_loop_factory=lambda: loop,
@@ -432,54 +448,6 @@ async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home
     assert cfg["agents"]["defaults"]["provider"] == "openai"
 
 
-async def test_a_bare_id_the_pinned_provider_does_serve_keeps_the_pin(fake_home: Path) -> None:
-    """Refusing every bare id would break the case where the pin was right.
-
-    A user who configured a spec-less vendor and types one of its model names is
-    not being ambiguous -- that provider serves it. Asked of its own list and the
-    catalogue rather than assumed either way.
-    """
-    _pin(fake_home, "mistral", {"mistral": {"api_key": "sk-mistral"}})
-
-    result = await config_set(
-        {"key": "model", "value": "mistral-large-latest"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "mistral"
-    # Stored naming its provider, which is what every surface writes: the same
-    # input through `raven provider use` produced the qualified form while this
-    # one kept it bare, so the two disagreed about what the user had chosen.
-    assert cfg["agents"]["defaults"]["model"] == "mistral/mistral-large-latest"
-
-
-async def test_a_local_deployment_keeps_its_pin_for_any_bare_id(fake_home: Path) -> None:
-    """Its server names whatever models it likes, and it holds no key to mis-route."""
-    _pin(fake_home, "ollama_chat", {"ollama_chat": {"api_base": "http://gpu-box:11434"}})
-
-    result = await config_set(
-        {"key": "model", "value": "some-local-build"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "ollama_chat"
-
-
-async def test_a_prefixed_id_no_spec_matches_still_hands_routing_back(fake_home: Path) -> None:
-    """Unchanged: the prefix names the vendor, so the pin has no claim on it."""
-    _pin(fake_home, "openai")
-
-    result = await config_set(
-        {"key": "model", "value": "mistral/mistral-large-latest"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "auto"
-
-
 async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> None:
     """The picker sends one with every selection; that path must not reach the gate."""
     _pin(fake_home, "openai")
@@ -491,28 +459,6 @@ async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> 
     assert result["applied"] is True
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["provider"] == "azure_openai"
-
-
-async def test_a_bare_id_the_pinned_provider_lists_itself_keeps_the_pin(fake_home: Path) -> None:
-    """The provider's own curated list is evidence too, and it stores ids bare.
-
-    `model.add_model` writes what the user typed, so a hand-added id sits there
-    unprefixed. Reading only the catalogue's prefixed spelling would refuse a model
-    the user had already told us this provider serves.
-    """
-    _pin(
-        fake_home,
-        "mistral",
-        {"mistral": {"api_key": "sk-mistral", "models": ["some-private-tune"]}},
-    )
-
-    result = await config_set(
-        {"key": "model", "value": "some-private-tune"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "mistral"
 
 
 async def test_a_session_switch_is_written_to_the_session_record(fake_home: Path, monkeypatch, tmp_path) -> None:
@@ -745,7 +691,7 @@ async def test_a_session_switch_always_applies_to_its_own_session(fake_home: Pat
     )
 
     result = await config_set(
-        {"key": "model", "value": "anthropic/claude-opus-4-8", "session_id": "tui:a"},
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "session_id": "tui:a"},
         agent_loop_factory=lambda: _FakeLoop("old-prov", "old-model"),
     )
     assert result["applies_to_session"] is True

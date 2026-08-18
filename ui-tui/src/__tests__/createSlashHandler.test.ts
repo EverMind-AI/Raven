@@ -51,7 +51,31 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('sends a bare /model switch with no provider param', async () => {
+  it('refuses a model id with no provider, and says how to name one', async () => {
+    // An id alone does not name a credential: `openrouter` serving
+    // `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5`
+    // are both real and cost different money. Guessing is what this removes.
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      '/model needs a provider. Run /model to pick one, or: /model <provider> x-model'
+    )
+  })
+
+  it('refuses a prefixed id too: a prefix is routing syntax, not a credential', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model openrouter/anthropic/claude-opus-4-5')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+  })
+
+  it('takes the two-word form as provider then model', async () => {
     patchUiState({ sid: 'sid-abc' })
 
     const ctx = buildCtx({
@@ -61,13 +85,26 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
+      provider: 'openrouter',
       session_id: 'sid-abc',
       scope: 'session',
       value: 'x-model'
     })
+  })
+
+  it('applies the same rule to --default', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model some-model --default')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      '/model needs a provider. Run /model to pick one, or: /model <provider> some-model'
+    )
   })
 
   it('sends scope default and leaves the status bar alone when the session kept its own model', async () => {
@@ -88,9 +125,10 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model new-default --default')).toBe(true)
+    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
+      provider: 'openrouter',
       session_id: 'sid-abc',
       scope: 'default',
       value: 'new-default'
@@ -124,7 +162,7 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model new-default --default')).toBe(true)
+    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
     await Promise.resolve()
     await Promise.resolve()
     expect(getUiState().info?.model).toBe('new-default')
@@ -140,7 +178,7 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
     await Promise.resolve()
     await Promise.resolve()
     expect(ctx.transcript.sys).toHaveBeenCalledWith('error: model switch was not applied: x-model')
@@ -157,7 +195,7 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model --default leading')).toBe(true)
+    expect(createSlashHandler(ctx)('/model --default openrouter leading')).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith(
       'config.set',
       expect.objectContaining({ value: 'leading', scope: 'default' })

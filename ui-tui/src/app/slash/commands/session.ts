@@ -27,11 +27,25 @@ import { patchUiState } from '../../uiStore.js'
 // A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
 // structured config.set params {key:'model', value, provider?}.
+// A model id never names its own credential: `openrouter` serving
+// `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5` are
+// both real, cost different money, and look the same on the wire. So the
+// provider is a word the user says, not something inferred -- including from a
+// prefix, which is LiteLLM routing syntax and not our credential.
+//
+// Accepted: `<provider> <id>`, or `<id> --provider <name>` for the flag form
+// the picker and older muscle memory use. An id on its own is refused.
 const parseModelArg = (arg: string): { provider?: string; value: string } => {
-  const m = arg.trim().match(/^(.*?)\s+--provider\s+(\S+)\s*$/)
+  const flagged = arg.trim().match(/^(.*?)\s+--provider\s+(\S+)\s*$/)
 
-  if (m) {
-    return { provider: m[2], value: m[1]!.trim() }
+  if (flagged) {
+    return { provider: flagged[2], value: flagged[1]!.trim() }
+  }
+
+  const words = arg.trim().split(/\s+/).filter(Boolean)
+
+  if (words.length === 2) {
+    return { provider: words[0], value: words[1]! }
   }
 
   return { value: arg.trim() }
@@ -87,6 +101,12 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       const { provider, value } = parseModelArg(rest)
+
+      if (!provider) {
+        // Not a picker with the id pre-filled, and not a "there is only one
+        // candidate so I picked it": both are the guess this refuses to make.
+        return ctx.transcript.sys(`/model needs a provider. Run /model to pick one, or: /model <provider> ${value}`)
+      }
 
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', {
