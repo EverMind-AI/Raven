@@ -238,6 +238,11 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
     * ``diff`` — a file tool's unified diff of the change it made, on its
       ``role="tool"`` entry. The one record with real line numbers, which the
       arguments alone can never reconstruct.
+    * ``reasoning_ms`` / ``duration_ms`` — how long the thought on that
+      assistant entry took, and how long the call that ``role="tool"`` entry
+      answers ran. Absent on anything written before they were recorded, and
+      absent means unknown: a client must draw the bare header rather than a
+      zero, which would claim the turn thought for no time at all.
     """
     out = []
     for m in messages:
@@ -254,7 +259,17 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             entry["text"] = content
         elif content is not None:
             entry["text"] = str(content)
-        for extra_key in ("context", "name", "tool_call_id", "timestamp", "diff", "turn_ended", "notice"):
+        for extra_key in (
+            "context",
+            "name",
+            "tool_call_id",
+            "timestamp",
+            "diff",
+            "turn_ended",
+            "notice",
+            "reasoning_ms",
+            "duration_ms",
+        ):
             if extra_key in m:
                 entry[extra_key] = m[extra_key]
         reasoning = m.get("reasoning_content")

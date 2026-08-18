@@ -195,7 +195,15 @@ export interface TranscriptMessage {
   tool_call_id?: string;
   timestamp?: string;
   reasoning_content?: string;
+  /**
+   * How long the thought on this assistant entry took, measured server-side from the first reasoning delta to the first answer token or tool call. Absent means unknown (an unstreamed call, or a session written before it was recorded) -- render the bare header, never a zero.
+   */
+  reasoning_ms?: number;
   tool_calls?: TranscriptToolCall[];
+  /**
+   * How long the call this role='tool' entry answers ran, dispatch to result. Absent means unknown, same rule as reasoning_ms.
+   */
+  duration_ms?: number;
   /**
    * A file tool's unified diff of the change it made, on its role='tool' entry.
    */
@@ -1384,6 +1392,10 @@ export interface SessionCreateParams {
    * Accepted and ignored; clients set titles via session.title.
    */
   title?: string;
+  /**
+   * Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory.
+   */
+  workdir?: string;
 }
 /**
  * The key is minted lazily -- no file is written until the first save.
@@ -2164,6 +2176,10 @@ export interface SubagentsInstanceForgetResult {
 export interface SystemHelloParams {
   client_version: string;
   client_capabilities?: string[];
+  /**
+   * Which front end this connection is ('tui', 'page', 'shell'). Recorded per connection for tracing only; session keys and channels are unaffected.
+   */
+  surface?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
