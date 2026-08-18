@@ -260,9 +260,10 @@ def test_bad_config_warns_again_after_recovery(tmp_path: Path, capsys) -> None:
 # Pre-0.1.11 bootstraps dumped every schema default to disk, and back then
 # ``contextWindowTokens`` defaulted to 65536. A pin outranks the model's real
 # window by design, so on upgraded installs that fossil silently caps every
-# model at 64k. It is cleared once, under a ``configVersion`` stamp -- the
-# value itself carries no provenance, so the stamp is the only thing separating
-# "we planted this" from "the user chose this".
+# model at 64k. It is cleared once, under a watermark kept in a sidecar next to
+# the config (see ``_stamp_path``) -- the value itself carries no provenance, so
+# the watermark is the only thing separating "we planted this" from "the user
+# chose this".
 
 
 def _defaults(path: Path) -> dict:

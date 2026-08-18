@@ -549,3 +549,35 @@ def test_nothing_configured_at_all_names_the_wizard(tmp_path: Path) -> None:
 
     assert "no provider is configured yet" in excinfo.value.summary
     assert "raven onboard" in excinfo.value.summary
+
+
+def test_migration_notices_go_to_stderr_not_stdout(tmp_path, capsys, monkeypatch) -> None:
+    """stdout is a command's answer; this is not part of it.
+
+    ``raven doctor --json`` and ``raven import --json`` are documented for
+    automation, so a notice appended to their output is not a cosmetic problem
+    but an unparseable document -- and the migration only fires once, which is
+    exactly the run a CI job would be unlucky enough to hit.
+    """
+    from raven.cli._helpers import print_config_migration_notices
+    from raven.config import loader
+
+    monkeypatch.setattr(loader, "_migration_notices", ["something was rewritten"])
+
+    print_config_migration_notices()
+
+    captured = capsys.readouterr()
+    assert "something was rewritten" in captured.err
+    assert captured.out == ""
+
+
+def test_no_notice_prints_nothing_at_all(capsys, monkeypatch) -> None:
+    from raven.cli._helpers import print_config_migration_notices
+    from raven.config import loader
+
+    monkeypatch.setattr(loader, "_migration_notices", [])
+
+    print_config_migration_notices()
+
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")

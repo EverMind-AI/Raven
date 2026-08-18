@@ -356,11 +356,25 @@ def print_config_migration_notices() -> None:
     The migrations run inside the loader, which has no terminal; this is the
     place that does. Call it after the config is loaded and before the command
     takes over the screen -- once printed, the notices are gone.
+
+    On stderr, because stdout is a command's answer and this is not part of it:
+    ``raven doctor --json`` and ``raven import --json`` are documented for
+    automation, and a line appended to their output is not a cosmetic problem
+    but an unparseable document. That is also where the rest of this class of
+    message already goes -- ``commands.run``'s own ConfigReadError branch and
+    the loader's malformed-config warning both use stderr -- so a future
+    ``--json`` command inherits the right behaviour without knowing about this.
     """
+    from rich.console import Console
+
     from raven.config.loader import drain_migration_notices
 
-    for notice in drain_migration_notices():
-        console.print(f"[yellow]Config updated:[/yellow] {notice}")
+    notices = drain_migration_notices()
+    if not notices:
+        return
+    err = Console(stderr=True)
+    for notice in notices:
+        err.print(f"[yellow]Config updated:[/yellow] {notice}")
 
 
 __all__ = [
