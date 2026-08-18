@@ -584,6 +584,8 @@ def test_save_config_keeps_every_value_the_user_chose(tmp_path: Path) -> None:
     assert reloaded.agents.defaults.model == "x/y"
     assert reloaded.providers.get("anthropic").api_key == "sk-a"
     assert reloaded.agents.defaults.max_tool_iterations == Config().agents.defaults.max_tool_iterations
+
+
 # ── The implicit provider ───────────────────────────────────────────────
 
 
