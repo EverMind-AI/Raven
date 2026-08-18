@@ -25,7 +25,7 @@ class FakeHandle:
     def __init__(self) -> None:
         self.cancelled = False
 
-    def cancel(self) -> None:
+    async def cancel(self) -> None:
         self.cancelled = True
 
     async def result(self):
@@ -97,6 +97,17 @@ async def test_turn_send_happy_path_returns_turn_id_and_accepted() -> None:
     assert turn_ids["tui:default"] == result["turn_id"]
     assert emitter.types() == ["message.start"]
     assert emitter.emitted[0][1]["payload"]["turn_id"] == result["turn_id"]
+
+
+async def test_the_returned_turn_id_rides_the_submitted_request() -> None:
+    """The client correlates on the id this call returns, and the lane stamps the
+    lifecycle events from the request -- so the two have to be the same value or
+    the completion the client is waiting for never names its turn."""
+    scheduler = FakeScheduler()
+
+    result = await turn_send({"session_key": "tui:default", "content": "hello"}, scheduler=scheduler, turn_ids={})
+
+    assert scheduler.submitted[0].turn_id == result["turn_id"]
 
 
 async def test_turn_send_generates_unique_turn_ids() -> None:
