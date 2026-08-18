@@ -14,6 +14,24 @@ from raven.tracing import semconv, trace
 RAW_ARGUMENTS_KEY = "_raw_arguments"
 
 
+def _received_tail(params: dict[str, Any]) -> str:
+    """The text the model actually emitted, for a call whose arguments did not parse.
+
+    Worth quoting back rather than only naming the fault. Reporting an unparsed
+    call through schema validation says "you forgot `path`", which is a lie the
+    caller acts on: it re-sends the same malformed JSON with the same field in
+    it, and loops -- eighteen calls in one observed session, the model
+    eventually theorising about ``_raw_arguments``, a key that exists only
+    because we put it there. Showing the text is what ends that.
+
+    Empty when the arguments parsed, so it can be appended unconditionally.
+    """
+    raw = str(params.get(RAW_ARGUMENTS_KEY) or "")
+    if not raw:
+        return ""
+    return f" Received: {raw[:400]}" + ("..." if len(raw) > 400 else "")
+
+
 class ToolRegistry:
     """
     Registry for agent tools.
@@ -164,7 +182,7 @@ class ToolRegistry:
                 f"output token limit part-way through writing this call, or the arguments were "
                 f"simply malformed. It was not run either way, and nothing here tells the two "
                 f"apart." + limit_branch + "\n\nIf the arguments were malformed: send the same "
-                "call again with well-formed arguments."
+                "call again with well-formed arguments." + _received_tail(params)
             )
         if run_meta and run_meta.arguments_repaired:
             # Calls arrived after this one, so a cut cannot explain it: the
@@ -172,22 +190,7 @@ class ToolRegistry:
             # pieces would send it after a problem it does not have.
             return (
                 f"Error: [invalid arguments] The arguments for '{name}' were not valid JSON, "
-                f"so this call was not run. Send it again with well-formed arguments."
-            )
-
-        # A call whose arguments would not parse arrives carrying the raw text
-        # instead of fields. Falling through to schema validation reports the
-        # fields as MISSING, which is a lie the caller acts on: it reads "you
-        # forgot `path`", re-sends the same malformed JSON with the same field
-        # in it, and loops -- eighteen calls in one observed session, the model
-        # eventually theorising about `_raw_arguments`, a key that only exists
-        # because we put it there. Say what actually happened instead.
-        if RAW_ARGUMENTS_KEY in params:
-            raw = str(params.get(RAW_ARGUMENTS_KEY) or "")
-            return (
-                f"Error: The arguments for tool '{name}' were not valid JSON, so none of them were read. "
-                f"Re-send the call with a well-formed JSON object. Received: {raw[:400]}"
-                + ("..." if len(raw) > 400 else "")
+                f"so this call was not run. Send it again with well-formed arguments." + _received_tail(params)
             )
 
         try:
