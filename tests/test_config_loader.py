@@ -544,3 +544,45 @@ def test_migration_notice_survives_a_load_before_the_sink_exists(caplog) -> None
 
     lines = [r.getMessage() for r in caplog.records if "cron.forwardChannels" in r.getMessage()]
     assert len(lines) == 1, "a load whose records were dropped must not consume the notice"
+
+
+def test_context_window_migration_logs_once_across_both_passes(caplog) -> None:
+    """This migration logs from its own function, and one command walks it
+    twice: load_config's read, then the persist pass re-reading the raw file.
+    Its stamp is best-effort (_write_migration_version swallows OSError), so a
+    config dir that cannot take the stamp leaves it re-running on every load --
+    the same repeat this dedup exists to stop."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_legacy_context_window
+
+    _logged_migrations.clear()
+    raw = {"agents": {"defaults": {"contextWindowTokens": 65536}}}
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        assert _migrate_legacy_context_window(copy.deepcopy(raw), notify=True) is True
+        assert _migrate_legacy_context_window(copy.deepcopy(raw)) is True
+
+    lines = [r.getMessage() for r in caplog.records if "contextWindowTokens" in r.getMessage()]
+    assert len(lines) == 1, lines
+
+
+def test_stamped_migration_pass_dedupes_too(caplog) -> None:
+    """The stamped path runs a migration the unstamped one does not, so it needs
+    its own coverage: deduping only what `run_stamped=False` reaches would leave
+    that line repeating."""
+    import copy
+    import logging
+
+    from raven.config.loader import _logged_migrations, _migrate_config
+
+    _logged_migrations.clear()
+    raw = {"agents": {"defaults": {"contextWindowTokens": 65536}}}
+
+    with caplog.at_level(logging.INFO, logger="raven.config.loader"):
+        _migrate_config(copy.deepcopy(raw), run_stamped=True)
+        _migrate_config(copy.deepcopy(raw), run_stamped=True)
+
+    lines = [r.getMessage() for r in caplog.records if "contextWindowTokens" in r.getMessage()]
+    assert len(lines) == 1, lines
