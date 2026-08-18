@@ -24,6 +24,7 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.rpc.connection import claim_conversation, declared_surface
 from raven.rpc.errors import RpcError, TurnInProgressError
 from raven.rpc.models import (
     TurnCancelParams,
@@ -251,6 +252,10 @@ async def turn_send(
             chat_id=parsed.chat_id or "default",
             sender_id=parsed.sender_id or "user",
             chat_type=ChatType.DM,
+            # What this connection called itself in system.hello, or None. The
+            # turn runs on the spine's own task, out of reach of the
+            # connection's contextvars, so the fact has to ride the request.
+            surface=declared_surface(),
         ),
         text=parsed.content,
         media=_resolve_media(parsed.media),
@@ -294,6 +299,11 @@ async def turn_send(
         else:
             direct_targets[lane] = target
     _active_turns[lane] = handle
+    # The surface that sent the turn is the one a mid-turn question belongs to.
+    # Without this the ask_user notification is broadcast to every socket on the
+    # gateway, so a question asked inside one terminal's session also interrupts
+    # the browser page and any other attached terminal.
+    claim_conversation(lane)
 
     if emitter is not None:
         # The question rides the event that opens the turn so a client which

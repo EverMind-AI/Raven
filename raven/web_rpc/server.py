@@ -93,6 +93,13 @@ class WebSocketRpcServer:
 
         self._clients.add(ws)
         logger.info("web_rpc: client connected ({} total)", len(self._clients))
+        # One connection, one identity scope (mirrors WsGateway and RpcServer):
+        # each dispatch task below snapshots this context, so a surface declared
+        # in this socket's system.hello reaches this socket's turn.send and
+        # nobody else's.
+        from raven.rpc import connection
+
+        conn_token = connection.bind_connection()
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
@@ -102,6 +109,7 @@ class WebSocketRpcServer:
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE, WSMsgType.CLOSING):
                     break
         finally:
+            connection.unbind_connection(conn_token)
             self._clients.discard(ws)
             logger.info("web_rpc: client disconnected ({} remain)", len(self._clients))
         return ws

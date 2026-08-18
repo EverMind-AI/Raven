@@ -377,3 +377,54 @@ async def test_the_sign_in_cookie_outlives_the_browser_session(gateway_client) -
     # Still the same hardening it had; the lifetime is the only thing added.
     assert morsel["httponly"]
     assert morsel["samesite"] == "Strict"
+
+
+# ---------------------------------------------------------------------------
+# each ws connection carries its own declared surface
+# ---------------------------------------------------------------------------
+
+
+async def test_each_ws_connection_keeps_its_own_declared_surface(gateway_client) -> None:
+    """Two clients on one dispatcher: the page declares itself in system.hello,
+    the other says nothing. What each connection's later frames observe is its
+    own declaration -- the whole point of binding identity to the connection
+    rather than the process."""
+    from raven.rpc.connection import declared_surface
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.system import register_system_methods
+
+    gateway, client = gateway_client
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher)
+
+    async def probe(params: dict) -> dict:
+        return {"surface": declared_surface()}
+
+    dispatcher.register("test.surface", probe)
+    gateway.dispatcher = dispatcher
+
+    auth = {"X-Raven-Token": gateway.session_token}
+    ws_page = await client.ws_connect("/rpc", headers=auth)
+    ws_anon = await client.ws_connect("/rpc", headers=auth)
+    try:
+        await ws_page.send_json(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "system.hello",
+                "params": {"client_version": "0.1.0", "surface": "page"},
+            }
+        )
+        assert "result" in await ws_page.receive_json()
+        await ws_anon.send_json(
+            {"jsonrpc": "2.0", "id": 1, "method": "system.hello", "params": {"client_version": "0.1.0"}}
+        )
+        assert "result" in await ws_anon.receive_json()
+
+        await ws_page.send_json({"jsonrpc": "2.0", "id": 2, "method": "test.surface", "params": {}})
+        await ws_anon.send_json({"jsonrpc": "2.0", "id": 2, "method": "test.surface", "params": {}})
+        assert (await ws_page.receive_json())["result"] == {"surface": "page"}
+        assert (await ws_anon.receive_json())["result"] == {"surface": None}
+    finally:
+        await ws_page.close()
+        await ws_anon.close()

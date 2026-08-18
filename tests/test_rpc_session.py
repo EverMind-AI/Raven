@@ -1590,3 +1590,59 @@ async def test_session_compress_hands_back_what_the_caller_must_redraw(
     assert [m["text"] for m in result["messages"]] == ["m3", "m4"]
     assert result["info"]["model"]
     assert isinstance(result["usage"], dict)
+
+
+# ---------------------------------------------------------------------------
+# session.create workdir override (the attach-to-gateway contract)
+# ---------------------------------------------------------------------------
+
+
+async def test_session_create_persists_the_workdir_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``workdir`` param must land in the minted session's metadata — the
+    override ``WorkdirResolver`` reads — and be reported back as ``info.cwd``,
+    so a client attached to a shared gateway works in its own launch
+    directory rather than the gateway's."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path / "home")
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    mgr = SessionManager(tmp_path / "home")
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda _cfg: mgr)
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    result = await session_create({"workdir": str(project)})
+
+    resolved = str(project.resolve())
+    assert result["info"]["cwd"] == resolved
+    assert mgr.get_or_create(result["session_id"]).metadata["workdir"] == resolved
+
+
+async def test_session_create_rejects_a_workdir_inside_the_agent_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path / "home")
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    with pytest.raises(ConfigValidationError):
+        await session_create({"workdir": str(tmp_path / "home" / "skills")})
+
+
+async def test_session_create_without_workdir_stays_lazy_and_unpinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The embedded path sends no workdir; nothing may change for it — no
+    manager built, no metadata written (see the writes-no-file test above)."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path / "home")
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    def _must_not_build(_cfg):
+        raise AssertionError("no workdir given, so no manager may be built")
+
+    monkeypatch.setattr(session_module, "_get_or_build_manager", _must_not_build)
+
+    result = await session_create({"cols": 80})
+    assert _SESSION_ID_RE.match(result["session_id"])

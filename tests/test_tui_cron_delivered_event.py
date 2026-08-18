@@ -142,7 +142,7 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 
     wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
 
-    job = SimpleNamespace(id="j7", name="standup")
+    job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(channel=None))
     await wrapped(job)
 
     emitter_spy.emit.assert_awaited_once()
@@ -155,8 +155,38 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 
     # No reply read back: base runs (side-effects) but nothing is fanned out.
     emitter_spy.emit.reset_mock()
-    silent = SimpleNamespace(id="j8", name="silent")
+    silent = SimpleNamespace(id="j8", name="silent", payload=SimpleNamespace(channel=None))
     await wrapped(silent)
+    emitter_spy.emit.assert_not_awaited()
+
+
+async def test_cron_callback_spine_fans_out_only_tui_jobs(emitter_spy: MagicMock) -> None:
+    """On the gateway (default_channel is an IM/web surface) the fan-out SHALL
+    follow the job's resolved channel: a tui job echoes to the page sessions, a
+    channel-addressed job is already delivered by the hub on its own channel
+    and SHALL NOT be echoed a second time."""
+    from types import SimpleNamespace
+
+    from raven.cli.tui_commands import _build_cron_callback_spine
+
+    async def base_on_cron(job):
+        return "reminder body"
+
+    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="cli")
+
+    tui_job = SimpleNamespace(id="j1", name="page", payload=SimpleNamespace(channel="tui"))
+    await wrapped(tui_job)
+    emitter_spy.emit.assert_awaited_once()
+
+    emitter_spy.emit.reset_mock()
+    feishu_job = SimpleNamespace(id="j2", name="im", payload=SimpleNamespace(channel="feishu"))
+    assert await wrapped(feishu_job) == "reminder body"  # delivery itself untouched
+    emitter_spy.emit.assert_not_awaited()
+
+    # No channel on the payload resolves to the host's default -- not tui on
+    # the gateway, so no fan-out there either.
+    unaddressed = SimpleNamespace(id="j3", name="plain", payload=SimpleNamespace(channel=None))
+    await wrapped(unaddressed)
     emitter_spy.emit.assert_not_awaited()
 
 

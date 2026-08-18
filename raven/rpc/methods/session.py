@@ -309,12 +309,32 @@ async def session_create(
     A fresh ``tui:<chat_id>`` key is minted on every call (lazy — no file
     written until the session's first save). An optional ``title`` param
     is accepted and ignored here; clients set titles via ``session.title``.
+
+    An optional ``workdir`` (absolute path) pins where this session's turns
+    run: it lands in the cached session's metadata as the workdir override
+    ``WorkdirResolver`` already honors, and persists with the first save —
+    as lazy as the mint itself. This is how a client attached to a shared
+    gateway keeps its own launch directory instead of inheriting the
+    gateway's. An unusable path (relative, or inside the agent home) is a
+    ``ConfigValidationError``.
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
     session_id = f"tui:{new_chat_id()}"
+    info = await _default_session_info(agent_loop, config)
+    workdir = params.get("workdir")
+    if workdir:
+        from raven.agent.workdir import validate_override
+
+        try:
+            resolved = validate_override(workdir, config.workspace_path)
+        except ValueError as e:
+            raise ConfigValidationError(str(e), data={"field": "workdir"}) from e
+        _manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
+        info["cwd"] = str(resolved)
     return {
         "session_id": session_id,
-        "info": await _default_session_info(agent_loop, load_config()),
+        "info": info,
     }
 
 

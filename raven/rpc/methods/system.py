@@ -63,6 +63,13 @@ async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
     ``default_channel`` given to ``register_turn_methods`` on the same
     dispatcher: a client is told one thing at handshake and its turns run on the
     other, and nothing else in the process notices.
+
+    ``surface`` (optional) names the front end behind this connection -- the
+    vocabulary the trace layer already uses (``"tui"``, ``"page"``, ``"shell"``).
+    It is recorded on the connection's own state, never process-wide: one
+    gateway serves the page, the shell, and relayed terminals at once, and each
+    connection's turns must carry its own name. Declaring changes no session
+    key -- the page and the terminal keep sharing the ``tui`` pool.
     """
     client_version = params.get("client_version")
     if not isinstance(client_version, str) or not client_version:
@@ -76,13 +83,25 @@ async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
             data={"field": "client_version", "value": client_version},
         )
 
+    surface = params.get("surface")
+    if surface is not None:
+        from raven.rpc.connection import SURFACE_RE, declare_surface
+
+        if not isinstance(surface, str) or not SURFACE_RE.match(surface):
+            raise ConfigValidationError(
+                "surface must be a short lowercase token (e.g. 'tui', 'page', 'shell')",
+                data={"field": "surface", "value": surface},
+            )
+        declare_surface(surface)
+
     client_capabilities = params.get("client_capabilities", []) or []
     # pid distinguishes concurrent `raven tui` processes sharing one log file.
     logger.info(
-        "rpc: handshake — pid={} client_version={} client_capabilities={}",
+        "rpc: handshake — pid={} client_version={} client_capabilities={} surface={}",
         os.getpid(),
         client_version,
         client_capabilities,
+        surface,
     )
     return {
         "server_version": SERVER_VERSION,
@@ -173,6 +192,15 @@ async def system_upgrade(params: dict) -> dict:
     def _refuse(reason: str, detail: str) -> ConfigValidationError:
         return ConfigValidationError(detail, data={"reason": reason, "detail": detail})
 
+    if SERVE.hosted_by_gateway:
+        # The page is mounted inside `raven gateway`, and the relaunch below
+        # would replace that whole process with a bare `raven serve` -- the IM
+        # channels would silently vanish. Restarting the gateway in place is a
+        # later phase; until then this refusal is the honest answer.
+        raise _refuse(
+            "gateway_hosted",
+            "This page is hosted by `raven gateway`. Run `raven upgrade`, then restart the gateway.",
+        )
     if not SERVE.running:
         raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
 

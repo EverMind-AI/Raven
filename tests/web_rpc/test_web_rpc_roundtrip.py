@@ -172,6 +172,30 @@ async def test_hello_subscribe_send_and_stream(server_url) -> None:
             assert merged == "hi there"
 
 
+async def test_each_web_connection_keeps_its_own_declared_surface(server_url) -> None:
+    """Two browser-channel clients on one dispatcher: the one that declared
+    ``surface: "webui"`` in system.hello gets it stamped onto its turns'
+    ``Source``; the silent one stays undeclared. Proves the web transport binds
+    the per-connection identity scope the way the terminal transports do --
+    without the bind, a declaration would land process-wide or nowhere."""
+    url, _emitter, scheduler = server_url
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(url) as ws_web, session.ws_connect(url) as ws_anon:
+            hello = await _rpc(ws_web, "system.hello", {"client_version": "0.1.0", "surface": "webui"}, 1)
+            assert "error" not in hello, hello
+            hello = await _rpc(ws_anon, "system.hello", {"client_version": "0.1.0"}, 1)
+            assert "error" not in hello, hello
+
+            sent = await _rpc(ws_web, "turn.send", {"session_key": "web:default", "content": "hi"}, 2)
+            assert sent["result"]["accepted"] is True
+            sent = await _rpc(ws_anon, "turn.send", {"session_key": "web:other", "content": "hi"}, 2)
+            assert sent["result"]["accepted"] is True
+
+    by_conversation = {req.conversation: req for req in scheduler.submitted}
+    assert by_conversation["web:default"].source.surface == "webui"
+    assert by_conversation["web:other"].source.surface is None
+
+
 async def test_auth_token_gate_rejects_wrong_token() -> None:
     port = _free_port()
     server = WebSocketRpcServer(host="127.0.0.1", port=port, auth_token="s3cret")

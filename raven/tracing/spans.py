@@ -21,13 +21,16 @@ _surface: str | None = None
 
 
 def set_surface(name: str | None) -> None:
-    """Declare which front end this process serves, for every span it writes.
+    """Declare which front end this process serves, as the process-wide default.
 
-    A process-wide fact, not a per-turn one: ``raven tui`` runs one RPC server
-    over a pipe to its own child and ``raven serve`` runs one WebSocket app, so a
-    process serves exactly one front end for as long as it lives. Threading this
-    through every turn would be plumbing for a value that cannot change, and it
-    would ride ``Source.extras`` into hook metadata, where it does not belong.
+    This used to be the whole story: ``raven tui`` ran one RPC server over a
+    pipe to its own child and ``raven serve`` ran one WebSocket app, so a
+    process served exactly one front end for as long as it lived. A gateway
+    that hosts the page now serves several at once -- the browser page, the
+    GUI shell, a relayed terminal -- so a turn may carry its own surface (see
+    ``build_span``'s ``surface`` argument, fed from ``Source.surface``). This
+    declaration remains the fallback for every span that does not: a host that
+    serves one front end keeps declaring it here and nothing else changes.
 
     It exists because the terminal and the served page share the ``tui`` channel
     deliberately -- one session pool, so the same person sees the same
@@ -70,6 +73,7 @@ def build_span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
+    surface: str | None = None,
     start_time: str,
     end_time: str | None = None,
     status_code: str = "OK",
@@ -88,8 +92,9 @@ def build_span(
         "channel": channel,
         "channel.id": channel,
         # Which front end produced this, where the channel cannot say: the
-        # terminal and the served page share one channel on purpose.
-        "surface": surface_for(channel),
+        # terminal and the served page share one channel on purpose. A turn
+        # that declared its own surface wins over the process-wide default.
+        "surface": surface or surface_for(channel),
         "chat_id": chat_id,
         "audit.schema_version": SCHEMA_VERSION,
     }

@@ -139,4 +139,51 @@ class QuestionBroker:
                 pending.future.set_result(pending.default)
 
 
-__all__ = ["QuestionBroker", "SendFrame"]
+class RoutingQuestionBroker:
+    """Routes each question to one of two brokers by its conversation key.
+
+    The gateway hosting the page runs two question surfaces over one shared
+    AgentLoop: the page renders questions for its own ``tui:*`` sessions, the
+    IM channels render everything else. ``AskUserTool.set_broker`` is a single
+    process-wide handle, so binding either broker directly is last-write-wins
+    and one surface swallows the other's questions. This shim is what gets
+    bound instead: ``await_question`` dispatches on the conversation key's
+    channel prefix (page sessions are ``tui:<chat_id>``, and a direct-chat
+    lane keeps that prefix -- see ``raven.spine.turn.direct_lane``), while
+    ``pending_req`` / ``reply`` consult both so an answer resolves wherever
+    the question is actually pending.
+    """
+
+    def __init__(self, page: QuestionBroker, channel: QuestionBroker, *, page_prefix: str = "tui:") -> None:
+        self._page = page
+        self._channel = channel
+        self._page_prefix = page_prefix
+
+    def _route(self, conversation_id: str) -> QuestionBroker:
+        return self._page if conversation_id.startswith(self._page_prefix) else self._channel
+
+    async def await_question(
+        self,
+        conversation_id: str,
+        *,
+        prompt: str,
+        choices: list[str] | None = None,
+        default: str = "",
+        timeout_s: float = 600.0,
+    ) -> str:
+        return await self._route(conversation_id).await_question(
+            conversation_id, prompt=prompt, choices=choices, default=default, timeout_s=timeout_s
+        )
+
+    def pending_req(self, conversation_id: str) -> str | None:
+        return self._page.pending_req(conversation_id) or self._channel.pending_req(conversation_id)
+
+    def reply(self, key: str, answer: str) -> bool:
+        return self._page.reply(key, answer) or self._channel.reply(key, answer)
+
+    def cancel_all(self) -> None:
+        self._page.cancel_all()
+        self._channel.cancel_all()
+
+
+__all__ = ["QuestionBroker", "RoutingQuestionBroker", "SendFrame"]

@@ -157,14 +157,18 @@ def test_gateway_log_config_overrides_parse() -> None:
 
 
 def test_gateway_channels_excludes_tui_when_no_im_enabled() -> None:
-    # The gateway does not claim "tui" cron jobs — those fire in the TUI
-    # process, so a TUI-set reminder is never forwarded to an IM channel.
+    # A page-less gateway does not claim ephemeral "tui" cron jobs — those fire
+    # in the TUI process, so a TUI-set reminder is never forwarded to an IM
+    # channel. With the page mounted the gateway IS a tui surface (see below).
     from types import SimpleNamespace
 
     from raven.cli.gateway_commands import _build_gateway_channels
     from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig())
+    cfg = SimpleNamespace(
+        channels=ChannelsConfig(),
+        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
+    )
     assert _build_gateway_channels(cfg) == set()  # no IM enabled, and no "tui"
 
 
@@ -174,7 +178,10 @@ def test_gateway_channels_excludes_tui_alongside_enabled_im() -> None:
     from raven.cli.gateway_commands import _build_gateway_channels
     from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}))
+    cfg = SimpleNamespace(
+        channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
+        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
+    )
     result = _build_gateway_channels(cfg)
     assert result == {"telegram"}
     assert "tui" not in result
@@ -195,9 +202,166 @@ def test_gateway_channels_derived_from_config_model_fields() -> None:
                 "feishu": {"enabled": True},
                 "weixin": {"enabled": False},
             }
-        )
+        ),
+        gateway=SimpleNamespace(page=SimpleNamespace(enabled=False)),
     )
     assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
+
+
+def test_gateway_channels_exclude_tui_even_when_the_page_is_enabled() -> None:
+    """Wanting the page is not hosting it. ``mount_page`` yields to a resident
+    standalone `raven serve`, so ``page.enabled`` alone says nothing about
+    whether this process has a tui outlet -- the partition must be decided by
+    the mount's outcome, and this helper only ever answers for the IM side."""
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _build_gateway_channels
+    from raven.config.schema import ChannelsConfig
+
+    cfg = SimpleNamespace(
+        channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
+        gateway=SimpleNamespace(page=SimpleNamespace(enabled=True)),
+    )
+    result = _build_gateway_channels(cfg)
+    assert result == {"telegram"}
+    assert "tui" not in result
+    assert "cli" not in result
+
+
+def test_the_live_page_is_what_adds_tui_to_the_cron_partition() -> None:
+    """``tui`` must join the partition inside the ``page_mount is not None``
+    block and before ``cron.start()``, so the sweep that deletes past-due
+    one-shots sees the final partition. Like the /stop test above this lives in
+    the serve command with no import seam, so pin the command source."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    mounted = src.split("if page_mount is not None:", 1)[1].split("# Channel inbound runs through", 1)[0]
+    assert 'cron.allowed_channels.add("tui")' in mounted
+    before_start, _, after_start = src.partition("await cron.start()")
+    assert 'cron.allowed_channels.add("tui")' in before_start
+    assert 'cron.allowed_channels.add("tui")' not in after_start
+    # And nowhere else: the config helper must not put it back.
+    helper_body = inspect.getsource(gateway_commands._build_gateway_channels).split('"""')[-1]
+    assert "tui" not in helper_body
+    assert "page" not in helper_body
+
+
+def _gateway_partition_with_the_page_enabled() -> set[str]:
+    """The cron partition a page-wanting gateway is built with."""
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _build_gateway_channels
+    from raven.config.schema import ChannelsConfig
+
+    return _build_gateway_channels(
+        SimpleNamespace(
+            channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}),
+            gateway=SimpleNamespace(page=SimpleNamespace(enabled=True)),
+        )
+    )
+
+
+def _write_jobs(store_path: Path, jobs: list[dict]) -> None:
+    import json
+
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    store_path.write_text(json.dumps({"version": 1, "jobs": jobs}), encoding="utf-8")
+
+
+def _due_recurring_tui_job(now_ms: int) -> dict:
+    return {
+        "id": "recurring",
+        "name": "page reminder",
+        "enabled": True,
+        "schedule": {"kind": "every", "everyMs": 600_000},
+        "payload": {"message": "drink water", "channel": "tui", "to": "default"},
+        "state": {"nextRunAtMs": 1},
+        "createdAtMs": now_ms - 600_000,
+        "updatedAtMs": now_ms - 600_000,
+    }
+
+
+def _past_due_oneshot_tui_job(now_ms: int) -> dict:
+    return {
+        "id": "oneshot",
+        "name": "stretch",
+        "enabled": True,
+        "schedule": {"kind": "at", "atMs": now_ms - 60_000},
+        "payload": {"message": "stretch", "channel": "tui", "to": "default"},
+        "state": {"nextRunAtMs": now_ms - 60_000},
+        "createdAtMs": now_ms - 120_000,
+        "updatedAtMs": now_ms - 120_000,
+        "deleteAfterRun": True,
+    }
+
+
+async def _fired_ids(store_path: Path, allowed: set[str]) -> list[str]:
+    """Job ids a runner on ``allowed`` claims and runs on one due tick."""
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store_path, allowed_channels=allowed)
+    svc.on_job = on_job
+    await svc._process_due()
+    return fired
+
+
+async def _survivors_after_restart(store_path: Path, allowed: set[str]) -> list[str]:
+    """Job ids left in the shared store after a runner on ``allowed`` starts."""
+    import json
+
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    svc = CronService(store_path, allowed_channels=allowed)
+    await svc.start()
+    svc.stop()
+    return [j["id"] for j in json.loads(store_path.read_text(encoding="utf-8"))["jobs"]]
+
+
+async def test_a_page_less_gateway_neither_runs_nor_drops_a_tui_reminder(tmp_path: Path) -> None:
+    """``page.enabled`` true, mount skipped -- a resident standalone `raven
+    serve` owns serve.json. This process has no tui outlet, so both tui jobs
+    must be left to the process that has one: the due job is not claimed (its
+    reply would be dropped by the hub after a full model turn had already run)
+    and the past-due one-shot is not deleted from the shared store."""
+    import time
+
+    partition = _gateway_partition_with_the_page_enabled()
+    now_ms = int(time.time() * 1000)
+
+    due = tmp_path / "due.json"
+    _write_jobs(due, [_due_recurring_tui_job(now_ms)])
+    assert await _fired_ids(due, partition) == []
+
+    missed = tmp_path / "missed.json"
+    _write_jobs(missed, [_past_due_oneshot_tui_job(now_ms)])
+    assert await _survivors_after_restart(missed, partition) == ["oneshot"]
+
+
+async def test_a_gateway_hosting_the_page_does_claim_tui_jobs(tmp_path: Path) -> None:
+    """Mount succeeded, so the wiring adds ``tui`` to the very set the service
+    was built with -- ``_owns_channel`` reads it live, so both halves flip: the
+    due job runs here, and the past-due one-shot is this runner's to retire."""
+    import time
+
+    partition = _gateway_partition_with_the_page_enabled()
+    partition.add("tui")  # what the page_mount block does
+    now_ms = int(time.time() * 1000)
+
+    due = tmp_path / "due.json"
+    _write_jobs(due, [_due_recurring_tui_job(now_ms)])
+    assert await _fired_ids(due, partition) == ["recurring"]
+
+    missed = tmp_path / "missed.json"
+    _write_jobs(missed, [_past_due_oneshot_tui_job(now_ms)])
+    assert await _survivors_after_restart(missed, partition) == []
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:

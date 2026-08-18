@@ -161,12 +161,26 @@ class _ServeControl:
         self.token: Optional[str] = None
         self.cookie: Optional[str] = None
         self._stop: Optional[asyncio.Event] = None
+        self.hosted_by_gateway = False
 
     def arm(self, port: int, token: str, cookie: str, stop: asyncio.Event) -> None:
         self.port, self.token, self.cookie, self._stop = port, token, cookie, stop
 
+    def arm_hosted(self, port: int, token: str, cookie: str) -> None:
+        """The gateway hosts the page: record the endpoint facts, no stop event.
+
+        ``system.upgrade``'s restart flow replaces a `raven serve` process with
+        another `raven serve`; ending the gateway's loop that way would drop the
+        IM channels and bring back the wrong process. So a hosted page carries
+        no shutdown handle, and upgrade refuses with its own reason instead
+        (see ``raven.rpc.methods.system.system_upgrade``).
+        """
+        self.port, self.token, self.cookie = port, token, cookie
+        self.hosted_by_gateway = True
+
     def disarm(self) -> None:
         self.port = self.token = self.cookie = self._stop = None
+        self.hosted_by_gateway = False
 
     @property
     def running(self) -> bool:
@@ -386,6 +400,35 @@ def _attached_url() -> Optional[str]:
     if recorded is None:
         return None
     return asyncio.run(_attach(*recorded))
+
+
+def _gateway_hosted_page() -> Optional[tuple[int, str]]:
+    """The (port, token) of a page a live `raven gateway` hosts, or None.
+
+    Three facts have to line up: the gateway lock says a gateway is running,
+    serve.json says a page is served, and the two pids match. The pid match is
+    what keeps this narrow -- a stale serve.json left by a killed standalone
+    serve does not turn a page-less gateway into "already hosting", and a
+    standalone serve running beside a gateway keeps its own file and its own
+    life (the gateway checks the same three facts the other way before
+    mounting, and yields -- see ``_gateway_page._standalone_serve_owner``).
+    Either of those cases reads as None, and starting is then correct.
+    """
+    import json
+    import time
+
+    from raven.cli._gateway_lock import read_status
+
+    status = read_status(now=time.time())
+    if status is None or status.pid <= 0:
+        return None
+    try:
+        pid = int(json.loads(_state_path().read_text(encoding="utf-8"))["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if pid != status.pid:
+        return None
+    return _read_serve_state()
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +840,24 @@ def register(app: typer.Typer) -> None:
         open_browser: bool = typer.Option(False, "--open", help="Open the served page in a browser."),
     ) -> None:
         """Run the headless Raven gateway (WebSocket RPC, plus a page when one is built)."""
+        # A `raven gateway` with the page mounted is already this engine, and
+        # a second engine on the same agent home would race it over the same
+        # sessions and the same store. Attach instead of starting; anything
+        # short of a live, ours, pid-matched page falls through to a normal
+        # standalone start.
+        hosted = _gateway_hosted_page()
+        if hosted is not None:
+            try:
+                url = asyncio.run(_attach(*hosted))
+            except PermissionError as exc:
+                typer.echo(f"error: {exc}; stop the gateway or remove {_state_path()}, then retry")
+                raise typer.Exit(1) from None
+            if url is not None:
+                base = url.split("/auth#")[0]
+                typer.echo(f"the running raven gateway already hosts the page at {base}; not starting a second engine")
+                if open_browser:
+                    _open(url)
+                return
         _run(port, open_browser)
 
     @app.command("web")

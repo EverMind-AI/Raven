@@ -179,7 +179,7 @@ class GatewayClient:
             # connection's events into the previous one's session.
             self._sub_sessions.clear()
             self._read_task = asyncio.create_task(self._read_loop())
-            await self.call("system.hello", {"client_version": _CLIENT_VERSION})
+            await self.call("system.hello", {"client_version": _CLIENT_VERSION, "surface": "webui"})
 
     async def _read_loop(self) -> None:
         try:

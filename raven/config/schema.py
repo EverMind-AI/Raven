@@ -742,6 +742,33 @@ class GatewayWebConfig(ChannelBase):
     auth_token: str | None = None
 
 
+class GatewayPageConfig(Base):
+    """The served page (`raven serve`'s browser front end) hosted inside the
+    gateway process, on the gateway's own agent loop.
+
+    On by default: one engine then serves the page and the IM channels, so
+    what the browser sees is what the channels talk to. The page follows the
+    `raven serve` port policy (``port``, probing forward when taken), writes
+    ``~/.raven/serve.json``, and `raven web` attaches to it. Disable to keep
+    the gateway channel-only and run `raven serve` standalone instead.
+    """
+
+    enabled: bool = True
+    port: int = 18792
+
+
+class TuiConfig(Base):
+    """Terminal UI launcher behavior.
+
+    ``attach_gateway``: when a live ``raven gateway`` already hosts the page,
+    ``raven tui`` relays to that engine instead of building a second one, so
+    the terminal and the channels share one loop. Set false — or pass
+    ``--standalone`` for one launch — to always run the embedded engine.
+    """
+
+    attach_gateway: bool = True
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -753,6 +780,7 @@ class GatewayConfig(Base):
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
     web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)
+    page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
 class WebSearchConfig(Base):
@@ -1355,6 +1383,7 @@ class Config(BaseSettings):
     cron: CronConfig = Field(default_factory=CronConfig)
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
+    tui: TuiConfig = Field(default_factory=TuiConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"

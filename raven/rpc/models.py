@@ -618,6 +618,13 @@ class SessionGetResult(_Strict):
 class SessionCreateParams(_Strict):
     cols: int | None = Field(default=None, description="Terminal width the client is drawing at.")
     title: str | None = Field(default=None, description="Accepted and ignored; clients set titles via session.title.")
+    workdir: str | None = Field(
+        default=None,
+        description=(
+            "Absolute directory this session's turns run in, persisted as the session's workdir override. "
+            "How a client attached to a shared gateway keeps its launch directory."
+        ),
+    )
 
 
 class SessionCreateResult(_Strict):
@@ -1045,6 +1052,13 @@ class ConfigSetResult(_Strict):
 class SystemHelloParams(_Strict):
     client_version: str
     client_capabilities: list[str] | None = None
+    surface: str | None = Field(
+        default=None,
+        description=(
+            "Which front end this connection is ('tui', 'page', 'shell'). Recorded per connection "
+            "for tracing only; session keys and channels are unaffected."
+        ),
+    )
 
 
 class SystemHelloSession(_Strict):

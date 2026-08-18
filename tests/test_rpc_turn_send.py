@@ -582,3 +582,79 @@ async def test_a_turn_that_never_ran_still_reports_against_its_target() -> None:
         {"agent": "Raven-Code", "handle": "refactor-auth"},
         {"agent": "Raven-Code", "handle": "refactor-auth"},
     ]
+
+
+# --- Per-connection surface ---
+
+
+async def test_turn_send_stamps_the_connection_surface_on_the_source() -> None:
+    """The turn runs on the spine's own task, where the connection's
+    contextvars cannot reach, so the declared surface must ride the request."""
+    from raven.rpc import connection
+
+    scheduler = FakeScheduler()
+    token = connection.bind_connection()
+    try:
+        connection.declare_surface("shell")
+        await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+    finally:
+        connection.unbind_connection(token)
+
+    src = scheduler.submitted[0].source
+    assert src.surface == "shell"
+    assert src.channel == "tui", "identity is tracing-only; the shared channel must not move"
+
+
+async def test_turn_send_without_a_declaration_leaves_the_surface_unset() -> None:
+    """An undeclared connection (or no connection scope at all) submits exactly
+    the request it always did -- tracing falls back to the process-wide value."""
+    scheduler = FakeScheduler()
+    await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+    assert scheduler.submitted[0].source.surface is None
+
+
+async def test_turn_send_claims_the_conversation_for_this_connection() -> None:
+    """A mid-turn question belongs to whoever sent the turn. The broker emits
+    from the engine's own task, where no connection is bound, so turn.send has
+    to record the owner while it still has the context."""
+    from raven.rpc import connection
+
+    async def sink(_frame: dict) -> None:
+        pass
+
+    token = connection.bind_connection()
+    try:
+        connection.set_frame_sink(sink)
+        await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=FakeScheduler(), turn_ids={})
+        assert connection.frame_sink_for("tui:default") is sink
+    finally:
+        connection.unbind_connection(token)
+    # The claim is the socket's, not the process's: it goes when the socket does.
+    assert connection.frame_sink_for("tui:default") is None
+
+
+async def test_turn_send_claims_a_direct_chat_by_its_own_lane() -> None:
+    """A direct-chat turn runs on that instance's lane, and that lane is the
+    conversation the question is keyed by -- so the lane is what gets claimed."""
+    from raven.rpc import connection
+    from raven.spine import direct_lane
+
+    async def sink(_frame: dict) -> None:
+        pass
+
+    lane = direct_lane("tui:default", "Raven-Code", "refactor-auth")
+    token = connection.bind_connection()
+    try:
+        connection.set_frame_sink(sink)
+        await turn_send(
+            {
+                "session_key": "tui:default",
+                "content": "fix it",
+                "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
+            },
+            scheduler=FakeScheduler(),
+            turn_ids={},
+        )
+        assert connection.frame_sink_for(lane) is sink
+    finally:
+        connection.unbind_connection(token)

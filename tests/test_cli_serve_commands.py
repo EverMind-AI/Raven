@@ -795,3 +795,107 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
         while state.exists() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert not state.exists(), "SIGTERM left web.json behind on a dead pid"
+
+
+# ---------------------------------------------------------------------------
+# `raven serve` -- attach to a gateway that already hosts the page, instead of
+# starting a second engine on the same agent home.
+# ---------------------------------------------------------------------------
+
+
+def _record_hosted(home: Path, *, pid: int, port: int = 18792, token: str = "tok") -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "serve.json").write_text(json.dumps({"port": port, "token": token, "pid": pid}), encoding="utf-8")
+
+
+class TestAGatewayHostedPage:
+    """The probe: a page is "gateway-hosted" only when the lock's pid and
+    serve.json's pid are the same process."""
+
+    def _lock_says(self, monkeypatch, pid: int | None) -> None:
+        from raven.cli import _gateway_lock
+
+        info = None if pid is None else _gateway_lock.LockInfo(pid=pid, started_at=0.0, config_path="")
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda now: info)
+
+    def test_matching_pids_name_the_hosted_page(self, home: Path, monkeypatch) -> None:
+        _record_hosted(home, pid=4321)
+        self._lock_says(monkeypatch, 4321)
+        assert serve_commands._gateway_hosted_page() == (18792, "tok")
+
+    def test_a_stale_serve_json_is_not_the_gateway_s(self, home: Path, monkeypatch) -> None:
+        """A serve.json left by a killed standalone serve must not make a
+        page-less gateway read as "already hosting" -- starting is correct."""
+        _record_hosted(home, pid=4321)
+        self._lock_says(monkeypatch, 9999)
+        assert serve_commands._gateway_hosted_page() is None
+
+    def test_no_gateway_running_reads_as_nothing_hosted(self, home: Path, monkeypatch) -> None:
+        _record_hosted(home, pid=4321)
+        self._lock_says(monkeypatch, None)
+        assert serve_commands._gateway_hosted_page() is None
+
+
+class TestServeAgainstAHostedPage:
+    """The command: attach and stop, or fall through to a normal start."""
+
+    def _invoke(self, args: list[str] | None = None):
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        return CliRunner().invoke(app, ["serve", *(args or [])])
+
+    def test_a_live_hosted_page_is_attached_not_doubled(self, monkeypatch, started, opened) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: (18792, "tok"))
+
+        async def _minted(port: int, token: str):
+            return f"http://127.0.0.1:{port}/auth#nonce"
+
+        monkeypatch.setattr(serve_commands, "_attach", _minted)
+        result = self._invoke()
+        assert result.exit_code == 0
+        assert "already hosts the page" in result.output
+        assert started == []
+
+    def test_open_opens_the_hosted_page(self, monkeypatch, started, opened) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: (18792, "tok"))
+
+        async def _minted(port: int, token: str):
+            return f"http://127.0.0.1:{port}/auth#nonce"
+
+        monkeypatch.setattr(serve_commands, "_attach", _minted)
+        result = self._invoke(["--open"])
+        assert result.exit_code == 0
+        assert opened == ["http://127.0.0.1:18792/auth#nonce"]
+        assert started == []
+
+    def test_an_unreachable_hosted_record_starts_normally(self, monkeypatch, started) -> None:
+        """The gateway is recorded but its page does not answer: nothing to
+        attach to, so standalone serve starts exactly as before."""
+        monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: (18792, "tok"))
+
+        async def _gone(port: int, token: str):
+            return None
+
+        monkeypatch.setattr(serve_commands, "_attach", _gone)
+        result = self._invoke()
+        assert result.exit_code == 0
+        assert started == [18792]
+
+    def test_a_refused_token_is_reported_not_worked_around(self, monkeypatch, started) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: (18792, "tok"))
+
+        async def _refused(port: int, token: str):
+            raise PermissionError(f"the gateway on port {port} refused the recorded token")
+
+        monkeypatch.setattr(serve_commands, "_attach", _refused)
+        result = self._invoke()
+        assert result.exit_code == 1
+        assert started == []
+
+    def test_nothing_hosted_starts_normally(self, monkeypatch, started) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: None)
+        result = self._invoke()
+        assert result.exit_code == 0
+        assert started == [18792]

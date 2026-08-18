@@ -193,6 +193,13 @@ class RpcServer:
                 self._stopped.set()
                 return
 
+        # One RpcServer serves one client connection, but it shares process-wide
+        # handler state with any other dispatcher in the process (a gateway also
+        # hosting the page). Binding a connection scope here keeps this client's
+        # declared surface on this connection's dispatch tasks only.
+        from raven.rpc import connection
+
+        conn_token = connection.bind_connection()
         try:
             while not self._stopped.is_set():
                 try:
@@ -222,6 +229,7 @@ class RpcServer:
                 self._pending.add(task)
                 task.add_done_callback(self._pending.discard)
         finally:
+            connection.unbind_connection(conn_token)
             await self._shutdown()
 
     async def _handle_frame(self, raw: bytes) -> None:
