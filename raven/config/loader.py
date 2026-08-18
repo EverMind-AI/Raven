@@ -18,6 +18,17 @@ from raven.config.schema import Config
 # ``_stamp_path``.
 CURRENT_CONFIG_VERSION = 2
 
+# The generation that introduced each run-once migration. Each is gated on its
+# own floor rather than on "is this config current", because those are not the
+# same question: a config stamped at 1 is behind the current mark while having
+# already been through generation 1. Gating the pair on one shared mark meant
+# raising it to 2 for the provider migration re-opened the context-window one
+# on every config that went through 0.1.11/0.1.12 -- deleting a
+# ``contextWindowTokens: 65536`` the user had put back by hand, after our own
+# notice invited them to. Adding a migration means adding a floor here.
+_CONTEXT_WINDOW_MIGRATION = 1
+_AUTO_PROVIDER_MIGRATION = 2
+
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
 # ``save_config`` dumped every default. A pin is honoured over the model's real
@@ -174,11 +185,13 @@ def _write_migration_version(config_path: Path) -> None:
 def _migrate_legacy_context_window(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Clear the retired 65536 context-window pin. True when ``data`` changed.
 
-    Callers gate this on the watermark (see ``_migration_version``) because the
-    value carries no provenance: 65536 written by the old bootstrap and 65536
-    chosen by a user are the same three bytes. Running it once means we clear
-    what we planted; from then on the number is the user's, and the ladder in
-    ``providers.rates.effective_context_window`` honours it like any other pin.
+    Callers gate this on ``_CONTEXT_WINDOW_MIGRATION`` -- its own floor, not the
+    current mark -- because the value carries no provenance: 65536 written by the
+    old bootstrap and 65536 chosen by a user are the same three bytes. Running it
+    once means we clear what we planted; from then on the number is the user's,
+    and the ladder in ``providers.rates.effective_context_window`` honours it like
+    any other pin. A later generation must not bring this back: the user we would
+    hit is the one who read our notice and put the line back on purpose.
 
     ``notify`` is for the caller that has a user to tell -- the persist pass
     re-runs this on the raw file and must not double-announce.
@@ -241,15 +254,21 @@ def _migrate_auto_provider(data: dict[str, Any], *, notify: bool = False) -> boo
         return False
 
     try:
-        probe = dict(data)
+        # Keep only what ``Config`` declares, by field name or alias. ``Config``
+        # is extra='forbid', and this runs before the shims that relocate legacy
+        # top-level blocks, so a config still carrying ``skillRouter`` would fail
+        # the probe -- and be stamped anyway, so it would never be retried. That
+        # lands on the oldest configs, which are the ones most likely to still
+        # say ``auto``. A name filter rather than a pop list: the next shim adds
+        # a legacy key without having to remember this one.
+        allowed = {name for name in Config.model_fields}
+        allowed |= {f.alias for f in Config.model_fields.values() if f.alias}
+        probe = {k: v for k, v in data.items() if k in allowed}
         probe_agents = dict(agents or {})
         probe_defaults = dict(defaults)
         probe_defaults["provider"] = "auto"
         probe_agents["defaults"] = probe_defaults
         probe["agents"] = probe_agents
-        for key in EXTENSION_KEYS:
-            probe.pop(key, None)
-        probe.pop("configVersion", None)
         resolved = Config.model_validate(probe)._match_provider()[1]
     except Exception as exc:
         logging.getLogger(__name__).debug("could not resolve the implicit provider: %s", exc)
@@ -269,7 +288,7 @@ def _migrate_auto_provider(data: dict[str, Any], *, notify: bool = False) -> boo
     return True
 
 
-def _persist_migrations(path: Path) -> None:
+def _persist_migrations(path: Path, from_version: int = 0) -> None:
     """Apply the stamped migrations to the file itself, then stamp. Best effort.
 
     Re-reads the raw file instead of reusing the mapping ``load_config`` already
@@ -295,10 +314,14 @@ def _persist_migrations(path: Path) -> None:
 
     changed = False
     if raw:
-        # Both run: a config can owe the file two edits, and the stamp covers
-        # every migration at once.
-        changed = _migrate_legacy_context_window(raw) or changed
-        changed = _migrate_auto_provider(raw) or changed
+        # Gated on the same per-migration floors the in-memory pass used, so the
+        # file and the loaded config owe each other nothing: persisting a
+        # migration the load path skipped would write an edit this process is
+        # not running on.
+        if from_version < _CONTEXT_WINDOW_MIGRATION:
+            changed = _migrate_legacy_context_window(raw) or changed
+        if from_version < _AUTO_PROVIDER_MIGRATION:
+            changed = _migrate_auto_provider(raw) or changed
     if changed:
         # PID in the name: two processes migrating at once would otherwise share
         # one temp path, and the second's truncating write could be read as an
@@ -343,8 +366,9 @@ def load_config(config_path: Path | None = None) -> Config:
             # Read the watermark before the migrations run, and let it gate
             # them: once stamped, this costs one small sidecar read per load
             # (the TUI RPC server reloads every turn) and nothing else.
-            unstamped = _migration_version(path) < CURRENT_CONFIG_VERSION
-            data = _migrate_config(data, run_stamped=unstamped)
+            from_version = _migration_version(path)
+            unstamped = from_version < CURRENT_CONFIG_VERSION
+            data = _migrate_config(data, from_version=from_version)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
             # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
@@ -382,7 +406,7 @@ def load_config(config_path: Path | None = None) -> Config:
             # Only once the migrated data is known to validate: a file we
             # cannot load is a file we have no business rewriting.
             if unstamped:
-                _persist_migrations(path)
+                _persist_migrations(path, from_version)
 
     if config is None:
         config = Config()
@@ -419,7 +443,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped: bool = False) -> dict:
+def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),
@@ -427,17 +451,19 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, run_stamped:
     doesn't reject them. Set to False when the caller needs to read
     extension blocks from the migrated data (``load_raven_config``).
 
-    ``run_stamped``: also run the migrations that are meant to happen once per
-    config rather than on every load. Off by default so only the caller holding
-    the config path -- the one that can read the watermark and write it back --
-    opts in; the shims below are idempotent and always run.
+    ``from_version``: the generation this config has already been through, which
+    gates the run-once migrations individually. Defaults to the current mark, so
+    a caller that cannot read the watermark runs none of them; only the caller
+    holding the config path -- the one that can also write the mark back -- passes
+    a real value. The shims below are idempotent and always run.
     """
     import logging as _logging
 
     _log = _logging.getLogger(__name__)
 
-    if run_stamped:
+    if from_version < _CONTEXT_WINDOW_MIGRATION:
         _migrate_legacy_context_window(data, notify=True)
+    if from_version < _AUTO_PROVIDER_MIGRATION:
         _migrate_auto_provider(data, notify=True)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace

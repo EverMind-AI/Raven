@@ -298,13 +298,80 @@ def test_legacy_context_window_pin_dropped_in_snake_case_too(tmp_path: Path) -> 
 
 def test_context_window_pin_survives_once_stamped(tmp_path: Path) -> None:
     """The user's own 65536 is theirs. Same value, same file -- but the stamp
-    says this config already had its one pass, so the pin stands."""
+    says this config already had its one pass, so the pin stands.
+
+    The stamp is the literal a shipped build wrote, not ``CURRENT_CONFIG_VERSION``.
+    Written from the constant, this precondition moves every time the mark is
+    bumped, so it can only ever test the generation it was run under -- which is
+    how the re-run below went unnoticed.
+    """
     p = tmp_path / "config.json"
     _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
-    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
 
     assert load_config(p).agents.defaults.context_window_tokens == 65536
     assert _defaults(p)["contextWindowTokens"] == 65536
+
+
+def test_a_later_generation_does_not_reopen_a_migration_already_run(tmp_path: Path) -> None:
+    """The user this protects read our own notice and acted on it.
+
+    0.1.11 cleared their fossil and told them: "Put the line back if you did want
+    that number". They did. Their stamp says 1. Bumping the mark to 2 for an
+    unrelated migration must not delete it a second time -- and must not print
+    the same invitation again.
+    """
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536, "model": "anthropic/claude-opus-4-5"}}})
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.agents.defaults.context_window_tokens == 65536
+    assert _defaults(p)["contextWindowTokens"] == 65536
+    assert [n for n in drain_migration_notices() if "contextWindowTokens" in n] == []
+
+
+def test_the_provider_migration_survives_a_legacy_top_level_block(tmp_path: Path) -> None:
+    """The probe validates a strict ``Config``, and this migration runs before
+    the shims that relocate legacy blocks. A config still carrying a top-level
+    ``skillRouter`` used to fail the probe, be skipped with a DEBUG line, and be
+    stamped anyway -- so it was never retried. It lands on the oldest configs,
+    which are the ones most likely to still say ``auto``.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"model": "claude-opus-4-5", "provider": "auto"}},
+            "providers": {"anthropic": {"apiKey": "sk-test"}},
+            "skillRouter": {"enabled": True},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert _defaults(p)["provider"] == "anthropic"
+
+
+def test_a_later_generation_still_runs_its_own_migration(tmp_path: Path) -> None:
+    """The other half of the floor: gen-1 configs are behind on gen 2 and must
+    pick it up. Without this, "do not re-run the old one" and "never run the new
+    one" look identical from the outside.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"model": "claude-opus-4-5", "provider": "auto"}},
+            "providers": {"anthropic": {"apiKey": "sk-test"}},
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert _defaults(p)["provider"] == "anthropic"
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
 def test_other_context_window_pins_are_never_touched(tmp_path: Path) -> None:
