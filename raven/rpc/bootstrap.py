@@ -73,12 +73,7 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
     from raven.rpc.methods import (
         turn as turn_module,
     )
-    from raven.rpc.methods.system import (
-        system_hello,
-        system_ping,
-        system_upgrade,
-        system_version,
-    )
+    from raven.rpc.methods.system import register_system_methods
     from raven.rpc.question_broker import QuestionBroker
     from raven.rpc.spine import build_rpc_spine, make_dag_progress_sink
     from raven.rpc.subscriptions import SubscriptionEmitter
@@ -173,10 +168,10 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
 
-    dispatcher.register("system.hello", system_hello)
-    dispatcher.register("system.ping", system_ping)
-    dispatcher.register("system.version", system_version)
-    dispatcher.register("system.upgrade", system_upgrade)
+    # The sink is what makes an explicit version check visible to tabs other than
+    # the one that asked: two windows on one gateway, one settings button, and
+    # both banners update.
+    register_system_methods(dispatcher, send_frame=send_frame)
     register_aligned_methods_except_system(
         dispatcher,
         emitter=emitter,

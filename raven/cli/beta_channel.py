@@ -34,6 +34,7 @@ _STATE_NAME = "beta.json"
 _POINTER_PATH = "latest/latest.json"
 _TIMEOUT_S = 10.0
 _HOST = "gitlab.com"
+_NOT_MODIFIED = 304
 
 _BETA_VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:b([1-9][0-9]*))?$")
 
@@ -147,19 +148,66 @@ def _parse_pointer(payload: object, chan: BetaChannel) -> ReleaseInfo:
     return ReleaseInfo(version=version, wheel_url=_authorized(url, chan))
 
 
-def fetch_latest(chan: BetaChannel | None = None, client: httpx.Client | None = None) -> ReleaseInfo:
-    """The newest published beta build. Raises ``UpgradeError`` with why not."""
+@dataclass(frozen=True)
+class PointerRead:
+    """What one read of the pointer learned.
+
+    ``release`` is ``None`` exactly when ``unchanged`` is true: a 304 carries no
+    body, so the caller keeps the version it already had rather than deriving a
+    new one. ``etag`` is the validator to send next time, present on both
+    answers -- a 304 leaves the one we sent current.
+    """
+
+    release: ReleaseInfo | None
+    etag: str | None
+    unchanged: bool = False
+
+
+def read_pointer(
+    chan: BetaChannel | None = None,
+    client: httpx.Client | None = None,
+    *,
+    etag: str | None = None,
+) -> PointerRead:
+    """Read ``latest.json``, conditionally when ``etag`` names an earlier read.
+
+    The pointer is 23 bytes and the registry answers ``If-None-Match`` with a
+    304, so looking while nothing has changed costs a request and no body. That
+    is what makes a one-minute poll affordable: the cost of asking stopped
+    scaling with how often we ask, which is the whole reason a tester hears
+    about a new build in a minute instead of half an hour.
+    """
     resolved = chan if chan is not None else channel()
     if resolved is None:
         raise UpgradeError("This Raven installation is not on the beta channel")
 
     url = f"{resolved.api_base}/{_POINTER_PATH}"
     headers = {"DEPLOY-TOKEN": resolved.token}
+    if etag:
+        headers["If-None-Match"] = etag
+
+    def _read(http: httpx.Client) -> PointerRead:
+        response = http.get(url, headers=headers)
+        if response.status_code == _NOT_MODIFIED:
+            return PointerRead(release=None, etag=response.headers.get("etag") or etag, unchanged=True)
+        response.raise_for_status()
+        return PointerRead(release=_parse_pointer(response.json(), resolved), etag=response.headers.get("etag"))
+
     if client is not None:
-        response = client.get(url, headers=headers)
-        response.raise_for_status()
-        return _parse_pointer(response.json(), resolved)
+        return _read(client)
     with httpx.Client(timeout=_TIMEOUT_S, follow_redirects=True) as owned:
-        response = owned.get(url, headers=headers)
-        response.raise_for_status()
-        return _parse_pointer(response.json(), resolved)
+        return _read(owned)
+
+
+def fetch_latest(chan: BetaChannel | None = None, client: httpx.Client | None = None) -> ReleaseInfo:
+    """The newest published beta build. Raises ``UpgradeError`` with why not.
+
+    Unconditional by construction: ``raven upgrade`` has to name the version it
+    will install, so it may not be answered "unchanged". Callers that keep a
+    cached version -- the update notice, and through it the gateway's announcer
+    -- use ``read_pointer`` instead.
+    """
+    read = read_pointer(chan, client)
+    if read.release is None:
+        raise UpgradeError("The beta pointer answered 304 to a request that sent no validator")
+    return read.release

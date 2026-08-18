@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -142,7 +142,19 @@ def _cached_update() -> tuple[bool, str] | None:
         return None
 
 
-async def system_version(params: dict) -> dict:
+async def _announce_update(send_frame: Any, latest: str) -> None:
+    """Push ``system.update_available`` to every client ``send_frame`` reaches.
+
+    The same notification ``serve_commands._announce_updates`` sends on its poll,
+    frame for frame, because it is the same fact arriving by a different route.
+    """
+    try:
+        await send_frame({"method": "system.update_available", "params": {"latest_version": latest}})
+    except Exception:
+        logger.debug("rpc: could not announce {} to open clients", latest)
+
+
+async def system_version(params: dict, *, send_frame: Any = None) -> dict:
     """`system.version` — versions for diagnostics, plus any pending upgrade.
 
     ``check: true`` fetches the latest release before answering, off the event
@@ -152,13 +164,26 @@ async def system_version(params: dict) -> dict:
     once on every boot, after its first paint has already gone out on the cached
     answer. Anything tuning this path (a throttle, a spinner, a quota guard) is
     tuning something that runs per page load, not one button.
+
+    A check that finds a newer build also announces it on ``send_frame`` when the
+    transport wired one. Without that, whatever asked for the check is the only
+    thing that learns the answer -- so one window's settings button would refresh
+    the cache while every other window on the same gateway kept showing the old
+    version until it happened to ask again.
+
+    Announcing a version the poll already announced is harmless: the client
+    writes one element's text (``showUpNote`` in ``ui/src/live.js``), so a repeat
+    lands on the banner already on screen. That is why this path keeps no memory
+    of what the announcer has sent -- sharing that state across two schedules
+    would buy nothing a re-rendered banner does not already give.
     """
     result = {
         "server_version": SERVER_VERSION,
         "schema_version": SCHEMA_VERSION,
         "raven_version": _raven_version(),
     }
-    if params.get("check") is True:
+    checked = params.get("check") is True
+    if checked:
         import asyncio
 
         try:
@@ -170,6 +195,8 @@ async def system_version(params: dict) -> dict:
     pending = _cached_update()
     if pending is not None:
         result["update_available"], result["latest_version"] = pending
+        if checked and send_frame is not None:
+            await _announce_update(send_frame, result["latest_version"])
     return result
 
 
@@ -265,15 +292,30 @@ async def system_upgrade(params: dict) -> dict:
 _UPGRADE_EXIT_DELAY_S = 0.75
 
 
-def register_system_methods(dispatcher: "Dispatcher", *, channel: str = LOCAL_CHANNEL) -> None:
-    """Register all 4 system.* methods on a dispatcher instance."""
+def register_system_methods(
+    dispatcher: "Dispatcher",
+    *,
+    channel: str = LOCAL_CHANNEL,
+    send_frame: Any = None,
+) -> None:
+    """Register all 4 system.* methods on a dispatcher instance.
+
+    ``send_frame`` is the transport's broadcast sink, and only a transport that
+    owns one should pass it: with it, an explicit ``system.version`` check that
+    finds a newer build tells every connected client. Without one -- the TUI's
+    single-socket transport, the web gateway, tests -- the check answers its
+    caller and nothing else, exactly as before.
+    """
 
     async def _hello(params: dict) -> dict:
         return await system_hello(params, channel=channel)
 
+    async def _version(params: dict) -> dict:
+        return await system_version(params, send_frame=send_frame)
+
     dispatcher.register("system.hello", _hello)
     dispatcher.register("system.ping", system_ping)
-    dispatcher.register("system.version", system_version)
+    dispatcher.register("system.version", _version)
     dispatcher.register("system.upgrade", system_upgrade)
 
 

@@ -273,7 +273,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: publishing failed: {exc}", file=sys.stderr)
         return 1
 
-    print(f"\nPublished {version}. Open tabs will offer it within a day, or on their next launch.")
+    print(f"\nPublished {version}.")
+    print("Every tester's gateway polls this pointer once a minute, so they are offered it within about that.")
     return 0
 
 

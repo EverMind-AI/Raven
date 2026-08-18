@@ -201,9 +201,61 @@ _UPDATE_FIRST_CHECK_S = 90.0
 ``system.version`` before the launch refresh's daemon thread has finished, so a
 release that landed since the last cache write would otherwise wait a day."""
 
-_UPDATE_POLL_S = 30 * 60.0
-"""How often a resident gateway re-checks after that. The cached path shows a
-notice one launch late, and a resident gateway has no next launch."""
+_UPDATE_POLL_BETA_S = 60.0
+"""How often a resident gateway re-checks on the beta channel.
+
+A beta lands whenever a maintainer runs ``make beta``, and every tester it is
+for is on another machine with no inbound path -- so this poll is the only thing
+that carries a build to them, and its interval is how long they wait. It is
+affordable at a minute because the check is a conditional request against a
+23-byte pointer that answers 304 while nothing has changed (see
+``beta_channel.read_pointer``), against a registry that is ours."""
+
+_UPDATE_POLL_STABLE_S = 30 * 60.0
+"""How often it re-checks on the stable channel. Deliberately left slow.
+
+A stable release lands on a cadence of days, and its check reads GitHub's
+release-page redirect rather than our own registry -- so a minute would spend
+someone else's budget, from every install behind a shared egress, to learn
+nothing 43,000 times a month. The cached path shows a notice one launch late and
+a resident gateway has no next launch, which is what this interval is for; it
+does not need to be the beta channel's."""
+
+_UPDATE_BACKOFF_CEILING_S = 30 * 60.0
+"""Where the failure backoff stops growing.
+
+Consecutive failures double the delay from the channel's own cadence up to this,
+so a gateway that is offline, or a registry that has started refusing, settles
+at the stable cadence instead of retrying every minute for as long as it stays
+up. One answer -- even a 304 -- puts it straight back."""
+
+_UPDATE_BACKOFF_STEPS = 5
+"""Doublings after which the delay is at the ceiling anyway (60s << 30min), so
+the exponent stops there rather than growing all week in an offline process."""
+
+
+def _update_poll_seconds() -> float:
+    """The cadence for the channel this install is on, read per tick.
+
+    Per tick and not once at startup: joining or leaving the beta channel is a
+    file appearing or being deleted, and a resident gateway that outlives the
+    change should follow it without a restart.
+    """
+    from raven.cli import beta_channel
+
+    return _UPDATE_POLL_BETA_S if beta_channel.is_active() else _UPDATE_POLL_STABLE_S
+
+
+def _update_delay(failures: int) -> float:
+    """How long to wait before the next check, given consecutive failures.
+
+    Each failure doubles the channel's cadence, to a ceiling of
+    ``_UPDATE_BACKOFF_CEILING_S`` (30 minutes) -- so the beta channel's minute
+    degrades 1, 2, 4, 8, 16, 30 and stays there, and the stable channel's half
+    hour is already at the ceiling and never grows. ``failures=0`` is the plain
+    cadence, which is what one answer restores.
+    """
+    return min(_update_poll_seconds() * 2**failures, _UPDATE_BACKOFF_CEILING_S)
 
 
 async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
@@ -216,10 +268,14 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
 
     Announces each version once. A tab that connects later still learns of it,
     because the check writes the cache ``system.version`` reads.
+
+    On the beta channel this loop is the whole delivery mechanism -- a tester's
+    gateway hears about a build no other way -- so it runs on that channel's
+    minute cadence and backs off only when the registry stops answering.
     """
     from importlib import metadata
 
-    from raven.cli.update_notice import check_for_update
+    from raven.cli.update_notice import Checked, check_now
 
     try:
         current = metadata.version("raven")
@@ -227,6 +283,7 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
         return
 
     announced: str | None = None
+    failures = 0
     delay = _UPDATE_FIRST_CHECK_S
     while not stop.is_set():
         try:
@@ -234,11 +291,13 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
             return
         except asyncio.TimeoutError:
             pass
-        delay = _UPDATE_POLL_S
         try:
-            latest = await asyncio.to_thread(check_for_update, current)
+            checked = await asyncio.to_thread(check_now, current)
         except Exception:
-            continue
+            checked = Checked(None, reached=False)
+        failures = 0 if checked.reached else min(failures + 1, _UPDATE_BACKOFF_STEPS)
+        delay = _update_delay(failures)
+        latest = checked.latest
         if latest is None or latest == announced:
             continue
         announced = latest
