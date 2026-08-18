@@ -108,6 +108,8 @@ subagents/*
 !subagents/raven-code/
 !subagents/raven-oncall/
 !subagents/raven-research/
+!subagents/README.md
+!subagents/install.sh
 
 # Report assets AGENTS.md bars from the repo whatever carries them. The
 # vendored upstream trees ship benchmark PDFs, doc diagrams and a demo
