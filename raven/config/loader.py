@@ -334,6 +334,18 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     """
     Save configuration to file.
 
+    Only what differs from the defaults is written. A dump of everything is
+    lossless on reload either way -- a value equal to its default reloads as
+    that default -- but it freezes today's defaults into the user's file, and
+    then a default we change later never reaches anyone who already has one.
+    That is not hypothetical: ``contextWindowTokens: 65536`` was written this
+    way, and every upgraded install stayed capped at 64k on a 1M model until a
+    migration went and took it out again. Writing less means the next default
+    we improve simply applies.
+
+    It also leaves a file a person can read: the handful of lines they chose,
+    rather than eight kilobytes of settings they have never heard of.
+
     Args:
         config: Configuration to save.
         config_path: Optional path to save to. Uses default if not provided.
@@ -341,7 +353,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = config.model_dump(by_alias=True)
+    data = config.model_dump(by_alias=True, exclude_defaults=True)
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
