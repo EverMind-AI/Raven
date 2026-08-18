@@ -71,6 +71,7 @@ def build_context_engine(
     model: str,
     context_window_tokens: int,
     get_tool_definitions: Callable[[], list[dict]],
+    get_tool_notices: Callable[[], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
@@ -145,7 +146,7 @@ def build_context_engine(
             now_fn=now_fn,
         ),
     ]
-    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)
+    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices)
 
 
 def _build_router(
