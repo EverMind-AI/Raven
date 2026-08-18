@@ -70,12 +70,12 @@ def test_lifecycle_events_construct_and_are_frozen():
 
 def test_turn_failed_has_no_usage():
     fields = {f.name for f in dataclasses.fields(TurnFailed)}
-    assert fields == {"error", "cancelled", "conversation_id"}  # failure carries no usage
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id"}  # failure carries no usage
 
 
 def test_turn_ended_carries_usage_latency_and_explicit_reply():
     fields = {f.name for f in dataclasses.fields(TurnEnded)}
-    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id"}
+    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id"}
 
 
 def test_every_deliverable_defaults_source_to_none():
@@ -116,6 +116,30 @@ def test_every_turn_event_defaults_conversation_id_to_none():
         assert event.conversation_id is None
     # lifecycle carries the correlation key but no source — it is never routed
     assert not any(hasattr(e, "source") for e in lifecycle)
+
+
+def test_every_lifecycle_event_carries_a_turn_id_axis():
+    # turn_id is the second correlation axis: conversation_id is WHERE a turn ran,
+    # this is WHICH turn ran. Lifecycle-only -- a deliverable is correlated by its
+    # stream, and growing the field there would invite stamping it from a per-lane
+    # slot again, which is the defect this axis exists to close.
+    m = Media(path="/tmp/a.jpg", mime="image/jpeg", kind="image")
+    lifecycle = [
+        TurnStarted(),
+        TurnFailed(error="e", cancelled=False),
+        TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False),
+    ]
+    for event in lifecycle:
+        assert event.turn_id == ""
+    deliverables = [
+        Text(content="hi"),
+        MediaOut(media=(m,)),
+        ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="t"),
+        StreamDelta(delta="d"),
+        Reasoning(content="r"),
+        Notice(kind=NoticeKind.PROGRESS),
+    ]
+    assert not any(hasattr(e, "turn_id") for e in deliverables)
 
 
 def test_media_out_carries_a_media_tuple():

@@ -372,6 +372,9 @@ class RavenGatewayAgent:
     """Duck-typed chat agent that drives a persistent ``raven gateway`` over WS."""
 
     timeout_seconds = 900.0
+    # Ceiling for a blocking tool's silent stretch. Not a latency budget -- a real
+    # run finishes far inside it; it exists so no wait is infinite.
+    blocking_timeout_seconds = 7200.0
 
     def __init__(self, *, name="Raven", state=None, model=None, middlewares=None, **_ignore):
         self.name = name or "Raven"
@@ -403,6 +406,7 @@ class RavenGatewayAgent:
         cur_tool: str | None = None
         cur_tool_blocking = False
         cur_tool_display: str | None = None
+        own_turn_id: str | None = None
 
         def _close_block():
             nonlocal open_kind, open_id
@@ -422,7 +426,7 @@ class RavenGatewayAgent:
             turn = _extract_text(inputs)
             if self._retriever is not None:
                 turn = await self._retriever.augment(turn)
-            await client.send_turn(session_key, turn)
+            own_turn_id = await client.send_turn(session_key, turn)
         except Exception as exc:  # connection / submit failure
             tb = uuid.uuid4().hex
             yield TextBlockStartEvent(reply_id=reply_id, block_id=tb)
@@ -432,15 +436,18 @@ class RavenGatewayAgent:
             return
 
         while True:
-            # No clock while a blocking tool is in flight. Those tools (spawn,
-            # run_subagent_dag, deep_research) run a sub-agent, which the runtime
-            # deliberately gives no automatic deadline -- a manual stop is the only
-            # end -- and which emits nothing between its tool.start and
-            # tool.complete. Clocking that gap ends the turn here while the run
-            # continues upstream, so its tool result, the DAG's terminal node
-            # events and the final answer arrive on a queue nobody is reading and
-            # the UI is left frozen on the last status it saw.
-            timeout = None if cur_tool_blocking else self.timeout_seconds
+            # A blocking tool (spawn / run_subagent_dag / deep_research) runs a
+            # sub-agent the runtime gives no automatic deadline, and emits nothing
+            # between its tool.start and tool.complete -- so it gets its own, much
+            # longer clock rather than the idle one, which would end the turn here
+            # while the run continues upstream (its tool result, the DAG's terminal
+            # node events and the final answer would then arrive on a queue nobody
+            # is reading, leaving the UI frozen on the last status it saw). What it
+            # does NOT get is no clock at all: a turn can end upstream with zero
+            # wire events (a queued turn drained at shutdown, a cancel that lands
+            # before the turn started), and an unbounded wait there never returns,
+            # so the reply generator never closes and the session's slot never frees.
+            timeout = self.blocking_timeout_seconds if cur_tool_blocking else self.timeout_seconds
             try:
                 ev = await asyncio.wait_for(queue.get(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -521,6 +528,48 @@ class RavenGatewayAgent:
                 await self._publish_custom(ev.get("name"), payload)
 
             elif etype == "message.complete":
+                # Whose turn ended? Only end this one on its OWN completion. A turn
+                # the runtime submitted (a sub-agent announce) shares this session's
+                # serial lane, so its completion lands on this queue -- and it may
+                # land BEFORE this turn even starts, since this turn can still be
+                # queued behind it. The gateway stamps every completion with the id
+                # of the turn that actually ended (the lane mints one for a turn no
+                # client submitted), which is what makes this comparison able to
+                # tell them apart at all.
+                #
+                # A completion with no turn_id, or an own id we never got, means an
+                # older gateway: end the turn, as the service did before this guard.
+                # Ignoring it there would trade a possibly-early end for a wait to
+                # the clock, which is strictly worse for the user.
+                incoming_turn_id = payload.get("turn_id")
+                if own_turn_id and incoming_turn_id and incoming_turn_id != own_turn_id:
+                    # Any tool still open here almost certainly belonged to that
+                    # turn: the two share this session's serial lane, so a turn
+                    # ending on it means its tool calls are done. (Not a proof --
+                    # a direct chat's tool events are untagged and reach this queue
+                    # from a lane of its own, a separate pre-existing leak -- but a
+                    # direct turn's completion IS tagged and never enters this
+                    # branch, so what we clear here is the ended turn's.) Clearing
+                    # puts the idle clock back in charge; left set, a foreign
+                    # blocking tool.start strands this turn on the blocking ceiling.
+                    if cur_tool is not None:
+                        # Its result block was opened by tool.start (ToolCallStart +
+                        # ToolResultStart) and _close_block only closes think/text,
+                        # so close it here or the renderer keeps a spinner on a tool
+                        # whose turn is already over.
+                        yield ToolResultEndEvent(
+                            reply_id=reply_id,
+                            tool_call_id=cur_tool,
+                            state=ToolResultState.SUCCESS,
+                            metadata={
+                                "truncated": False,
+                                **({"display": cur_tool_display} if cur_tool_display else {}),
+                            },
+                        )
+                    cur_tool = None
+                    cur_tool_blocking = False
+                    cur_tool_display = None
+                    continue
                 break
 
             elif etype == "__disconnected__":

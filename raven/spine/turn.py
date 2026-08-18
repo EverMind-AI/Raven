@@ -54,6 +54,14 @@ class TurnRequest:
     text: str
     media: tuple[Media, ...] = ()
     message_id: str | None = None
+    # The turn's own identity, carried on its lifecycle events so a consumer can
+    # tell WHICH turn just ended. Distinct from ``message_id`` above, which is an
+    # inbound channel message's id: one inbound message is one turn today, but a
+    # turn the runtime submits itself has no inbound message at all. A submitter
+    # that must correlate the end with its own call sets this (``turn.send``
+    # returns it to the client); left unset, the lane mints one, so every turn is
+    # identified whether or not its submitter cared.
+    turn_id: str | None = None
     conversation: str | None = None
     busy: BusyPolicy = BusyPolicy.APPEND
     sentinel: SentinelExtras | None = None
