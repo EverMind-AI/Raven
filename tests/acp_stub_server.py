@@ -33,6 +33,13 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``cancelled``    - streams one chunk, then reports ``stopReason: "cancelled"``. The
                      shape measured on codex-acp when a turn is torn down part-way: a
                      reply that reads finished and is not.
+- ``cancel_aware``  - holds the prompt open and answers it with
+                      ``stopReason: "cancelled"`` only after a ``session/cancel``
+                      notification arrives. Proves raven both sends the
+                      notification and waits for the turn to settle.
+- ``cancel_deaf``   - holds the prompt open and ignores ``session/cancel``
+                      entirely, so the settle budget expires. Proves the timeout
+                      path, which unbinds the session rather than reusing it.
 - ``silent``       - reads and never answers, for the timeout path.
 - ``mute``         - answers ``initialize``, then closes stdout and sleeps with
                      the process alive: the connection is dead, the pid is not.
@@ -94,6 +101,9 @@ _PENDING: list = []
 
 # Prompts held open until raven answers the permission request they triggered.
 _AWAITING_PERMISSION: list = []
+
+# Prompts held open until the client cancels them (cancel_aware / cancel_deaf).
+_AWAITING_CANCEL: list = []
 
 
 def handle_response(frame) -> None:
@@ -177,6 +187,10 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
         ok(request_id, {"stopReason": "end_turn"})
         return
+    if MODE in ("cancel_aware", "cancel_deaf"):
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working"}})
+        _AWAITING_CANCEL.append((request_id, session_id))
+        return
     if MODE == "cancelled":
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I will "}})
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "start by"}})
@@ -195,6 +209,18 @@ def handle_prompt(request_id, params) -> None:
     update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
     update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 42})
     ok(request_id, {"stopReason": "end_turn"})
+
+
+def handle_cancel(params) -> None:
+    """Settle a held prompt on ``session/cancel``, unless this mode ignores it."""
+    if MODE != "cancel_aware":
+        return
+    session_id = params.get("sessionId")
+    for held in list(_AWAITING_CANCEL):
+        if held[1] != session_id:
+            continue
+        _AWAITING_CANCEL.remove(held)
+        ok(held[0], {"stopReason": "cancelled"})
 
 
 def main() -> None:
@@ -248,6 +274,9 @@ def main() -> None:
 
                     time.sleep(60)
                     return
+        elif method == "session/cancel":
+            handle_cancel(params)
+            continue
         elif not _INITIALIZED:
             err(request_id, -32603, "Internal error: no initialize was received on this connection")
         elif method == "session/new":

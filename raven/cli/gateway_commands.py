@@ -724,16 +724,28 @@ def register(app: typer.Typer) -> None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
                 if web_server is not None:
                     await web_server.stop()
+                from raven.agent.acp.client import begin_drain
+                from raven.agent.acp.pool import close_pool
+
+                # Before anything tears a transport down: an ACP connection
+                # closed first fails every pending turn with a connection error,
+                # which records as a failure rather than as the stop it is. A
+                # CLI subagent's process group is detached from the gateway's
+                # own (start_new_session=True), so nothing else reaches it
+                # either. Draining first, because the pool close below kills
+                # every ACP server anyway and no cancelled turn is worth waiting
+                # on when its process is about to go.
+                begin_drain()
+                await agent.subagents.cancel_all()
                 if web_teardown is not None:
                     await web_teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
+                # ACP agents are launched with start_new_session, so they do not
+                # get this process's signals and outlive it unless the pool is
+                # closed.
+                await close_pool()
                 await agent.close_mcp()
-                # Cancel every still-running spawn before stopping the agent: a
-                # CLI subagent's process group is detached from the gateway's
-                # own (start_new_session=True), and with every automatic
-                # timeout removed nothing else would ever reach it.
-                await agent.subagents.cancel_all()
                 agent.stop()
                 await channels.stop_all()
                 # Stop the memory-backend plugin last so any

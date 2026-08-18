@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1370,3 +1371,158 @@ async def test_the_approver_leaves_unsupported_methods_refused() -> None:
 
     handle = auto_approver("a")
     assert await handle("fs/read_text_file", {"path": "/etc/hostname"}) is UNHANDLED
+
+
+# ---- cancelling a turn on the agent, not only locally -----------------------
+
+
+async def test_a_cancelled_turn_is_cancelled_on_the_agent_too() -> None:
+    from raven.agent.acp.pool import get_pool
+
+    connection = await get_pool().acquire(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "cancel_aware"},
+        ready_timeout_s=15.0,
+    )
+    client = connection.client
+    session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+
+    task = asyncio.create_task(
+        client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            cancel_session=session,
+        )
+    )
+    await asyncio.sleep(0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The stub only answers a held prompt when it is told to stop, so a settled
+    # turn is the proof the notification went out and was waited for.
+    assert client.take_unsettled_cancel(session) is False
+
+
+async def test_an_agent_that_ignores_the_cancel_marks_the_session_unsettled() -> None:
+    from raven.agent.acp import client as client_mod
+    from raven.agent.acp.pool import get_pool
+
+    monkeyed = client_mod._CANCEL_SETTLE_S
+    client_mod._CANCEL_SETTLE_S = 0.3
+    try:
+        connection = await get_pool().acquire(
+            name="stub",
+            command=f"{sys.executable} {_STUB}",
+            env={"ACP_STUB_MODE": "cancel_deaf"},
+            ready_timeout_s=15.0,
+        )
+        client = connection.client
+        session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+
+        task = asyncio.create_task(
+            client.request(
+                "session/prompt",
+                {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+                cancel_session=session,
+            )
+        )
+        await asyncio.sleep(0.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert client.take_unsettled_cancel(session) is True
+        # Consumed: a second read must not unbind a second time.
+        assert client.take_unsettled_cancel(session) is False
+    finally:
+        client_mod._CANCEL_SETTLE_S = monkeyed
+
+
+async def test_draining_notifies_without_waiting_for_the_turn_to_settle() -> None:
+    from raven.agent.acp import client as client_mod
+    from raven.agent.acp.pool import get_pool
+
+    connection = await get_pool().acquire(
+        name="stub",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "cancel_deaf"},
+        ready_timeout_s=15.0,
+    )
+    client = connection.client
+    session = (await client.request("session/new", {"cwd": "/tmp", "mcpServers": []}, timeout=15.0))["sessionId"]
+
+    task = asyncio.create_task(
+        client.request(
+            "session/prompt",
+            {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]},
+            cancel_session=session,
+        )
+    )
+    await asyncio.sleep(0.5)
+    client_mod.begin_drain()
+    started = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    elapsed = time.monotonic() - started
+
+    # The default budget is seconds; draining must not pay any of it.
+    assert elapsed < 1.0
+    assert client.take_unsettled_cancel(session) is False
+    assert client_mod.is_draining() is True
+
+
+async def test_closing_the_pool_leaves_drain_mode() -> None:
+    from raven.agent.acp import client as client_mod
+    from raven.agent.acp.pool import close_pool
+
+    client_mod.begin_drain()
+    await close_pool()
+    assert client_mod.is_draining() is False
+
+
+async def test_a_turn_that_would_not_stop_drops_its_session_binding(tmp_path: Path) -> None:
+    """The settle budget expired, so the turn is still running on the agent while
+    the session lock is released -- prompting that session again would collide."""
+    from raven.agent.acp import client as client_mod
+
+    cfg = stub_config("stub", mode="cancel_deaf")
+    registry = InstanceRegistry(path=tmp_path / "inst.json")
+    await registry.commit("web:s1", "stub", "h1", "stub-session-1", kind="acp")
+    backend = AcpAgentBackend(
+        name="stub",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("stub", cfg, can_resume=True, can_load=False),
+        registry=registry,
+    )
+
+    streamed = asyncio.Event()
+
+    async def _on_delta(_text: str) -> None:
+        streamed.set()
+
+    monkeyed = client_mod._CANCEL_SETTLE_S
+    client_mod._CANCEL_SETTLE_S = 0.3
+    try:
+        task = asyncio.create_task(
+            backend.run(
+                "hi",
+                task_id="t1",
+                workspace=tmp_path,
+                executor=None,
+                session_key="web:s1",
+                instance="h1",
+                on_delta=_on_delta,
+            )
+        )
+        await asyncio.wait_for(streamed.wait(), 30)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        client_mod._CANCEL_SETTLE_S = monkeyed
+
+    assert await registry.lookup("web:s1", "stub", "h1", kind="acp") is None

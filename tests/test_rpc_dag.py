@@ -117,7 +117,7 @@ async def test_dag_get_overlays_registry_rows_on_an_unfinalized_run() -> None:
     by_node = {f["node"]: f for f in result["run"]["files"]}
     assert by_node["node-a"]["status"] == "completed"
     assert by_node["node-b"]["status"] == "pending"
-    assert result["run"]["summary"] == {"total": 2, "completed": 1, "failed": 0, "skipped": 0}
+    assert result["run"]["summary"] == {"total": 2, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0}
 
 
 async def test_dag_get_reports_a_dead_runs_live_looking_node_as_interrupted() -> None:
@@ -475,3 +475,19 @@ async def test_the_fallback_reads_a_nodes_transcript_off_disk(one_run_on_disk) -
     )
 
     assert [m["role"] for m in answer["node"]["messages"]] == ["user", "tool", "assistant"]
+
+
+def test_the_dag_event_models_accept_a_cancelled_node() -> None:
+    from raven.rpc.models import DagRunCompletedPayload
+
+    payload = DagRunCompletedPayload(
+        run_id="r1",
+        dir="/w/.raven_dag/r1",
+        summary={"total": 2, "completed": 0, "failed": 0, "skipped": 1, "cancelled": 1},
+        files=[
+            {"node": "a", "status": "cancelled"},
+            {"node": "b", "status": "skipped"},
+        ],
+    )
+    assert payload.summary.cancelled == 1
+    assert payload.files[0].status == "cancelled"

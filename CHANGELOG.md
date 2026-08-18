@@ -24,9 +24,10 @@ All notable changes to Raven are documented here.
   `depends_on` -- there is nothing left to order. `depends_on` may name it anyway, which
   records the dependency without ordering anything. Previously nothing carried across runs:
   the outputs sit under the session's metadata directory, which no working directory can
-  be aimed at, so no relative path reached them. A node with no output to read -- failed,
-  skipped, or in a run still in flight -- keeps its id but is refused, naming which case
-  it is. Node ids are unique per conversation for this to work (see Breaking Changes).
+  be aimed at, so no relative path reached them. A node with no output to read --
+  failed, skipped, cancelled, or in a run still in flight -- keeps its id but is
+  refused, naming which case it is. Node ids are unique per conversation for this to
+  work (see Breaking Changes).
 - A DAG file reference (`{{ ref: }}` / `{{ ref_path: }}` / an `inputs` `{"file": ...}`)
   resolves inside two roots now, the session working directory and this conversation's
   sub-agent history (`<session_dir>/subagents/`, so the `spawn` records beside the DAG runs
@@ -37,15 +38,30 @@ All notable changes to Raven are documented here.
   sub-agent history, which `workdir.py` already keeps off the agent's file surface, and a
   DAG graph is LLM-authored and auto-run.
   Every `_path` form is now checked to exist before its sub-agent is dispatched.
-- A DAG run stopped by `/stop` or a gateway shutdown now records its unfinished nodes as
-  `skipped` in the session index on the way out. Those routes cancel the run task, which
-  skipped the finalizer, so the ids the run had claimed stayed readable as "still being
-  written" forever -- a later graph could then neither reuse them nor read them, and the two
-  refusals it got contradicted each other. The id-reuse refusal also stops advising a
-  reference to a node that has no output to reference.
+- A DAG run stopped by `/stop` or a gateway shutdown now records each unfinished node by
+  the stage it was in: one still running when the stop arrived is recorded `cancelled`, and
+  one still pending stays `skipped`, in the session index on the way out. Those routes
+  cancel the run task, which skipped the finalizer, so the ids the run had claimed stayed
+  readable as "still being written" forever -- a later graph could then neither reuse them
+  nor read them, and the two refusals it got contradicted each other. The id-reuse refusal
+  also stops advising a reference to a node that has no output to reference.
 - Sessions started by `raven tui` / `raven agent` record the directory they were
   launched in as `Session.metadata["project_dir"]`. The group directory name is
   a lossy slug, so this is what identifies the project.
+- A DAG node stopped mid-flight is now recorded `cancelled` rather than `skipped`, in the
+  session index, the manifest, and both the TUI and web frontends, and it stays on the
+  instance list, where a `skipped` node is filtered out on the grounds that it has no
+  transcript, no cost, and no clock -- untrue of a node that ran.
+- Cancelling a sub-agent on the ACP transport now actually stops the turn on the agent:
+  raven sends the protocol's `session/cancel` and waits up to 5 seconds for
+  `stopReason: "cancelled"`. Previously it only abandoned its own wait, so the agent ran
+  the turn to completion and answered a request nobody was listening for -- and for a
+  stateful agent the half-finished turn stayed in its session. If the wait expires the
+  session binding is dropped, so the next dispatch opens a fresh session instead of
+  colliding with a turn that is still running.
+- The gateway now closes the ACP connection pool on the way out. Those adapter servers
+  are launched with `start_new_session=True` and receive none of the gateway's signals,
+  so every gateway exit used to orphan them.
 
 ### Breaking Changes
 

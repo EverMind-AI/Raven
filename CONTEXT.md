@@ -721,10 +721,11 @@ same conversation uses to read what that node produced — `{{ <id>.output }}`, 
 nothing). That second role is why the id is
 **unique per conversation, not per graph**: reusing one an earlier run took is refused, so
 an id names one node and one output. An id is claimed for the whole run, whatever the
-outcome, but only a `completed` node can be referenced; a failed, skipped or still-running
-one keeps its id and is refused with which of the three it is. A run stopped by `/stop` or
-a shutdown records its unfinished nodes as `skipped` on the way out, so "still-running"
-means what it says rather than outliving the run that claimed it. Distinct from an
+outcome, but only a `completed` node can be referenced; a failed, skipped, cancelled or
+still-running one keeps its id and is refused with which of the four it is. A run stopped
+by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
+ones as `skipped` on the way out, so "still-running" means what it says rather than
+outliving the run that claimed it. Distinct from an
 `instance` handle, which shares a sub-agent *session* rather than naming an output.
 _Avoid_: "node name" — the id is an address, not a label.
 

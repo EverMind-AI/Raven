@@ -359,3 +359,16 @@ def test_gateway_passes_no_store_when_web_disabled(tmp_config: Path) -> None:
     cfg.gateway.web.enabled = False
 
     assert _build_deliverable_store(cfg) is None
+
+
+def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports() -> None:
+    """An ACP connection closed first fails every pending turn with a connection
+    error, which records as a failure rather than as the stop it is. And the
+    gateway never closed the ACP pool at all, so its servers outlived it."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
+    drain = src.index("begin_drain()")
+    cancel = src.index("await agent.subagents.cancel_all()")
+    web = src.index("await web_teardown()")
+    pool = src.index("await close_pool()")
+
+    assert drain < cancel < web < pool

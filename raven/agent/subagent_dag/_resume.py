@@ -69,5 +69,6 @@ async def read_run_reconciled(tool: Any, run_id: str, session_key: str | None) -
         "completed": statuses.count("completed"),
         "failed": statuses.count("failed"),
         "skipped": statuses.count("skipped"),
+        "cancelled": statuses.count("cancelled"),
     }
     return run

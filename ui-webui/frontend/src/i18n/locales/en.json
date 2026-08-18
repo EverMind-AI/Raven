@@ -548,6 +548,7 @@
 			"completed": "completed",
 			"failed": "failed",
 			"skipped": "skipped",
+			"cancelled": "cancelled",
 			"interrupted": "interrupted",
 			"reused": "reused"
 		},

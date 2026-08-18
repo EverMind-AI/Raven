@@ -1658,7 +1658,7 @@ async def test_dag_get_overlays_registry_rows_on_an_unfinalized_run(
     assert by_node["node-b"]["started_at"] > 0
     assert by_node["node-b"]["ended_at"] is None
     assert by_node["node-a"]["ended_at"] > 0
-    assert run["summary"] == {"total": 2, "completed": 1, "failed": 0, "skipped": 0}
+    assert run["summary"] == {"total": 2, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0}
 
 
 async def test_dag_get_reports_a_dead_runs_live_looking_nodes_as_interrupted(

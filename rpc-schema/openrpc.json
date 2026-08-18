@@ -6594,12 +6594,12 @@
       "DagNodeStatus": {
         "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.",
         "type": "string",
-        "enum": ["pending", "running", "completed", "failed", "skipped"]
+        "enum": ["pending", "running", "completed", "failed", "skipped", "cancelled"]
       },
       "DagSnapshotNodeStatus": {
         "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.",
         "type": "string",
-        "enum": ["pending", "running", "completed", "failed", "skipped", "interrupted"]
+        "enum": ["pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted"]
       },
       "DagSnapshotNode": {
         "type": "object",
@@ -6648,7 +6648,8 @@
               "total": { "type": "integer" },
               "completed": { "type": "integer" },
               "failed": { "type": "integer" },
-              "skipped": { "type": "integer" }
+              "skipped": { "type": "integer" },
+              "cancelled": { "type": "integer" }
             }
           }
         }
@@ -6763,7 +6764,8 @@
                   "total": { "type": "integer" },
                   "completed": { "type": "integer" },
                   "failed": { "type": "integer" },
-                  "skipped": { "type": "integer" }
+                  "skipped": { "type": "integer" },
+                  "cancelled": { "type": "integer" }
                 }
               },
               "files": {

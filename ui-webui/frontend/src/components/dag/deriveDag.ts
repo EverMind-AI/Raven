@@ -23,6 +23,7 @@ export type DagNodeStatus =
 	| 'completed'
 	| 'failed'
 	| 'skipped'
+	| 'cancelled'
 	| 'interrupted'
 	| 'reused';
 
@@ -40,6 +41,7 @@ export const DAG_STATUS_LABEL_KEY: Record<DagNodeStatus, string> = {
 	completed: 'dag.status.completed',
 	failed: 'dag.status.failed',
 	skipped: 'dag.status.skipped',
+	cancelled: 'dag.status.cancelled',
 	interrupted: 'dag.status.interrupted',
 	reused: 'dag.status.reused',
 };
@@ -67,6 +69,7 @@ export interface DagSummary {
 	completed: number;
 	failed: number;
 	skipped: number;
+	cancelled: number;
 }
 
 export interface DagTerminalOutput {
@@ -104,16 +107,17 @@ export function readDagManifest(metadata: Record<string, unknown> | undefined): 
 	};
 }
 
-/** Coerce an arbitrary status string to a known `DagNodeStatus`. A cancelled
- *  node lands on `interrupted`: both mean "stopped before it could finish",
- *  and neither may fall through to `pending`, which would draw a node that is
- *  never going to run again as though it were still queued. */
+/** Coerce an arbitrary status string to a known `DagNodeStatus`. `cancelled`
+ *  and `interrupted` are both kept: the runner records the first when it stops
+ *  a node, while the second is a reader's inference about a node no run is
+ *  executing any more. Neither may fall through to `pending`, which would draw
+ *  a node that is never going to run again as though it were still queued. */
 export function toStatus(s: string | undefined): DagNodeStatus {
-	if (s === 'cancelled') return 'interrupted';
 	return s === 'running' ||
 		s === 'completed' ||
 		s === 'failed' ||
 		s === 'skipped' ||
+		s === 'cancelled' ||
 		s === 'interrupted'
 		? s
 		: 'pending';
