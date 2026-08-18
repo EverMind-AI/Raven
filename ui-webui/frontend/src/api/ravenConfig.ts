@@ -170,7 +170,6 @@ export interface RavenCronAddRequest {
 	message: string;
 	channel?: string | null;
 	to?: string | null;
-	deliver?: boolean;
 }
 
 export interface RavenLocalDir {

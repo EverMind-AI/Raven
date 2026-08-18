@@ -241,7 +241,6 @@ class CronTool(Tool):
                 name=message[:30],
                 schedule=schedule,
                 message=message,
-                deliver=True,
                 channel=self._channel,
                 to=self._chat_id,
                 delete_after_run=delete_after,

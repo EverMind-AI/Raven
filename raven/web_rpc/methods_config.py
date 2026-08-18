@@ -970,7 +970,6 @@ def register_config_methods(
                 name=params.get("name", "task"),
                 schedule=cs,
                 message=params.get("message", ""),
-                deliver=params.get("deliver", True),
                 channel=params.get("channel"),
                 to=params.get("to"),
             )
