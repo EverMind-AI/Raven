@@ -4806,25 +4806,24 @@ const eventsFor = (run) => (run.key === 'gtm' && capOn('websearch') && run.evOk)
    server, so it stays null and pins live in page memory only. */
 let pinPersist = null;
 let SESS = [
-  { id:'a', title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', when:'11:24', g:'今天', run:'gtm', pin:false },
-  { id:'b', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   when:'09:02', g:'今天', run:'fix', pin:true },
-  { id:'g', title:'重构支付回调',       last:'出错：找不到模块 stripe',              when:'08:41', g:'今天', run:null, status:'err' },
-  { id:'c', title:'整理本周迭代进度',   last:'还没开始',                            when:'昨天',  g:'昨天', run:null },
-  { id:'h', title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               when:'昨天',  g:'昨天', run:null, status:'run' },
-  { id:'d', title:'把 CSV 导入 Notion', last:'还没开始',                            when:'周三',  g:'本周', run:null },
-  { id:'f', title:'给 README 加安装说明', last:'已导出 Markdown',                   when:'上周四', g:'更早', run:null },
+  { id:'a', title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', when:'11:24', run:'gtm', pin:false },
+  { id:'b', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   when:'09:02', run:'fix', pin:true },
+  { id:'g', title:'重构支付回调',       last:'出错：找不到模块 stripe',              when:'08:41', run:null, status:'err' },
+  { id:'c', title:'整理本周迭代进度',   last:'还没开始',                            when:'昨天', run:null },
+  { id:'h', title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               when:'昨天', run:null, status:'run' },
+  { id:'d', title:'把 CSV 导入 Notion', last:'还没开始',                            when:'周三', run:null },
+  { id:'f', title:'给 README 加安装说明', last:'已导出 Markdown',                   when:'上周四', run:null },
   // Sessions a schedule produced. They get their own group because they
   // arrive while you are away -- mixed into 今天 they read as things you did.
   // Title is the job; the time badge tells the runs apart, so repeating it
   // in the title would just eat the width the title needs.
   { id:'k1', title:'昨日错误日志汇总', last:'3 类错误 · 支付回调占 68%',
-    when:'08:00', g:'今天', run:null, from:'cron', job:'j1' },
+    when:'08:00', run:null, from:'cron', job:'j1' },
   { id:'k2', title:'竞品动态', last:'网页搜索未配置，只抓到 1 家',
-    when:'昨天 19:00', g:'昨天', run:null, from:'cron', job:'j3', status:'err' },
+    when:'昨天 19:00', run:null, from:'cron', job:'j3', status:'err' },
   { id:'k3', title:'昨日错误日志汇总', last:'2 类错误',
-    when:'昨天 08:00', g:'昨天', run:null, from:'cron', job:'j1' }
+    when:'昨天 08:00', run:null, from:'cron', job:'j1' }
 ];
-const GROUPS = ['今天', '昨天', '本周', '更早'];
 
 /* ══ app state ════════════════════════════════════════════════════ */
 let cur = 'a', busy = false, timers = [], q = [], use = null, kids = [], tl = [], raw = [];
@@ -5313,7 +5312,13 @@ function drawList() {
   put(T('gui.rail.pinned'), rows.filter((s) => s.pin), null, null, 'pin');
   put(T('gui.rail.from_cron'), rows.filter((s) => !s.pin && s.from === 'cron'), openCron, 3, 'cron', true);
   const rest = rows.filter((s) => !s.pin && s.from !== 'cron');
-  put(T('gui.rail.recent'), GROUPS.flatMap((g) => rest.filter((s) => s.g === g)), null, 15, 'recent', true);
+  // Straight through, in the order SESS already holds: newest last activity
+  // first, which is the same value each row's clock shows. This used to be
+  // re-bucketed by a coarse day group, and since the day before yesterday
+  // shared its bucket with everything older than a week, a session answered
+  // two days ago sorted below one answered six days ago -- while its own
+  // clock said otherwise.
+  put(T('gui.rail.recent'), rest, null, 15, 'recent', true);
 }
 
 /* A title is whatever the prompt or the job name started with, and a leading
@@ -6706,7 +6711,7 @@ function answerBlock(text) {
       + '<circle cx="17" cy="8" r="2.2"/><path d="M7 8.2v7.6"/>'
       + '<path d="M17 10.2v1.3a3.5 3.5 0 0 1-3.5 3.5H10"/>', () => {
       const s = { id: 'n' + Date.now(), title: (sess(cur) ? sess(cur).title : '新任务') + ' 的分支',
-        last: '从上一轮回复分叉', when: '刚刚', g: '今天', run: null };
+        last: '从上一轮回复分叉', when: '刚刚', run: null };
       SESS.unshift(s); cur = s.id; drawList(); openSession(s); toast('已分叉出新会话');
     });
   }
@@ -9898,7 +9903,7 @@ function cronRow(j) {
 function openRun(j, run) {
   closeCron();
   const s = { id: 'n' + Date.now(), title: j.name, last: run.note,
-    when: run.at, g: '今天', run: run.ok ? 'gtm' : null, status: run.ok ? null : 'err',
+    when: run.at, run: run.ok ? 'gtm' : null, status: run.ok ? null : 'err',
     from: 'cron', job: j.id };
   SESS.unshift(s); cur = s.id; drawList(); openSession(s);
   if (!run.ok) {
@@ -9912,7 +9917,7 @@ function openRun(j, run) {
 function runNow(j) {
   closeCron();
   const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
-    g: '今天', run: null, from: 'cron', job: j.id };
+    run: null, from: 'cron', job: j.id };
   SESS.unshift(s); cur = s.id; drawList(); openSession(s);
   send(j.what);
   toast(T('gui.cron.running_x', { name: j.name }));
@@ -10369,7 +10374,7 @@ document.addEventListener('keydown', (e) => {
 
 $('#newBtn').onclick = () => {
   showPage(null);
-  const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', g: '今天', run: null };
+  const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', run: null };
   SESS.unshift(s); cur = s.id; drawList(); openSession(s); ta.focus();
 };
 $('#renameBtn').onclick = () => renameTitle();

@@ -187,7 +187,7 @@ const DAY = 86400000;
 /* A clock only earns its place on today's rows: further back, the day is what
    the reader is placing the session by, and "yesterday 22:07" spends four
    characters saying something they did not ask. */
-function whenGroup(epochS) {
+function whenLabel(epochS) {
   const d = new Date(epochS * 1000), now = new Date();
   const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const t = d.getTime();
@@ -196,11 +196,10 @@ function whenGroup(epochS) {
   const dated = d.getFullYear() === now.getFullYear()
     ? T('gui.time.md', parts)
     : T('gui.time.ymd', parts);
-  if (t >= day0) return { when: hm, g: '今天' };
-  if (t >= day0 - DAY) return { when: T('gui.time.yest'), g: '昨天' };
-  if (t >= day0 - 2 * DAY) return { when: T('gui.time.dbyest'), g: '更早' };
-  if (t >= day0 - 6 * DAY) return { when: dated, g: '本周' };
-  return { when: dated, g: '更早' };
+  if (t >= day0) return hm;
+  if (t >= day0 - DAY) return T('gui.time.yest');
+  if (t >= day0 - 2 * DAY) return T('gui.time.dbyest');
+  return dated;
 }
 
 /* Scheduled runs live in cron:<job_id> sessions with no title of their own;
@@ -220,7 +219,7 @@ function rowFrom(it) {
      answered, so labelling rows with their birthday put the clock and the
      order in disagreement. */
   const at = it.updated_at || it.started_at || 0;
-  const { when, g } = whenGroup(at);
+  const when = whenLabel(at);
   const cron = it.source === 'cron';
   const jobId = cron ? String(it.id).split(':').pop() : null;
   /* Cron turns open with the scheduler's "[Scheduled Task] Timer ..." wrapper;
@@ -236,7 +235,7 @@ function rowFrom(it) {
     title: (cron && cronNames[jobId]) || it.title || prev.slice(0, 24)
       || T('gui.sess.fallback_title', { id: String(it.id).split(':').pop().slice(0, 15) }),
     last: it.preview ? it.preview.slice(0, 60) : T('gui.sess.n_messages', { n: it.message_count }),
-    when, g, at, run: null, live: true, from: cron ? 'cron' : undefined,
+    when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned,
   };
 }
@@ -248,9 +247,7 @@ function touchSession(id) {
   const s = sess(id);
   if (!s) return;
   s.at = Math.floor(Date.now() / 1000);
-  const wg = whenGroup(s.at);
-  s.when = wg.when;
-  s.g = wg.g;
+  s.when = whenLabel(s.at);
   SESS.sort((a, b) => (b.at || 0) - (a.at || 0));
   drawList();
 }
@@ -263,7 +260,7 @@ async function loadSessions() {
   SESS = (r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0));
   if (!SESS.length) {
     SESS = [{ id: 'tui:default', title: T('gui.new_task'), last: T('gui.sess.not_started'),
-      when: T('gui.sess.just_now'), g: '今天', run: null, live: true }];
+      when: T('gui.sess.just_now'), run: null, live: true }];
   }
 }
 
@@ -625,7 +622,7 @@ function onEvent(ev) {
     const id = `cron:${p.job_id}`;
     let s = sess(id);
     if (!s) {
-      s = { id, title: p.name, last: '', when: T('gui.sess.just_now'), g: '今天',
+      s = { id, title: p.name, last: '', when: T('gui.sess.just_now'),
         at: Date.now() / 1000, run: null, live: true, from: 'cron' };
       SESS.unshift(s);
     }
@@ -1191,7 +1188,7 @@ send = function (text) {
   (async () => {
     const r = await rpc.call('session.create', {});
     const s = { id: r.session_id, title: T('gui.new_task'), last: T('gui.sess.not_started'),
-      when: T('gui.sess.just_now'), g: '今天', at: Math.floor(Date.now() / 1000), run: null, live: true };
+      when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true };
     SESS.unshift(s); cur = s.id; draft = false;
     turnOwner = cur;
     // The composer was owned by 'new' until this point; keep later keystrokes
@@ -1470,7 +1467,8 @@ runNow = function (j) {
 
 openRun = function (j) {
   closeCron();
-  const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '', g: '今天', run: null, live: true, from: 'cron' };
+  const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
+    at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' };
   if (!sess(s.id)) SESS.unshift(s);
   cur = s.id; drawList(); openSession(s);
 };
@@ -5129,7 +5127,8 @@ answerBlock = function (text, meta, anchor) {
         .then((r) => {
           if (!r.session_id) { toast('这个会话还没有内容，无法分叉'); return; }
           const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
-            last: T('gui.sess.branched'), when: T('gui.sess.just_now'), g: '今天', run: null, live: true };
+            last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
+            at: Math.floor(Date.now() / 1000), run: null, live: true };
           SESS.unshift(s); cur = s.id; drawList(); openSession(s);
           toast(`已分叉，带上了 ${r.message_count || 0} 条消息`);
         })
