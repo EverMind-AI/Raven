@@ -426,6 +426,14 @@ def _remember_session_model(loop: Any, session_key: str, model: str, provider_na
     Stored on the session record rather than in ``agents.defaults``: it is
     this conversation's model, and a new conversation must still start on the
     configured default.
+
+    Written in memory unconditionally, saved only for a session that already
+    has a file. ``session.create`` is lazy -- it mints a key and writes
+    nothing until the session's first real save -- so saving here would
+    manufacture a record with zero messages for anyone who runs ``/model``
+    before saying anything, and ``/sessions list`` would grow an untitled row
+    per switch. The choice still reaches disk: it rides the session's first
+    real save. ``session.title`` guards the identical case the same way.
     """
     sessions = getattr(loop, "sessions", None)
     if sessions is None:
@@ -435,7 +443,8 @@ def _remember_session_model(loop: Any, session_key: str, model: str, provider_na
         session.metadata["model"] = model
         if provider_name:
             session.metadata["provider"] = provider_name
-        sessions.save(session)
+        if sessions.exists(session_key):
+            sessions.save(session)
     except Exception:
         logger.warning("could not persist the model on session {!r}", session_key)
 

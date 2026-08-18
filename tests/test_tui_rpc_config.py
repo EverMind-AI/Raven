@@ -749,3 +749,38 @@ async def test_a_session_switch_always_applies_to_its_own_session(fake_home: Pat
         agent_loop_factory=lambda: _FakeLoop("old-prov", "old-model"),
     )
     assert result["applies_to_session"] is True
+
+
+async def test_a_model_switch_before_the_first_message_writes_no_session_file(tmp_path, monkeypatch) -> None:
+    """``session.create`` is lazy: it mints a key and writes nothing until the
+    session's first real save. Persisting the model here used to manufacture a
+    zero-message record, which ``/sessions list`` then showed as an untitled
+    row for every switch made before saying anything."""
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.config import _remember_session_model
+
+    sessions = SessionManager(tmp_path)
+    loop = SimpleNamespace(sessions=sessions)
+
+    _remember_session_model(loop, "tui:fresh", "vendor-a/model", "anthropic")
+
+    assert sessions.exists("tui:fresh") is False
+    assert [s for s in sessions.list_sessions() if s.get("session_key") == "tui:fresh"] == []
+    # In memory it is remembered, so the session's first real save carries it.
+    assert sessions.get_or_create("tui:fresh").metadata["model"] == "vendor-a/model"
+
+
+async def test_a_model_switch_on_a_saved_session_is_persisted_at_once(tmp_path) -> None:
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.config import _remember_session_model
+
+    sessions = SessionManager(tmp_path)
+    record = sessions.get_or_create("tui:saved")
+    sessions.save(record)
+    loop = SimpleNamespace(sessions=sessions)
+
+    _remember_session_model(loop, "tui:saved", "vendor-b/model", "openrouter")
+
+    reread = SessionManager(tmp_path).peek("tui:saved")
+    assert reread.metadata["model"] == "vendor-b/model"
+    assert reread.metadata["provider"] == "openrouter"
