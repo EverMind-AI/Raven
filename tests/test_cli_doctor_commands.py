@@ -744,3 +744,79 @@ def test_doctor_says_nothing_about_a_pin_that_matches_the_model(tmp_path, monkey
     monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
 
     assert _inspect_config_health(load_config(cfg), fix=False).findings == []
+
+
+def test_doctor_fix_reports_a_write_it_could_not_make(tmp_path, monkeypatch) -> None:
+    """A read-only home is a reason to say so, not to crash the health check --
+    the rest of the report is still worth printing."""
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+    monkeypatch.setattr(
+        "raven.cli.doctor_commands._write_config_preserving_mode",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("read-only file system")),
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert any("could not write the fix" in f for f in health.findings)
+    assert health.applied == []
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_the_fix_writer_survives_a_mode_it_cannot_read(tmp_path, monkeypatch) -> None:
+    """Preserving the mode is best-effort: a filesystem that will not answer
+    `stat` is not a reason to leave the fix unwritten."""
+    from raven.cli.doctor_commands import _write_config_preserving_mode
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("os.chmod", lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+
+    _write_config_preserving_mode(cfg, {"agents": {"defaults": {"model": "x/y"}}})
+
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["model"] == "x/y"
+
+
+def test_doctor_prints_the_config_section_it_found(tmp_path, monkeypatch, capsys) -> None:
+    """The renderer, not just the check: a finding nothing prints is a finding
+    the user never gets."""
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(
+            findings=["contextWindowTokens is pinned to 32,768"],
+            fixes=["remove agents.defaults.contextWindowTokens"],
+        ),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "Config" in out
+    assert "pinned to 32,768" in out
+    assert "raven doctor --fix" in out
+    assert "remove agents.defaults.contextWindowTokens" in out
+
+
+def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(applied=["remove agents.defaults.contextWindowTokens"]),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "fixed" in out
+    assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"
