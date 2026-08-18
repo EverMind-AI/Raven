@@ -160,8 +160,13 @@ class ToolRegistry:
         # A wasted turn is cheaper than a silent overwrite.
         truncation = run_meta.truncation if run_meta else None
         if truncation:
+            # The tail belongs here too, and this is the path it matters most on:
+            # ``flag_truncation`` reads ``arguments_repaired`` to reach its verdict
+            # and adds ``truncation`` to that same run_meta, so a streamed reply cut
+            # mid-arguments arrives carrying all three -- the flag, the verdict, and
+            # the parked text.
             hint = tool.truncation_hint
-            return truncation.as_error(name) + (f" {hint}" if hint else "")
+            return truncation.as_error(name) + (f" {hint}" if hint else "") + _received_tail(params)
         if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
             # Two facts, two readings, and nothing here to choose between them.
             # The arguments did not parse and nothing arrived after this call,

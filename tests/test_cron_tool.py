@@ -78,3 +78,29 @@ async def test_add_cron_expr_with_bad_tz_still_errors() -> None:
     result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz="Not/AZone")
     assert "unknown timezone" in result
     cron.add_job.assert_not_called()
+
+
+async def test_a_job_the_agent_creates_is_marked_as_delivering(tmp_path) -> None:
+    """The tool's own creation path has to pass the flag, not just accept it.
+
+    A store-level round-trip proves the field survives what it is handed and
+    says nothing about what the callers hand it. This merge dropped
+    ``deliver=True`` from all three non-RPC creation paths while the plumbing
+    below them was intact, which left the flag reading False for every reminder
+    the agent set up and True only for ones typed into a form -- a distinction
+    that describes which function ran, not anything about the job.
+    """
+    from pathlib import Path
+
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    service = CronService(Path(tmp_path) / "jobs.json")
+    tool = CronTool(service)
+    tool.set_context("tui", "default")
+
+    result = await tool.execute(action="add", message="drink water", every_seconds=3600)
+
+    assert result.startswith("Created job"), result
+    stored = service.list_jobs()
+    assert len(stored) == 1
+    assert stored[0].payload.deliver is True

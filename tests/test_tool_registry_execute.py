@@ -189,12 +189,14 @@ class TestUnparsableArguments:
     """A call whose arguments were not JSON must be told so.
 
     The loop parks the raw text under ``_raw_arguments`` and flags the call with
-    ``run_meta.arguments_repaired`` when ``json.loads`` fails; the refusal is
-    driven by the flag and quotes the parked text back. Reported through schema validation that reads as "missing required
-    path" -- and a caller told it forgot a field it did send re-sends the same
-    malformed JSON forever. One observed session burned eighteen tool calls in
-    this loop and the model ended up reasoning about ``_raw_arguments``, an
-    internal key it only ever saw because we invented it.
+    ``run_meta.arguments_repaired`` when ``json.loads`` fails; the refusal reads
+    the flag and quotes the parked text back.
+
+    Falling through to schema validation instead would report it as "missing
+    required path" -- and a caller told it forgot a field it did send re-sends
+    the same malformed JSON forever. One observed session burned eighteen tool
+    calls in this loop and the model ended up reasoning about
+    ``_raw_arguments``, an internal key it only ever saw because we invented it.
     """
 
     @pytest.mark.asyncio
@@ -257,6 +259,10 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
     assert "[truncated]" in out
     assert "4096-token output limit" in out
     assert "missing required" not in out
+    # flag_truncation reaches its verdict from arguments_repaired and adds
+    # truncation to that same run_meta, so this pairing is the ordinary streamed
+    # cut -- the parked text has to come back on this path as well.
+    assert '{"content": "def foo(' in out
     # The generic hint would still point at "try a different approach", which is
     # the advice that produced the retry loop.
     assert "different approach" not in out
