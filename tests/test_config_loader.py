@@ -260,9 +260,10 @@ def test_bad_config_warns_again_after_recovery(tmp_path: Path, capsys) -> None:
 # Pre-0.1.11 bootstraps dumped every schema default to disk, and back then
 # ``contextWindowTokens`` defaulted to 65536. A pin outranks the model's real
 # window by design, so on upgraded installs that fossil silently caps every
-# model at 64k. It is cleared once, under a ``configVersion`` stamp -- the
-# value itself carries no provenance, so the stamp is the only thing separating
-# "we planted this" from "the user chose this".
+# model at 64k. It is cleared once, under a watermark kept in a sidecar next to
+# the config (see ``_stamp_path``) -- the value itself carries no provenance, so
+# the watermark is the only thing separating "we planted this" from "the user
+# chose this".
 
 
 def _defaults(path: Path) -> dict:
@@ -481,3 +482,38 @@ def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
         loader.Path.write_text = original  # type: ignore[method-assign]
 
     assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)
+
+
+def test_save_config_writes_only_what_differs_from_the_defaults(tmp_path: Path) -> None:
+    """A dump of everything is lossless on reload, but it freezes today's
+    defaults into the user's file -- and then a default we improve later never
+    reaches anyone who already has one. `contextWindowTokens: 65536` got there
+    exactly this way."""
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+
+    p = tmp_path / "config.json"
+    save_config(Config(), p)
+
+    assert json.loads(p.read_text(encoding="utf-8")) == {}
+    assert p.stat().st_size < 100
+
+
+def test_save_config_keeps_every_value_the_user_chose(tmp_path: Path) -> None:
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+
+    p = tmp_path / "config.json"
+    chosen = Config.model_validate(
+        {"agents": {"defaults": {"model": "x/y"}}, "providers": {"anthropic": {"apiKey": "sk-a"}}}
+    )
+    save_config(chosen, p)
+
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written == {"agents": {"defaults": {"model": "x/y"}}, "providers": {"anthropic": {"apiKey": "sk-a"}}}
+    # And it reloads to the same config: dropping a value equal to its default
+    # is what makes this lossless.
+    reloaded = load_config(p)
+    assert reloaded.agents.defaults.model == "x/y"
+    assert reloaded.providers.get("anthropic").api_key == "sk-a"
+    assert reloaded.agents.defaults.max_tool_iterations == Config().agents.defaults.max_tool_iterations
