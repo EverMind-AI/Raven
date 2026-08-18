@@ -90,6 +90,17 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
   return t.muted
 }
 
+/** What a picker selection becomes on the command line.
+ *
+ * Its own function because the scope has to survive the trip: `/model --default`
+ * opens the picker, and a callback that dropped the flag here sent a
+ * session-scoped switch that looked like it had changed the default. The
+ * overlay value is passed in rather than read, so the rule can be pinned
+ * without mounting the app.
+ */
+export const modelSelectCommand = (model: string, providerSlug: string, pending: boolean | 'default'): string =>
+  `/model ${model} --provider ${providerSlug}${pending === 'default' ? ' --default' : ''}`
+
 export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -826,12 +837,11 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   const onModelSelect = useCallback(
     (model: string, providerSlug: string) => {
-      // Read the pending scope before clearing it: `/model --default` opens the
-      // picker, and without carrying the flag through here the selection was a
-      // session-scoped switch that looked like it had changed the default.
-      const asDefault = overlay.modelPicker === 'default'
+      // Read the pending scope before clearing it -- clearing first would make
+      // every selection session-scoped.
+      const command = modelSelectCommand(model, providerSlug, overlay.modelPicker)
       patchOverlayState({ modelPicker: false })
-      slashRef.current(`/model ${model} --provider ${providerSlug}${asDefault ? ' --default' : ''}`)
+      slashRef.current(command)
     },
     [overlay.modelPicker]
   )
