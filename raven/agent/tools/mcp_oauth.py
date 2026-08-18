@@ -34,7 +34,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 from urllib.parse import parse_qs, urlparse
 
 import portalocker
@@ -67,8 +67,23 @@ class OAuthUnavailableError(Exception):
 _callback_base: str | None = None
 _fallback_runner: Any = None
 
-_PENDING: dict[str, tuple[str, asyncio.Future]] = {}
-"""OAuth ``state`` -> (server name, future resolving to (code, state))."""
+
+class _Pending(NamedTuple):
+    """One in-flight browser round-trip.
+
+    ``url`` rides along because the authorization URL is otherwise reachable
+    only by whoever received the ``oauth.pending`` event: an in-process caller
+    that kicked the connect and now has to *tell someone* where to click (the
+    agent's ``plugin`` tool) has no event stream to read.
+    """
+
+    server: str
+    future: asyncio.Future
+    url: str
+
+
+_PENDING: dict[str, _Pending] = {}
+"""OAuth ``state`` -> the pending round-trip it will resolve."""
 
 
 def set_callback_base(base_url: str) -> None:
@@ -181,7 +196,7 @@ def resolve_callback(query: dict[str, Any]) -> tuple[bool, str]:
     entry = _PENDING.pop(state, None)
     if entry is None:
         return False, _page(False, "This authorization link is stale or was already used.")
-    server, fut = entry
+    server, fut = entry.server, entry.future
     if fut.done():
         return False, _page(False, "This authorization was already completed.")
     error = query.get("error")
@@ -359,9 +374,11 @@ class FileTokenStorage:
 class _Flow:
     """redirect/callback handler pair for ONE connect attempt.
 
-    ``interactive`` is whether a person asked for this connect. Only an explicit
-    one (``plug.install`` / ``plug.auth``) may take over the browser; a
-    background connect -- the lazy one every turn runs, a config reload -- still
+    ``interactive`` is whether a person asked for this connect *and is at this
+    host's screen*. Only an explicit request from the local surface
+    (``plug.install`` / ``plug.auth``) may take over the browser. Everything
+    else -- the lazy connect every turn runs, a config reload, and the agent's
+    ``plugin`` tool answering a request that arrived over a channel -- still
     mints the URL and publishes it, but leaves the opening to the user.
     """
 
@@ -391,7 +408,7 @@ class _Flow:
             raise OAuthUnavailableError("authorization URL carries no state parameter")
         # Register before the browser opens: the user can be faster than us.
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        _PENDING[state] = (self._server, fut)
+        _PENDING[state] = _Pending(self._server, fut, auth_url)
         self._state = state
         # The deadline travels with the invitation. A page that knows only "an
         # authorization is pending" cannot tell a flow still worth finishing
@@ -406,29 +423,24 @@ class _Flow:
             },
         )
         if not self._interactive:
-            # Nobody asked. Taking the screen for a third-party sign-in the user
-            # did not initiate is disproportionate, and on a gateway the host
-            # running this is not even the machine they are sitting at. The URL
-            # went out on the event above; the page offers it, they choose.
+            # Nobody at this screen asked. Taking it for a third-party sign-in
+            # the user did not initiate is disproportionate, and on a gateway the
+            # host running this is not even the machine they are sitting at --
+            # which holds for a request relayed through a turn too, however
+            # deliberate the person on the far end was. The URL went out on the
+            # event above; whoever is talking to them offers it, they choose.
             logger.info(
                 "MCP OAuth: '{}' needs authorization; not opening a browser for a background connect",
                 self._server,
             )
             return
-        import webbrowser
-
-        try:
-            opened = webbrowser.open(auth_url)
-        except Exception:  # noqa: BLE001 — headless hosts have no browser; the GUI still shows the URL
-            opened = False
-        if not opened:
-            logger.info("MCP OAuth: open this URL to authorize '{}': {}", self._server, auth_url)
+        open_browser(self._server, auth_url)
 
     async def callback(self) -> tuple[str, str | None]:
         state = self._state
         if state is None or state not in _PENDING:
             raise OAuthUnavailableError("no pending authorization for this flow")
-        _, fut = _PENDING[state]
+        fut = _PENDING[state].future
         try:
             code, got_state = await asyncio.wait_for(fut, timeout=OAUTH_FLOW_TIMEOUT)
         except asyncio.TimeoutError as e:
@@ -455,8 +467,8 @@ def cancel_pending(server: str) -> None:
     its tokens land but its commit is dropped, and the newer attempt stays
     blocked on a callback that will never come.
     """
-    for state in [s for s, (name, _) in _PENDING.items() if name == server]:
-        _, fut = _PENDING.pop(state)
+    for state in [s for s, entry in _PENDING.items() if entry.server == server]:
+        fut = _PENDING.pop(state).future
         if not fut.done():
             fut.set_exception(OAuthWaitTimeoutError("superseded by a newer authorization attempt"))
 
@@ -468,7 +480,37 @@ def auth_wait_servers() -> set[str]:
     the flow reaches the browser: from that point the connect blocks on the
     user, not on the network.
     """
-    return {server for server, _ in _PENDING.values()}
+    return {entry.server for entry in _PENDING.values()}
+
+
+def pending_url(server: str) -> str | None:
+    """The authorization URL ``server`` is currently parked on, if any.
+
+    For an in-process caller that has to hand the link to a person -- the agent
+    tool answering "connect asana" cannot wait for the click, so the URL is the
+    whole content of its answer. Event consumers get the same string on
+    ``oauth.pending``; this is the pull side of it.
+    """
+    return next((entry.url for entry in _PENDING.values() if entry.server == server), None)
+
+
+def open_browser(server: str, auth_url: str) -> bool:
+    """Hand one authorization URL to the browser on *this* host.
+
+    Reached only from an interactive :class:`_Flow`, which is what keeps the
+    decision to open in one place. Nothing else may call it: a caller holding a
+    URL for someone who is not at this screen -- the agent's ``plugin`` tool --
+    reports the link instead.
+    """
+    import webbrowser
+
+    try:
+        opened = webbrowser.open(auth_url)
+    except Exception:  # noqa: BLE001 — headless hosts have no browser; the URL is still reported
+        opened = False
+    if not opened:
+        logger.info("MCP OAuth: open this URL to authorize '{}': {}", server, auth_url)
+    return opened
 
 
 async def provider_for(
@@ -549,6 +591,8 @@ __all__ = [
     "credentials_path",
     "delete_credentials",
     "is_auth_error",
+    "open_browser",
+    "pending_url",
     "provider_for",
     "redirect_uri",
     "resolve_callback",

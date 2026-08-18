@@ -986,6 +986,14 @@ class AgentLoop:
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
+        # The plugin market, reachable from the conversation. Unconditional: the
+        # catalog ships in the wheel and the connection manager is this loop's
+        # own, so the only thing that ever made this impossible was the tool not
+        # existing -- an agent asked to connect an integration could reach the
+        # engine no other way than telling the user to go to the panel.
+        from raven.agent.tools.plughub import PluginTool
+
+        self.tools.register(PluginTool(loop=self))
         if self.cron_service:
             # Lazy import: CronTool lives under raven.proactive_engine.schedulers.cron.tool
             # which (a) imports raven.agent.tools.base, triggering raven.agent.__init__,
@@ -1883,7 +1891,8 @@ class AgentLoop:
         # capability.
         return [
             f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
-            f"absent from this turn's definitions until the user authorizes it in the plugin panel."
+            f"absent from this turn's definitions until it is authorized -- by the `plugin` "
+            f"tool's authorize action, or by the user in the plugin panel."
             for snap in mgr.status()
             if snap["state"] == "auth_required" and snap.get("enabled", True)
         ]

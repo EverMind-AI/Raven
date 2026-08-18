@@ -165,6 +165,32 @@ async def test_oauth_still_connecting_reports_pending(monkeypatch, _isolated):
     assert read_ledger("svc") is not None
 
 
+async def test_a_connect_parked_at_the_browser_is_pending_not_a_failure(monkeypatch, _isolated):
+    """`auth_required` means two different things, and only one of them is a
+    failure.
+
+    The manager moves a server there the moment its connect reaches the
+    browser-authorization step -- that is how every poller learns who the wait
+    is on -- so the state alone cannot tell a pending consent page from a
+    rejected credential. Reading it as failure rolled the transaction back while
+    the user's browser was still on the provider's consent screen: they got
+    "authentication failed" and no plugin, and completing the authorization then
+    had nothing to land against. The pending map is what separates the two.
+    """
+    entry = _entry("oauth")
+    _patch_catalog(monkeypatch, entry)
+    monkeypatch.setattr("raven.agent.tools.mcp_oauth.auth_wait_servers", lambda: {"svc"})
+    loop = _FakeLoop("svc", "auth_required")
+
+    r = await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
+
+    assert r["pending"] is True
+    assert r["installed"] is False
+    assert read_ledger("svc") is not None, "a pending authorization must keep its transaction"
+    assert _server_in_cfg(_isolated, "svc")
+    assert loop.mcp_manager.dropped == []
+
+
 async def test_oauth_auth_failure_rolls_back(monkeypatch, _isolated):
     entry = _entry("oauth")
     _patch_catalog(monkeypatch, entry)
@@ -226,8 +252,8 @@ async def test_auth_reconnects_one_server(_isolated, monkeypatch) -> None:
     connected: list[tuple] = []
 
     class _Manager(_FakeManager):
-        async def connect(self, name, cfg, *, executor_provider=None):
-            connected.append((name, executor_provider))
+        async def connect(self, name, cfg, *, executor_provider=None, interactive: bool = True):
+            connected.append((name, executor_provider, interactive))
             self.state = "connected"
             return {"name": name, "state": "connected", "tool_count": 3, "error": None}
 
@@ -241,6 +267,67 @@ async def test_auth_reconnects_one_server(_isolated, monkeypatch) -> None:
     # The executor provider has to be passed through, or a stdio server in a
     # sandbox connects without one.
     assert connected[0][1] is not None
+    # The panel's button is the one caller whose screen this is, so it keeps the
+    # browser -- the tool's own authorize passes False (test_plughub_tool.py).
+    assert connected[0][2] is True
+
+
+async def test_auth_returns_as_soon_as_the_flow_reaches_the_browser(_isolated, monkeypatch) -> None:
+    """Re-authorize used to sit out its whole 8s window on a browser round-trip
+    whose URL had already been published -- the answer the caller needed was
+    ready and withheld. Both kicks now end on the same park check."""
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+    )
+    parked: list[str] = []
+    monkeypatch.setattr(
+        "raven.agent.tools.mcp_oauth.pending_url",
+        lambda server: parked[0] if parked else None,
+    )
+
+    class _Manager(_FakeManager):
+        async def connect(self, name, cfg, *, executor_provider=None, interactive: bool = True):
+            parked.append("https://idp.example/authorize?state=new")
+            await asyncio.sleep(60)  # a real OAuth connect waits on the person
+            raise AssertionError("unreachable in this test")
+
+    loop = _FakeLoop("svc", "error")
+    loop.mcp_manager = _Manager("svc", "connecting")
+
+    t0 = asyncio.get_running_loop().time()
+    out = await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=_factory(loop))
+    elapsed = asyncio.get_running_loop().time() - t0
+
+    assert elapsed < 1.0, f"held the caller for {elapsed:.1f}s while parked on the user"
+    assert out["mcp"]["state"] == "connecting"
+
+
+async def test_auth_does_not_answer_with_the_link_it_is_about_to_supersede(_isolated, monkeypatch) -> None:
+    """Re-authorizing a server that is already parked mints a *new* link and kills
+    the old one. A wait that ends on "some authorization is pending" returned
+    before the new attempt had even taken the lock, so the caller got the link
+    that was seconds from refusing to redeem."""
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+    )
+    urls = ["https://idp.example/authorize?state=old"]
+    monkeypatch.setattr("raven.agent.tools.mcp_oauth.pending_url", lambda server: urls[-1] if urls else None)
+
+    class _Manager(_FakeManager):
+        async def connect(self, name, cfg, *, executor_provider=None, interactive: bool = True):
+            await asyncio.sleep(0.2)  # the handshake gets to the browser step
+            urls.append("https://idp.example/authorize?state=new")
+            await asyncio.sleep(60)
+            raise AssertionError("unreachable in this test")
+
+    loop = _FakeLoop("svc", "auth_required")
+    loop.mcp_manager = _Manager("svc", "auth_required")
+
+    await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=_factory(loop))
+
+    from raven.agent.tools.mcp_oauth import pending_url
+
+    assert pending_url("svc").endswith("state=new"), "returned on the superseded link"
 
 
 async def test_auth_refuses_a_disabled_server(_isolated) -> None:
