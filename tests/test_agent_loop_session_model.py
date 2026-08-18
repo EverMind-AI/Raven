@@ -519,6 +519,95 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
     assert not loop.has_session_binding("tui:a")
 
 
+def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
+    """A loop whose session store already holds someone's earlier choice."""
+    from raven.config.schema import Config
+    from raven.providers.pool import ProviderPool
+
+    cfg = Config()
+    cfg.agents.defaults.model = "claude-opus-4-5"
+    cfg.providers.anthropic.api_key = "sk-ant"
+    loop = AgentLoop(
+        provider=_Provider("boot"),
+        workspace=tmp_path,
+        model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
+        provider_pool=ProviderPool(cfg),
+    )
+    for key, metadata in stored.items():
+        record = loop.sessions.get_or_create(key)
+        record.metadata.update(metadata)
+        loop.sessions.save(record)
+    return loop
+
+
+async def test_a_channel_turn_restores_the_model_that_session_chose(tmp_path) -> None:
+    """The reason the read moved onto the loop. It used to hang off
+    ``session.resume``, so only the TUI got it: a conversation arriving from a
+    channel came back on the default after a restart, with its own choice
+    sitting unread in its own record. No resume call anywhere in this test.
+    """
+    loop = _restorable_loop(tmp_path, {"whatsapp:alice": {"model": "claude-sonnet-4-5", "provider": "anthropic"}})
+
+    seen: list[str] = []
+
+    async def body(*a, **k):
+        seen.append(loop.model)
+        return None
+
+    await _run(loop, "whatsapp:alice", body)
+
+    assert seen == ["claude-sonnet-4-5"]
+
+
+def test_the_stored_model_is_read_once_per_session(tmp_path) -> None:
+    """Most sessions never switched, and the miss has to be remembered too --
+    otherwise every turn of every unswitched conversation re-reads a record to
+    learn the same nothing.
+    """
+    loop = _restorable_loop(tmp_path, {"tui:a": {"model": "claude-sonnet-4-5", "provider": "anthropic"}})
+    reads: list[str] = []
+    real_peek = loop.sessions.peek
+
+    def counting_peek(key: str):
+        reads.append(key)
+        return real_peek(key)
+
+    loop.sessions.peek = counting_peek
+
+    for _ in range(3):
+        loop.session_model("tui:a")
+        loop.session_model("tui:never-switched")
+
+    assert reads == ["tui:a", "tui:never-switched"]
+
+
+def test_clearing_an_override_is_not_undone_by_the_stored_model(tmp_path) -> None:
+    """Dropping a session back to the default has to stick. Re-reading the
+    record on the next ask would restore the very choice just cleared.
+    """
+    loop = _restorable_loop(tmp_path, {"tui:a": {"model": "claude-sonnet-4-5", "provider": "anthropic"}})
+
+    assert loop.session_model("tui:a") == "claude-sonnet-4-5"
+    loop.clear_session_binding("tui:a")
+
+    assert loop.session_model("tui:a") == "boot/model"
+    assert not loop.has_session_binding("tui:a")
+
+
+def test_has_session_binding_sees_a_choice_that_only_exists_on_disk(tmp_path) -> None:
+    """``model.options`` asks this to decide whether to report the session's own
+    model or the configured default. Answered without the restore, a session
+    that switched before a restart is reported as having inherited the default,
+    and the picker stars the wrong row.
+    """
+    loop = _restorable_loop(tmp_path, {"tui:a": {"model": "claude-sonnet-4-5", "provider": "anthropic"}})
+
+    assert loop.has_session_binding("tui:a")
+    assert not loop.has_session_binding("tui:b")
+
+
 def test_has_session_binding_distinguishes_chosen_from_inherited(tmp_path) -> None:
     """``session_model`` falls back to the default, so it cannot answer this --
     and callers that override a forced provider need the difference.

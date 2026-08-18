@@ -1177,54 +1177,35 @@ async def test_session_info_without_a_session_reports_the_default() -> None:
     assert info["model"] == config.agents.defaults.model
 
 
-async def test_session_resume_puts_the_session_back_on_its_stored_model(tmp_path) -> None:
-    """The handler, not the helper: a resume that stops passing the session key
-    would leave every restored session on the default with the suite green.
+async def test_session_resume_reports_the_model_the_loop_restored(tmp_path) -> None:
+    """The handler no longer restores anything -- the loop reads the stored model
+    on first ask, which is what makes the choice survive on every surface and not
+    only on the one that calls this handler. What the handler still owes is
+    passing the session key down, so the bundle reports *this* session's model
+    instead of the configured default.
     """
-    from unittest.mock import MagicMock
-
     from raven.session.manager import SessionManager
     from raven.tui_rpc.methods.session import session_resume
 
     sessions = SessionManager(tmp_path)
     record = sessions.get_or_create("tui:a")
     record.metadata["model"] = "vendor-a/model"
-    record.metadata["provider"] = "anthropic"
     sessions.save(record)
 
-    restored: list[tuple[str, str, str | None]] = []
+    from unittest.mock import MagicMock
+
+    asked: list[str] = []
     loop = MagicMock()
     loop.sessions = sessions
     # A real id, not the MagicMock default: the init bundle resolves a window
     # from whatever the loop reports as its model.
     loop.model = "vendor-a/model"
-    loop.restore_session_model = lambda key, model, provider=None: restored.append((key, model, provider))
-    loop.session_model = lambda key: "vendor-a/model"
+    loop.session_model = lambda key: (asked.append(key), "vendor-a/model")[1]
 
-    await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+    result = await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
 
-    assert restored == [("tui:a", "vendor-a/model", "anthropic")]
-
-
-async def test_session_resume_without_a_stored_model_restores_nothing(tmp_path) -> None:
-    from unittest.mock import MagicMock
-
-    from raven.session.manager import SessionManager
-    from raven.tui_rpc.methods.session import session_resume
-
-    sessions = SessionManager(tmp_path)
-    sessions.save(sessions.get_or_create("tui:a"))
-
-    restored: list[object] = []
-    loop = MagicMock()
-    loop.sessions = sessions
-    loop.model = "vendor-a/model"
-    loop.restore_session_model = lambda *a, **k: restored.append(a)
-    loop.session_model = lambda key: "boot/model"
-
-    await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
-
-    assert restored == []
+    assert asked == ["tui:a"], "the handler stopped passing the session key down"
+    assert result["info"]["model"] == "vendor-a/model"
 
 
 async def test_session_branch_carries_the_parents_model_to_the_child(
