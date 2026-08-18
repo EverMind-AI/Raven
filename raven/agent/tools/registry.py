@@ -5,12 +5,31 @@ from contextvars import ContextVar
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
+from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
 # Where the agent loop parks a tool call's arguments when they do not parse as
 # JSON. Named here, next to the only code that must recognise it, so the two
 # ends cannot drift into reporting a parse failure as a missing field.
 RAW_ARGUMENTS_KEY = "_raw_arguments"
+
+
+def _received_tail(params: dict[str, Any]) -> str:
+    """The text the model actually emitted, for a call whose arguments did not parse.
+
+    Worth quoting back rather than only naming the fault. Reporting an unparsed
+    call through schema validation says "you forgot `path`", which is a lie the
+    caller acts on: it re-sends the same malformed JSON with the same field in
+    it, and loops -- eighteen calls in one observed session, the model
+    eventually theorising about ``_raw_arguments``, a key that exists only
+    because we put it there. Showing the text is what ends that.
+
+    Empty when the arguments parsed, so it can be appended unconditionally.
+    """
+    raw = str(params.get(RAW_ARGUMENTS_KEY) or "")
+    if not raw:
+        return ""
+    return f" Received: {raw[:400]}" + ("..." if len(raw) > 400 else "")
 
 
 class ToolRegistry:
@@ -108,27 +127,75 @@ class ToolRegistry:
         return [tool.to_schema() for tool in self._tools.values() if self.offers_on_this_channel(tool)]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
-    async def execute(self, name: str, params: dict[str, Any]) -> str:
-        """Execute a tool by name with given parameters."""
+    async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        run_meta: RunMeta | None = None,
+    ) -> str:
+        """Execute a tool by name with given parameters.
+
+        ``run_meta`` carries what happened around the call rather than what it
+        asks for -- today only whether it finished arriving, which changes what
+        a validation failure means. Keyword-only so the five call sites stay
+        self-describing and so a second field does not reorder anything.
+        """
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
         tool = self._tools.get(name)
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
-        # A call whose arguments would not parse arrives carrying the raw text
-        # instead of fields. Falling through to schema validation reports the
-        # fields as MISSING, which is a lie the caller acts on: it reads "you
-        # forgot `path`", re-sends the same malformed JSON with the same field
-        # in it, and loops -- eighteen calls in one observed session, the model
-        # eventually theorising about `_raw_arguments`, a key that only exists
-        # because we put it there. Say what actually happened instead.
-        if RAW_ARGUMENTS_KEY in params:
-            raw = str(params.get(RAW_ARGUMENTS_KEY) or "")
+        # Refused before dispatch, not after validation: a truncated call whose
+        # required fields happen to have arrived still validates, and running it
+        # executes an intent that was never fully transmitted. For write_file
+        # that is not merely an incomplete write -- `mode` is optional, so a cut
+        # before it arrives falls back to "overwrite" and silently replaces
+        # everything an earlier append had written, then reports success.
+        #
+        # The cost of being wrong here is one retry: a turn can end with a
+        # complete tool call and be cut in prose that follows it, which the
+        # non-streaming path cannot tell apart (see providers/truncation.py).
+        # A wasted turn is cheaper than a silent overwrite.
+        truncation = run_meta.truncation if run_meta else None
+        if truncation:
+            # The tail belongs here too, and this is the path it matters most on:
+            # ``flag_truncation`` reads ``arguments_repaired`` to reach its verdict
+            # and adds ``truncation`` to that same run_meta, so a streamed reply cut
+            # mid-arguments arrives carrying all three -- the flag, the verdict, and
+            # the parked text.
+            hint = tool.truncation_hint
+            return truncation.as_error(name) + (f" {hint}" if hint else "") + _received_tail(params)
+        if run_meta and run_meta.arguments_repaired and run_meta.last_of_turn:
+            # Two facts, two readings, and nothing here to choose between them.
+            # The arguments did not parse and nothing arrived after this call,
+            # which is the shape a cut leaves -- and equally the shape of a
+            # model writing bad JSON on its last call. Each reading gets its own
+            # branch rather than one being asserted: a model told to split up a
+            # call it merely misspelled goes looking for a size problem it does
+            # not have. Longer than a verdict, and the length is the point.
+            hint = tool.incomplete_hint
+            limit_branch = (
+                f"\n\nIf it was the output limit: {hint}"
+                if hint
+                else "\n\nIf it was the output limit: send this call again in a smaller form."
+            )
             return (
-                f"Error: The arguments for tool '{name}' were not valid JSON, so none of them were read. "
-                f"Re-send the call with a well-formed JSON object. Received: {raw[:400]}"
-                + ("..." if len(raw) > 400 else "")
+                f"Error: [incomplete arguments] The arguments for '{name}' did not parse, and it "
+                f"was the last call of the turn. Two things can cause that: the reply hit its "
+                f"output token limit part-way through writing this call, or the arguments were "
+                f"simply malformed. It was not run either way, and nothing here tells the two "
+                f"apart." + limit_branch + "\n\nIf the arguments were malformed: send the same "
+                "call again with well-formed arguments." + _received_tail(params)
+            )
+        if run_meta and run_meta.arguments_repaired:
+            # Calls arrived after this one, so a cut cannot explain it: the
+            # model wrote bad JSON. Telling it to send the content in smaller
+            # pieces would send it after a problem it does not have.
+            return (
+                f"Error: [invalid arguments] The arguments for '{name}' were not valid JSON, "
+                f"so this call was not run. Send it again with well-formed arguments." + _received_tail(params)
             )
 
         try:

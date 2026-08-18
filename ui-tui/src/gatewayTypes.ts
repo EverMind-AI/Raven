@@ -117,12 +117,12 @@ export interface SetupStatusResponse {
 // ── Session lifecycle ────────────────────────────────────────────────
 
 export interface SessionCreateResponse {
-  info?: SessionInfo & { config_warning?: string; credential_warning?: string }
+  info?: SessionInfo & { config_notices?: string[]; config_warning?: string; credential_warning?: string }
   session_id: string
 }
 
 export interface SessionResumeResponse {
-  info?: SessionInfo
+  info?: SessionInfo & { config_notices?: string[] }
   message_count?: number
   messages: GatewayTranscriptMessage[]
   resumed?: string

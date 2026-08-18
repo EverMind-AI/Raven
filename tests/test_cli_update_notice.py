@@ -164,21 +164,33 @@ def test_failed_refresh_still_backs_off_and_keeps_version(cache, monkeypatch):
 
 
 def test_successful_refresh_records_fetched_version(cache, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: _Release("0.3.0")))
+    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: "0.3.0"))
     un._refresh()
 
     saved = json.loads(cache.read_text(encoding="utf-8"))
     assert saved["latest_version"] == "0.3.0"
 
 
+def test_refresh_uses_the_quota_free_lookup(cache, monkeypatch):
+    # The daily check runs on every install behind a shared egress; routing it through
+    # the API is what drains the 60/hour unauthenticated bucket.
+    import raven.cli.upgrade_commands as upgrade
+
+    monkeypatch.setattr(upgrade, "_fetch_latest_release", _forbidden_api_call)
+    monkeypatch.setattr(upgrade, "fetch_latest_version", lambda: "0.4.0")
+    un._refresh()
+
+    saved = json.loads(cache.read_text(encoding="utf-8"))
+    assert saved["latest_version"] == "0.4.0"
+
+
+def _forbidden_api_call(*args, **kwargs):
+    raise AssertionError("the update notice must not touch the GitHub API")
+
+
 class _FakeThread:
     def start(self):  # noqa: D102 - test double
         pass
-
-
-class _Release:
-    def __init__(self, version: str) -> None:
-        self.version = version
 
 
 class _FakeUpgrade:
@@ -189,10 +201,8 @@ class _FakeUpgrade:
     def __init__(self, fetch) -> None:
         self._fetch = fetch
 
-    def fetch_latest_for_channel(self):  # noqa: D102 - test double
-        # The real one answers with the ordering to judge the release by; the
-        # refresh only stores a version string, so the second half goes unused.
-        return self._fetch(), self._version_key
+    def fetch_latest_version(self):  # noqa: D102 - test double
+        return self._fetch()
 
     def _version_key(self, value):  # noqa: D102 - test double
         raise RuntimeError(value)
@@ -235,7 +245,7 @@ def _speaking_fake(version: str) -> _FakeUpgrade:
     check_for_update compares versions after its fetch, so a fake that raises
     on comparison silences the very answer under test.
     """
-    fake = _FakeUpgrade(lambda: _Release(version))
+    fake = _FakeUpgrade(lambda: version)
     fake._version_key = lambda value: tuple(int(part) for part in value.lstrip("v").split("."))
     return fake
 
@@ -262,7 +272,7 @@ def test_check_for_update_respects_the_opt_out(cache, monkeypatch):
 
     def _fetch():
         fetched["n"] += 1
-        return _Release("0.9.9")
+        return "0.9.9"
 
     monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(_fetch))
 

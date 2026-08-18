@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.main import _is_hard_tool_failure
+from raven.agent.loop.failure_streak import is_hard_tool_failure
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -26,7 +26,7 @@ def workspace():
 
 
 # --------------------------------------------------------------------------- #
-# unit: _is_hard_tool_failure                                                  #
+# unit: is_hard_tool_failure                                                  #
 # --------------------------------------------------------------------------- #
 
 
@@ -46,7 +46,7 @@ def workspace():
     ],
 )
 def test_is_hard_tool_failure(result, expected):
-    assert _is_hard_tool_failure(result) is expected
+    assert is_hard_tool_failure(result) is expected
 
 
 # --------------------------------------------------------------------------- #
@@ -106,3 +106,54 @@ async def test_repeated_tool_failure_nudges_bounded(workspace):
 
     # A nudge fired (>=1 [loop] marker seen) but never exceeded the per-turn cap.
     assert max(provider.loop_marker_counts) == AgentLoop._LOOP_BREAK_MAX
+
+
+class _AlwaysTruncatedWriteProvider(LLMProvider):
+    """Every turn is cut off inside the same `write_file` call."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.nudges: list[str] = []
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        self.nudges.extend(str(m.get("content", "")) for m in messages if "[loop]" in str(m.get("content", "")))
+        if tools is None:  # max-iter synthesis call
+            return LLMResponse(content="done", finish_reason="stop")
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id=f"c{len(self.nudges)}", name="write_file", arguments={"path": "snake.py"})],
+            finish_reason="length",
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_truncation_streak_is_nudged_toward_a_smaller_payload(workspace):
+    """The class reaches the nudge from the loop, not only from a direct call.
+
+    The streak key is already `(tool, class)`; only `[0]` was being read, so a
+    per-class text is inert until the call site passes the rest of what it has.
+    """
+    provider = _AlwaysTruncatedWriteProvider()
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=6,
+        restrict_to_workspace=True,
+    )
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="write a long file",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.nudges, "two truncations running should have fired the loop break"
+    assert all("different tool" not in n for n in provider.nudges)
+    assert all("smaller" in n for n in provider.nudges)

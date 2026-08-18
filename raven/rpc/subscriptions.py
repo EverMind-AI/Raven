@@ -62,6 +62,17 @@ class SubscriptionEmitter:
         self._by_id: dict[str, Subscription] = {}
         # session_key -> events of the turn currently in flight, oldest first.
         self._replay: dict[str, list[dict[str, Any]]] = {}
+        self._startup_events: list[dict[str, Any]] = []
+
+    def queue_startup_event(self, event: dict[str, Any]) -> None:
+        """Buffer an event produced before any subscription exists.
+
+        Server bring-up (cron start, agent-loop build) precedes the client's
+        ``turn.subscribe``, so an ``emit`` at that point is a silent no-op.
+        Buffered events are flushed to the first subscription that registers,
+        then dropped — they are one-shot startup notices, not a replay log.
+        """
+        self._startup_events.append(event)
 
     async def register(self, session_key: str) -> str:
         """Create a subscription, start its coalesce loop, return the sub_id.
@@ -76,6 +87,9 @@ class SubscriptionEmitter:
         between them: an ``emit`` can only run at a suspension point, so it
         either lands before the copy (and is in it) or after the publish (and
         is queued behind it).
+
+        Any queued startup events are flushed to this subscription's session
+        if it is the first to register (see ``queue_startup_event``).
         """
         sub = Subscription(
             sub_id=uuid4().hex,
@@ -91,6 +105,10 @@ class SubscriptionEmitter:
         self._by_session.setdefault(session_key, []).append(sub)
         self._by_id[sub.sub_id] = sub
         sub.coalesce_task = asyncio.create_task(self._coalesce_loop(sub))
+        if self._startup_events:
+            pending, self._startup_events = self._startup_events, []
+            for event in pending:
+                await self.emit(session_key, event)
         return sub.sub_id
 
     async def unregister(self, sub_id: str) -> bool:

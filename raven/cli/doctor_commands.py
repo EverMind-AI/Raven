@@ -33,6 +33,8 @@ console = Console()
 class PathsInfo:
     config_path: str
     config_exists: bool
+    config_valid: bool = False
+    config_invalid_reason: str = ""
     workspace_path: str = ""
     workspace_exists: bool = False
 
@@ -48,6 +50,7 @@ class RoutingInfo:
 @dataclass
 class FeaturesInfo:
     channels_enabled: list[str] = field(default_factory=list)
+    channels_missing_deps: list[str] = field(default_factory=list)
     skill_forge_enabled: bool = False
 
 
@@ -70,10 +73,14 @@ class MemoryInfo:
     """
 
     backend: Optional[str] = None
+    root: Optional[str] = None
+    owned: bool = True
+    address: Optional[str] = None
     server_running: bool = False
     reports_capabilities: bool = False
     configured: list[str] = field(default_factory=list)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    retrieval: Optional[str] = None
 
     @property
     def unbuilt(self) -> list[str]:
@@ -119,6 +126,8 @@ class DoctorReport:
     def exit_code(self) -> int:
         if self.paths is None or not self.paths.config_exists:
             return 1
+        if not self.paths.config_valid:
+            return 1
         if not self.config_loaded:
             return 1
         if self.routing is None or self.routing.provider is None:
@@ -146,6 +155,23 @@ def _gather_static_checks() -> DoctorReport:
     if not paths.config_exists:
         return report
 
+    # Classify config validity with load_config's eyes: a syntax error, an
+    # empty file, and a non-object top level all mean no settings were read.
+    # Inspect the file directly -- load_config swallows syntax errors into
+    # defaults, and read_raw_or_raise folds the last two cases into {} for
+    # its read-modify-write callers, so neither can classify all three.
+    try:
+        text = config_path.read_text(encoding="utf-8")
+        data = json.loads(text) if text.strip() else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        paths.config_invalid_reason = "invalid JSON"
+    else:
+        if not text.strip():
+            paths.config_invalid_reason = "empty"
+        elif not isinstance(data, dict):
+            paths.config_invalid_reason = "not a JSON object"
+    paths.config_valid = not paths.config_invalid_reason
+
     try:
         config = load_config()
     except Exception:
@@ -156,11 +182,16 @@ def _gather_static_checks() -> DoctorReport:
     paths.workspace_path = str(workspace)
     paths.workspace_exists = workspace.exists()
 
+    from raven.providers.rates import resolve_max_output_tokens
+
     defaults = config.agents.defaults
     report.routing = RoutingInfo(
         model=defaults.model,
         provider=config.get_provider_name(),
-        max_tokens=defaults.max_tokens,
+        # What a request will actually carry, resolved the same way the
+        # provider resolves it -- doctor reporting a configured number that
+        # no longer exists would be reporting a setting, not the behaviour.
+        max_tokens=resolve_max_output_tokens(defaults.model),
         context_window_tokens=defaults.context_window_tokens,
     )
 
@@ -174,8 +205,11 @@ def _gather_static_checks() -> DoctorReport:
     except Exception:
         skill_forge_on = False
 
+    from raven.channels.manager import missing_dependency_channels
+
     report.features = FeaturesInfo(
         channels_enabled=enabled,
+        channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
 
@@ -201,7 +235,7 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
-    from raven.config.update_everos import everos_role_configured
+    from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
     from raven.plugin.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
@@ -209,11 +243,43 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
         probe_capabilities,
     )
 
-    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+    # Which memories, and whose. Neither was reachable from any command before:
+    # the wizard printed the path once while converging and nothing showed it
+    # again, so "where are my memories" had no answer short of reading
+    # config.json by hand. This is the place that question gets asked.
+    info.owned = everos_owned()
+    info.address = configured_base_url(config)
     report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
     info.capabilities = dict(report.capabilities)
+
+    if info.owned:
+        info.root = str(everos_root())
+        info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+        # Recall quality is decided by the embedding role in the user-level
+        # everos.toml: with it recall matches meaning, without it only keywords.
+        info.retrieval = "semantic" if "embedding" in info.configured else "keyword-only"
+        return info
+
+    # A root the user runs. Nothing here may come from the local filesystem:
+    # no root is recorded for it, so ``everos_root()`` would answer with the
+    # fallback -- a directory that is not theirs and holds none of their
+    # memories -- and the roles read out of that directory's toml would
+    # describe an install nobody is using. Reading their toml is not an option
+    # either; not touching it is the promise. What the server says about itself
+    # is the only honest source, and when it is down there is no source at all.
+    info.root = None
+    # Every section the server has an opinion about -- built or failed. Taking
+    # only the built ones made ``unbuilt`` (the failed subset of this list)
+    # structurally empty, so ``broken`` and the exit code could never fire and
+    # a server that could not build its LLM reported healthy. Raven cannot read
+    # their toml to learn what they configured, and does not need to: a section
+    # the server reports as unavailable is one it tried to build and could not.
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if report.available(s) is not None]
+    info.retrieval = None
+    if report.reports_capabilities:
+        info.retrieval = "semantic" if report.available("embedding") is True else "keyword-only"
     return info
 
 
@@ -236,6 +302,14 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
 
     if memory.backend != "everos":
         return
+    if memory.root:
+        console.print(f"  Memories:   {memory.root}")
+    if not memory.owned:
+        console.print(
+            "  [dim]Managed by you -- Raven reads it at the address below and never writes,\n"
+            "  starts or stops it, so it does not track where on disk it keeps them.[/dim]"
+        )
+    console.print(f"  Address:    {memory.address}")
     if not memory.server_running:
         console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
         if memory.configured:
@@ -303,10 +377,13 @@ def _render_human_output(report: DoctorReport) -> None:
     paths = report.paths
     assert paths is not None  # _gather_static_checks always populates this
     console.print("[bold]Paths[/bold]")
-    if paths.config_exists:
-        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
-    else:
+    if not paths.config_exists:
         console.print(f"  Config:    {paths.config_path}  [red]✗  (not found)[/red]")
+    elif not paths.config_valid:
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"  Config:    {paths.config_path}  [yellow]⚠  {reason} (running on defaults)[/yellow]")
+    else:
+        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
     if paths.config_exists:
         mark = "[green]✓[/green]" if paths.workspace_exists else "[red]✗[/red]"
         console.print(f"  Workspace: {paths.workspace_path}  {mark}")
@@ -316,7 +393,14 @@ def _render_human_output(report: DoctorReport) -> None:
         return
 
     if not report.config_loaded:
-        console.print("\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it.")
+        if paths.config_valid:
+            console.print(
+                "\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it."
+            )
+        else:
+            reason = paths.config_invalid_reason or "invalid JSON"
+            console.print(f"\n[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
+            console.print(f"Fix [cyan]{paths.config_path}[/cyan] or run [cyan]raven onboard --reset[/cyan].")
         return
 
     routing = report.routing
@@ -338,6 +422,11 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"  Channels:    {count} enabled  ({', '.join(features.channels_enabled)})")
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
+        if features.channels_missing_deps:
+            from raven.channels.manager import _missing_dep_hint
+
+            names = ", ".join(features.channels_missing_deps)
+            console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{_missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
 
@@ -356,6 +445,12 @@ def _render_human_output(report: DoctorReport) -> None:
     if memory is not None and memory.backend:
         console.print("\n[bold]Memory[/bold]")
         console.print(f"  Backend:    {memory.backend}")
+        if memory.retrieval == "semantic":
+            console.print("  Retrieval:  semantic")
+        elif memory.retrieval:
+            console.print("  Retrieval:  [dim]keyword-only  (no embedding key)[/dim]")
+        elif not memory.owned:
+            console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
 
     if report.probe is not None:
@@ -383,6 +478,10 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("Run [cyan]doctor --probe[/cyan] to send a test message and verify the LLM responds.")
         else:
             console.print("[green]✓ All checks passed.[/green]")
+    elif not paths.config_valid:
+        reason = paths.config_invalid_reason or "invalid JSON"
+        console.print(f"[yellow]⚠ Config file is {reason}; the checks above ran on built-in defaults.[/yellow]")
+        console.print(f"Fix [cyan]{paths.config_path}[/cyan] (JSON allows no comments or trailing commas).")
     elif routing and routing.provider is None:
         console.print(
             f"[red]✗ Model [bold]{routing.model}[/bold] could not be routed to any configured provider.[/red]"

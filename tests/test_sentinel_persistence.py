@@ -244,9 +244,9 @@ def test_cron_claim_prevents_concurrent_fire(tmp_state_dir: Path, monkeypatch):
         # Wait until the job is due, then tick both services.
         await asyncio.sleep(0.6)
         current_pid["val"] = 1000
-        await svc_a._on_timer()
+        await svc_a._process_due()
         current_pid["val"] = 2000
-        await svc_b._on_timer()
+        await svc_b._process_due()
 
     asyncio.run(drive())
 
@@ -330,7 +330,6 @@ def test_cron_channel_filter_routes_to_right_process(tmp_state_dir: Path, monkey
         name="reminder",
         schedule=CronSchedule(kind="at", at_ms=now_ms + 500),
         message="drink water",
-        deliver=True,
         channel="feishu",
         to="ou_xxx",
         delete_after_run=True,
@@ -343,10 +342,10 @@ def test_cron_channel_filter_routes_to_right_process(tmp_state_dir: Path, monkey
         await asyncio.sleep(0.6)
         # REPL ticks first, must skip the job.
         current_pid["val"] = 1000
-        await svc_repl._on_timer()
+        await svc_repl._process_due()
         # Gateway ticks, must claim it.
         current_pid["val"] = 2000
-        await svc_gw._on_timer()
+        await svc_gw._process_due()
 
     asyncio.run(drive())
 
@@ -354,22 +353,17 @@ def test_cron_channel_filter_routes_to_right_process(tmp_state_dir: Path, monkey
     assert fired_gw == [job.id], f"gateway must claim feishu job, got {fired_gw}"
 
 
-def test_cron_arm_timer_caps_sleep_for_peer_writes(tmp_state_dir: Path, monkeypatch):
-    """_arm_timer must cap sleep at _MAX_WAKE_INTERVAL_S so a peer process's
-    write to jobs.json gets picked up within that window — otherwise a
-    gateway armed for a far-future wake misses a sooner job added by REPL.
+def test_cron_wake_delay_caps_sleep_for_peer_writes(tmp_state_dir: Path):
+    """_compute_wake_delay must cap at _MAX_WAKE_INTERVAL_S so a peer
+    process's write to jobs.json gets picked up within that window —
+    otherwise a gateway parked on a far-future wake misses a sooner job
+    added by a peer.
     """
     from raven.proactive_engine.schedulers.cron import service as cron_service
 
     captured: list[float] = []
-
-    async def _recording_sleep(delay):
-        captured.append(delay)
-        raise asyncio.CancelledError  # abort the tick coroutine
-
-    async def _drive(scenario: str):
+    for scenario in ("no_jobs", "far_future"):
         svc = CronService(tmp_state_dir / f"{scenario}.json")
-        svc._running = True
         if scenario == "far_future":
             now_ms = int(time.time() * 1000)
             svc.add_job(
@@ -378,17 +372,7 @@ def test_cron_arm_timer_caps_sleep_for_peer_writes(tmp_state_dir: Path, monkeypa
                 message="x",
                 delete_after_run=True,
             )
-        monkeypatch.setattr(cron_service.asyncio, "sleep", _recording_sleep)
-        svc._arm_timer()
-        if svc._timer_task:
-            try:
-                await svc._timer_task
-            except asyncio.CancelledError:
-                pass
-        monkeypatch.undo()
-
-    asyncio.run(_drive("no_jobs"))
-    asyncio.run(_drive("far_future"))
+        captured.append(svc._compute_wake_delay())
 
     assert len(captured) == 2, captured
     for delay in captured:
@@ -677,5 +661,5 @@ def test_cron_stale_claim_is_stolen(tmp_state_dir: Path):
         captured.append(job.id)
 
     svc.on_job = cb
-    asyncio.run(svc._on_timer())
+    asyncio.run(svc._process_due())
     assert captured == ["j1"], f"expected stale claim stolen, got {captured}"

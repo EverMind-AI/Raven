@@ -130,17 +130,19 @@ async def test_fanout_cron_delivered_no_active_sessions() -> None:
 async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> None:
     """``_build_cron_callback_spine`` SHALL run the base callback (the spine
     submit + read-back) and fan its reply out as cron.delivered with the job's
-    metadata; a deliver=False job SHALL NOT fan out."""
+    metadata; a job whose turn produced no reply SHALL NOT fan out."""
     from types import SimpleNamespace
 
     from raven.cli.tui_commands import _build_cron_callback_spine
 
+    replies = {"j7": "reminder body", "j8": None}
+
     async def base_on_cron(job):
-        return "reminder body"  # the read-back reply
+        return replies[job.id]  # the read-back reply
 
     wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
 
-    job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(deliver=True))
+    job = SimpleNamespace(id="j7", name="standup")
     await wrapped(job)
 
     emitter_spy.emit.assert_awaited_once()
@@ -151,8 +153,106 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
     assert event["payload"]["text"] == "reminder body"
     assert event["payload"]["fired_at"]  # stamped by the wrapper
 
-    # deliver=False job: base runs (side-effects) but nothing is fanned out.
+    # No reply read back: base runs (side-effects) but nothing is fanned out.
     emitter_spy.emit.reset_mock()
-    silent = SimpleNamespace(id="j8", name="silent", payload=SimpleNamespace(deliver=False))
+    silent = SimpleNamespace(id="j8", name="silent")
     await wrapped(silent)
     emitter_spy.emit.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# cron.missed — startup notice for reminders dropped by the startup recompute
+# ---------------------------------------------------------------------------
+
+
+def test_cron_missed_event_pydantic_validates() -> None:
+    """``CronMissedEvent`` SHALL be a member of the ``TurnEvent`` discriminated
+    union with payload {count, items: [{name, scheduled_at, message}]}."""
+    from raven.rpc.models import CronMissedEvent
+
+    event = CronMissedEvent(
+        type="cron.missed",
+        payload={
+            "count": 2,
+            "items": [
+                {"name": "hydrate", "scheduled_at": "2026-06-04T10:23:00+00:00", "message": "记得喝水"},
+                {"name": "stretch", "scheduled_at": "2026-06-04T11:00:00+00:00", "message": "起来活动一下"},
+            ],
+        },
+    )
+    assert event.type == "cron.missed"
+    assert event.payload.count == 2
+    assert event.payload.items[0].name == "hydrate"
+    assert event.payload.items[0].scheduled_at == "2026-06-04T10:23:00+00:00"
+    assert event.payload.items[1].message == "起来活动一下"
+
+
+def test_cron_missed_event_in_turn_event_union() -> None:
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import CronMissedEvent, TurnEvent
+
+    adapter = TypeAdapter(TurnEvent)
+    parsed = adapter.validate_python(
+        {
+            "type": "cron.missed",
+            "payload": {
+                "count": 1,
+                "items": [{"name": "meds", "scheduled_at": "2026-06-04T08:00:00+00:00", "message": "吃药"}],
+            },
+        }
+    )
+    assert isinstance(parsed, CronMissedEvent)
+
+
+def _drop(name: str, message: str, at_ms: int):
+    from raven.proactive_engine.schedulers.cron.types import CronStartupDrop
+
+    return CronStartupDrop(name=name, message=message, at_ms=at_ms)
+
+
+async def test_fanout_cron_missed_active_session(emitter_spy: MagicMock) -> None:
+    """With an attached session, ``_fanout_cron_missed`` SHALL emit one
+    cron.missed event carrying every drop, scheduled_at as ISO-8601 UTC."""
+    from raven.cli.tui_commands import _fanout_cron_missed
+
+    await _fanout_cron_missed(
+        emitter_spy,
+        drops=[
+            _drop("hydrate", "记得喝水", 1_749_031_380_000),
+            _drop("stretch", "起来活动一下", 1_749_033_600_000),
+        ],
+    )
+
+    emitter_spy.emit.assert_awaited_once()
+    session_key, event = emitter_spy.emit.await_args.args
+    assert session_key == "sess_user_default"
+    assert event["type"] == "cron.missed"
+    assert event["payload"]["count"] == 2
+    assert [i["name"] for i in event["payload"]["items"]] == ["hydrate", "stretch"]
+    assert event["payload"]["items"][0]["message"] == "记得喝水"
+    assert event["payload"]["items"][0]["scheduled_at"] == "2025-06-04T10:03:00+00:00"
+
+
+async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
+    """With no subscription yet (server bring-up precedes turn.subscribe), the
+    event SHALL be queued on the emitter for the first registration instead of
+    being dropped like the cron.delivered no-subscriber no-op."""
+    from raven.cli.tui_commands import _fanout_cron_missed
+
+    emitter = MagicMock()
+    emitter._by_session = {}
+    emitter.emit = AsyncMock()
+
+    await _fanout_cron_missed(emitter, drops=[_drop("meds", "吃药", 1_749_024_000_000)])
+
+    emitter.emit.assert_not_awaited()
+    emitter.queue_startup_event.assert_called_once()
+    event = emitter.queue_startup_event.call_args.args[0]
+    assert event["type"] == "cron.missed"
+    assert event["payload"]["count"] == 1
+    assert event["payload"]["items"][0] == {
+        "name": "meds",
+        "scheduled_at": "2025-06-04T08:00:00+00:00",
+        "message": "吃药",
+    }

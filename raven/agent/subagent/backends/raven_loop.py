@@ -302,7 +302,7 @@ class RavenLoopBackend:
                     # something the sub-agent did, and it is the one a reader
                     # asking "what happened" most needs to see.
                     activity.note_tool_call(tool_call.name)
-                    result = await tools.execute(tool_call.name, tool_call.arguments)
+                    result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # The subagent's loop is an untrusted-data path too — fence its
                     # tool output like the main loop does in add_tool_result.
                     messages.append(

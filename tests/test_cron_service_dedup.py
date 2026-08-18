@@ -27,12 +27,12 @@ def svc(tmp_path: Path) -> CronService:
     return CronService(tmp_path / "jobs.json")
 
 
-def _add(svc, msg, schedule, *, channel="cli", to="direct", topic_tag=None):
+def _add(svc, msg, schedule, *, channel="tui", to="direct", topic_tag=None, deliver=False):
     return svc.add_job(
         name=msg[:30],
         schedule=schedule,
         message=msg,
-        deliver=True,
+        deliver=deliver,
         channel=channel,
         to=to,
         topic_tag=topic_tag,
@@ -82,7 +82,7 @@ def test_topic_tag_dedup_isolated_by_channel(svc):
         svc,
         "msg A",
         CronSchedule(kind="cron", expr="0 9 * * *"),
-        channel="cli",
+        channel="tui",
         to="alice",
         topic_tag="exercise",
     )
@@ -175,3 +175,45 @@ def test_topic_tag_dedup_runs_before_message_equal(svc):
         topic_tag="meds_morning",
     )
     assert j1.id == j2.id
+
+
+def test_topic_tag_dedup_takes_the_new_deliver_flag(svc):
+    """An in-place update has to carry the caller's flag, not the old one.
+
+    The dedup branches update a job the caller believes it is creating, so
+    every field the caller passed has to land. ``deliver`` did not: the branch
+    updated message, name and schedule and left the flag as first registered,
+    so a re-registration asking for delivery was silently answered with the
+    original value.
+    """
+    first = _add(svc, "take meds", CronSchedule(kind="every", every_ms=60_000), topic_tag="meds", deliver=False)
+    again = _add(svc, "take the meds", CronSchedule(kind="every", every_ms=90_000), topic_tag="meds", deliver=True)
+
+    assert again.id == first.id, "topic_tag dedup should have updated in place"
+    assert again.payload.deliver is True
+    assert svc.list_jobs()[0].payload.deliver is True
+
+
+def test_schedule_dedup_takes_the_new_deliver_flag(svc):
+    """The commonest re-registration path also has to carry the caller's flag.
+
+    A plain re-add of the same recurring schedule/channel/to carries no
+    topic_tag, so it lands on ``_find_duplicate_schedule`` rather than the
+    topic_tag branch. Reaching it needs the existing job's ``next_run_at_ms``
+    cleared: with a fire still scheduled, the 15-minute time-window layer above
+    matches first and returns without updating anything. That is the state this
+    layer is written for -- see its "already fired or was disabled" comment.
+    """
+    sched = CronSchedule(kind="every", every_ms=60_000)
+    first = _add(svc, "water", sched, deliver=False)
+    # Persisted, not just set: add_job reloads the store under its lock
+    # (``self._store = None``) on every call, so an in-memory edit is read back
+    # over and the assertion below would pass against the wrong branch.
+    first.state.next_run_at_ms = None
+    svc._save_store()
+
+    again = _add(svc, "drink water", sched, deliver=True)
+
+    assert again.id == first.id, "should have updated in place via schedule dedup"
+    assert again.payload.deliver is True
+    assert svc.list_jobs()[0].payload.deliver is True

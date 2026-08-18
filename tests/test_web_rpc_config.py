@@ -330,7 +330,9 @@ async def test_everos_get_set_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     # Nothing configured yet: every section present, secret shown as empty.
     got = await _dispatch(d, "raven.everos.get", {})
-    assert set(got["result"]["everos"]) == {"llm", "embedding", "rerank", "multimodal"}
+    from raven.config.update_everos import WRITABLE_SECTIONS
+
+    assert set(got["result"]["everos"]) == set(WRITABLE_SECTIONS)
     assert got["result"]["everos"]["llm"]["api_key"] == "(empty)"
 
     res = await _dispatch(
