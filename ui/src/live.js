@@ -1848,6 +1848,18 @@ function redrawAll() {
   try { drawCaps(); } catch { /* extensions not loaded yet */ }
   try { drawConn(); } catch { /* channels not loaded yet */ }
   try { drawCron(); } catch { /* schedules not loaded yet */ }
+  try { drawXa(); } catch { /* agents not loaded yet */ }
+  try { drawMem(); } catch { /* memory not loaded yet */ }
+  // The More rows are redrawn on each open, so only a group standing open at
+  // the moment of the flip keeps the old names.
+  drawMoreFly();
+  /* The shared drawer is closed rather than redrawn: it is not on any page, so
+     nothing above reaches it, and every one of its five openers would have to
+     hand back the subject it was drawn from. Left open it would sit in the old
+     language over a page now in the new one, which reads worse than losing the
+     place -- and only the settings dialog, which the flip is made from, is
+     above it. */
+  closeDetail();
   const p = $('#stage').querySelector('.pitch');
   if (p) { p.remove(); pitch(); }
   /* The transcript writes its words into the DOM as it renders -- fold headers,
