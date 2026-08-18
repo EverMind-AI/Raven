@@ -87,6 +87,9 @@ def test_set_provider_reaches_every_holder() -> None:
     loop._provider_pool = None
     loop._default_binding = ModelBinding(_Provider("old"), "old-model")
     loop._session_bindings = {}
+    loop._configured_window = None
+    loop._image_tool_result_ok = {}
+    loop._vision_ok = {}
 
     new_provider = _Provider("new-provider")
     loop.set_provider(new_provider, NEW_MODEL)
@@ -138,6 +141,62 @@ def test_fan_out_targets_still_exist_on_a_real_loop(tmp_path) -> None:
         holder = getattr(loop, attr, None)
         assert holder is not None, f"AgentLoop.{attr} is gone; set_provider still fans out to it"
         assert callable(getattr(holder, "set_provider", None)), f"AgentLoop.{attr} lost set_provider"
+
+
+# ---------------------------------------------------------------------------
+# Capability verdicts cached across a switch
+# ---------------------------------------------------------------------------
+
+
+def test_a_new_binding_forgets_the_old_transport_verdicts(tmp_path) -> None:
+    """Both caches key on a model id but are computed from the provider, so a
+    rebuild that keeps the id would keep answering with the old endpoint's
+    verdict. The reachable case is an ``apiBase`` repointed at a box with
+    different capabilities: the id does not move, so nothing else invalidates
+    them, and images stay dropped from tool results for the life of the process
+    with nothing in the log to say why.
+    """
+    loop = _loop(tmp_path)
+    loop._image_tool_result_ok["custom/my-model"] = False
+    loop._vision_ok["custom/my-model"] = False
+
+    loop.set_default_binding(ModelBinding(_Provider("rebuilt"), "custom/my-model"))
+
+    assert loop._image_tool_result_ok == {}
+    assert loop._vision_ok == {}
+
+
+def test_a_session_switch_forgets_them_too(tmp_path) -> None:
+    """The session-scoped path rebuilds a provider exactly as the default one
+    does, and the cache key does not record which provider answered.
+    """
+    loop = _loop(tmp_path)
+    loop._image_tool_result_ok["custom/my-model"] = False
+    loop._vision_ok["custom/my-model"] = False
+
+    loop.set_session_binding("tui:a", ModelBinding(_Provider("rebuilt"), "custom/my-model"))
+
+    assert loop._image_tool_result_ok == {}
+    assert loop._vision_ok == {}
+
+
+def test_a_pair_free_switch_keeps_a_window_the_user_pinned(tmp_path) -> None:
+    """``set_provider`` builds the binding itself, so it is the one path that
+    can drop a pinned window on the floor.
+    """
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/model",
+        context_window_tokens=32768,
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(),
+    )
+
+    loop.set_provider(_Provider("new"), NEW_MODEL)
+
+    assert loop.default_binding.configured_window == 32768
+    assert loop.context_window_tokens == 32768
 
 
 def test_assembler_forwards_to_llm_backed_builders_only() -> None:

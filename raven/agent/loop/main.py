@@ -360,6 +360,9 @@ class AgentLoop:
         # by model, not a single flag: the loop is a long-lived singleton and
         # takes a per-call model (strategies rewrite it, and the model chain
         # falls back), so one model's verdict must not answer for another's.
+        # Keyed by model but *computed from the provider*, so a rebuild that
+        # keeps the model id would keep serving the old transport's verdict --
+        # ``_forget_transport_verdicts`` is what the binding setters call.
         self._image_tool_result_ok: dict[str, bool] = {}
         self._vision_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
@@ -713,10 +716,28 @@ class AgentLoop:
         parking is needed to arrange that.
         """
         self._session_bindings[session_key] = binding
+        self._forget_transport_verdicts()
 
     def clear_session_binding(self, session_key: str) -> None:
         """Drop a session's override so it follows the default again."""
         self._session_bindings.pop(session_key, None)
+
+    def _forget_transport_verdicts(self) -> None:
+        """Drop the capability verdicts a new provider may answer differently.
+
+        Both caches key on a model id but are computed from the provider serving
+        it, so a rebuild that keeps the id keeps the old endpoint's answer. The
+        reachable case is an ``apiBase`` repointed at a box with different
+        capabilities, or a re-authenticated provider: the credentials
+        fingerprint changes, the pool builds a new provider, the model id does
+        not move -- and images stay dropped from tool results for the life of
+        the process, with nothing in the log to say why.
+
+        Cleared wholesale rather than per binding: the loop now holds several
+        providers at once, and the key does not say which one answered.
+        """
+        self._image_tool_result_ok.clear()
+        self._vision_ok.clear()
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
@@ -727,16 +748,22 @@ class AgentLoop:
         have no binding to read.
         """
         self._default_binding = binding
+        self._forget_transport_verdicts()
         self.subagents.set_provider(binding.provider, binding.model)
         self.context_engine.set_provider(binding.provider, binding.model)
         self.memory_consolidator.set_provider(binding.provider, binding.model)
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
-        """Change the default binding. Kept for callers that are not
-        session-aware (the gateway, a CLI one-shot); the session-scoped path
-        is ``set_session_binding``.
+        """Change the default binding, from a pair a caller already built.
+
+        No production caller today -- every switch path goes through the pool
+        and lands on ``set_default_binding`` or ``set_session_binding``. Kept as
+        the pair-free entry point for an embedder that has a provider in hand,
+        which is why it carries ``_configured_window`` forward: a window the
+        user pinned belongs to whatever they run, and building the binding
+        without it here would drop it the day this grows a caller.
         """
-        self.set_default_binding(ModelBinding(provider, model))
+        self.set_default_binding(ModelBinding(provider, model, self._configured_window))
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
