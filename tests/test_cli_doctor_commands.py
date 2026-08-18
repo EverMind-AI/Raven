@@ -664,3 +664,83 @@ class TestASelfManagedServerCanStillBeBroken:
 
         assert "rerank" not in info.configured
         assert "rerank" not in info.unbuilt
+
+
+# ── raven doctor --fix ──────────────────────────────────────────────────
+#
+# The migrations run at load, so nothing is ever "pending" by the time this
+# command looks. What is left to ask about is what they deliberately do not
+# decide: a window the user pinned below what the model holds, and a provider
+# nothing could resolve. Both are legitimate configurations, which is why they
+# are reported and only written with --fix.
+
+
+def _pinned_config(home: Path, **defaults: object) -> Path:
+    cfg = home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps(
+            {
+                "providers": {"anthropic": {"apiKey": "sk-a"}},
+                "agents": {
+                    "defaults": {
+                        "model": "anthropic/claude-opus-4-5",
+                        "provider": "anthropic",
+                        **defaults,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_doctor_reports_a_pin_that_caps_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("32,768" in f and "1,000,000" in f for f in health.findings)
+    assert health.fixes and not health.applied
+    # Reported only: no consent, no write.
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_doctor_fix_removes_the_pin_and_keeps_the_file_mode(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    cfg.chmod(0o600)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert health.applied and not health.fixes
+    assert "contextWindowTokens" not in json.loads(cfg.read_text())["agents"]["defaults"]
+    # config.json holds providers.*.apiKey, so a replacing writer owns the mode.
+    assert cfg.stat().st_mode & 0o777 == 0o600
+
+
+def test_doctor_says_nothing_about_a_pin_that_matches_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=1_000_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    assert _inspect_config_health(load_config(cfg), fix=False).findings == []
