@@ -11,6 +11,7 @@ Spec source:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -287,7 +288,7 @@ def _workspace_cfg(tmp_path, *, restrict: bool = True):
     from unittest.mock import MagicMock
 
     cfg = MagicMock()
-    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.workspace_path = Path(tmp_path)
     cfg.tools.restrict_to_workspace = restrict
     return patch("raven.config.load_config", return_value=cfg)
 

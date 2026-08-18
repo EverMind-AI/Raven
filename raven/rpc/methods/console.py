@@ -1071,16 +1071,38 @@ def _safe_name(name: str) -> str:
     return (cleaned or "file")[:120]
 
 
+def _upload_root() -> Path:
+    """Where an uploaded file is deposited: agent home, not the session workdir.
+
+    The relative path this handler returns rides back to ``turn.send``, which
+    resolves an attachment against agent home and fences it there, so a file
+    parked anywhere else is dropped from the turn without an error. Agent home
+    is also the one root always writable: a session's working directory is
+    wherever the engine was launched from, and an engine started by the desktop
+    shell inherits ``/``, where creating the directory cannot succeed.
+
+    Browsing is the other way round on purpose -- ``fs.list`` / ``fs.read`` /
+    ``fs.reveal`` stay rooted at the session's working directory, because the
+    panel shows where this session's turns read and write.
+    """
+    from raven.config.loader import load_config
+
+    return Path(load_config().workspace_path).expanduser().resolve()
+
+
 async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
-    """Store an uploaded file under ``<workspace>/uploads`` and return its path.
+    """Store an uploaded file under ``<agent home>/uploads`` and return its path.
 
     The caller hands the agent a path, not bytes: every tool that reads files is
     already workspace-scoped, so an upload is just a file appearing in the
     workspace. Collisions get a numeric suffix rather than overwriting.
+
+    ``session`` is still accepted (the page sends it) but does not select the
+    root -- see :func:`_upload_root`.
     """
     import base64
 
-    root = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or ""))
+    root = _upload_root()
     raw = params.get("content_b64") or ""
     try:
         data = base64.b64decode(raw, validate=True)
@@ -1092,7 +1114,12 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         raise ConfigValidationError(f"file exceeds {_FS_MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
 
     target_dir = root / _UPLOAD_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # Guarded like the write below: unguarded, an unwritable root reached
+        # the page as a bare -32603 ``internal_error`` with no reason in it.
+        raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
     target = target_dir / name
     stem, suffix = target.stem, target.suffix
@@ -1129,7 +1156,14 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         raise ConfigValidationError("path is required")
     p = Path(raw).expanduser()
     if not p.is_absolute():
-        p = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
+        # The session's working directory first, since that is what the file
+        # panel lists; agent home second, by handing the relative path to
+        # ``resolve_readable``, which roots it there. Both are needed because
+        # the page sends one string to two surfaces: the panel's own rows are
+        # relative to the workdir, while an uploaded attachment's chip carries
+        # ``uploads/<name>``, and only agent home holds that.
+        listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
+        p = listed if listed.exists() else Path(raw)
     try:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:

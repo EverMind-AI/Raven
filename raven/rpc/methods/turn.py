@@ -17,7 +17,6 @@ single-argument dispatcher handlers.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -65,7 +64,12 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
 
     try:
         cfg = load_config()
-        workspace = Path(cfg.agents.defaults.workspace).expanduser()
+        # Through ``workspace_path``, not the raw field: the declared default is
+        # a literal that the property resolves against ``RAVEN_HOME``, and
+        # ``fs.upload`` deposits through that same property. Reading the field
+        # directly put a second home's attachments under the first home's
+        # workspace, where nothing resolved.
+        workspace = cfg.workspace_path
         allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
     except Exception as exc:
         logger.warning("turn.send: cannot resolve the workspace ({}); attachments dropped", exc)

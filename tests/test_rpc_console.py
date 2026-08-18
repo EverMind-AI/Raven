@@ -539,13 +539,26 @@ async def test_fs_list_asks_for_the_named_session(tmp_path: Path) -> None:
     assert [e["name"] for e in r["entries"]] == ["pinned.txt"]
 
 
-async def test_fs_upload_lands_in_the_session_workdir(tmp_path: Path) -> None:
-    """The uploaded file is handed to the agent as a relative path, so it has to
-    land under the directory the agent's tools resolve relative paths against."""
+def _agent_home(monkeypatch, home: Path):
+    """Point ``_upload_root`` at ``home``. Patched on the loader module because
+    the handler imports the name inside the function."""
+    from raven.config import loader as config_loader
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(workspace_path=str(home)))
+
+
+async def test_fs_upload_lands_in_agent_home_not_the_session_workdir(tmp_path: Path, monkeypatch) -> None:
+    """The relative path this returns rides back to ``turn.send``, which resolves
+    an attachment against agent home and fences it there. Deposited in the
+    session's working directory instead, the file exists and the turn still drops
+    it, so the reader hands over an attachment the model never sees."""
     import base64
 
+    home = tmp_path / "home"
+    home.mkdir()
     launch = tmp_path / "proj"
     launch.mkdir()
+    _agent_home(monkeypatch, home)
     loop = _WorkdirLoop({}, launch)
 
     r = await console_module.fs_upload(
@@ -553,8 +566,53 @@ async def test_fs_upload_lands_in_the_session_workdir(tmp_path: Path) -> None:
         agent_loop_factory=_loop_factory(loop),
     )
 
-    assert r["abs_path"] == str(launch.resolve() / "uploads" / "pic.png")
-    assert (launch / "uploads" / "pic.png").read_bytes() == b"bytes"
+    assert r["path"] == "uploads/pic.png"
+    assert r["abs_path"] == str(home.resolve() / "uploads" / "pic.png")
+    assert (home / "uploads" / "pic.png").read_bytes() == b"bytes"
+    assert not (launch / "uploads").exists()
+
+
+async def test_fs_upload_survives_a_session_workdir_that_takes_no_files(tmp_path: Path, monkeypatch) -> None:
+    """The reported break: the page's engine launched by the desktop shell
+    inherits ``/`` as its working directory, so an upload rooted there died on
+    ``mkdir`` and reached the composer as a bare ``internal_error``."""
+    import base64
+
+    home = tmp_path / "home"
+    home.mkdir()
+    unwritable = tmp_path / "not-a-dir" / "sub"
+    (tmp_path / "not-a-dir").write_text("x")
+    _agent_home(monkeypatch, home)
+    loop = _WorkdirLoop({}, unwritable)
+
+    r = await console_module.fs_upload(
+        {"name": "image.png", "content_b64": base64.b64encode(b"bytes").decode(), "session": "web:1"},
+        agent_loop_factory=_loop_factory(loop),
+    )
+
+    assert (home / "uploads" / "image.png").read_bytes() == b"bytes"
+    assert r["path"] == "uploads/image.png"
+
+
+async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path, monkeypatch) -> None:
+    """An unwritable agent home is a real configuration, and the page can only
+    report what the error carries: unguarded, ``mkdir`` escaped as -32603 with
+    the reason only in the server log."""
+    import base64
+
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "file" / "home"
+    (tmp_path / "file").write_text("x")
+    _agent_home(monkeypatch, home)
+
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await console_module.fs_upload(
+            {"name": "pic.png", "content_b64": base64.b64encode(b"bytes").decode()},
+            agent_loop_factory=None,
+        )
+
+    assert "uploads" in str(excinfo.value)
 
 
 async def test_fs_root_survives_a_loop_without_the_resolver(tmp_path: Path) -> None:
@@ -589,6 +647,32 @@ async def test_fs_reveal_selects_the_file_in_the_host_file_manager(
 
     loop = _WorkdirLoop({}, launch)
     r = await console_module.fs_reveal({"path": "report.md"}, agent_loop_factory=_loop_factory(loop))
+
+    assert r == {"ok": True}
+    assert spawned == [["open", "-R", str(target.resolve())]]
+
+
+async def test_fs_reveal_finds_an_uploaded_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page sends one string to two surfaces. A panel row is relative to the
+    session's working directory; an attachment chip carries ``uploads/<name>``,
+    which only agent home holds -- so rooting at the workdir alone made Reveal
+    fail on the very file the viewer had just rendered from that same string."""
+    home = tmp_path / "raven-home"
+    (home / "workspace" / "uploads").mkdir(parents=True)
+    target = home / "workspace" / "uploads" / "doc.pdf"
+    target.write_bytes(b"%PDF-1.4 x")
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    r = await console_module.fs_reveal(
+        {"path": "uploads/doc.pdf", "session": "web:1"}, agent_loop_factory=_loop_factory(loop)
+    )
 
     assert r == {"ok": True}
     assert spawned == [["open", "-R", str(target.resolve())]]
