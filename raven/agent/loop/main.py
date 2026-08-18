@@ -302,12 +302,16 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
         return None
 
 
-_MCP_TURN_WAIT_S = 20.0
+_MCP_TURN_WAIT_S = 90.0
 """How long a turn waits for the first MCP sync before proceeding without it.
 
-Long enough for local stdio servers to hand over their tool lists, short enough
-that a server parked on an authorization nobody answered does not become the
-reader's wait. See ``AgentLoop._connect_mcp``.
+Mirrors the manager's own per-handshake budget (``_HANDSHAKE_TIMEOUT``), so a
+cold stdio server downloading its package on first run still makes it into the
+very turn a user sends after installing it. The sync no longer includes anyone
+waiting on a person -- a connect that reaches the browser-authorization step is
+marked ``auth_required`` and left behind by the sync itself -- and it connects
+servers concurrently, so in practice this bound is the slowest single
+handshake, not a sum. See ``AgentLoop._connect_mcp``.
 """
 
 
@@ -585,6 +589,7 @@ class AgentLoop:
             # Late-bound: the playbook runtime is built after the context
             # engine, and the library can change between turns.
             playbook_listing=lambda: self._playbooks.listing() if self._playbooks is not None else [],
+            get_tool_notices=self._mcp_tool_notices,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
             # SkillForgeRouter + EverOS recall lane.
@@ -1795,19 +1800,45 @@ class AgentLoop:
             )
         return self._mcp_manager
 
+    def _mcp_tool_notices(self) -> list[str]:
+        """Host facts about MCP tools the definitions cannot carry.
+
+        One line per enabled server sitting in ``auth_required``: its tools are
+        not in the definitions at all, so without this the model reads an
+        unauthorized plugin as a capability that does not exist and says so.
+        Rendered into the runtime-context block, not the system prompt -- the
+        set changes turn to turn and must never be cached with the prefix.
+        """
+        # getattr: the engine factory takes this callable during __init__,
+        # before the manager attribute is assigned further down.
+        mgr = getattr(self, "_mcp_manager", None)
+        if mgr is None:
+            return []
+        # Stated as fact, not as a directive: this block's own header says
+        # "metadata only, not instructions", and the model is told to treat it
+        # that way -- an imperative here would be either ignored or a fence
+        # violation. The fact alone is enough to stop it reporting a missing
+        # capability.
+        return [
+            f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
+            f"absent from this turn's definitions until the user authorizes it in the plugin panel."
+            for snap in mgr.status()
+            if snap["state"] == "auth_required" and snap.get("enabled", True)
+        ]
+
     async def _connect_mcp(self, *, wait: float | None = None) -> None:
         """Connect to configured MCP servers (one-time, lazy).
 
         ``wait`` bounds how long the CALLER blocks, not how long the connect
         gets: past it the sync keeps running and its tools land in the registry
-        for the next turn. A turn passes one because a server parked at the
-        browser-authorization step is waiting on a person, for up to
-        ``OAUTH_FLOW_TIMEOUT``, and the manager connects servers one after
-        another -- so one unanswered park held every later server and the
-        message behind them. Measured at 10m35s from send to the first model
-        call, on a park nobody had been shown.
+        for the next turn. The manager already refuses to wait on a person --
+        a connect that reaches the browser-authorization step is marked
+        ``auth_required`` and the sync moves on without it -- so this bound
+        only covers real handshakes, and it matches their own budget. It
+        exists because one wedged sync once held a message for 10m35s, and a
+        turn must never inherit a wait like that whatever the cause.
 
-        Left unbounded for a caller that has nothing else to do (``_start``),
+        Left unbounded for a caller that has nothing else to do (``run()``),
         which also keeps SandboxInitError reaching its handler there.
         """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:

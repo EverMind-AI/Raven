@@ -239,8 +239,16 @@ def build_runtime_context(
     now_fn: Callable[[], datetime],
     channel: str | None,
     chat_id: str | None,
+    tool_notices: list[str] | None = None,
 ) -> str:
-    """Untrusted runtime metadata block injected before the user message."""
+    """Untrusted runtime metadata block injected before the user message.
+
+    ``tool_notices`` are host-side facts about the tool surface the definitions
+    themselves cannot carry -- e.g. an installed MCP plugin whose tools are
+    absent because it awaits authorization. Without the line, the model reads
+    a missing tool as a missing capability and tells the user it cannot be
+    done, when the honest answer is "authorize the plugin".
+    """
     import time as _time
 
     now = now_fn().strftime("%Y-%m-%d %H:%M (%A)")
@@ -248,6 +256,8 @@ def build_runtime_context(
     lines = [f"Current Time: {now} ({tz})"]
     if channel and chat_id:
         lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+    if tool_notices:
+        lines += tool_notices
     return RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
 

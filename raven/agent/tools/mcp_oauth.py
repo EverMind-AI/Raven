@@ -32,6 +32,7 @@ import asyncio
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -294,7 +295,43 @@ class FileTokenStorage:
     async def set_tokens(self, tokens) -> None:
         data = self._read()
         data["tokens"] = tokens.model_dump(mode="json", exclude_none=True)
+        # ``expires_in`` is relative to the moment the token was minted, and
+        # that moment dies with the process: the SDK restores the tokens on the
+        # next start but not their expiry, treats "no expiry" as "still valid",
+        # and rides the stale access token into a 401 -- whose handler is a full
+        # browser authorization, not the silent refresh the stored
+        # refresh_token was for. Anchor the deadline so provider_for can seed
+        # it back (see stored_token_expiry).
+        expires_in = getattr(tokens, "expires_in", None)
+        if expires_in is not None:
+            data["expires_at"] = time.time() + float(expires_in)
+        else:
+            data.pop("expires_at", None)
         self._write(data)
+
+    def stored_token_expiry(self) -> float | None:
+        """Absolute expiry of the stored tokens, for re-seeding the SDK.
+
+        ``None`` means "do not seed": no tokens, or tokens that declared no
+        expiry. A file written before ``expires_at`` existed but holding a
+        refresh_token returns 1.0 -- long expired -- so the first request
+        refreshes instead of trusting an access token of unknown age. Not 0.0:
+        the SDK's ``is_token_valid`` tests ``not self.token_expiry_time``, so a
+        falsy expiry reads as "no expiry, still valid" and the heal never fires.
+        """
+        data = self._read()
+        tokens = data.get("tokens")
+        if not tokens:
+            return None
+        expires_at = data.get("expires_at")
+        if expires_at is not None:
+            try:
+                return float(expires_at)
+            except (TypeError, ValueError):
+                return None
+        if tokens.get("refresh_token"):
+            return 1.0
+        return None
 
     async def get_client_info(self):
         from mcp.shared.auth import OAuthClientInformationFull
@@ -407,6 +444,23 @@ class _Flow:
         return code, got_state
 
 
+def cancel_pending(server: str) -> None:
+    """Invalidate any pending authorization for ``server``.
+
+    Called when a new connect attempt supersedes a parked one (an explicit
+    ``connect()`` on a server whose background attempt is waiting at the
+    browser) and when the server is detached. The old link must stop being
+    redeemable the moment a newer flow can be minted behind it: otherwise the
+    first tab's success page completes an attempt whose epoch is already dead,
+    its tokens land but its commit is dropped, and the newer attempt stays
+    blocked on a callback that will never come.
+    """
+    for state in [s for s, (name, _) in _PENDING.items() if name == server]:
+        _, fut = _PENDING.pop(state)
+        if not fut.done():
+            fut.set_exception(OAuthWaitTimeoutError("superseded by a newer authorization attempt"))
+
+
 def auth_wait_servers() -> set[str]:
     """Names of servers currently parked at the browser-authorization step.
 
@@ -439,7 +493,8 @@ async def provider_for(
 
     uri = redirect_uri() or await _ensure_callback_endpoint()
     flow = _Flow(server, notify, interactive=interactive)
-    return OAuthClientProvider(
+    storage = FileTokenStorage(server, uri)
+    provider = OAuthClientProvider(
         server_url=cfg.url,
         client_metadata=OAuthClientMetadata(
             client_name="Raven",
@@ -448,11 +503,23 @@ async def provider_for(
             response_types=["code"],
             token_endpoint_auth_method="none",  # noqa: S106 — OAuth public-client mode, not a secret
         ),
-        storage=FileTokenStorage(server, uri),
+        storage=storage,
         redirect_handler=flow.redirect,
         callback_handler=flow.callback,
         timeout=OAUTH_FLOW_TIMEOUT,
     )
+    # The SDK's _initialize() restores the tokens but not when they expire, and
+    # is_token_valid() reads a missing expiry as "valid" -- so a restart never
+    # refreshes, it 401s and re-authorizes in a browser instead. Seed the expiry
+    # we anchored at set_tokens time and the refresh branch works across
+    # restarts; authorization is then an install-time event, not a recurring one.
+    expiry = storage.stored_token_expiry()
+    if expiry is not None:
+        try:
+            provider.context.token_expiry_time = expiry
+        except AttributeError:  # pragma: no cover — SDK moved the field; refresh degrades, connect still works
+            logger.warning("MCP OAuth: cannot seed token expiry for '{}'; SDK context changed shape", server)
+    return provider
 
 
 def is_auth_error(exc: BaseException) -> bool:
@@ -476,6 +543,7 @@ def is_auth_error(exc: BaseException) -> bool:
 
 __all__ = [
     "FileTokenStorage",
+    "cancel_pending",
     "OAuthUnavailableError",
     "OAuthWaitTimeoutError",
     "credentials_path",
