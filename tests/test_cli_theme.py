@@ -237,7 +237,7 @@ def test_onboard_panels_render_without_missing_style(scheme):
     from rich.table import Table
 
     theme = _theme.build_rich_theme(scheme)
-    console = Console(theme=theme, file=io.StringIO(), force_terminal=True)
+    console = Console(theme=theme, file=io.StringIO(), force_terminal=True, color_system="truecolor")
     console.print("[accent]x[/accent] [bold][accent]y[/accent][/bold] [heading]z[/heading]")
     console.print(Panel("b", title="[bold][accent]t[/accent][/bold]", border_style="border"))
     console.print(Panel("recap", border_style="#8a6d00"))  # preserved literal
