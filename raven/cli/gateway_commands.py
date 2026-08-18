@@ -81,14 +81,28 @@ def _risk_banner(config) -> str | None:
 
 def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
-    enabled IM channels only (field-driven via ``enabled_channel_names``, so a
-    channel added to ``ChannelsConfig`` is covered without touching this module).
+    enabled IM channels, and only those (field-driven via
+    ``enabled_channel_names``, so a channel added to ``ChannelsConfig`` is
+    covered without touching this module).
 
     The gateway owns cron jobs for its IM channels. It does NOT claim
     ``tui``/``cli`` jobs: those fire in the interactive process that created
     them (the TUI / ``raven agent`` session), so a TUI-set reminder always
-    delivers to the TUI rather than racing the gateway — fire-at-origin, no
-    trigger-time re-routing.
+    delivers to the TUI rather than racing the gateway and being forwarded to an
+    IM channel — fire-at-origin, no trigger-time re-routing. The trade-off is no
+    cross-process fallback while that process is down; restoring "fire at origin,
+    hand off only after the origin exits" is a deferred cron-delivery-ownership
+    design, not this set.
+
+    ``tui`` is deliberately NOT derived from ``gateway.page.enabled`` here. The
+    partition has to follow the mount's outcome, not the config's intent:
+    ``mount_page`` yields the page to a resident standalone `raven serve`, so
+    "enabled but not mounted" is a routine state in which this process has no
+    ``tui`` outlet at all. Claiming ``tui`` from config would then burn a whole
+    model turn on a reminder the hub drops, and a restart would delete a
+    past-due one-shot the serve process could still deliver. The caller adds
+    ``tui`` once a live page exists — see the ``page_mount is not None`` block
+    in :func:`register`, which runs before ``cron.start()``.
     """
     return config.channels.enabled_channel_names()
 
@@ -432,6 +446,7 @@ def register(app: typer.Typer) -> None:
             question_broker = None
             web_server = None
             web_teardown = None
+            page_mount = None
             # Bring the memory backend online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired;
             # the start / stop awaits are then skipped entirely.
@@ -687,6 +702,64 @@ def register(app: typer.Typer) -> None:
                     ask_tool.set_broker(question_broker)
                 agent.set_deep_research_broker(question_broker)
 
+                # The served page, on this same engine. Mounted after the broker
+                # wiring above on purpose: build_rpc_stack rebinds the streaming
+                # sinks (dag progress, mcp events) to the page's emitter, and
+                # while the page is mounted it is the surface that renders those.
+                # The question brokers are re-bound below to a routing shim over
+                # both surfaces, not left last-write-wins. mount_page returns
+                # None when a live standalone `raven serve` already owns the
+                # page; the IM round-trip above is then the wiring, untouched.
+                if config.gateway.page.enabled:
+                    from raven.cli._gateway_page import mount_page
+
+                    try:
+                        page_mount = await mount_page(agent, config.gateway.page.port)
+                    except OSError as exc:
+                        logger.warning("page mount failed ({}); gateway continues without the page", exc)
+                if page_mount is not None:
+                    # One shared loop, two question surfaces. build_rpc_stack
+                    # bound the page's broker over the channel broker wired
+                    # above (AskUserTool._broker is process-wide, last write
+                    # wins), which would leave an IM ask_user emitting to the
+                    # browser and its answer starting a fresh turn. Re-bind a
+                    # shim that routes by conversation: page/tui sessions
+                    # (`tui:<id>`) to the page broker, everything else back to
+                    # the channel broker. deep_research clarify rides the same
+                    # shim, through the loop for the same promotion reason as
+                    # above.
+                    from raven.rpc.question_broker import RoutingQuestionBroker
+
+                    routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
+                    if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
+                        ask_tool.set_broker(routed_broker)
+                    agent.set_deep_research_broker(routed_broker)
+                    # Route channel="tui" outbounds from the gateway's own
+                    # spines (a tui cron job's reply, a subagent announce whose
+                    # conversation lives on the page) to the page.
+                    gw_hub.register(page_mount.outlet)
+                    web_hub.register(page_mount.outlet)
+                    # Only now is this process a tui surface, so only now may it
+                    # claim tui cron jobs. Deciding the partition here rather
+                    # than from gateway.page.enabled is what keeps a gateway
+                    # that yielded the page to a standalone `raven serve` from
+                    # running a page-set reminder the hub then has to drop, and
+                    # from deleting a past-due one-shot the serve can still
+                    # deliver. _owns_channel reads the set live and cron.start()
+                    # (which sweeps past-due one-shots) is still ahead.
+                    cron.allowed_channels.add("tui")
+                    # A delivering tui cron job's reply also fans out as a
+                    # cron.delivered event to the page's sessions, the same
+                    # path serve and the TUI use. Only tui jobs: an IM job's
+                    # reply is already delivered on its own channel, and the
+                    # page has no claim on it.
+                    from raven.cli.tui_commands import _build_cron_callback_spine
+
+                    cron.on_job = _build_cron_callback_spine(
+                        cron.on_job, page_mount.emitter, default_channel=pro_channel
+                    )
+                    console.print(f"[green]✓[/green] Page: {page_mount.url} (rpc: {page_mount.url}/rpc)")
+
                 # Channel inbound runs through the spine: a permitted
                 # message is submitted as a USER turn. /stop and /restart are
                 # control commands (the bus drainer's job) — intercepted here, not
@@ -771,6 +844,8 @@ def register(app: typer.Typer) -> None:
                     await sentinel_runner.stop()
                 if question_broker is not None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
+                if page_mount is not None:
+                    await page_mount.teardown()
                 if web_server is not None:
                     await web_server.stop()
                 from raven.agent.acp.client import begin_drain

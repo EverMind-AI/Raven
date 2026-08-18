@@ -111,6 +111,11 @@ const rpc = {
 
 const SHELL = /RavenShell/.test(navigator.userAgent);
 
+/* What this connection calls itself in system.hello, so a trace can tell the
+   GUI shell from the browser page on one gateway. Identity only — both still
+   share the tui session pool. */
+const SURFACE = SHELL ? 'shell' : 'page';
+
 /* Only for a socket that never opened: the cookie no longer matches the running
    gateway's token (a serve restarted without RAVEN_SERVE_TOKEN mints a fresh
    one), or the browser dropped the session cookie.
@@ -1016,7 +1021,7 @@ async function subscribe(sessionKey) {
 }
 
 rpc.onReconnect = async () => {
-  await rpc.call('system.hello', { client_version: '0.1.0' }).catch(() => {});
+  await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
   killStatus();
   // A fresh socket voids every server-side subscription, and the events a
   // parked turn missed while the socket was down are unrecoverable — drop
@@ -5206,7 +5211,7 @@ window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
 (async () => {
   if (!(await rpc.connect())) return;
   try {
-    const hello = await rpc.call('system.hello', { client_version: '0.1.0' });
+    const hello = await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE });
     if (hello && hello.platform) HOST_PLATFORM = hello.platform;
     // Before the first paint of anything data-driven: config.language decides
     // what every label below says.

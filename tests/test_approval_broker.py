@@ -220,3 +220,102 @@ async def test_send_failure_denies_request() -> None:
         )
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-conversation scoping of the notification itself
+# (connection.conversation_scoped, the same wrapper the question broker uses)
+# ---------------------------------------------------------------------------
+
+
+def _frame_collector() -> tuple[list[dict], object]:
+    frames: list[dict] = []
+
+    async def send(frame: dict) -> None:
+        frames.append(frame)
+
+    return frames, send
+
+
+async def _hold_connection(sink, conversation_id: str, ready: asyncio.Event, release: asyncio.Event) -> None:
+    """Stand in for one live socket: its own connection scope, held open in its
+    own task, exactly as a transport holds one while it dispatches frames."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    connection.set_frame_sink(sink)
+    connection.claim_conversation(conversation_id)
+    ready.set()
+    try:
+        await release.wait()
+    finally:
+        connection.unbind_connection(token)
+
+
+async def test_an_approval_reaches_only_the_surface_that_sent_the_turn() -> None:
+    """Two terminals attached to one gateway. A protected command run in one
+    session must not open the allow/deny overlay in the other, which is not in
+    that conversation -- ``approval.request`` and the ``approval.closed`` that
+    retires it both carry ``conversation_id``, so both are scopable."""
+    from raven.rpc import connection
+
+    broadcast_frames, broadcast = _frame_collector()
+    mine_frames, mine_send = _frame_collector()
+    other_frames, other_send = _frame_collector()
+
+    release = asyncio.Event()
+    mine_ready, other_ready = asyncio.Event(), asyncio.Event()
+    mine = asyncio.create_task(_hold_connection(mine_send, "tui:mine", mine_ready, release))
+    other = asyncio.create_task(_hold_connection(other_send, "tui:other", other_ready, release))
+    await asyncio.wait_for(mine_ready.wait(), 1)
+    await asyncio.wait_for(other_ready.wait(), 1)
+
+    try:
+        broker = ApprovalBroker(connection.conversation_scoped(broadcast))
+        task = asyncio.create_task(
+            broker.await_approval(
+                conversation_id="tui:mine",
+                turn_id="turn-a",
+                tool_call_id="call-a",
+                command="rm -rf build",
+                description="Delete files",
+            )
+        )
+        frame = await _wait_for_frame(mine_frames)
+        assert frame["method"] == "approval.request"
+        assert frame["params"]["conversation_id"] == "tui:mine"
+        assert other_frames == []
+        assert broadcast_frames == []
+
+        assert broker.resolve(frame["params"]["approval_id"], "allow", conversation_id="tui:mine") is True
+        assert await task is True
+        assert [f["method"] for f in mine_frames] == ["approval.request", "approval.closed"]
+        assert other_frames == []
+        assert broadcast_frames == []
+    finally:
+        release.set()
+        await asyncio.gather(mine, other)
+
+
+async def test_an_unowned_approval_conversation_still_broadcasts() -> None:
+    """No connection claimed this conversation (an IM turn, or a transport that
+    binds nothing at all), so broadcast stays the fallback: an overlay nobody
+    sees would hold the tool call until the backend deadline."""
+    from raven.rpc import connection
+
+    broadcast_frames, broadcast = _frame_collector()
+    broker = ApprovalBroker(connection.conversation_scoped(broadcast))
+
+    task = asyncio.create_task(
+        broker.await_approval(
+            conversation_id="weixin:u1",
+            turn_id="turn-a",
+            tool_call_id="call-a",
+            command="rm -rf build",
+            description="Delete files",
+        )
+    )
+    frame = await _wait_for_frame(broadcast_frames)
+    assert frame["params"]["conversation_id"] == "weixin:u1"
+    assert broker.resolve(frame["params"]["approval_id"], "deny", conversation_id="weixin:u1") is True
+    assert await task is False

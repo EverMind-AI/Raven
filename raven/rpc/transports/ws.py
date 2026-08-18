@@ -255,6 +255,16 @@ class WsGateway:
         await ws.prepare(request)
         self._sockets.add(ws)
         logger.info("serve: ws client connected ({} active)", len(self._sockets))
+        # One connection, one identity scope: every dispatch task created below
+        # snapshots this context, so a surface declared in this socket's
+        # system.hello reaches this socket's turn.send and nobody else's.
+        from raven.rpc import connection
+
+        conn_token = connection.bind_connection()
+        # ...and one way to reach this socket alone, for the frames that
+        # interrupt a single conversation rather than stream to whoever is
+        # subscribed (see connection.conversation_scoped).
+        connection.set_frame_sink(lambda frame: self._send_one(ws, frame))
         pending: set[asyncio.Task] = set()
         try:
             async for msg in ws:
@@ -277,11 +287,19 @@ class WsGateway:
                 pending.add(task)
                 task.add_done_callback(pending.discard)
         finally:
+            connection.unbind_connection(conn_token)
             self._sockets.discard(ws)
             for task in pending:
                 task.cancel()
             logger.info("serve: ws client disconnected ({} active)", len(self._sockets))
         return ws
+
+    async def _send_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+        """Send one frame to a single socket. Raises if that socket is gone --
+        the caller decides whether to fall back to :meth:`broadcast`."""
+        if ws.closed:
+            raise ConnectionResetError("socket closed")
+        await ws.send_str(json.dumps(frame, ensure_ascii=False))
 
     async def _dispatch_one(self, ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
         response = await self.dispatcher.dispatch(frame)

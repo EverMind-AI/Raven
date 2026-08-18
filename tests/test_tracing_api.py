@@ -431,3 +431,62 @@ def test_each_host_declares_before_it_can_emit_a_span():
     tui_src = inspect.getsource(tui_commands._run_rpc_server_until_done)
     assert "set_surface(TERMINAL_SURFACE)" in tui_src
     assert tui_src.index("set_surface") < tui_src.index("register_aligned_methods_except_system")
+
+
+# ---------------------------------------------------------------------------
+# Per-turn surface: one gateway process now serves several front ends at once.
+# ---------------------------------------------------------------------------
+
+
+def test_a_turn_that_declares_its_own_surface_wins_over_the_process_global(trace_dir):
+    """A gateway hosting the page serves the page, the shell, and relayed
+    terminals from one process, so the process-wide declaration cannot name
+    them all. A turn that arrived on a connection which declared itself carries
+    that name on every span, whatever the process says."""
+    _spans.set_surface("page")
+    with trace.span("session.turn", channel="tui", surface="shell"):
+        with trace.span("llm.call", {"llm.provider": "openrouter", "llm.model": "m"}):
+            pass
+
+    assert {sp["attributes"]["surface"] for sp in _spans_written(trace_dir)} == {"shell"}
+
+
+def test_a_turn_without_its_own_surface_falls_back_to_the_process_global(trace_dir):
+    """`raven serve` standalone and `raven agent` declare nothing per turn;
+    their spans must look exactly as they did before the field existed."""
+    _spans.set_surface("page")
+    with trace.span("session.turn", channel="tui", surface=None):
+        pass
+
+    assert _spans_written(trace_dir)[0]["attributes"]["surface"] == "page"
+
+
+def test_with_no_declaration_anywhere_the_channel_still_names_the_surface(trace_dir):
+    with trace.span("session.turn", channel="tui", surface=None):
+        pass
+
+    assert _spans_written(trace_dir)[0]["attributes"]["surface"] == "tui"
+
+
+def test_the_request_source_carries_the_surface_into_the_turn_seed():
+    """The turn runs on the spine's own task, out of reach of the connection's
+    contextvars, so the surface has to ride the TurnRequest into the root
+    span's seed -- children then inherit it like the rest of the identity."""
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven.tracing.semconv import turn_seed
+
+    declared = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM, surface="shell"),
+        text="hi",
+    )
+    seed = turn_seed({"self": None, "req": declared, "session_key": "tui:c"})
+    assert seed["surface"] == "shell"
+    assert seed["channel"] == "tui", "the shared channel must stay exactly what it was"
+
+    undeclared = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+    )
+    assert turn_seed({"self": None, "req": undeclared, "session_key": "tui:c"})["surface"] is None

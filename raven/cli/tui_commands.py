@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 import typer
 
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
+from raven.rpc import LOCAL_CHANNEL
 from raven.utils.helpers import project_slug
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
@@ -387,18 +388,26 @@ async def _fanout_cron_missed(emitter, *, drops) -> None:
         await emitter.emit(session_key, event)
 
 
-def _build_cron_callback_spine(base_on_cron, emitter):
-    """Wrap the spine cron callback so a job's reply is fanned out as a
+def _build_cron_callback_spine(base_on_cron, emitter, *, default_channel: str = LOCAL_CHANNEL):
+    """Wrap the spine cron callback so a **tui** job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
-    returns its reply (read back from the runner via ``readback_texts``); the cron
+    returns its reply (read back from the runner via ``readback_texts``); a tui
     turn's own hub deliverables target the ``cron:<job_id>`` conversation, which
-    has no subscriber and so no-op, making this fan-out the only delivery path."""
+    has no subscriber and so no-op, making this fan-out the only delivery path.
+
+    The fan-out is gated on the job's resolved channel (``payload.channel`` or
+    ``default_channel``, the same resolution ``make_on_cron_job`` applies) being
+    ``tui``: a job addressed to an IM channel is delivered there by the hub, and
+    echoing its reply to every page session would deliver it twice. In `raven
+    tui` / `raven serve` every job resolves to tui and the gate never bites; the
+    gateway passes its own default so only its tui-addressed jobs fan out."""
     from datetime import datetime, timezone
 
     async def wrapped(job):
         response = await base_on_cron(job)
-        if response:
+        resolved_channel = job.payload.channel or default_channel
+        if response and resolved_channel == LOCAL_CHANNEL:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -1161,6 +1170,11 @@ def tui(
         "--home",
         help="Agent home directory (memory, skills, transcripts)",
     ),
+    standalone: bool = typer.Option(
+        False,
+        "--standalone",
+        help="Run the embedded engine even when a gateway already hosts the page.",
+    ),
 ) -> None:
     """Launch Raven native TUI."""
     if ctx.invoked_subcommand is not None:
@@ -1251,6 +1265,16 @@ def tui(
             record_filter=_drop_watcher_spam,
         )
 
+    # When a gateway already hosts the page, relay to its engine instead of
+    # building a second one — unless this launch opts out (--standalone /
+    # tui.attach_gateway=false) or points at another agent home, whose engine
+    # the recorded gateway is not.
+    attach_plan = None
+    if not no_rpc and not standalone and home is None:
+        from raven.cli._tui_relay import plan_attach
+
+        attach_plan = plan_attach(workspace)
+
     if dev:
         # tsx watch via local node_modules.
         # Derive npx from the validated node_path so RAVEN_NODE's
@@ -1281,6 +1305,10 @@ def tui(
         tsx_args = ["tsx", "src/entry.tsx"]
         if no_rpc:
             exit_code = run_subprocess(npx, tsx_args, cwd=_UI_TUI_DIR)
+        elif attach_plan is not None:
+            from raven.cli._tui_relay import run_subprocess_attached
+
+            exit_code = run_subprocess_attached(npx, tsx_args, cwd=_UI_TUI_DIR, plan=attach_plan, workspace=workspace)
         else:
             exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR, workspace=workspace, home=home)
     else:
@@ -1306,6 +1334,12 @@ def tui(
         # interactive run path opens the RPC pipes and enforces handshake.
         if no_rpc:
             exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=dist_cwd)
+        elif attach_plan is not None:
+            from raven.cli._tui_relay import run_subprocess_attached
+
+            exit_code = run_subprocess_attached(
+                node_path, [str(dist_entry)], cwd=dist_cwd, plan=attach_plan, workspace=workspace
+            )
         else:
             exit_code = run_subprocess_with_rpc(
                 node_path, [str(dist_entry)], cwd=dist_cwd, workspace=workspace, home=home

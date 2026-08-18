@@ -83,6 +83,14 @@
             "type": "string",
             "description": "Accepted and ignored; clients set titles via session.title."
           }
+        },
+        {
+          "name": "workdir",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory."
+          }
         }
       ],
       "result": {
@@ -1538,6 +1546,14 @@
           "schema": {
             "type": "array",
             "items": { "type": "string" }
+          }
+        },
+        {
+          "name": "surface",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Which front end this connection is ('tui', 'page', 'shell'). Recorded per connection for tracing only; session keys and channels are unaffected."
           }
         }
       ],

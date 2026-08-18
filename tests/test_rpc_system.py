@@ -213,6 +213,24 @@ async def test_upgrade_refuses_outside_serve():
     assert excinfo.value.data["reason"] == "not_serving"
 
 
+async def test_upgrade_refuses_on_a_gateway_hosted_page():
+    """The relaunch flow replaces this process with a bare `raven serve`. On a
+    page the gateway hosts that would silently drop the IM channels, so until
+    the gateway can restart in place the page gets a structured refusal the
+    front end already renders (reason + human sentence)."""
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+
+    SERVE.arm_hosted(18792, "tok", "cookie")
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+    assert excinfo.value.data["reason"] == "gateway_hosted"
+    assert "raven gateway" in excinfo.value.data["detail"]
+
+
 async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch: pytest.MonkeyPatch):
     import asyncio
 
@@ -360,3 +378,70 @@ async def test_version_check_true_fetches_before_answering(monkeypatch) -> None:
 
     await system_mod.system_version({"check": True})
     assert fetched["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The handshake may name the front end behind this connection
+# ---------------------------------------------------------------------------
+
+
+async def test_hello_declares_the_surface_on_the_connection() -> None:
+    """One gateway serves the page, the shell, and relayed terminals at once,
+    so the declaration lands on the connection's own state, never process-wide."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    try:
+        await system_hello({"client_version": "0.1.0", "surface": "shell"})
+        assert connection.declared_surface() == "shell"
+    finally:
+        connection.unbind_connection(token)
+
+
+async def test_hello_without_a_surface_declares_nothing() -> None:
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    try:
+        await system_hello({"client_version": "0.1.0"})
+        assert connection.declared_surface() is None
+    finally:
+        connection.unbind_connection(token)
+
+
+@pytest.mark.parametrize("bad", ["Not A Surface", "", "x" * 33, 5, {"name": "page"}])
+async def test_hello_rejects_a_malformed_surface(bad) -> None:
+    """The value is stamped onto every span of every turn this connection
+    sends; an arbitrary client does not get to write paragraphs there."""
+    with pytest.raises(ConfigValidationError):
+        await system_hello({"client_version": "0.1.0", "surface": bad})
+
+
+async def test_hello_with_a_surface_needs_no_connection_scope() -> None:
+    """A transport that never binds (bare pipe, in-process tests) still
+    handshakes fine -- the declaration simply has nowhere to live."""
+    result = await system_hello({"client_version": "0.1.0", "surface": "page"})
+    assert result["server_version"]
+
+
+async def test_two_connections_keep_their_surfaces_apart() -> None:
+    """The state is per context, so two sockets saying hello concurrently on
+    one dispatcher never see each other's declaration."""
+    import asyncio
+
+    from raven.rpc import connection
+
+    async def one_connection(surface: str | None) -> str | None:
+        token = connection.bind_connection()
+        try:
+            params: dict = {"client_version": "0.1.0"}
+            if surface is not None:
+                params["surface"] = surface
+            await system_hello(params)
+            await asyncio.sleep(0)
+            return connection.declared_surface()
+        finally:
+            connection.unbind_connection(token)
+
+    seen = await asyncio.gather(one_connection("page"), one_connection("tui"), one_connection(None))
+    assert seen == ["page", "tui", None]

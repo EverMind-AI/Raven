@@ -88,6 +88,7 @@ def main(
         preview_colors=False,
         workspace=None,
         home=None,
+        standalone=False,
     )
 
 

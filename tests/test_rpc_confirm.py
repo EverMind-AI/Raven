@@ -311,3 +311,28 @@ async def test_non_tui_confirm_unchanged(fake_confirm_app) -> None:
     assert typer.confirm is orig  # never patched without a broker
     assert "DID-IT" not in result["stdout"]  # never auto-accepted
     assert result["exit_code"] != 0  # native confirm failed; no phantom success
+
+
+async def test_a_confirm_frame_names_no_conversation_so_it_cannot_be_scoped() -> None:
+    """Why ``bootstrap`` leaves this broker on the raw broadcast while the
+    approval and question brokers are ``conversation_scoped``: there is no field
+    to scope by. ``conversation_scoped`` reads ``params.conversation_id``, finds
+    nothing here, and falls straight through to broadcast -- so on a gateway
+    hosting the page a destructive terminal confirm still opens the sheet on
+    every attached surface. Closing it means threading the conversation into
+    ConfirmBroker (``cli.dispatch`` knows it) or capturing the owning sink when
+    the dispatch starts; deferred, and this test is the marker.
+    """
+    from raven.rpc.connection import conversation_scoped
+
+    frames, send_frame = _frame_collector()
+    broker = ConfirmBroker(conversation_scoped(send_frame))
+
+    task = asyncio.create_task(broker.await_confirm("Delete everything?", default=False))
+    frame = await _wait_for_frame(frames)
+
+    assert set(frame["params"]) == {"request_id", "prompt", "default"}
+    assert "conversation_id" not in frame["params"]
+
+    broker.resolve(frame["params"]["request_id"], False)
+    await task

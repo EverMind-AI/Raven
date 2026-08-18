@@ -776,3 +776,100 @@ def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytes
     assert r.exit_code == 0, r.output
     assert received.keys() == options
     assert [name for name, value in received.items() if isinstance(value, OptionInfo)] == []
+
+
+# ---------------------------------------------------------------------------
+# attaching to a running gateway (G2): which engine a launch gets
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tui_launch_spies(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Stub everything past the engine decision so ``tui`` can be invoked
+    headlessly: a fake Node, a fake dist bundle, and recorders in place of
+    both launch paths. Returns the ``calls`` dict the tests inspect."""
+    from raven.cli import _tui_relay, tui_commands
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    calls: dict[str, Any] = {}
+
+    monkeypatch.setattr(tui_commands, "find_node", lambda: ("/usr/bin/node", (22, 0, 0)))
+    dist = tmp_path / "entry.js"
+    dist.write_text("", encoding="utf-8")
+    monkeypatch.setattr(tui_commands, "resolve_dist_entry", lambda: dist)
+    monkeypatch.setattr("raven.cli.update_notice.maybe_refresh_async", lambda: None)
+
+    def embedded(*args: Any, **kwargs: Any) -> int:
+        calls["embedded"] = kwargs
+        return 0
+
+    def attached(*args: Any, **kwargs: Any) -> int:
+        calls["attached"] = kwargs
+        return 0
+
+    monkeypatch.setattr(tui_commands, "run_subprocess_with_rpc", embedded)
+    monkeypatch.setattr(_tui_relay, "run_subprocess_attached", attached)
+    return calls
+
+
+def test_tui_attaches_when_a_gateway_hosts_the_page(tui_launch_spies, monkeypatch, tmp_path) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+    from raven.cli._tui_relay import AttachPlan
+
+    plan = AttachPlan(port=18999, token="tok", workdir=tmp_path)
+    monkeypatch.setattr(_tui_relay, "plan_attach", lambda workspace=None: plan)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, [])
+
+    assert r.exit_code == 0, r.output
+    assert "attached" in tui_launch_spies and "embedded" not in tui_launch_spies
+    assert tui_launch_spies["attached"]["plan"] == plan
+
+
+def test_tui_stays_embedded_when_no_gateway_is_found(tui_launch_spies, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", lambda workspace=None: None)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, [])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_standalone_flag_skips_discovery_entirely(tui_launch_spies, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    def _must_not_be_called(workspace=None):
+        raise AssertionError("--standalone must not discover a gateway")
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", _must_not_be_called)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--standalone"])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
+
+
+def test_a_pointed_home_skips_discovery_entirely(tui_launch_spies, monkeypatch, tmp_path) -> None:
+    """--home points at another instance's data; the recorded gateway serves
+    the default one, so an attached engine would be the wrong engine."""
+    from typer.testing import CliRunner
+
+    from raven.cli import _tui_relay, tui_commands
+
+    def _must_not_be_called(workspace=None):
+        raise AssertionError("--home must not discover a gateway")
+
+    monkeypatch.setattr(_tui_relay, "plan_attach", _must_not_be_called)
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--home", str(tmp_path / "other")])
+
+    assert r.exit_code == 0, r.output
+    assert "embedded" in tui_launch_spies and "attached" not in tui_launch_spies
