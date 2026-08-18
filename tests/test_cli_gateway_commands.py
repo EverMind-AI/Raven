@@ -157,47 +157,60 @@ def test_gateway_log_config_overrides_parse() -> None:
 
 
 def test_gateway_channels_excludes_tui_when_no_im_enabled() -> None:
-    # The gateway does not claim "tui" cron jobs — those fire in the TUI
-    # process, so a TUI-set reminder is never forwarded to an IM channel.
-    from types import SimpleNamespace
+    # The gateway does not claim ephemeral "tui" cron jobs — those fire in the
+    # TUI process, so a TUI-set reminder is never forwarded to an IM channel.
+    from unittest.mock import MagicMock
 
     from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig())
+    cfg = MagicMock()
+    for name in (
+        "whatsapp",
+        "telegram",
+        "discord",
+        "feishu",
+        "mochat",
+        "dingtalk",
+        "email",
+        "slack",
+        "qq",
+        "matrix",
+        "wecom",
+        "weixin",
+    ):
+        ch = MagicMock()
+        ch.enabled = False
+        setattr(cfg.channels, name, ch)
     assert _build_gateway_channels(cfg) == set()  # no IM enabled, and no "tui"
 
 
 def test_gateway_channels_excludes_tui_alongside_enabled_im() -> None:
-    from types import SimpleNamespace
+    from unittest.mock import MagicMock
 
     from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
 
-    cfg = SimpleNamespace(channels=ChannelsConfig.model_validate({"telegram": {"enabled": True}}))
+    cfg = MagicMock()
+    for name in (
+        "whatsapp",
+        "telegram",
+        "discord",
+        "feishu",
+        "mochat",
+        "dingtalk",
+        "email",
+        "slack",
+        "qq",
+        "matrix",
+        "wecom",
+        "weixin",
+    ):
+        ch = MagicMock()
+        ch.enabled = name == "telegram"
+        setattr(cfg.channels, name, ch)
     result = _build_gateway_channels(cfg)
-    assert result == {"telegram"}
     assert "tui" not in result
-
-
-def test_gateway_channels_derived_from_config_model_fields() -> None:
-    # The partition is derived from the channels config model, not a
-    # hardcoded list: every field with a truthy .enabled participates.
-    from types import SimpleNamespace
-
-    from raven.cli.gateway_commands import _build_gateway_channels
-    from raven.config.schema import ChannelsConfig
-
-    cfg = SimpleNamespace(
-        channels=ChannelsConfig.model_validate(
-            {
-                "telegram": {"enabled": True},
-                "feishu": {"enabled": True},
-                "weixin": {"enabled": False},
-            }
-        )
-    )
-    assert _build_gateway_channels(cfg) == {"telegram", "feishu"}
+    assert "telegram" in result
+    assert "discord" not in result
 
 
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
@@ -217,47 +230,6 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "cancel_conversation(cid)" in stop_branch
     assert "cancel_by_session(cid)" in stop_branch
     assert "stopped +=" in stop_branch
-
-
-def test_cron_config_notify_missed_defaults_on() -> None:
-    from raven.config.schema import CronConfig
-
-    assert CronConfig().notify_missed is True
-    assert CronConfig.model_validate({"notify_missed": False}).notify_missed is False
-
-
-def test_gateway_wires_anti_runaway_count_and_reset() -> None:
-    """The anti-runaway guard must be WIRED, not just defined: the cron
-    handler gets the service to count fires on (``cron_service=cron``) and
-    the AgentLoop's user-inbound hook chains the counter reset after the
-    Sentinel hook. Like the /stop test above, these live in closures inside
-    the serve command with no import seam, so pin the command source.
-    """
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    assert "cron_service=cron," in src
-    assert "chain_cron_activity_reset(cron, inner=sentinel_on_user_inbound)" in src
-    assert "on_user_inbound=on_user_inbound," in src
-
-
-def test_gateway_wires_missed_reminder_observer_behind_config() -> None:
-    """The missed-reminder observer must be wired onto the gateway's cron
-    service, gated on the event-wake plumbing existing AND
-    ``cron.notify_missed`` — with either off there is no sink, so the
-    observer must stay unset."""
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    gate = src.split("cron.on_missed_foreign", 1)[0].rsplit("if ", 1)[1]
-    assert "system_events is not None" in gate
-    assert "wake is not None" in gate
-    assert "config.cron.notify_missed" in gate
-    assert "cron.on_missed_foreign = make_on_missed_foreign(system_events, wake)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -387,36 +359,3 @@ def test_gateway_passes_no_store_when_web_disabled(tmp_config: Path) -> None:
     cfg.gateway.web.enabled = False
 
     assert _build_deliverable_store(cfg) is None
-
-
-# ---------------------------------------------------------------------------
-# _risk_banner: sandbox=none + open allow_from startup warning
-# ---------------------------------------------------------------------------
-
-
-def _config_with(*, backend: str, telegram_enabled: bool, allow_from: list[str]):
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.tools.sandbox.backend = backend
-    cfg.channels.telegram.enabled = telegram_enabled
-    cfg.channels.telegram.allow_from = allow_from
-    return cfg
-
-
-def test_risk_banner_fires_on_combo() -> None:
-    from raven.cli.gateway_commands import _risk_banner
-
-    banner = _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["*"]))
-    assert banner
-    assert "sandbox" in banner
-    assert "allow_from" in banner
-    assert "telegram" in banner
-
-
-def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
-    from raven.cli.gateway_commands import _risk_banner
-
-    assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
-    assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
-    assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None

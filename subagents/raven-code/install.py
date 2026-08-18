@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Register this folder's subagent with a running Raven gateway.
+"""Register this folder's subagent in the host raven's config.
 
 `subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved, so the
 published file carries no path from the machine it was built on. The gateway
@@ -9,14 +9,19 @@ can stand in for the real path: it has to be resolved at install time, which is
 what this does - against this file's own location, so moving the folder and
 re-running is the whole migration story.
 
-The write goes through `PUT /raven/subagents`, not by editing the gateway's
-config file: the RPC validates the entry and hot-applies it, where a file edit
-is picked up only on restart and can be silently overwritten. The endpoint
-takes the *entire* list, so this reads the current one first, merges this entry
-into it by name, and keeps a timestamped backup.
+The entry is written into `subagents.thirdParty` through
+`raven.config.update_subagents`, the only supported write path: it validates
+against the schema, replaces the entry that shares this one's name, refuses a list
+that would hold duplicates, and replaces the file atomically.
+Hand-editing the JSON skips all three, and a half-written config is one raven
+will not start on. Nothing needs to be running for this, but nothing running
+picks it up either - a live raven holds the roster it read at startup, so
+restart it (or the gateway) afterwards.
 
-Standard library only, and no `import raven` - this must run under a bare
-`python3` on a machine that has never installed the runtime.
+That module lives wherever the host raven is installed, which is not necessarily
+the interpreter running this file, so it is reached through a subprocess instead
+of an import. This stays standard-library only, and installable under a bare
+`python3`.
 """
 
 from __future__ import annotations
@@ -24,14 +29,50 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import shutil
+import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_ENDPOINT = "http://127.0.0.1:8000/raven/subagents"
+
+# Runs under the host raven's interpreter, reading one JSON payload on stdin and
+# writing one on stdout. Kept to a single `-c` string so this file stays the
+# whole installer: a temp file would have to be cleaned up on every error path.
+WRITER = r"""
+import json
+import sys
+from pathlib import Path
+
+from raven.config.loader import get_config_path, read_raw_or_raise
+from raven.config.update_subagents import add_third_party_subagent, get_third_party_subagents
+
+payload = json.load(sys.stdin)
+path = Path(payload["config"]) if payload.get("config") else get_config_path()
+backup = Path(payload["backup"])
+# Raw, not get_third_party_subagents(): loading coerces fields away (an openai
+# entry's readsLocalFiles is dropped), so a validated round-trip is not what was
+# on disk, and restoring from it would silently strip whatever it dropped.
+raw = read_raw_or_raise(path) if path.exists() else {}
+stored = raw.get("subagents") or {}
+before = stored.get("thirdParty") or stored.get("third_party") or []
+# Before the write, not after: a backup that lands only on success is not a
+# rollback path. Mode 600 because an openai entry among the others holds its
+# own api key.
+try:
+    backup.write_text(json.dumps(before, indent=2, ensure_ascii=False), encoding="utf-8")
+    backup.chmod(0o600)
+except OSError as exc:
+    raise SystemExit(f"error: cannot write the backup at {backup} ({exc}); the config is untouched")
+add_third_party_subagent(payload["entry"], config_path=path)
+after = get_third_party_subagents(config_path=path)
+json.dump(
+    {"config": str(path), "before": [e.get("name") for e in before], "after": [e["name"] for e in after]},
+    sys.stdout,
+)
+"""
 
 
 def env_value(name: str) -> str | None:
@@ -59,41 +100,57 @@ def resolve(entry: dict, python: str) -> dict:
     return resolved
 
 
-def request(url: str, method: str, payload: object | None = None) -> object:
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
-    # The gateway is on loopback; an inherited http_proxy would send this out to
-    # the internet, which is both wrong and a way to leak the payload.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(req, timeout=30) as response:
-        body = response.read().decode("utf-8")
-    return json.loads(body) if body.strip() else None
+def host_interpreter(explicit: str | None) -> list[str]:
+    """Return the argv prefix for the interpreter that has `raven` importable.
 
-
-def entries_of(payload: object) -> tuple[list, str | None]:
-    """Return the subagent list and the key it sat under, if any.
-
-    The endpoint has been seen returning both a bare list and a wrapper object;
-    preserving the shape matters because the PUT has to send back the same one.
+    Read out of the `raven` console script's shebang rather than assumed to be
+    the one running this file: the installer is meant to work under a bare
+    `python3`, and the runtime usually sits in a tool env of its own. `shlex`
+    because the shebang may be an `env` line, which is two words.
     """
-    if isinstance(payload, list):
-        return payload, None
-    if isinstance(payload, dict):
-        for key in ("agents", "subagents", "thirdParty", "third_party", "items"):
-            if isinstance(payload.get(key), list):
-                return payload[key], key
-    raise SystemExit(f"error: cannot find a subagent list in the response: {payload!r}")
+    if explicit:
+        return shlex.split(explicit)
+    if value := env_value("RAVEN_PYTHON"):
+        return shlex.split(value)
+    script = shutil.which("raven")
+    if not script:
+        raise SystemExit("error: no `raven` on PATH; pass --raven-python with the interpreter that has raven installed")
+    first = Path(script).read_bytes().split(b"\n", 1)[0]
+    if not first.startswith(b"#!"):
+        raise SystemExit(f"error: {script} carries no shebang to read the interpreter from; pass --raven-python")
+    return shlex.split(first[2:].decode("utf-8", "replace").strip())
+
+
+def write_entry(interpreter: list[str], entry: dict, config: str | None, backup: Path) -> dict:
+    payload = json.dumps({"entry": entry, "config": config, "backup": str(backup)})
+    proc = subprocess.run([*interpreter, "-c", WRITER], input=payload, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        raise SystemExit(
+            f"error: the write failed under {shlex.join(interpreter)} (exit {proc.returncode}); "
+            "if it could not import raven, pass --raven-python with the right interpreter"
+        )
+    try:
+        return json.loads(proc.stdout)
+    except ValueError as exc:
+        raise SystemExit(f"error: cannot read the writer's output ({exc}): {proc.stdout[:400]!r}") from exc
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     ap.add_argument(
         "--python",
         default=None,
         help="Interpreter the gateway should invoke (default: $SUBAGENT_PYTHON, "
         "or this interpreter). run.py is standard-library only, so any python3 works.",
     )
+    ap.add_argument(
+        "--raven-python",
+        default=None,
+        help="Interpreter that has raven installed, used to perform the write "
+        "(default: $RAVEN_PYTHON, or the shebang of `raven` on PATH)",
+    )
+    ap.add_argument("--config", default=None, help="Config file to write (default: the host raven's own)")
     ap.add_argument("--dry-run", action="store_true", help="Print the resolved entry and stop")
     args = ap.parse_args()
 
@@ -105,25 +162,23 @@ def main() -> int:
         raise SystemExit(f"error: placeholders left unresolved in {', '.join(unresolved)}")
 
     print(json.dumps(entry, indent=2, ensure_ascii=False))
+    interpreter = host_interpreter(args.raven_python)
     if args.dry_run:
+        print(f"would write through {shlex.join(interpreter)}")
         return 0
 
-    try:
-        payload = request(args.endpoint, "GET")
-    except urllib.error.URLError as exc:
-        raise SystemExit(f"error: cannot reach the gateway at {args.endpoint}: {exc}") from exc
-
-    entries, key = entries_of(payload)
+    # The writer takes it, so that a backup which cannot be written stops the
+    # install instead of going missing after a config that already changed.
     backup = HERE / f"subagents-backup-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    backup.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"backed up the current list ({len(entries)} entries) to {backup}")
+    result = write_entry(interpreter, entry, args.config, backup)
+    print(f"backed up the previous list ({len(result['before'])} entries) to {backup}")
 
-    merged = [e for e in entries if e.get("name") != entry["name"]]
-    replaced = len(merged) != len(entries)
-    merged.append(entry)
-
-    request(args.endpoint, "PUT", merged if key is None else {**payload, key: merged})
-    print(f"{'replaced' if replaced else 'added'} {entry['name']}; the list now has {len(merged)} entries")
+    replaced = entry["name"] in result["before"]
+    print(
+        f"{'replaced' if replaced else 'added'} {entry['name']} in {result['config']}; "
+        f"the list now has {len(result['after'])} entries"
+    )
+    print("restart raven (or the gateway) to pick it up: a running one holds the roster it read at startup")
     return 0
 
 

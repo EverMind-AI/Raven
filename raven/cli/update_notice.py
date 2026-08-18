@@ -5,17 +5,14 @@ cwd/branch label when the session init bundle carries ``update_available`` /
 ``update_command`` (see ``ui-tui/src/components/appChrome.tsx``); this module
 is what fills those in.
 
-The live check reads the release page redirect (not the releases API, whose
-unauthenticated quota is 60 requests per hour per IP -- a daily check from every
-install behind one egress is enough to drain it, and a nudge must not cost the
-budget that ``raven upgrade`` needs). An install that joined the beta channel
-asks that channel's own registry instead, which never used the API to begin with.
-Either way it is too slow for the session-create hot path, so we keep a small
-cache in the runtime cache dir and refresh it in a daemon thread at most once a
-day. A launch therefore shows the notice based on the *cached* latest version;
-the first launch after a release lands refreshes the cache and the notice appears
-on the next launch. Any network or parse failure is swallowed -- an update nudge
-must never break startup.
+The live check hits the GitHub releases API -- or the beta channel's registry,
+on an install that joined it -- which is too slow to run on the
+session-create hot path, so we keep a small cache in the runtime cache dir and
+refresh it in a daemon thread at most once a day. A launch therefore shows the
+notice based on the *cached* latest version; the first launch after a release
+lands refreshes the cache and the notice appears on the next launch. Any
+network or parse failure is swallowed -- an update nudge must never break
+startup.
 
 Set ``RAVEN_NO_UPDATE_CHECK=1`` to opt out of both the fetch and the hint.
 """
@@ -127,14 +124,10 @@ def _refresh() -> None:
     keep = previous if isinstance(previous, str) else None
 
     try:
-        from raven.cli import beta_channel
-        from raven.cli.upgrade_commands import fetch_latest_version
+        from raven.cli.upgrade_commands import fetch_latest_for_channel
 
-        chan = beta_channel.channel()
-        if chan is None:
-            _write_cache(fetch_latest_version(), now=time.time())
-        else:
-            _write_cache(beta_channel.fetch_latest(chan).version, now=time.time())
+        release, _ = fetch_latest_for_channel()
+        _write_cache(release.version, now=time.time())
     except Exception:
         # Offline, rate-limited, or the latest release is a draft/prerelease.
         # Stamp checked_at anyway so we back off for a full TTL instead of

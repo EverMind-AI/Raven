@@ -46,11 +46,10 @@ class TestDefaults:
     def test_skill_router_defaults(self) -> None:
         c = SkillForgeRouterConfig()
         assert c.enabled is True
-        assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
+        assert c.weights == {"local": 1.0, "everos": 0.9, "hub": 0.85}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
         assert c.top_k == 5
-        assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source);
         # disabled until an endpoint is set.
         assert isinstance(c.hub, HubSourceConfig)
@@ -58,11 +57,6 @@ class TestDefaults:
         assert c.hub.api_key is None
         assert c.hub.timeout_s == pytest.approx(2.0)
         assert c.hub.min_safety == pytest.approx(0.7)
-
-    def test_rrf_k_accepts_camel_case_and_rejects_zero(self) -> None:
-        assert SkillForgeRouterConfig(rrfK=30).rrf_k == 30
-        with pytest.raises(ValidationError):
-            SkillForgeRouterConfig(rrf_k=0)
 
     def test_skill_forge_public_defaults(self) -> None:
         c = SkillForgeConfig()
@@ -125,15 +119,6 @@ class TestKeyAliasing:
         assert c.hub.timeout_s == pytest.approx(5.0)
         assert c.hub.min_safety == pytest.approx(0.8)
 
-    def test_skill_forge_auto_install_tri_state(self) -> None:
-        assert SkillForgeConfig().auto_install == "auto"
-        c = SkillForgeConfig.model_validate({"autoInstall": "off"})
-        assert c.auto_install == "off"
-        c = SkillForgeConfig.model_validate({"auto_install": "prompt"})
-        assert c.auto_install == "prompt"
-        with pytest.raises(ValidationError):
-            SkillForgeConfig.model_validate({"autoInstall": "sometimes"})
-
 
 # ---------------------------------------------------------------------------
 # EXTENSION_KEYS includes the new sections
@@ -194,13 +179,7 @@ class TestLoaderIntegration:
         )
         cfg = load_raven_config(path)
         assert cfg.plugins.disabled == ["mem0-memory"]
-        # ``mode`` never had a reader and is dropped on load; ``root`` / ``owned``
-        # are recorded in its place so every caller reads one recorded decision
-        # instead of re-deriving it.
-        everos_slice = cfg.plugins.config["everos-memory"]
-        assert "mode" not in everos_slice
-        assert everos_slice["root"]
-        assert isinstance(everos_slice["owned"], bool)
+        assert cfg.plugins.config["everos-memory"]["mode"] == "embedded"
         assert cfg.memory.backend == "everos"
         assert cfg.memory.user_id == "alice"
         assert cfg.memory.memory_top_k == 10

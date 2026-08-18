@@ -258,12 +258,6 @@ class ChannelsConfig(Base):
     wecom: WecomConfig = Field(default_factory=WecomConfig)
     weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
-    def enabled_channel_names(self) -> set[str]:
-        """Names of every enabled IM channel. Field-driven, so a channel
-        added to this model is covered without touching consumers (the
-        gateway cron partition, cron add's target validation)."""
-        return {name for name in type(self).model_fields if getattr(getattr(self, name, None), "enabled", False)}
-
 
 class AgentDefaults(Base):
     """Default agent configuration."""
@@ -271,12 +265,7 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    # No maxTokens here on purpose. A number in a config file cannot be right
-    # for every model -- too large is a 400, too small truncates silently --
-    # so the ceiling is resolved per model from the catalogue
-    # (providers/rates.resolve_max_output_tokens). An old config carrying the
-    # retired key is ignored rather than rejected: this model does not forbid
-    # extras.
+    max_tokens: int = 8192
     # None (or 0) means "figure it out" -- resolved against the model's real
     # window at construction time. A positive value pins the window, taking
     # priority over whatever the model's own catalogue reports.
@@ -334,20 +323,20 @@ class AgentsConfig(Base):
 class CronConfig(Base):
     """Cron scheduler configuration.
 
-    Delivery is bound at job creation (fire-at-origin) — there is no
-    trigger-time routing config anymore. The retired ``forward_channels``
-    key is stripped by the config loader for backwards compatibility.
+    Only consulted at cron job TRIGGER time, never at creation. Ephemeral
+    channels (cli / tui — anything not in ChannelManager.enabled_channels)
+    cannot deliver to themselves after the host process exits, so the
+    forward_channels list resolves which real channels receive the reminder.
     """
+
+    forward_channels: list[str] = Field(default_factory=lambda: ["*"])
+    """Channels to deliver ephemeral-origin reminders to. ``["*"]`` broadcasts
+    to every enabled channel. Specific names (``["telegram", "feishu"]``)
+    restrict to those. Non-ephemeral channels (telegram / feishu / weixin
+    etc.) ignore this list — they always pass-through to the per-job channel."""
 
     default_timezone: str = "Asia/Shanghai"
     """Default IANA timezone for cron expressions without explicit ``--tz``."""
-
-    notify_missed: bool = True
-    """When True, the gateway observes one-shot reminders bound to other
-    partitions (tui / cli sessions) that went past due unfired — their
-    session was closed — and surfaces each once as a system event through
-    the heartbeat wake path. Read-only observation: the foreign job itself
-    is never mutated."""
 
 
 class ModelOverlay(Base):
@@ -359,9 +348,8 @@ class ModelOverlay(Base):
     their own deployment -- but it leaves no way to label several of them.
 
     Only what a person states about presentation. Token accounting is not in
-    scope here -- `agents.defaults.contextWindowTokens` holds what a person can
-    state about it, and the output ceiling resolves per model with no knob at
-    all. What has no knob either is a *price* for an endpoint no catalogue
+    scope here -- `agents.defaults.contextWindowTokens` / `maxTokens` already
+    hold it. What has no knob at all is a *price* for an endpoint no catalogue
     prices; such a deployment reports unknown spend rather than borrowing a
     hosted model's rate. Adding one is a separate ask.
     """
@@ -1300,18 +1288,10 @@ class SubagentsConfig(Base):
     third_party: list[ThirdPartySubagentConfig] = Field(default_factory=list)
 
 
-class CliConfig(Base):
-    """CLI surface configuration."""
-
-    turn_summary: bool = True
-    """Render a one-line tokens/cost summary after each successful CLI turn."""
-
-
 class Config(BaseSettings):
     """Root configuration for raven."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    cli: CliConfig = Field(default_factory=CliConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)

@@ -22,6 +22,7 @@ Read that before trusting a run.
 subagents/raven-oncall/          what ships
 ├── Raven-Oncall/        the checkout, with its own .venv (uv sync, Python 3.13)
 ├── config.json          this install's runtime config (no secrets - they live in .env)
+├── install.py           registers the entry in the host raven's config
 ├── run.py               host-side launcher; what the gateway actually invokes
 └── subagent.json        the entry registered with the host Raven
 ```

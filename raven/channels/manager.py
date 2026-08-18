@@ -19,8 +19,8 @@ from raven.channels.contract import Channel
 from raven.config.schema import Config
 
 
-def _missing_dep_hint() -> str:
-    """How to install missing channel SDKs, tailored to the install mode.
+def _missing_dep_hint(modname: str) -> str:
+    """How to install a channel's missing SDK, tailored to the install mode.
 
     An editable (dev) checkout uses ``uv sync``; a wheel/tool install has no
     source tree, so it must re-run the installer instead. PEP 610
@@ -28,10 +28,6 @@ def _missing_dep_hint() -> str:
     ``archive_info`` (no ``dir_info`` key), so ``.get`` chaining avoids a
     KeyError when it is absent. This runs while a channel is already failing,
     so a missing/corrupt file must degrade to the installer hint, never raise.
-
-    The dev hint names the umbrella ``channels`` extra and passes
-    ``--inexact`` on purpose: ``uv sync`` is an exact sync, so syncing one
-    channel's extra uninstalls every other channel's SDK on the way in.
     """
     editable = False
     try:
@@ -42,37 +38,10 @@ def _missing_dep_hint() -> str:
         pass
 
     if editable:
-        return "Run: uv sync --inexact --extra channels"
+        return f"Run: uv sync --extra channel-{modname}"
     if sys.platform == "win32":
         return "Re-run the installer to add channels: irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex"
     return "Re-run the installer to add channels: curl -fsSL https://raven.evermind.ai/install.sh | bash"
-
-
-def missing_dependency_channels(config: Config) -> list[str]:
-    """Enabled channels whose SDK is not installed, in registry order.
-
-    Runs the same probe as :meth:`ChannelManager._init_channels` -- build via
-    the spec factory, catch ImportError -- so a channel reported here is
-    exactly one the gateway would disable at start. Every other construction
-    failure is somebody else's diagnosis, not a missing dependency.
-
-    Read-only callers (``channels status``, ``doctor``) use this so an enabled
-    channel that can never start is visible before the gateway is run.
-    """
-    from raven.channels.registry import discover_specs
-
-    missing: list[str] = []
-    for modname, spec in discover_specs().items():
-        section = getattr(config.channels, modname, None)
-        if not section or not getattr(section, "enabled", False):
-            continue
-        try:
-            spec.factory(section)
-        except ImportError:
-            missing.append(modname)
-        except Exception:
-            continue
-    return missing
 
 
 class ChannelManager:
@@ -110,7 +79,7 @@ class ChannelManager:
                     "{} channel disabled: missing dependency ({}). {}",
                     modname,
                     e,
-                    _missing_dep_hint(),
+                    _missing_dep_hint(modname),
                 )
 
         self._validate_allow_from()

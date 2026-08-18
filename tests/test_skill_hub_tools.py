@@ -51,7 +51,6 @@ class _FakeClient:
         self._raises = raises
         self.get_calls: list[str] = []
         self.install_calls: list[str] = []
-        self.install_meta: list[dict | None] = []
 
     async def get(self, skill_id: str):
         self.get_calls.append(skill_id)
@@ -59,9 +58,8 @@ class _FakeClient:
             raise RuntimeError("boom")
         return self._get_result
 
-    async def install(self, skill_id: str, *, prefetched_meta=None):
+    async def install(self, skill_id: str):
         self.install_calls.append(skill_id)
-        self.install_meta.append(prefetched_meta)
         if self._raises:
             raise RuntimeError("boom")
         return self._install_result
@@ -227,160 +225,3 @@ class TestUseSkill:
         client = _FakeClient(raises=True)
         out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
         assert out.startswith("Error") and "failed to install" in out
-
-
-class TestUseSkillSafetyPolicy:
-    """Install-time policy: min_safety and blocklist must gate use_skill."""
-
-    async def test_low_safety_hub_skill_refused(self) -> None:
-        client = _FakeClient(
-            get_result={"score_safety": 0.2, "slug": "tag-memory", "skill_md": "evil"},
-            install_result={"slug": "tag-memory", "version": "v1", "skill_md": "evil"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/tag-memory",
-        )
-        assert out.startswith("Error")
-        assert "score_safety" in out
-        assert client.install_calls == []
-
-    async def test_score_missing_allows_install(self) -> None:
-        client = _FakeClient(
-            get_result={"slug": "foo"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error")
-        assert client.install_calls == ["foo"]
-
-    async def test_blocklisted_hub_skill_refused_before_network(self) -> None:
-        client = _FakeClient(get_result={"slug": "tag-memory"})
-        out = await UseSkillTool(client=client, blocklist=["Tag-Memory"]).execute(
-            skill_id="hub/tag-memory",
-        )
-        assert out.startswith("Error") and "blocklist" in out
-        assert client.get_calls == []
-        assert client.install_calls == []
-
-    async def test_blocklisted_local_skill_refused(self, tmp_path: Path) -> None:
-        meta = _meta(tmp_path, "x", "body", with_scripts=True)
-        # Keyed under a real registry layer, not the "local" router namespace:
-        # `local/x` is a namespace-qualified id the router strips, and a fixture
-        # keyed under ("local", ...) would let a passthrough bug read as green.
-        reg = _FakeRegistry({("workspace", "x"): meta})
-        out = await UseSkillTool(registry=reg, blocklist=["x"]).execute(
-            skill_id="local/x",
-        )
-        assert out.startswith("Error") and "blocklist" in out
-
-    async def test_policy_pass_reuses_prefetched_meta(self) -> None:
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-        out = await UseSkillTool(client=client, min_safety=0.7).execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error")
-        assert client.get_calls == ["foo"]
-        assert client.install_meta == [{"score_safety": 0.9, "slug": "foo"}]
-
-    async def test_external_path_in_body_refused(self) -> None:
-        client = _FakeClient(
-            get_result={
-                "score_safety": 0.9,
-                "slug": "tag-memory",
-                "skill_md": "python scripts/db.py --db ~/.openclaw/db.sqlite",
-            },
-        )
-        out = await UseSkillTool(client=client).execute(skill_id="hub/tag-memory")
-        assert out.startswith("Error") and "~/.openclaw" in out
-        assert client.install_calls == []
-
-    async def test_install_appends_audit_record(self, tmp_path: Path) -> None:
-        import json
-
-        audit = tmp_path / "installs.jsonl"
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
-            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": "/cache/foo"},
-        )
-        out = await UseSkillTool(
-            client=client,
-            min_safety=0.7,
-            install_audit_path=audit,
-        ).execute(skill_id="hub/foo")
-        assert not out.startswith("Error")
-        rec = json.loads(audit.read_text(encoding="utf-8").strip())
-        assert rec["slug"] == "foo"
-        assert rec["trigger"] == "use_skill"
-
-    async def test_install_writes_install_meta(self, tmp_path: Path) -> None:
-        import json
-
-        skill_dir = tmp_path / "foo@v2"
-        skill_dir.mkdir()
-        client = _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "version": "v2"},
-            install_result={"slug": "foo", "version": "v2", "skill_md": "ok", "dir": str(skill_dir)},
-        )
-        out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
-        assert not out.startswith("Error")
-        rec = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
-        assert rec["slug"] == "foo"
-        assert rec["version"] == "v2"
-        assert rec["source"] == "hub"
-        assert rec["trigger"] == "use_skill"
-        assert rec["installed_at"]
-
-
-class _FakeStdin:
-    def __init__(self, *, tty: bool) -> None:
-        self._tty = tty
-
-    def isatty(self) -> bool:
-        return self._tty
-
-
-class TestUseSkillAutoInstall:
-    """skillForge.autoInstall gates the Hub bundle download in use_skill."""
-
-    def _client(self) -> _FakeClient:
-        return _FakeClient(
-            get_result={"score_safety": 0.9, "slug": "foo", "skill_md": "ok"},
-            install_result={"slug": "foo", "version": "v1", "skill_md": "ok"},
-        )
-
-    async def test_off_skips_install_with_notice(self) -> None:
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="off").execute(
-            skill_id="hub/foo",
-        )
-        assert out.startswith("Skill install skipped")
-        assert "'off'" in out
-        assert client.install_calls == []
-
-    async def test_prompt_without_tty_skips(self, monkeypatch) -> None:
-        import sys
-
-        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=False))
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="prompt").execute(
-            skill_id="hub/foo",
-        )
-        assert out.startswith("Skill install skipped")
-        assert client.install_calls == []
-
-    async def test_prompt_tty_confirmation_installs(self, monkeypatch) -> None:
-        import sys
-
-        monkeypatch.setattr(sys, "stdin", _FakeStdin(tty=True))
-        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
-        client = self._client()
-        out = await UseSkillTool(client=client, auto_install="prompt").execute(
-            skill_id="hub/foo",
-        )
-        assert not out.startswith("Error") and not out.startswith("Skill install skipped")
-        assert client.install_calls == ["foo"]

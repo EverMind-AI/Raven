@@ -5054,13 +5054,6 @@
             "type": "string",
             "description": "The command that would install the newer release."
           },
-          "config_notices": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "What a config migration changed on the user's behalf during this boot. Drained, so only the first session of a launch carries them."
-          },
           "endpoint": {
             "type": "string",
             "description": "Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones."
@@ -6578,35 +6571,6 @@
           }
         }
       },
-      "CronMissedEvent": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["type", "payload"],
-        "properties": {
-          "type": { "type": "string", "const": "cron.missed" },
-          "payload": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["count", "items"],
-            "properties": {
-              "count": { "type": "integer" },
-              "items": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "required": ["name", "scheduled_at", "message"],
-                  "properties": {
-                    "name": { "type": "string" },
-                    "scheduled_at": { "type": "string" },
-                    "message": { "type": "string" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
       "SubagentDeliveredEvent": {
         "description": "A delegated run's result re-entered its conversation here. The injection itself is invisible on the wire -- the next frame a client sees is an assistant turn nobody visibly asked. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back.",
         "type": "object",
@@ -6837,8 +6801,7 @@
           { "$ref": "#/components/schemas/SubagentDeliveredEvent" },
           { "$ref": "#/components/schemas/DagRunStartedEvent" },
           { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
-          { "$ref": "#/components/schemas/DagRunCompletedEvent" },
-          { "$ref": "#/components/schemas/CronMissedEvent" }
+          { "$ref": "#/components/schemas/DagRunCompletedEvent" }
         ],
         "discriminator": {
           "propertyName": "type",
@@ -6857,8 +6820,7 @@
             "subagent.delivered": "#/components/schemas/SubagentDeliveredEvent",
             "dag.run_started": "#/components/schemas/DagRunStartedEvent",
             "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
-            "dag.run_completed": "#/components/schemas/DagRunCompletedEvent",
-            "cron.missed": "#/components/schemas/CronMissedEvent"
+            "dag.run_completed": "#/components/schemas/DagRunCompletedEvent"
           }
         }
       }

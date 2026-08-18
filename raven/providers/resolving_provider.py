@@ -33,6 +33,7 @@ class ResolvingProvider(LLMProvider):
         self._default_model = defaults.model
         self.generation = GenerationSettings(
             temperature=defaults.temperature,
+            max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
         )
@@ -90,12 +91,3 @@ class ResolvingProvider(LLMProvider):
     ) -> AsyncIterator[StreamDelta]:
         async for delta in self._pick(model).chat_stream(messages, tools, model=model, **kwargs):
             yield delta
-
-    def wire_model_id(self, model: str) -> str:
-        """Forwarded: the inner adapter is the one that decides the wire id.
-
-        Answering identity here would let a caller size a request against the
-        stored name while the inner sends a gateway spelling, which the
-        catalogue files with different numbers.
-        """
-        return self._pick(model).wire_model_id(model)

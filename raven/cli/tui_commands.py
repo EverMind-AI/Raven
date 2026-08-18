@@ -358,37 +358,8 @@ async def _fanout_cron_delivered(emitter, *, job_id, name, text, fired_at) -> No
         await emitter.emit(session_key, {"type": "cron.delivered", "payload": payload})
 
 
-async def _fanout_cron_missed(emitter, *, drops) -> None:
-    """Fan a ``cron.missed`` event out to every active TUI session.
-
-    Fired once, right after ``cron_service.start()`` dropped past-due one-shot
-    reminders. At that point the client has not called ``turn.subscribe`` yet
-    (server bring-up precedes the handshake), so with no active session the
-    event is queued on the emitter and flushed to the first subscription that
-    registers — unlike ``cron.delivered``, whose no-subscriber case is a
-    silent no-op because a job fire always happens after the client attached.
-    """
-    from datetime import datetime, timezone
-
-    items = [
-        {
-            "name": d.name,
-            "scheduled_at": datetime.fromtimestamp(d.at_ms / 1000, tz=timezone.utc).isoformat(),
-            "message": d.message,
-        }
-        for d in drops
-    ]
-    event = {"type": "cron.missed", "payload": {"count": len(items), "items": items}}
-    sessions = list(emitter._by_session.keys())
-    if not sessions:
-        emitter.queue_startup_event(event)
-        return
-    for session_key in sessions:
-        await emitter.emit(session_key, event)
-
-
 def _build_cron_callback_spine(base_on_cron, emitter):
-    """Wrap the spine cron callback so a job's reply is fanned out as a
+    """Wrap the spine cron callback so a delivering job's reply is fanned out as a
     ``cron.delivered`` event. ``base_on_cron`` (``make_on_cron_job`` with
     ``submit=``) runs the reminder as a CRON turn through the TUI scheduler and
     returns its reply (read back from the runner via ``readback_texts``); the cron
@@ -398,7 +369,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
 
     async def wrapped(job):
         response = await base_on_cron(job)
-        if response:
+        if job.payload.deliver and response:
             await _fanout_cron_delivered(
                 emitter,
                 job_id=job.id,
@@ -438,7 +409,6 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
-        from raven.cli._cron_handler import chain_cron_activity_reset
         from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
@@ -531,11 +501,6 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             playbook_config=config.playbooks,
             # TUI is always a multi-turn interactive session.
             interactive=True,
-            # Anti-runaway reset: user turns arrive as (tui, default), the
-            # same pair CronTool.set_context binds into new jobs, so genuine
-            # TUI activity zeroes the silent-fire counters counted by this
-            # process's on_cron_job (no Sentinel hook in the TUI to chain).
-            on_user_inbound=chain_cron_activity_reset(cron),
         )
         agent_loop.configure_personalization(
             config.agents.defaults.enable_personalization,
@@ -713,13 +678,15 @@ async def _run_rpc_server_until_done(
     direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
     if agent_loop is not None:
+        from types import SimpleNamespace
+
         from raven.cli._cron_handler import make_on_cron_job
 
         # Build the spine before wiring cron: a reminder submits a CRON turn
         # through this scheduler, captured non-streaming and read back via
         # cron_readback so the wrapper can fan it out as a cron.delivered event.
         cron_readback: dict[str, str] = {}
-        turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_rpc_spine(
+        turn_scheduler, turn_hub, turn_ids, turn_teardown = build_rpc_spine(
             agent_loop,
             emitter,
             on_turn_end=turn_module.clear_active,
@@ -734,17 +701,15 @@ async def _run_rpc_server_until_done(
         # before cron.start() so an immediately-firing job has its callback.
         if agent_loop.cron_service is not None:
             base_on_cron = make_on_cron_job(
+                agent_loop,
+                turn_hub,
                 submit=turn_scheduler.submit,
                 readback_texts=cron_readback,
+                channel_manager=SimpleNamespace(enabled_channels=["tui"]),
                 default_channel="tui",
-                cron_service=agent_loop.cron_service,
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
-            # start() dropped past-due one-shot reminders on this runner's
-            # partition; surface them as one cron.missed startup notice.
-            if agent_loop.cron_service.last_startup_drops:
-                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
 
     # Wrap system.hello to latch the handshake event; the umbrella below
     # registers everything else (cli.dispatch + setup.status + reload.mcp +
@@ -835,7 +800,6 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
-                await agent_loop.drain_backend_stores()
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger
@@ -1073,7 +1037,7 @@ def _print_node_help(out=None) -> None:
     msg = (
         "✗ TUI 启动失败：未找到 Node.js ≥ 22。\n"
         "  安装：https://nodejs.org/  或  brew install node@22  或  nvm install 22\n"
-        '  或：一次性提问  ->  raven agent -m "..."\n'
+        "  或：临时使用行式 REPL  ->  raven agent --legacy-repl\n"
     )
     typer.echo(msg, file=out)
 

@@ -237,10 +237,6 @@ def test_onboard_panels_render_without_missing_style(scheme):
     from rich.table import Table
 
     theme = _theme.build_rich_theme(scheme)
-    # color_system pinned: rich caches a resolved Style on its lru_cache, so a
-    # Console left to downgrade to 8-bit here poisons that cache for the
-    # truecolor assertion further down this file. This test only checks that
-    # nothing raises MissingStyle, so the depth is free to pin.
     console = Console(theme=theme, file=io.StringIO(), force_terminal=True, color_system="truecolor")
     console.print("[accent]x[/accent] [bold][accent]y[/accent][/bold] [heading]z[/heading]")
     console.print(Panel("b", title="[bold][accent]t[/accent][/bold]", border_style="border"))

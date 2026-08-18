@@ -107,52 +107,18 @@ def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> 
     return names or None
 
 
-def _resolved_model_id() -> str:
-    """The routed model id (gateway/provider prefix applied) from config.
-
-    Delegates the storage-to-wire conversion to ``providers.wire`` instead
-    of constructing a provider — that would import litellm and mutate env
-    vars during prompt assembly. Reads config lazily and never raises;
-    ``""`` means "unknown" and the identity block skips the line.
-    """
-    try:
-        from raven.config.loader import load_config
-        from raven.providers.registry import find_by_name, find_gateway
-        from raven.providers.wire import wire_model
-
-        config = load_config()
-        model = config.agents.defaults.model
-        provider_name = config.get_provider_name(model)
-        gateway = find_gateway(
-            provider_name,
-            config.get_api_key(model),
-            config.get_api_base(model),
-        )
-        # spec mirrors the non-LiteLLM call sites (codex / azure strip their
-        # own prefix on the wire); a gateway still decides alone when set.
-        return wire_model(model, spec=find_by_name(provider_name), gateway=gateway)
-    except Exception:
-        return ""
-
-
-def identity_text(agent_home: Path, work_dir: Path | None = None, model: str | None = None) -> str:
-    """Segment 1 - the core identity / runtime block.
+def identity_text(agent_home: Path, work_dir: Path | None = None) -> str:
+    """Segment 1 — the core identity / runtime block.
 
     ``work_dir`` defaults to the directory bound for the running turn, and
-    falls back to ``agent_home`` when nothing is bound - the single-directory
+    falls back to ``agent_home`` when nothing is bound — the single-directory
     behaviour a loop built without a workdir resolver still has.
-
-    ``model`` is the resolved routed model id (full ``provider/model``
-    form) told to the model so it never guesses its own identity from
-    pretraining. ``None`` (the default) resolves it lazily from config.
     """
     home_path = str(agent_home.expanduser().resolve())
     bound = work_dir or workdir.current()
     work_path = str(Path(bound).expanduser().resolve()) if bound else home_path
     system = platform.system()
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
-    resolved_model = model if model is not None else _resolved_model_id()
-    model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
 
     if system == "Windows":
         platform_policy = """## Platform Policy (Windows)
@@ -171,7 +137,7 @@ def identity_text(agent_home: Path, work_dir: Path | None = None, model: str | N
 You are Raven, a helpful AI assistant.
 {_language_directive()}
 ## Runtime
-{runtime}{model_line}
+{runtime}
 
 ## Directories
 - Working directory: {work_path} — files you produce go here; relative paths resolve here.

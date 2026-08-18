@@ -84,10 +84,7 @@ async def test_memory_backend_not_writable(cfg):
 @pytest.fixture()
 def everos_toml(tmp_path, monkeypatch):
     path = tmp_path / "everos.toml"
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: path.parent)
-    # Upstream gates the write primitives on root ownership; a tmp root is not
-    # one raven created, so declare it owned for the test.
-    monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: True)
+    monkeypatch.setattr("raven.config.update_everos._EVEROS_CONFIG", path)
     return path
 
 

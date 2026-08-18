@@ -20,9 +20,8 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
-from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
+from raven.providers.base import ErrorClassification, LLMResponse, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
-from raven.providers.truncation import flag_truncation
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -71,7 +70,6 @@ async def stream_llm_call(
     had_error = False
     error_content: str | None = None
     error_classification: ErrorClassification | None = None
-    upstream_finish_reason: str | None = None
 
     for attempt in range(max_reconnects + 1):
         # aclosing() guarantees the async generator (and its underlying stream)
@@ -98,8 +96,6 @@ async def stream_llm_call(
                         # chat()'s own retries, so the stream ends here and
                         # ``had_error`` answers for the call.
                         continue
-                    if delta.finish_reason:
-                        upstream_finish_reason = delta.finish_reason
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -156,18 +152,7 @@ async def stream_llm_call(
         )
 
     tool_calls = _finalize_tool_calls(tool_call_slots)
-
-    # No ceiling is passed in: the main loop deliberately lets chat_stream's own
-    # defaults stand (see the caller's docstring), so the number this turn
-    # carried is not knowable here. Nothing is compared against it, so nothing
-    # is missing.
-    sent_max_tokens, truncated = flag_truncation(
-        finish_reason=upstream_finish_reason,
-        usage=final_usage,
-        tool_calls=tool_calls,
-    )
-
-    finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
+    finish_reason = "tool_calls" if tool_calls else "stop"
 
     content = "".join(content_buf)
     reasoning_content = "".join(reasoning_buf) or None
@@ -185,8 +170,6 @@ async def stream_llm_call(
         finish_reason=finish_reason,
         usage=final_usage or {},
         reasoning_content=reasoning_content,
-        truncated=truncated,
-        max_tokens=sent_max_tokens,
     )
 
 
@@ -254,24 +237,17 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
-        repaired = False
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             # Kept rather than dropped so the registry can quote the text back;
             # it is the only evidence of what the model actually emitted.
             args = {RAW_ARGUMENTS_KEY: args_text}
-            repaired = True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
-                # Flagged on the call, not the turn: this is the one truncation
-                # signal that needs no cooperation from the backend, and the
-                # streaming path assembles its calls here, where no provider is
-                # left to attach a conclusion to.
-                run_meta=RunMeta(arguments_repaired=True) if repaired else None,
             )
         )
     return result

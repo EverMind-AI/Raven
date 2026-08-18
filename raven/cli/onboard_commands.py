@@ -1044,14 +1044,6 @@ def _pick_model(
             )
             model_ids = known
 
-    if default_value and default_value == spec.default_model:
-        console.print(
-            _t(
-                f"  [dim]Default: {default_value} — recommended balance of quality/cost for daily use.[/dim]",
-                f"  [dim]默认:{default_value} — 质量/成本均衡,适合日常使用。[/dim]",
-            )
-        )
-
     if model_ids:
         choices = [_format_model_for_provider(provider, spec, mid) for mid in model_ids]
         # Dedupe: the chain above already prefixes its ids, and _format_ leaves a
@@ -2019,33 +2011,6 @@ def _probe_boxlite() -> tuple[bool, str]:
     return True, "ok"
 
 
-def _warn_host_risk() -> None:
-    console.print(
-        _t(
-            "  [yellow]⚠ Third-party messages (channels, imports) can inject instructions.[/yellow]\n"
-            "  [yellow]⚠ On the host, injected commands execute with full host privileges.[/yellow]",
-            "  [yellow]⚠ 第三方消息(渠道、导入内容)可能向智能体注入指令。[/yellow]\n"
-            "  [yellow]⚠ 本机模式下,注入的命令将以宿主机全部权限执行。[/yellow]",
-        )
-    )
-
-
-def _confirm_host_run(questionary: Any) -> bool:
-    """Warn about host-mode risk and ask for explicit confirmation (default No)."""
-    from raven.cli._styles import RAVEN_STYLE
-
-    _warn_host_risk()
-    confirmed = questionary.confirm(
-        _t("Run directly on the host anyway?", "仍要在本机直接运行吗?"),
-        default=False,
-        style=RAVEN_STYLE,
-        qmark=_QMARK,
-    ).ask()
-    if confirmed is None:
-        raise typer.Exit(1)
-    return bool(confirmed)
-
-
 def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     """Step 2 — choose run location (host / boxlite sandbox)."""
     _step_header(2, _t("Choose where Raven runs code / commands", "选择 Raven 运行代码 / 命令的位置"))
@@ -2057,8 +2022,6 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                 "  [dim]保持运行位置:本机直接运行。[/dim]",
             )
         )
-        if _current_sandbox_backend() == "none":
-            _warn_host_risk()
         return None
 
     questionary = _require_questionary()
@@ -2090,20 +2053,16 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         ]
     )
 
-    while True:
-        picked = questionary.select(
-            _t("Run location:", "运行位置:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
-        ).ask()
-        if picked is None:
-            raise typer.Exit(1)
-        if picked is _BACK:
-            return _BACK
-        if picked == "keep":
-            return None
-        if picked != "none":
-            break
-        if not _confirm_host_run(questionary):
-            continue
+    picked = questionary.select(
+        _t("Run location:", "运行位置:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
+    ).ask()
+    if picked is None:
+        raise typer.Exit(1)
+    if picked is _BACK:
+        return _BACK
+    if picked == "keep":
+        return None
+    if picked == "none":
         _persist_sandbox_backend("none")
         console.print(
             _t(
@@ -2148,30 +2107,25 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                     "  [dim]可能本机缺少所需的虚拟化支持。可退回本机运行,或查阅 boxlite 安装文档。[/dim]",
                 )
             )
-        while True:
-            choice = _failure_choice(
-                [
-                    (_t("Fall back to host", "退回本机运行"), "host"),
-                    (_t("Retry after install", "安装后重试"), "retry"),
-                    (_t("Skip", "跳过"), "skip"),
-                ],
-                non_interactive=non_interactive,
-            )
-            if choice == "retry":
-                break
-            if choice == "host":
-                # A declined confirm re-asks this submenu; only "retry" may
-                # re-probe (and reprint the failure banner).
-                if not _confirm_host_run(questionary):
-                    continue
-                _persist_sandbox_backend("none")
-                console.print(
-                    _t(
-                        "  [green]✓ Running directly on the host.[/green]",
-                        "  [green]✓ 将在本机直接运行。[/green]",
-                    )
+        choice = _failure_choice(
+            [
+                (_t("Fall back to host", "退回本机运行"), "host"),
+                (_t("Retry after install", "安装后重试"), "retry"),
+                (_t("Skip", "跳过"), "skip"),
+            ],
+            non_interactive=non_interactive,
+        )
+        if choice == "retry":
+            continue
+        if choice == "host":
+            _persist_sandbox_backend("none")
+            console.print(
+                _t(
+                    "  [green]✓ Running directly on the host.[/green]",
+                    "  [green]✓ 将在本机直接运行。[/green]",
                 )
-            return None
+            )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2179,7 +2133,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 # ---------------------------------------------------------------------------
 
 
-def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> None:
+def _print_next_steps(*, warnings: list[str]) -> None:
     from rich.table import Table
 
     console.print()
@@ -2247,17 +2201,6 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
             padding=(1, 2),
         )
     )
-
-    if not show_next_steps:
-        # The startup gate runs the wizard with the TUI already on its way in,
-        # so a list of commands to try next is answered before it is read.
-        console.print(
-            _t(
-                "  [dim]Setup complete - starting the TUI...[/dim]",
-                "  [dim]配置完成,正在进入 TUI...[/dim]",
-            )
-        )
-        return
 
     table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
     table.add_column(style="accent", no_wrap=True)
@@ -2785,7 +2728,6 @@ def run_wizard(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
-    show_next_steps: bool = True,
 ) -> None:
     """Run the 6-step onboarding wizard end-to-end.
 
@@ -2816,7 +2758,6 @@ def run_wizard(
             yes=yes,
             reset=reset,
             skip_test=skip_test,
-            show_next_steps=show_next_steps,
         )
     finally:
         _logger.enable("raven")
@@ -2861,7 +2802,6 @@ def _run_wizard_body(
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
-    show_next_steps: bool = True,
 ) -> None:
     global _LANG
     _check_tty_or_die(non_interactive)
@@ -2950,14 +2890,11 @@ def _run_wizard_body(
         else:
             index += 1
 
-    _print_next_steps(warnings=warnings, show_next_steps=show_next_steps)
+    _print_next_steps(warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
-# Startup gate — invoked by bare `raven` and `raven tui` (the same callback).
-# One-shot `raven agent` deliberately stays out: launching a six-step wizard
-# from a scriptable command would be a surprise, so it reports the missing
-# credentials through `check_provider_credentials` instead.
+# Startup gate — invoked by bare `raven` / `raven agent` / TUI entry points
 # ---------------------------------------------------------------------------
 
 
@@ -2978,7 +2915,7 @@ def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
         return
 
     if not _configured_providers():
-        run_wizard(non_interactive=non_interactive, show_next_steps=False)
+        run_wizard(non_interactive=non_interactive)
         return
 
     model = (_load_raw_config().get("agents", {}) or {}).get("defaults", {}).get("model")

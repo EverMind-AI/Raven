@@ -70,15 +70,9 @@ LEDGER: dict[str, Difference] = {
             "neither (see the _build_agent_loop docstring)."
         ),
     ),
-    "cron_service": Difference(
-        absent_from=frozenset({"agent"}),
-        reason=(
-            "Upstream removed the REPL from `agent`, so that process is never a "
-            "cron runner and wiring a CronService would create jobs nothing "
-            "fires (see the comment at the AgentLoop call in "
-            "raven/cli/agent_commands.py). Scripted reminder creation is "
-            "`raven cron add` with an explicit --channel."
-        ),
+    "on_user_inbound": Difference(
+        absent_from=frozenset({"tui"}),
+        reason="Sentinel hook -- same reason as response_modifier.",
     ),
     "now_fn": Difference(
         absent_from=frozenset({"tui"}),

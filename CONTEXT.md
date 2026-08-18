@@ -168,26 +168,6 @@ _Avoid_: using "Sentinel" as the name of the whole proactivity subsystem (stale 
 The time-driven trigger path inside the Proactive Engine: cron jobs and heartbeat.
 _Avoid_: conflating with Sentinel
 
-**Fire-at-origin**:
-The cron ownership rule: a job is claimed and delivered only by the runner that
-owns its creation-time channel binding (`payload.channel/to`) — the gateway for
-enabled IM channels, an open TUI session for `tui`.
-A job whose surface is closed waits (recurring) or lapses (one-shot `at`,
-dropped at that runner's next startup); there is no trigger-time re-routing.
-_Avoid_: reintroducing fire-time channel selection (the retired
-`cron.forward_channels`) — bind the target at creation instead. The `cli`
-channel value is retired with the REPL; stored `cli`-bound jobs migrate to
-`tui` at load time.
-
-**Fixed-delay interval**:
-The scheduling contract for `--every` jobs: the next run is computed from the
-moment the previous fire **completed**, not from the moment it was due. A job
-that takes 15s to run therefore repeats every `interval + 15s`, and its clock
-drifts by design — the property being bought is that a slow run can never
-overlap itself or leave a backlog to catch up on.
-_Avoid_: calling this fixed-rate, or reading `--every 2m` as a promise to fire
-on the two-minute mark; calendar-anchored schedules are what `--cron` is for.
-
 **Predictor**:
 The Sentinel pipeline stage that turns signals into predicted user needs (the
 proactive side of prediction).
@@ -511,7 +491,7 @@ A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`end
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
-candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
+candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
 `read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
 the retired "Mass" source.
 
@@ -571,27 +551,6 @@ _Avoid_: calling it a Skill or a SKILL.md — a playbook has its own root, its o
 file name and its own loader, and is not indexed by `skill_local`. Also avoid
 conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a
 model just wrote; a playbook stores one for reuse).
-
-**SkillPolicy** (`skill_hub/policy.py`):
-The install-time safety decision both Hub install paths consult before any
-`SkillHubClient.install()` — the segment builder's post-gate hydrate and the `use_skill`
-tool. `refusal_for_detail()` checks, in order: the operator blocklist
-(`skillForge.blocklist`, matched case-insensitively against name / slug / native id), the
-`min_safety` bar against the *detail*-level `score_safety` (the catalog payload omits the
-score; a missing or malformed score passes), and an external home-dotdir lint over the
-skill body (`~/.raven` is allowed; any other dotdir reference refuses the install). A hub
-candidate whose detail fetch fails is unvetted and dropped — it never reaches `install()`.
-Every install that passes is appended to a JSONL audit trail
-(`<workspace>/skills/hub/installs.jsonl`, `skill_hub/audit.py`).
-`install_skip_reason()` is the separate operator-consent gate over the bundle download
-itself (`skillForge.autoInstall`: `auto` / `prompt` / `off`), consulted by both call sites
-right before `install()`, after all safety vetting. A consent decline is a **skip**, not a
-refusal: the already-vetted skill body still injects (and `read_skill` still works), only
-the on-disk bundle is withheld. Alongside the JSONL trail, a passing install stamps a
-one-time `.install-meta.json` into the skill directory (`write_install_meta`, first
-install wins) — the O(1) provenance source behind `raven skill list`'s Installed column.
-_Avoid_: calling an autoInstall skip a "refusal" or "block" — refusals are safety verdicts
-on the skill; a skip is withheld operator consent for the download.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.

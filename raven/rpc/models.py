@@ -541,22 +541,6 @@ class DagNodeResult(_Strict):
     node: DagNodeDetail
 
 
-class CronMissedItem(_Strict):
-    name: str
-    scheduled_at: str
-    message: str
-
-
-class CronMissedPayload(_Strict):
-    count: int
-    items: list[CronMissedItem]
-
-
-class CronMissedEvent(_Strict):
-    type: Literal["cron.missed"]
-    payload: CronMissedPayload
-
-
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -574,7 +558,6 @@ TurnEvent = Annotated[
         DagRunStartedEvent,
         DagNodeUpdatedEvent,
         DagRunCompletedEvent,
-        CronMissedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -1752,13 +1735,6 @@ class SessionInitInfo(_Strict):
     mcp_servers: list[JsonValue]
     update_available: bool | None = None
     update_command: str | None = Field(default=None, description="The command that would install the newer release.")
-    config_notices: list[str] | None = Field(
-        default=None,
-        description=(
-            "What a config migration changed on the user's behalf during this boot. "
-            "Drained, so only the first session of a launch carries them."
-        ),
-    )
     endpoint: str | None = Field(
         default=None,
         description="Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.",
@@ -2836,9 +2812,6 @@ __all__ = [
     "SkillhubSearchParams",
     "SkillhubSearchResult",
     "SkillhubSubscores",
-    "CronMissedEvent",
-    "CronMissedItem",
-    "CronMissedPayload",
     # registry
     "METHOD_MODELS",
 ]

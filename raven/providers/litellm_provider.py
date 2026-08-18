@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import json
 import os
 import secrets
 import string
@@ -15,15 +14,7 @@ import json_repair
 from loguru import logger
 
 from raven.providers import prompt_cache
-from raven.providers.base import (
-    GenerationSettings,
-    LLMProvider,
-    LLMResponse,
-    RunMeta,
-    StreamDelta,
-    ToolCallRequest,
-    format_llm_error,
-)
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
@@ -201,10 +192,6 @@ class LiteLLMProvider(LLMProvider):
     def _resolve_model(self, model: str) -> str:
         """The id this request is sent under. See ``providers.wire``."""
         return wire_model(model, gateway=self._gateway)
-
-    def wire_model_id(self, model: str) -> str:
-        """See ``LLMProvider.wire_model_id``."""
-        return self._resolve_model(model)
 
     def can_serve(self, model: str) -> bool:
         """See ``LLMProvider.can_serve``.
@@ -403,7 +390,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int | None = None,
+        max_tokens: int = 4096,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -431,16 +418,14 @@ class LiteLLMProvider(LLMProvider):
         else:
             messages, tools = prompt_cache.strip(messages, tools)
 
-        # Never volunteered: a caller that wants a short answer pins one, and
-        # a vendor that requires the field has a LiteLLM transformation that
-        # supplies it. Clamped to at least 1 when present, since LiteLLM
-        # rejects a zero or negative value outright.
-        if max_tokens is not None:
-            max_tokens = max(1, max_tokens)
+        # Clamp max_tokens to at least 1 — negative or zero values cause
+        # LiteLLM to reject the request with "max_tokens must be at least 1".
+        max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "max_tokens": max_tokens,
             "temperature": temperature,
             # Per-read httpx cap forwarded to the underlying client. This alone
             # cannot bound a backend that trickles bytes forever (the read timer
@@ -448,8 +433,6 @@ class LiteLLMProvider(LLMProvider):
             # asyncio.wait_for wall-clock cap below.
             "timeout": self.generation.timeout,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
@@ -485,12 +468,10 @@ class LiteLLMProvider(LLMProvider):
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
             # string — the retry/fallback layer reads this verdict.
-            classification = self.classify_error(e)
-            head = self._provider_name or (self._gateway.name if self._gateway else None)
             return LLMResponse(
-                content=format_llm_error(e, classification, provider=head),
+                content=f"Error calling LLM: {str(e)}",
                 finish_reason="error",
-                error_classification=classification,
+                error_classification=self.classify_error(e),
             )
 
     async def chat_stream(
@@ -498,9 +479,9 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: object = LLMProvider._SENTINEL,
-        temperature: object = LLMProvider._SENTINEL,
-        reasoning_effort: object = LLMProvider._SENTINEL,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Streaming counterpart to chat().
@@ -513,19 +494,7 @@ class LiteLLMProvider(LLMProvider):
         Provider-specific chunk shapes (e.g. dashscope) are handled inside
         `_normalize_stream_chunk`. The default OpenAI shape extraction lives
         in that hook; subclasses or implementer additions can override.
-
-        Generation defaults resolve from ``self.generation`` the same way
-        ``chat_with_retry`` does: literal defaults here would shadow the user's
-        configuration, since the agent loop calls this with messages/tools/model
-        only.
         """
-        gen = getattr(self, "generation", None) or GenerationSettings()
-        if max_tokens is self._SENTINEL:
-            max_tokens = gen.max_tokens
-        if temperature is self._SENTINEL:
-            temperature = gen.temperature
-        if reasoning_effort is self._SENTINEL:
-            reasoning_effort = gen.reasoning_effort
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
@@ -536,9 +505,12 @@ class LiteLLMProvider(LLMProvider):
         else:
             messages, tools = prompt_cache.strip(messages, tools)
 
+        max_tokens = max(1, max_tokens)
+
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
             # OpenAI-compatible providers only emit the trailing usage chunk
@@ -547,8 +519,6 @@ class LiteLLMProvider(LLMProvider):
             "stream_options": {"include_usage": True},
             "timeout": self.generation.timeout,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max(1, max_tokens)
 
         self._apply_model_overrides(model, kwargs)
 
@@ -665,13 +635,6 @@ class LiteLLMProvider(LLMProvider):
             tool_calls = getattr(delta_obj, "tool_calls", None)
             usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
-            # Upstream states why it stopped only on the terminal chunk, which
-            # otherwise carries no payload at all. Dropping that chunk (as the
-            # emptiness check below used to) discards the one signal that says
-            # the response was cut off at the output ceiling rather than
-            # finished -- the difference between "the model is done" and "the
-            # model was interrupted mid-token".
-            finish_reason = getattr(choices[0], "finish_reason", None) or None
 
             tool_call_delta: dict[str, Any] | None = None
             if tool_calls:
@@ -706,13 +669,7 @@ class LiteLLMProvider(LLMProvider):
                         "total_tokens": getattr(usage, "total_tokens", None),
                     }
 
-            if (
-                content is None
-                and tool_call_delta is None
-                and usage_dict is None
-                and reasoning_content is None
-                and finish_reason is None
-            ):
+            if content is None and tool_call_delta is None and usage_dict is None and reasoning_content is None:
                 return None
 
             return StreamDelta(
@@ -720,7 +677,6 @@ class LiteLLMProvider(LLMProvider):
                 tool_call_delta=tool_call_delta,
                 usage=usage_dict,
                 reasoning_content=reasoning_content,
-                finish_reason=finish_reason,
             )
         except (AttributeError, IndexError):
             return None
@@ -751,20 +707,10 @@ class LiteLLMProvider(LLMProvider):
 
         tool_calls = []
         for tc in raw_tool_calls:
-            # Parse arguments from JSON string if needed. Strict first, so that
-            # "this needed repairing" survives as a signal: an upstream cut mid
-            # arguments arrives as an unclosed blob, and json_repair closes it
-            # silently. Measured against openrouter, both Anthropic and OpenAI
-            # backends send the raw fragment here, so this is the one locally
-            # computable clue that the call was cut.
+            # Parse arguments from JSON string if needed
             args = tc.function.arguments
-            repaired = False
             if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    args = json_repair.loads(args)
-                    repaired = True
+                args = json_repair.loads(args)
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None
@@ -776,7 +722,6 @@ class LiteLLMProvider(LLMProvider):
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
-                    run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                 )
             )
 

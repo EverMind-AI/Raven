@@ -52,8 +52,7 @@ export type TurnEvent =
   | SubagentDeliveredEvent
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
-  | DagRunCompletedEvent
-  | CronMissedEvent;
+  | DagRunCompletedEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -142,10 +141,6 @@ export interface SessionInitInfo {
    * The command that would install the newer release.
    */
   update_command?: string;
-  /**
-   * What a config migration changed on the user's behalf during this boot. Drained, so only the first session of a launch carries them.
-   */
-  config_notices?: string[];
   /**
    * Which of a multi-endpoint provider's endpoints this session is on; null for single-endpoint ones.
    */
@@ -1162,21 +1157,6 @@ export interface CronDeliveredEvent {
     name: string;
     text: string;
     fired_at: string;
-  };
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "CronMissedEvent".
- */
-export interface CronMissedEvent {
-  type: 'cron.missed';
-  payload: {
-    count: number;
-    items: {
-      name: string;
-      scheduled_at: string;
-      message: string;
-    }[];
   };
 }
 /**
