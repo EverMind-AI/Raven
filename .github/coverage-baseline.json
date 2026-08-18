@@ -824,6 +824,14 @@
       "line_percent": 26.993865,
       "statements": 163
     },
+    "raven/cli/_repl_slash.py": {
+      "branch_percent": 67.741935,
+      "branches": 62,
+      "covered_branches": 42,
+      "covered_lines": 107,
+      "line_percent": 71.333333,
+      "statements": 150
+    },
     "raven/cli/_repl_spine.py": {
       "branch_percent": 90.0,
       "branches": 20,
