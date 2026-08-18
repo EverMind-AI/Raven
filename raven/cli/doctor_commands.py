@@ -74,6 +74,7 @@ class MemoryInfo:
 
     backend: Optional[str] = None
     root: Optional[str] = None
+    binary: Optional[str] = None
     owned: bool = True
     address: Optional[str] = None
     server_running: bool = False
@@ -255,7 +256,10 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info.capabilities = dict(report.capabilities)
 
     if info.owned:
+        from raven.plugin.memory.everos._server import everos_binary_path
+
         info.root = str(everos_root())
+        info.binary = everos_binary_path()
         info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
         # Recall quality is decided by the embedding role in the user-level
         # everos.toml: with it recall matches meaning, without it only keywords.
@@ -304,6 +308,11 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         return
     if memory.root:
         console.print(f"  Memories:   {memory.root}")
+    if memory.owned:
+        if memory.binary:
+            console.print(f"  Binary:     {memory.binary}")
+        else:
+            console.print("  Binary:     [yellow]not found[/yellow]  (searched next to the interpreter, then PATH)")
     if not memory.owned:
         console.print(
             "  [dim]Managed by you -- Raven reads it at the address below and never writes,\n"

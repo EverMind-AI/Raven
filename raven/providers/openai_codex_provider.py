@@ -94,20 +94,21 @@ class OpenAICodexProvider(LLMProvider):
         timeout = self.generation.timeout
         try:
             try:
-                content, tool_calls, finish_reason = await _request_codex(
+                content, tool_calls, finish_reason, usage = await _request_codex(
                     url, headers, body, verify=True, timeout=timeout
                 )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
-                content, tool_calls, finish_reason = await _request_codex(
+                content, tool_calls, finish_reason, usage = await _request_codex(
                     url, headers, body, verify=False, timeout=timeout
                 )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
+                usage=usage,
             )
         except Exception as e:
             classification = self.classify_error(e)
@@ -151,7 +152,7 @@ async def _request_codex(
     body: dict[str, Any],
     verify: bool,
     timeout: float,
-) -> tuple[str, list[ToolCallRequest], str]:
+) -> tuple[str, list[ToolCallRequest], str, dict[str, int]]:
     async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
@@ -160,6 +161,27 @@ async def _request_codex(
                     response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
                 )
             return await _consume_sse(response, timeout)
+
+
+def _convert_usage(raw: Any) -> dict[str, int]:
+    """Map a Responses API usage block onto the keys raven's loop reads.
+
+    ``input_tokens`` counts cached tokens as well -- the same total-prompt
+    convention OpenRouter/LiteLLM use, which ``_build_usage_snapshot`` already
+    normalizes to fresh-only, so it passes through as ``prompt_tokens`` as-is.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    details = raw.get("input_tokens_details")
+    if not isinstance(details, dict):
+        details = {}
+    return {
+        "prompt_tokens": int(raw.get("input_tokens") or 0),
+        "completion_tokens": int(raw.get("output_tokens") or 0),
+        "total_tokens": int(raw.get("total_tokens") or 0),
+        "cache_read_input_tokens": int(details.get("cached_tokens") or 0),
+        "cache_creation_input_tokens": int(details.get("cache_write_tokens") or 0),
+    }
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -357,11 +379,14 @@ async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[
         buffer.append(line)
 
 
-async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, list[ToolCallRequest], str]:
+async def _consume_sse(
+    response: httpx.Response, timeout: float
+) -> tuple[str, list[ToolCallRequest], str, dict[str, int]]:
     content = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     finish_reason = "stop"
+    usage: dict[str, int] = {}
 
     async for event in _iter_sse(response, timeout):
         event_type = event.get("type")
@@ -416,8 +441,9 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
                     )
                 )
         elif event_type == "response.completed":
-            status = (event.get("response") or {}).get("status")
-            finish_reason = _map_finish_reason(status)
+            completed = event.get("response") or {}
+            finish_reason = _map_finish_reason(completed.get("status"))
+            usage = _convert_usage(completed.get("usage"))
         elif event_type in {"error", "response.failed"}:
             # The code is the retry signal: classify_error buckets by message
             # substring, and "server_is_overloaded" is what turns a dead-end
@@ -432,7 +458,7 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
             detail = ": ".join(str(part) for part in (code, message) if part)
             raise RuntimeError(f"Codex response failed: {detail}" if detail else "Codex response failed")
 
-    return content, tool_calls, finish_reason
+    return content, tool_calls, finish_reason, usage
 
 
 _FINISH_REASON_MAP = {"completed": "stop", "incomplete": "length", "failed": "error", "cancelled": "error"}

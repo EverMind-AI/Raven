@@ -133,6 +133,19 @@ def _require_llm_configured() -> None:
     )
 
 
+def everos_binary_path() -> str | None:
+    """The everos the spawner would run, or ``None`` when there is none.
+
+    ``doctor`` reports this: which binary raven resolved is invisible
+    otherwise, and it is the first thing to check when a memory install that
+    looks configured still will not start.
+    """
+    try:
+        return _everos_executable()
+    except EverosBinaryMissingError:
+        return None
+
+
 def _everos_executable() -> str:
     """Locate the everos CLI, preferring the one installed alongside raven.
 
