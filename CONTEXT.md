@@ -76,7 +76,8 @@ raven's own memory instead of the user's checkout, and says nothing about having
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
 `execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,
-message, ask_user, spawn (Subagent), MCP, media generation, and skill read/use.
+message, ask_user, spawn (Subagent), MCP, media generation, skill read/use, and the
+plugin market (`plugin`).
 _Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
 
 **Tool Registry** (`agent/tools/registry.py`):
@@ -522,6 +523,17 @@ server, credentials, a skill -- and `install` lands them all or none. Distinct f
 Hub**, which is a remote marketplace for skills alone.
 _Avoid_: "market" on its own for either one -- both surfaces are called that in prose, and
 the RPC groups (`plughub.*` vs `skillhub.*`) are separate.
+
+**`plugin` tool** (`agent/tools/plughub.py`):
+PlugHub's agent-facing surface: `find` / `connect` / `authorize` / `list` / `remove`, over the
+same `plughub/connect.py` transaction the panel's `plug.*` RPC drives, called in-process. It
+installs catalogue entries only and accepts no credentials, so an entry that needs an API key
+is reported by field name rather than installed; an OAuth connect returns the authorization
+URL as soon as the flow mints it instead of waiting for the click, and opens no page -- the
+host running a turn is not necessarily the machine the person who asked is sitting at.
+_Avoid_: reading its name as the **Plugin** term below -- that is a `raven-plugin.toml`
+component under `plugin/`, which this tool neither sees nor installs. The two vocabularies
+meet only in the word.
 
 **Ledger**:
 One JSON file per PlugHub-installed plugin (`plugins/<catalog_id>.json`), recording the

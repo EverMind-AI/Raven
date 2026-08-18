@@ -172,13 +172,19 @@ class MCPConnectionManager:
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
-    async def connect(self, name: str, cfg: Any, *, executor_provider=None) -> dict:
+    async def connect(self, name: str, cfg: Any, *, executor_provider=None, interactive: bool = True) -> dict:
         """Connect (or force-reconnect) one server.
 
         Already-connected servers with unchanged config are left alone;
         anything else (disconnected / error / auth_required / config
         changed) is torn down and connected fresh — this is the explicit
         retry entry point for plug.auth and install flows.
+
+        ``interactive`` defaults to True because this *is* the explicit retry
+        entry point: a caller pressing it is watching. A caller that is only
+        relaying the result to someone elsewhere -- the agent's ``plugin`` tool,
+        whose asker may be on an IM channel -- passes False, so the flow mints
+        the URL without taking this host's screen.
         """
         async with self._lock:
             conn = self._conns.get(name)
@@ -195,9 +201,7 @@ class MCPConnectionManager:
                 # a retry button pressed twice costs two servers, not one.
                 return self._snapshot(conn)
             conn, epoch = await self._begin_connect_locked(name, cfg)
-        # This is the explicit retry entry point (plug.auth / install), so an
-        # OAuth server reached from here may take the browser.
-        return await self._run_connect(conn, epoch, executor_provider, interactive=True)
+        return await self._run_connect(conn, epoch, executor_provider, interactive=interactive)
 
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         """Detach one server. ``drop=True`` forgets the record entirely

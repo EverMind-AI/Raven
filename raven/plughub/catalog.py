@@ -136,6 +136,38 @@ async def catalog_detail(entry_id: str) -> dict | None:
     return None
 
 
+async def catalog_suggest(q: str, lang: str = "en", limit: int = 5) -> list[dict]:
+    """Card projections of the entries closest to ``q``, best first.
+
+    For the "no such plugin" answer: a caller asked for ``asanna`` or for
+    ``jira`` (which the catalog calls ``atlassian``), and a bare refusal makes
+    them guess again. Substring hits come first and rank by how much of the
+    entry they cover; the rest fall back to difflib similarity over the id and
+    both languages of the name, so a near-miss spelling still surfaces.
+    """
+    from difflib import SequenceMatcher
+
+    needle = (q or "").strip().lower()
+    if not needle:
+        return []
+    data = await _load()
+    scored: list[tuple[float, dict]] = []
+    for entry in data.get("entries", []):
+        names = [str(entry.get("id") or ""), _text(entry.get("name"), "en"), _text(entry.get("name"), "zh")]
+        best = 0.0
+        for name in [n.lower() for n in names if n]:
+            if needle in name:
+                # +1 keeps every substring hit ahead of every fuzzy one, and the
+                # ratio inside that band prefers the tightest containment.
+                best = max(best, 1.0 + len(needle) / len(name))
+            else:
+                best = max(best, SequenceMatcher(None, needle, name).ratio())
+        if best >= 0.45:
+            scored.append((best, entry))
+    scored.sort(key=lambda pair: (-pair[0], str(pair[1].get("id") or "")))
+    return [_lite(entry, lang) for _, entry in scored[:limit]]
+
+
 async def catalog_categories() -> list[str]:
     data = await _load()
     seen: list[str] = []
@@ -146,4 +178,4 @@ async def catalog_categories() -> list[str]:
     return seen
 
 
-__all__ = ["catalog_categories", "catalog_detail", "catalog_search"]
+__all__ = ["catalog_categories", "catalog_detail", "catalog_search", "catalog_suggest"]

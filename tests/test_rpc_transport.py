@@ -189,7 +189,7 @@ async def test_the_oauth_callback_escapes_what_the_redirect_carried(gateway_clie
     payload = "<script>alert(1)</script>"
     state = "live-state-for-escaping-test"
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
-    mcp_oauth._PENDING[state] = ("example-server", fut)
+    mcp_oauth._PENDING[state] = mcp_oauth._Pending("example-server", fut, "https://idp.example/authorize")
     try:
         resp = await client.get(
             "/oauth/callback",
