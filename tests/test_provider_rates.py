@@ -177,6 +177,68 @@ def test_a_network_failure_falls_through_to_the_bundled_copy(monkeypatch):
     assert token_rates("openrouter/nobody/has-heard-of-this", 1000, 500) is None
 
 
+def test_the_gateway_price_wins_over_the_routers_copy(monkeypatch):
+    """Who sends the request is not who bills for it.
+
+    LiteLLM routes an ``openrouter/`` id and also carries a row for it, so its
+    answer used to win -- but OpenRouter is the party charging, and the two
+    disagree. Measured on the pinned LiteLLM: ``openrouter/z-ai/glm-4.6`` is
+    filed at 0.40/1.75 per million where OpenRouter's own table says 0.50/2.00,
+    so every such call was under-reported by a fifth.
+
+    A model LiteLLM knows is used deliberately: with one it does not, tier 1
+    misses and the old order would pass this too.
+    """
+    router = rates._try_litellm_rates("openrouter/openai/gpt-4.1", 1000, 500)
+    assert router, "fixture needs a model LiteLLM prices under its openrouter id"
+
+    gateway_prompt, gateway_completion = router[0] * 2, router[1] * 2
+    _patch_openrouter(
+        monkeypatch,
+        lambda req: _models_response(
+            [
+                {
+                    "id": "openai/gpt-4.1",
+                    "pricing": {"prompt": str(gateway_prompt), "completion": str(gateway_completion)},
+                }
+            ]
+        ),
+    )
+    rates._fetch_openrouter_models()  # tier 0 is cache-only; warm it as a real run does
+
+    assert token_rates("openrouter/openai/gpt-4.1", 1000, 500) == (gateway_prompt, gateway_completion)
+
+
+def test_a_direct_id_is_never_priced_from_the_gateways_table(monkeypatch):
+    """The other half. Reading OpenRouter's row for an id that does not name it
+    is what priced a self-hosted deployment at a hosted model's rate, and tier 0
+    must not reintroduce it.
+    """
+    _patch_openrouter(
+        monkeypatch,
+        lambda req: _models_response([{"id": "openai/gpt-4.1", "pricing": {"prompt": "999", "completion": "999"}}]),
+    )
+    rates._fetch_openrouter_models()
+
+    direct = token_rates("openai/gpt-4.1", 1000, 500)
+
+    assert direct is not None
+    assert direct != (999.0, 999.0)
+
+
+def test_the_price_ladder_never_fetches_on_its_first_tier(monkeypatch):
+    """Pricing runs after every call, inside the turn. Tier 0 reads a catalogue
+    already in hand; making it fetch would put an HTTP round-trip on the path of
+    every completion.
+    """
+    counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    # A model LiteLLM knows, so tier 1 answers and tiers 2+ never run.
+    assert token_rates("openrouter/openai/gpt-4.1", 1000, 500) is not None
+
+    assert counter["calls"] == 0
+
+
 def test_the_live_table_is_fetched_once_and_reused(monkeypatch):
     counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
