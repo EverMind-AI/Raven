@@ -5217,6 +5217,15 @@ window.__upnote = (kind, latest) => showUpNote(kind || 'ver', latest);
     /* Absent until system.version carries them; the row simply stays hidden,
        so an older server degrades to no notice rather than a broken one. */
     if (v.update_available) showUpNote('ver', v.latest_version);
+    /* That answer came from the update cache, which the gateway refreshes on a
+       poll -- so between a publish and the next poll it names a version that is
+       already superseded, and the banner promises one build while the button
+       installs whatever is newest at click time. Ask again with `check: true`,
+       after the paint and deliberately not awaited, so the number the reader is
+       shown is the number they will get. */
+    rpc.call('system.version', { check: true })
+      .then((fresh) => { if (fresh && fresh.update_available) showUpNote('ver', fresh.latest_version); })
+      .catch(() => {});
     await loadSessions();
     listReady = true;
     drawList();
