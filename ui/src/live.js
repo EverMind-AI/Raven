@@ -1565,7 +1565,7 @@ function jobRefuse(draft, err, redraw) {
 }
 
 function jobToSave(j) {
-  const base = { name: j.name.trim(), message: j.what.trim(), deliver: true };
+  const base = { name: j.name.trim(), message: j.what.trim() };
   if (j.id && !j.fresh) base.id = j.id;
   if (j.freq === 'hour') {
     return { ...base, kind: 'every', every_seconds: j.every_ms ? Math.round(j.every_ms / 1000) : 3600 };

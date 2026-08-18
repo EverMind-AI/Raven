@@ -213,7 +213,6 @@ class CronService:
                             ),
                             payload=CronPayload(
                                 message=j["payload"].get("message", ""),
-                                deliver=j["payload"].get("deliver", False),
                                 channel=channel,
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
@@ -265,7 +264,6 @@ class CronService:
                     },
                     "payload": {
                         "message": j.payload.message,
-                        "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
                         "topicTag": j.payload.topic_tag,
@@ -691,7 +689,6 @@ class CronService:
         name: str,
         schedule: CronSchedule,
         message: str,
-        deliver: bool = False,
         channel: str | None = None,
         to: str | None = None,
         delete_after_run: bool = False,
@@ -747,7 +744,6 @@ class CronService:
                     j.name = name
                     j.schedule = schedule
                     j.payload.message = message
-                    j.payload.deliver = deliver
                     j.payload.channel = channel
                     j.payload.to = to
                     j.payload.topic_tag = topic_tag
@@ -790,7 +786,6 @@ class CronService:
                         schedule.kind,
                     )
                     j.payload.message = message
-                    j.payload.deliver = deliver
                     j.name = name
                     j.schedule = schedule
                     j.state.next_run_at_ms = _compute_next_run(schedule, now)
@@ -859,7 +854,6 @@ class CronService:
             existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to)
             if existing is not None:
                 existing.payload.message = message
-                existing.payload.deliver = deliver
                 existing.name = name
                 existing.updated_at_ms = now
                 # Recompute next_run_at_ms only if the existing job already
@@ -883,7 +877,6 @@ class CronService:
                 schedule=schedule,
                 payload=CronPayload(
                     message=message,
-                    deliver=deliver,
                     channel=channel,
                     to=to,
                     topic_tag=topic_tag,

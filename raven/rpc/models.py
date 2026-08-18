@@ -1953,7 +1953,6 @@ class CronJobInfo(_Strict):
     at_ms: int | None = None
     tz: str | None = None
     message: str
-    deliver: bool
     next_run_at_ms: int | None = None
     last_run_at_ms: int | None = None
     last_status: Literal["ok", "error", "skipped"] | None = None
@@ -1979,7 +1978,6 @@ class CronSaveParams(_Strict):
     every_seconds: int | None = None
     at_iso: str | None = None
     tz: str | None = None
-    deliver: bool | None = None
     id: str | None = Field(
         default=None,
         description="Editing an existing job: the id is kept so its run history does not orphan.",

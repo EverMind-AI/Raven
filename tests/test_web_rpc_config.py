@@ -203,7 +203,7 @@ class _FakeCron:
     def list_jobs(self, include_disabled: bool = False):
         return self.jobs
 
-    def add_job(self, name, schedule, message, deliver=False, channel=None, to=None):
+    def add_job(self, name, schedule, message, channel=None, to=None):
         from raven.proactive_engine.schedulers.cron.types import CronJob, CronPayload
 
         self._n += 1
@@ -211,7 +211,7 @@ class _FakeCron:
             id=f"job{self._n}",
             name=name,
             schedule=schedule,
-            payload=CronPayload(message=message, channel=channel, to=to, deliver=deliver),
+            payload=CronPayload(message=message, channel=channel, to=to),
         )
         self.jobs.append(job)
         return job

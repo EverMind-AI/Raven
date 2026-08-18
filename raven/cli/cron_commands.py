@@ -789,7 +789,6 @@ def cron_add(
             name=name[:30],
             schedule=schedule,
             message=message,
-            deliver=True,
             channel=channel,
             to=to,
             delete_after_run=delete_after,

@@ -322,7 +322,6 @@ export interface CronJobInfo {
   at_ms?: number;
   tz?: string;
   message: string;
-  deliver: boolean;
   next_run_at_ms?: number;
   last_run_at_ms?: number;
   last_status?: 'ok' | 'error' | 'skipped';
@@ -2734,7 +2733,6 @@ export interface CronSaveParams {
   every_seconds?: number;
   at_iso?: string;
   tz?: string;
-  deliver?: boolean;
   /**
    * Editing an existing job: the id is kept so its run history does not orphan.
    */

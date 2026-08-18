@@ -52,16 +52,15 @@ def test_every_payload_field_survives_a_store_round_trip(tmp_path: Path):
     Driven off ``dataclasses.fields`` rather than a written-out list: a field
     added to the payload and forgotten in ``_save_store`` / ``_load_store``
     reads back as its default, which no assertion on the fields anyone
-    remembered would catch. ``deliver`` was lost exactly that way -- accepted
-    by ``add_job``, dropped on the way to the store -- while a full suite
-    stayed green.
+    remembered would catch. This is not hypothetical: a field was lost exactly
+    that way during the v0.1.12 sync -- accepted by ``add_job``, dropped on the
+    way to the store -- while a full suite stayed green.
     """
     store_path = tmp_path / "jobs.json"
     added = CronService(store_path).add_job(
         name="round trip",
         schedule=CronSchedule(kind="every", every_ms=60_000),
         message="remind me",
-        deliver=True,
         channel="tui",
         to="direct",
         topic_tag="meds",

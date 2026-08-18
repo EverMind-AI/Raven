@@ -215,7 +215,6 @@ class ActionExecutor:
                         name=option.title[:30] or routine_id,
                         schedule=_build_cron_schedule(cron_expr, payload.get("tz")),
                         message=cron_msg,
-                        deliver=True,
                         channel=decision.channel,
                         to=decision.to,
                     )

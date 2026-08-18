@@ -2778,13 +2778,6 @@
           }
         },
         {
-          "name": "deliver",
-          "required": false,
-          "schema": {
-            "type": "boolean"
-          }
-        },
-        {
           "name": "id",
           "required": false,
           "schema": {
@@ -5381,9 +5374,6 @@
           "message": {
             "type": "string"
           },
-          "deliver": {
-            "type": "boolean"
-          },
           "next_run_at_ms": {
             "type": "integer"
           },
@@ -5407,8 +5397,7 @@
           "name",
           "enabled",
           "kind",
-          "message",
-          "deliver"
+          "message"
         ],
         "type": "object"
       },
