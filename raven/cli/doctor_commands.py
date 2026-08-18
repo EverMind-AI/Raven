@@ -162,6 +162,23 @@ class DoctorReport:
         return 0
 
 
+def _routes_anywhere(provider: str) -> bool:
+    """Is this a provider name anything can route to?
+
+    Deliberately generous: it accepts a vendor Raven carries no spec for as long
+    as LiteLLM knows the name -- mistral and xai are supported exactly that way,
+    and reporting them as broken would be worse than saying nothing. What it
+    catches is a name nothing has ever heard of, which is a typo.
+    """
+    from raven.config.update_providers import ensure_routable_provider
+
+    try:
+        ensure_routable_provider(provider)
+    except Exception:
+        return False
+    return True
+
+
 def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
     """Ask the two questions the migrations refuse to answer for the user.
 
@@ -170,10 +187,12 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
     configuration for a self-hosted endpoint served smaller than the catalogue
     thinks.
 
-    One check for now. The other candidate -- a config naming no provider --
-    reads differently before and after the explicit-provider rule lands, so it
-    belongs to that change rather than to this one; routing that resolves to
-    nothing is already reported above.
+    The provider checks are reported and never fixed, and that is not an
+    omission. Only the user knows which vendor they meant to pay: the load-time
+    migration already tried the derivation and wrote down its answer wherever it
+    had one, so a provider still blank here is one the derivation could not
+    resolve. Guessing again in a command called ``--fix`` would be the same
+    guess under a more confident name.
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
     from raven.providers.rates import resolve_context_window
@@ -192,6 +211,23 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
                 f"starts paying for a slow path, and when memory consolidation archives."
             )
             health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
+
+    provider = (getattr(defaults, "provider", "") or "").strip()
+    if not provider:
+        health.findings.append(
+            "agents.defaults.provider is not set, so the vendor serving "
+            f"{model or 'your model'} is derived from its id. A model id does not name whose "
+            "credential answers for it, and the derivation walks a list -- with two vendors "
+            "configured, which one pays can come down to their order in it."
+        )
+        health.findings.append(f"  raven provider use {model or '<model>'} --provider <name>")
+    elif not _routes_anywhere(provider):
+        health.findings.append(
+            f"agents.defaults.provider is {provider!r}, which nothing routes to. "
+            "Every call resolves against a vendor that does not exist, so the credential "
+            "it would use is never found."
+        )
+        health.findings.append("  raven provider list  # the names this accepts")
 
     if fix and health.fixes:
         path = get_config_path()

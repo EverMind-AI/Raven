@@ -783,6 +783,74 @@ def test_the_fix_writer_survives_a_mode_it_cannot_read(tmp_path, monkeypatch) ->
     assert json.loads(cfg.read_text())["agents"]["defaults"]["model"] == "x/y"
 
 
+def test_doctor_reports_a_config_that_names_no_provider(tmp_path) -> None:
+    """The check that had to wait for the explicit-provider rule.
+
+    Before it, ``provider`` defaulted to ``auto`` and blank never happened. After
+    it, blank means the load-time migration could not resolve the vendor -- so
+    every call falls back to deriving it from the model id, which is the guess
+    the rule exists to end.
+
+    The fixture has to be genuinely unresolvable, which is the check's whole
+    scope: with a configured vendor that serves the model, the migration fills
+    the blank in during ``load_config`` and there is nothing left to report.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": ""}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    # Reported, never fixed: the migration already tried the derivation and had
+    # no answer, so only the user knows which vendor they meant to pay.
+    assert not health.fixes
+
+
+def test_doctor_reports_a_provider_nothing_routes_to(tmp_path) -> None:
+    """A typo written before `provider use` started checking the name. Every
+    call then resolves against a vendor that does not exist.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "antropic"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
+def test_doctor_accepts_a_vendor_only_litellm_knows(tmp_path) -> None:
+    """The counterweight. Raven carries no spec for mistral, so "no spec of
+    ours" cannot be the test -- reporting it as broken would be worse than
+    saying nothing.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "mistral"
+    raw["agents"]["defaults"]["model"] = "mistral/mistral-large-latest"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert health.findings == []
+
+
 def test_doctor_prints_the_config_section_it_found(tmp_path, monkeypatch, capsys) -> None:
     """The renderer, not just the check: a finding nothing prints is a finding
     the user never gets."""
