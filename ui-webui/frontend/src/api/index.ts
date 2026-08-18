@@ -27,6 +27,8 @@ export type {
 	RavenCronAddRequest,
 	RavenChannel,
 	RavenChannelFieldSpec,
+	RavenToolCredential,
+	RavenToolKeySource,
 	RavenSkillForge,
 	EverOSModelConfig,
 	EverOSMemoryConfig,

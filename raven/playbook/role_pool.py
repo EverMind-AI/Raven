@@ -1,10 +1,14 @@
 """The role pool — capability bases the generator casts roles from.
 
-Built-in defaults live in ``roles_default.yaml`` next to this module; user
-config (``playbook.roles`` in ``~/.raven/config.json``) merges on top:
+Built-in defaults live in ``roles_default.yaml`` next to this module. A caller
+may pass ``overrides`` to merge on top:
 
 - same base name -> field-level override (only the fields given);
 - new base name  -> added to the pool.
+
+No config key feeds that parameter today -- every caller loads the defaults --
+so the merge is the mechanism a future config or registry uses, not a promise
+that editing config changes the pool right now.
 
 The generator never hardcodes base names — it renders whatever the merged
 pool holds, and contract validation checks ``RoleSpec.base`` against the
@@ -36,8 +40,10 @@ class RoleBase(BaseModel):
 
     description: str
     tags: list[str] = Field(default_factory=lambda: ["stateful", "local-files"])
-    model: str | None = None
-    effort: str | None = None
+    # No model / effort here on purpose: nothing on the execution path reads a
+    # per-base model, so declaring one would be a knob that silently does
+    # nothing. Per-agent model, credentials and connection details belong to the
+    # agent registry, which is where a node's ``agent`` name resolves.
 
 
 class RolePoolError(ValueError):

@@ -238,6 +238,7 @@ raven/
 ├── context_engine/     # Context assembly and Curator path
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
 ├── memory_engine/      # EverOS memory, local skills, SkillForge
+├── playbook/           # Stored orchestrations: library, match funnel, executor
 ├── token_wise/         # Usage tracking, cache placement, routing
 ├── tracing/            # Span capture and local tracing dashboard
 ├── evolver/            # Benchmark-driven harness self-evolution

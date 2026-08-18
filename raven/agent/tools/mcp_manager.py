@@ -22,11 +22,21 @@ disconnect/config-change during the handshake wins cleanly.
 State transitions (``sync``/``connect`` drive them):
 
     disconnected -> connecting -> connected
-                        |-> auth_required   (OAuth needed / token expired)
+                        |-> auth_required   (OAuth needed / token expired /
+                        |                    parked at the browser step)
                         `-> error           (kept until config changes or an
                                              explicit connect() retries it —
                                              the 5s reload poll must not turn
                                              a dead server into a retry storm)
+
+``auth_required`` is reached two ways. A connect that *failed* with an auth
+error rests there until an explicit ``connect()``. A background connect that
+*parked* at the browser-authorization step is moved there immediately — while
+its attempt keeps running: ``sync`` stops awaiting it, the state tells every
+poller who the wait is on, and if the user completes the authorization the
+still-live attempt commits and the server flips to ``connected`` on its own.
+The commit/abort checks therefore accept ``auth_required`` alongside
+``connecting`` when the epoch matches.
 """
 
 from __future__ import annotations
@@ -61,6 +71,20 @@ _AUTH_PARK_GRACE = 120.0
 _AUTH_PARK_MAX = OAUTH_FLOW_TIMEOUT + _AUTH_PARK_GRACE
 
 
+def _log_detached_connect(task: "asyncio.Task") -> None:
+    """Report a connect attempt that finished after sync stopped awaiting it.
+
+    Success needs no line here -- the commit already logs it and broadcasts
+    ``mcp.status``. A failure would otherwise vanish: no caller holds this
+    task any more.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.warning("MCP: a connect left running behind an authorization failed: {}", exc)
+
+
 @dataclass
 class MCPConnection:
     """Live record for one configured server."""
@@ -74,6 +98,9 @@ class MCPConnection:
     epoch: object | None = None
     """Identity of the in-flight connect attempt; commit checks it so a
     disconnect/reconfigure that raced the handshake invalidates the result."""
+    auth_parked: asyncio.Event | None = None
+    """Set when the current attempt reaches the browser-authorization step,
+    so a caller that must not wait on a person can stop awaiting it."""
 
 
 def _cfg_fingerprint(cfg: Any) -> Any:
@@ -221,20 +248,72 @@ class MCPConnectionManager:
         # own guard skips a record that is not `disconnected` -- so abandoning the
         # tail on the first failure would park those servers in `connecting`
         # permanently, which no later sync would retry.
+        #
+        # The attempts run concurrently: they share no state but the registry
+        # (single-threaded asyncio dict ops) and the commit lock, and connecting
+        # serially meant one slow server delayed every server behind it -- the
+        # measured cost was a whole turn spent waiting on a handshake that had
+        # nothing to do with it. The executor is resolved once, under a lock,
+        # because ``_start_executor`` was written for one caller at a time.
         first_error: SandboxInitError | None = None
-        for conn, epoch in pending:
-            try:
-                snap = await self._run_connect(conn, epoch, executor_provider)
-            except SandboxInitError as e:
-                first_error = first_error or e
-                reloaded += 1
-                continue
+        shared_executor = self._shared_executor_provider(executor_provider)
+        results = await asyncio.gather(
+            *[self._attempt_or_detach(conn, epoch, shared_executor) for conn, epoch in pending],
+            return_exceptions=True,
+        )
+        for res in results:
             reloaded += 1
-            tools_changed = tools_changed or snap["tool_count"] > 0
+            if isinstance(res, SandboxInitError):
+                first_error = first_error or res
+                continue
+            if isinstance(res, BaseException):
+                raise res
+            tools_changed = tools_changed or res["tool_count"] > 0
         if first_error is not None:
             raise first_error
 
         return {"reloaded": reloaded, "tools_changed": tools_changed}
+
+    @staticmethod
+    def _shared_executor_provider(executor_provider):
+        """Memoise ``executor_provider`` across one sync's concurrent attempts."""
+        if executor_provider is None:
+            return None
+        lock = asyncio.Lock()
+        cache: list = []
+
+        async def _shared():
+            async with lock:
+                if not cache:
+                    cache.append(await executor_provider())
+                return cache[0]
+
+        return _shared
+
+    async def _attempt_or_detach(self, conn: MCPConnection, epoch: object, executor_provider) -> dict:
+        """Await one connect attempt -- until it parks on a person.
+
+        The moment the attempt reaches the browser-authorization step it stops
+        being sync's business: the server is already marked ``auth_required``
+        (the oauth.pending hook did that), the URL is already published, and
+        the only thing left to wait on is the user. The attempt is left
+        running -- not cancelled, its PKCE state is what the authorization
+        link resolves against -- and commits or aborts on its own; the epoch
+        check covers anything that changes meanwhile.
+        """
+        parked = conn.auth_parked
+        task = asyncio.ensure_future(self._run_connect(conn, epoch, executor_provider))
+        if parked is None:
+            return await task
+        park_wait = asyncio.ensure_future(parked.wait())
+        try:
+            done, _ = await asyncio.wait({task, park_wait}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            park_wait.cancel()
+        if task in done:
+            return await task
+        task.add_done_callback(_log_detached_connect)
+        return self._snapshot(conn)
 
     async def aclose(self) -> None:
         """Detach everything and forget all records (loop shutdown)."""
@@ -245,14 +324,23 @@ class MCPConnectionManager:
     # ── Connect machinery ──────────────────────────────────────────
 
     async def _begin_connect_locked(self, name: str, cfg: Any) -> tuple[MCPConnection, object]:
+        from raven.agent.tools.mcp_oauth import cancel_pending
+
         existing = self._conns.get(name)
         if existing is not None and existing.state == "connected":
             await self._disconnect_locked(name, drop=False)
+
+        # A superseded attempt's authorization link must go stale NOW, not when
+        # its flow times out: the new epoch below already dooms its commit, and
+        # a link that still redeems would show success for an attempt whose
+        # result is dropped while the new attempt waits on a click of its own.
+        cancel_pending(name)
 
         conn = self._conns.get(name) or MCPConnection(name=name, config=cfg)
         conn.config = cfg
         epoch = object()
         conn.epoch = epoch
+        conn.auth_parked = asyncio.Event()
         self._conns[name] = conn
         self._set_state(conn, "connecting")
         return conn, epoch
@@ -282,7 +370,7 @@ class MCPConnectionManager:
                     self._registry,
                     stack,
                     executor=executor,
-                    http_auth=await self._auth_for(name, cfg, interactive=interactive),
+                    http_auth=await self._auth_for(conn, interactive=interactive),
                 ),
             )
         except SandboxInitError as e:
@@ -321,7 +409,16 @@ class MCPConnectionManager:
             return self._snapshot(conn)
 
         async with self._lock:
-            if self._conns.get(name) is not conn or conn.epoch is not epoch or conn.state != "connecting":
+            # `auth_required` is a live state here, not a terminal one: the
+            # oauth.pending hook moves a background attempt there while its
+            # handshake keeps running, and this commit is that handshake
+            # finishing. The epoch is what says whether the attempt still owns
+            # the record.
+            if (
+                self._conns.get(name) is not conn
+                or conn.epoch is not epoch
+                or conn.state not in ("connecting", "auth_required")
+            ):
                 # A disconnect or reconfigure won the race — this attempt's
                 # registrations and transport are stale, drop them. Names the
                 # winner now owns are left alone: the registry keys by name, so
@@ -415,14 +512,17 @@ class MCPConnectionManager:
     ) -> None:
         self._unregister_unclaimed(registered)
         await self._close_stack(stack)
-        if self._conns.get(conn.name) is conn and conn.epoch is epoch and conn.state == "connecting":
+        if self._conns.get(conn.name) is conn and conn.epoch is epoch and conn.state in ("connecting", "auth_required"):
             self._set_state(conn, state, error or None)
 
     async def _disconnect_locked(self, name: str, *, drop: bool) -> None:
+        from raven.agent.tools.mcp_oauth import cancel_pending
+
         conn = self._conns.get(name)
         if conn is None:
             return
         conn.epoch = None  # invalidates any in-flight attempt
+        cancel_pending(name)
         for t in conn.tool_names:
             self._registry.unregister(t)
         conn.tool_names = set()
@@ -443,13 +543,32 @@ class MCPConnectionManager:
 
     # ── OAuth seam ─────────────────────────────────────────────────
 
-    async def _auth_for(self, name: str, cfg: Any, *, interactive: bool = False):
+    async def _auth_for(self, conn: MCPConnection, *, interactive: bool = False):
         """httpx.Auth for this server's HTTP transport; None = no auth."""
+        cfg = conn.config
         if getattr(cfg, "auth", "none") != "oauth":
             return None
         from raven.agent.tools.mcp_oauth import provider_for
 
-        return await provider_for(name, cfg, notify=self.on_oauth_event, interactive=interactive)
+        parked = conn.auth_parked
+
+        def notify(event: str, payload: dict) -> None:
+            if event == "oauth.pending":
+                # The connect just parked on a person. Say so in the state
+                # machine right away -- a background caller stops awaiting on
+                # the event, and every poller sees who the wait is on -- while
+                # the attempt itself keeps running so a completed authorization
+                # still commits. Only a background connect flips the state: an
+                # interactive one (plug.install / plug.auth) is being watched
+                # by the flow that asked for it.
+                if not interactive and conn.state == "connecting":
+                    self._set_state(conn, "auth_required", "waiting for browser authorization")
+                if parked is not None:
+                    parked.set()
+            if self.on_oauth_event is not None:
+                self.on_oauth_event(event, payload)
+
+        return await provider_for(conn.name, cfg, notify=notify, interactive=interactive)
 
     @staticmethod
     def _is_auth_error(exc: BaseException) -> bool:

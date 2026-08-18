@@ -48,11 +48,13 @@ class ContextAssembler(ContextEngine):
         builders: list[SegmentBuilder],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         now_fn: Callable[[], datetime] | None = None,
+        get_tool_notices: Callable[[], list[str]] | None = None,
     ) -> None:
         self._builders = sorted(builders, key=lambda b: b.order)
         self._phase_a = [b for b in self._builders if not b.needs_prefix]
         self._phase_b = [b for b in self._builders if b.needs_prefix]
         self.get_tool_definitions = get_tool_definitions
+        self.get_tool_notices = get_tool_notices
         self._now_fn = now_fn or datetime.now
 
     @property
@@ -163,7 +165,8 @@ class ContextAssembler(ContextEngine):
 
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
         """The single structural user message: runtime context + content."""
-        runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id)
+        notices = self.get_tool_notices() if self.get_tool_notices is not None else None
+        runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id, tool_notices=notices)
         user_content = render.build_user_content(
             ctx.current_message,
             ctx.media,

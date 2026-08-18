@@ -290,7 +290,7 @@ def register(app: typer.Typer) -> None:
             # Gates run_subagent_dag: AgentLoop registers it only when the roster
             # is non-empty, since its nodes dispatch to these agents.
             third_party_subagents=config.subagents.third_party,
-            playbook_config=config.playbook,
+            playbook_config=config.playbooks,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,

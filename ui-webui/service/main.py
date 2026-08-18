@@ -337,6 +337,10 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        # Movable, because the launcher has to be able to put the service
+        # somewhere else: :8000 is a popular default and the process already on
+        # it is usually not this one. start_webapp.sh passes SERVICE_PORT here
+        # and to the frontend bundle, so both ends agree on where to look.
+        port=int(os.environ.get("SERVICE_PORT", "8000")),
         reload=True,
     )

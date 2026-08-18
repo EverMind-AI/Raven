@@ -271,12 +271,16 @@ def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
         return None
 
 
-_MCP_TURN_WAIT_S = 20.0
+_MCP_TURN_WAIT_S = 90.0
 """How long a turn waits for the first MCP sync before proceeding without it.
 
-Long enough for local stdio servers to hand over their tool lists, short enough
-that a server parked on an authorization nobody answered does not become the
-reader's wait. See ``AgentLoop._connect_mcp``.
+Mirrors the manager's own per-handshake budget (``_HANDSHAKE_TIMEOUT``), so a
+cold stdio server downloading its package on first run still makes it into the
+very turn a user sends after installing it. The sync no longer includes anyone
+waiting on a person -- a connect that reaches the browser-authorization step is
+marked ``auth_required`` and left behind by the sync itself -- and it connects
+servers concurrently, so in practice this bound is the slowest single
+handshake, not a sum. See ``AgentLoop._connect_mcp``.
 """
 
 
@@ -558,6 +562,10 @@ class AgentLoop:
             model=self.model,
             context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
+            # Late-bound: the playbook runtime is built after the context
+            # engine, and the library can change between turns.
+            playbook_listing=lambda: self._playbooks.listing() if self._playbooks is not None else [],
+            get_tool_notices=self._mcp_tool_notices,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
             # SkillForgeRouter + EverOS recall lane.
@@ -956,6 +964,25 @@ class AgentLoop:
                     charge=self.subagents.charge_dag_run,
                 )
             )
+        # The agent's own entry into the playbook library. Registered only when
+        # the library actually holds something matchable: the passive funnel
+        # already decided before this turn, so this tool exists for the cases it
+        # structurally cannot catch -- a request that means a playbook without
+        # using any of its trigger words, and a parameter supplied only after a
+        # previous run asked for it -- and an empty roster has neither.
+        if self._playbooks is not None and not self._playbooks.empty:
+            from raven.agent.tools.run_playbook import RunPlaybookTool
+
+            self.tools.register(RunPlaybookTool(self._playbooks))
+        # Creation registers whenever the feature is on -- an empty library is
+        # exactly when capturing the first workflow matters.
+        if self._playbooks is not None:
+            from raven.agent.tools.create_playbook import CreatePlaybookTool
+            from raven.config.update import set_playbook_disabled
+
+            self.tools.register(
+                CreatePlaybookTool(self._playbook_generator, self._playbook_store, set_playbook_disabled)
+            )
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -1049,9 +1076,13 @@ class AgentLoop:
         one announce path.
         """
         from raven.agent.subagent_dag.tool import SubAgentDagTool
-        from raven.memory_engine.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
+        from raven.playbook import PlaybookExecutor, PlaybookRuntime, PlaybookStore
 
-        library_dir = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
+        # The user layer of the two-layer library; the builtin layer is the
+        # store's own default. ``subagents.workspace`` is agent home here, so
+        # playbooks sit beside memory and skills rather than following the
+        # per-turn working directory.
+        user_layer = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
         dag_tool = SubAgentDagTool(
             workspace=self.subagents.workspace,
             third_party_subagents=self._third_party_subagents,
@@ -1063,7 +1094,7 @@ class AgentLoop:
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
         )
-        from raven.memory_engine.playbook import agent_roster, load_role_pool
+        from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
 
         executor = PlaybookExecutor(
             backend_factory=self.subagents.build_role_backend,
@@ -1071,13 +1102,31 @@ class AgentLoop:
             provider=self.provider,
             compose_model=cfg.model,
         )
-        executor.set_roster(agent_roster(load_role_pool()))
+        roster = agent_roster(load_role_pool())
+        executor.set_roster(roster)
+        store = PlaybookStore(user_layer)
+        # Kept for the create_playbook tool: creation shares the library and
+        # generator with the funnel, so both entries write the same place.
+        self._playbook_store = store
+        self._playbook_generator = PlaybookGenerator(self.provider, None, roster, StaticInventory(), model=cfg.model)
+
+        async def ask_via_broker(prompt: str, choices: "list[str] | None", conversation_id: str):
+            # Resolved per call, not captured: the tool exists after
+            # _register_default_tools and the transport injects its broker
+            # later still. None (no tool / no broker) tells the runtime the
+            # environment cannot ask, which it treats as consent-not-required.
+            tool = self.tools.get("ask_user")
+            if isinstance(tool, AskUserTool):
+                return await tool.ask_direct(prompt, choices, conversation_id)
+            return None
+
         return PlaybookRuntime(
             provider=self.provider,
-            store=PlaybookStore(library_dir),
+            store=store,
             executor=executor,
             model=cfg.model,
-            include_draft=cfg.match_draft,
+            disabled=cfg.disabled,
+            ask=ask_via_broker,
         )
 
     def _dag_guide_skill_id(self) -> str | None:
@@ -1813,19 +1862,45 @@ class AgentLoop:
             )
         return self._mcp_manager
 
+    def _mcp_tool_notices(self) -> list[str]:
+        """Host facts about MCP tools the definitions cannot carry.
+
+        One line per enabled server sitting in ``auth_required``: its tools are
+        not in the definitions at all, so without this the model reads an
+        unauthorized plugin as a capability that does not exist and says so.
+        Rendered into the runtime-context block, not the system prompt -- the
+        set changes turn to turn and must never be cached with the prefix.
+        """
+        # getattr: the engine factory takes this callable during __init__,
+        # before the manager attribute is assigned further down.
+        mgr = getattr(self, "_mcp_manager", None)
+        if mgr is None:
+            return []
+        # Stated as fact, not as a directive: this block's own header says
+        # "metadata only, not instructions", and the model is told to treat it
+        # that way -- an imperative here would be either ignored or a fence
+        # violation. The fact alone is enough to stop it reporting a missing
+        # capability.
+        return [
+            f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
+            f"absent from this turn's definitions until the user authorizes it in the plugin panel."
+            for snap in mgr.status()
+            if snap["state"] == "auth_required" and snap.get("enabled", True)
+        ]
+
     async def _connect_mcp(self, *, wait: float | None = None) -> None:
         """Connect to configured MCP servers (one-time, lazy).
 
         ``wait`` bounds how long the CALLER blocks, not how long the connect
         gets: past it the sync keeps running and its tools land in the registry
-        for the next turn. A turn passes one because a server parked at the
-        browser-authorization step is waiting on a person, for up to
-        ``OAUTH_FLOW_TIMEOUT``, and the manager connects servers one after
-        another -- so one unanswered park held every later server and the
-        message behind them. Measured at 10m35s from send to the first model
-        call, on a park nobody had been shown.
+        for the next turn. The manager already refuses to wait on a person --
+        a connect that reaches the browser-authorization step is marked
+        ``auth_required`` and the sync moves on without it -- so this bound
+        only covers real handshakes, and it matches their own budget. It
+        exists because one wedged sync once held a message for 10m35s, and a
+        turn must never inherit a wait like that whatever the cause.
 
-        Left unbounded for a caller that has nothing else to do (``_start``),
+        Left unbounded for a caller that has nothing else to do (``run()``),
         which also keeps SandboxInitError reaching its handler there.
         """
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
@@ -1990,6 +2065,16 @@ class AgentLoop:
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
+        # Not in the name list above: the playbook executor's DAG tool is a
+        # private unregistered instance, reachable only through the runtime.
+        # Recorded here -- the one place every origin passes -- because
+        # consider() only runs for user turns, while a CRON/SENTINEL turn can
+        # still call run_playbook and its announce must go to the turn's own
+        # address, not the last human conversation's.
+        if self._playbooks is not None:
+            self._playbooks.set_context(
+                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
+            )
 
     def set_dag_progress_sink(self, sink) -> None:
         """Late-bind the DAG tool's progress sink (host wires it to the web
@@ -2475,6 +2560,14 @@ class AgentLoop:
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
+                        # An injected message is a new user message by every
+                        # other definition in the loop, but it never reaches
+                        # consider(), whose reset would otherwise clear the
+                        # conversation's declined playbooks -- so an explicit
+                        # re-request inside the fall-through turn stays
+                        # refused. Reset here, at the merge point.
+                        if self._playbooks is not None:
+                            self._playbooks.reset_declines(session_key)
 
             tool_defs = self.tools.get_definitions()
 

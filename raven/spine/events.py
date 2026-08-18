@@ -38,12 +38,18 @@ class ToolPhase(StrEnum):
 
 # Lifecycle events — emitted by the worker, never by a runner.
 
+# ``turn_id`` is the second correlation axis alongside ``conversation_id``: the
+# lane is WHERE a turn ran, this is WHICH turn ran. A consumer keyed only on the
+# lane stamps a turn's end with whatever a per-lane slot last held, which is a
+# different turn whenever the runtime submits one of its own onto a busy lane.
+
 
 @dataclass(frozen=True)
 class TurnStarted:
     """Marker that a turn began."""
 
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,7 @@ class TurnFailed:
     error: str
     cancelled: bool
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,7 @@ class TurnEnded:
     latency_ms: float
     explicit_reply: bool
     conversation_id: str | None = None
+    turn_id: str = ""
 
 
 # Deliverable events — emitted by the runner, routed to outlets.

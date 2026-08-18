@@ -442,6 +442,101 @@ def register_config_methods(
 
     dispatcher.register("raven.channels.live", _channels_live)
 
+    # Tool credentials: the Serper key behind ``web_search``, and the key/model of
+    # each media tool. Reuses raven.config.update_tools. Both are read where the
+    # AgentLoop is built -- ``web_search`` is withheld without a key, and a media
+    # tool is registered only once its model or key is set -- so a write here
+    # takes effect on the next gateway restart, which is what ``set`` reports.
+    from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
+    from raven.config.update_tools import MEDIA_TOOLS, get_media, get_web_search, set_media, set_web_search
+
+    _media_classes = {"image": ImageGenerateTool, "speech": SpeechGenerateTool, "video": VideoGenerateTool}
+    # Asked of a tool built with no config rather than repeated as a literal: the
+    # default endpoint lives in media_gen, and a second copy here would keep
+    # claiming the old one after that module moved on. All three share it.
+    _media_default_base = ImageGenerateTool().api_base
+
+    def _registered_tools() -> set[str]:
+        """Names the live loop actually offers the model right now.
+
+        This is the difference between "configured" and "working": the config
+        file can hold a key that the running process was started without.
+        """
+        return set(getattr(getattr(agent, "tools", None), "tool_names", ()) or ())
+
+    def _openrouter_config_key() -> bool:
+        """Whether ``providers.openrouter.apiKey`` is set, read from the file.
+
+        Not from ``config``: that object was validated at startup, and a key the
+        user has just saved on the credentials page would not be in it.
+        """
+        from raven.config.update_providers import get_provider_config
+
+        return get_provider_config("openrouter").get("api_key") == "****set****"
+
+    def _web_search_row(registered: set[str]) -> dict:
+        stored = get_web_search()
+        own = stored["api_key"] == "****set****"
+        env = bool(os.environ.get("SERPER_API_KEY"))
+        return {
+            "kind": "web_search",
+            "tool": "web_search",
+            "registered": "web_search" in registered,
+            "settingPath": "tools.web.search.apiKey",
+            "envKey": "SERPER_API_KEY",
+            "apiKey": stored["api_key"],
+            "maxResults": stored["max_results"],
+            # Which source will actually supply the key, in the order the tool
+            # resolves them. ``none`` is what the page turns into a prompt.
+            "keySource": "own" if own else "env" if env else "none",
+        }
+
+    def _media_row(kind: str, registered: set[str]) -> dict:
+        cls = _media_classes[kind]
+        stored = get_media(kind)
+        own = stored["api_key"] == "****set****"
+        # The registration rule, restated from AgentLoop: a media tool the user
+        # never configured stays off even with an OpenRouter key set for chat.
+        configured = own or bool(stored["model"])
+        if own:
+            source = "own"
+        elif _openrouter_config_key():
+            source = "openrouter"
+        elif os.environ.get("OPENROUTER_API_KEY"):
+            source = "env"
+        else:
+            source = "none"
+        return {
+            "kind": kind,
+            "tool": cls.name,
+            "registered": cls.name in registered,
+            "configured": configured,
+            "settingPath": f"tools.media.{kind}.apiKey",
+            "envKey": "OPENROUTER_API_KEY",
+            "apiKey": stored["api_key"],
+            "apiBase": stored["api_base"],
+            "defaultApiBase": _media_default_base,
+            "model": stored["model"],
+            "defaultModel": cls.default_model,
+            "keySource": source,
+        }
+
+    async def _tools_list(params: dict) -> dict:
+        registered = _registered_tools()
+        return {"tools": [_web_search_row(registered), *(_media_row(k, registered) for k in MEDIA_TOOLS)]}
+
+    async def _tools_set(params: dict) -> dict:
+        kind = params.get("kind") or ""
+        fields = params.get("fields") or {}
+        if kind == "web_search":
+            set_web_search(fields)
+        else:
+            set_media(kind, fields)  # raises KeyError on an unknown kind
+        return {"ok": True, "restart_required": True}
+
+    dispatcher.register("raven.tools.list", _tools_list)
+    dispatcher.register("raven.tools.set", _tools_set)
+
     # Skills (SkillForge). Reuses raven.config.update_skills. Config is applied at
     # gateway startup, so a change takes effect on the next gateway restart.
     from raven.config.update_skills import get_skillforge, list_skills, set_skillforge

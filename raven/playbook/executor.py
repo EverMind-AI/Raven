@@ -21,20 +21,22 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.memory_engine.playbook.prompt import COMPOSE_TOOL_NAME, build_compose_prompt, compose_tool
-from raven.memory_engine.playbook.types import NodeSpec, PlaybookSpec
-from raven.memory_engine.playbook.validate import validate_graph_nodes
+from raven.playbook.prompt import COMPOSE_TOOL_NAME, build_compose_prompt, compose_tool
+from raven.playbook.types import NodeSpec, PlaybookSpec
+from raven.playbook.validate import validate_graph_nodes
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
 
 _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
+_NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
 
 
 @dataclass(frozen=True)
@@ -69,23 +71,43 @@ class ExecutionPlan:
     """Degradations worth surfacing (stripped instances, unsupported mcps)."""
 
 
-def _fill_params(spec: PlaybookSpec, params: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
-    """Resolve every declared param to a string value, or collect questions.
+def _fill_params(spec: PlaybookSpec, params: dict[str, Any]) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Resolve every declared param to a string value, or collect what is missing.
 
-    A param's ``description`` doubles as the follow-up wording, per the
-    field definition."""
+    Returns the missing params as ``(name, description)``: the description is the
+    follow-up wording per the field definition, and the name is what the retry
+    hint needs -- see :func:`_missing_params_reply`.
+    """
     values: dict[str, str] = {}
-    questions: list[str] = []
+    missing: list[tuple[str, str]] = []
     for name, p in spec.params.items():
         if name in params and params[name] is not None:
             values[name] = _render_value(params[name])
         elif p.default is not None:
             values[name] = _render_value(p.default)
         elif p.required:
-            questions.append(p.description)
+            missing.append((name, p.description))
         else:
             values[name] = ""
-    return values, questions
+    return values, missing
+
+
+def _missing_params_reply(spec: PlaybookSpec, missing: list[tuple[str, str]]) -> str:
+    """Ask for the missing params, and show a phrasing that can come back.
+
+    Matching is stateless: the answer re-enters at L1, where a bare reply like
+    "OpenAI" carries no trigger word, wins no nomination, and the run is lost
+    with the user believing they answered. So the ask carries an example built
+    from this playbook's own vocabulary -- repeating a trigger is what makes the
+    next message reach the gate at all.
+    """
+    asks = "\n".join(f"- {desc}" for _name, desc in missing)
+    trigger = spec.triggers.keywords[0]
+    slots = " ".join(f"{name}=<your answer>" for name, _desc in missing)
+    return (
+        f"Running '{spec.name}' still needs a few details:\n{asks}\n"
+        f"Include a trigger word in your reply, e.g.: {trigger} {slots}"
+    )
 
 
 def _render_value(value: Any) -> str:
@@ -100,6 +122,44 @@ def _fill_param_refs(text: str, values: dict[str, str]) -> str:
     return _PARAM_REF_RE.sub(lambda m: values.get(m.group(1), m.group(0)), text)
 
 
+def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
+    """Rewrite node ids to a run-unique form, all reference sites in step.
+
+    The graph runner holds node ids unique per session (that is what makes a
+    finished node's output addressable across runs), while playbook authors
+    write plain stable ids like ``scan`` — so verbatim dispatch would reject
+    the second run of the same playbook in one conversation. This rewrite is
+    the bridge: id, ``dependsOn`` and the ``{{ id.output }}`` /
+    ``{{ id.output_path }}`` placeholders move together, ``{{ ref:… }}``
+    forms and unknown ids pass through untouched, and the mapping never
+    leaves the executor, so the file format stays plain. A random tag rather
+    than a run counter: a counter would restart with the process while the
+    session's id registry outlives it.
+    """
+    tag = uuid.uuid4().hex[:6]
+    # The composite must satisfy the runner's id charset even if the
+    # playbook name does not.
+    prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", spec_name)
+    mapping = {n.id: f"{prefix}-{tag}-{n.id}" for n in nodes}
+
+    def rewrite_refs(text: str) -> str:
+        return _NODE_REF_RE.sub(
+            lambda m: "{{ %s.%s }}" % (mapping.get(m.group(1), m.group(1)), m.group(2)),
+            text,
+        )
+
+    return [
+        n.model_copy(
+            update={
+                "id": mapping[n.id],
+                "depends_on": [mapping.get(d, d) for d in n.depends_on],
+                "prompt_template": rewrite_refs(n.prompt_template),
+            }
+        )
+        for n in nodes
+    ]
+
+
 class PlaybookExecutor:
     """Turn a matched playbook into a running graph."""
 
@@ -110,11 +170,16 @@ class PlaybookExecutor:
         dag_tool: Any = None,
         provider: "LLMProvider | None" = None,
         compose_model: str | None = None,
+        background: bool = True,
     ) -> None:
         self._make_backend = backend_factory
         self._dag_tool = dag_tool
         self._provider = provider
         self._compose_model = compose_model
+        #: False = wait for the graph and reply with its result instead of a
+        #: dispatch receipt. The CLI's explicit run; in-conversation entries
+        #: stay backgrounded so the turn is not held open by a long graph.
+        self._background = background
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
         """Address this turn's dispatch (progress + announce) like the loop
@@ -124,15 +189,14 @@ class PlaybookExecutor:
             self._dag_tool.set_context(channel, chat_id, session_key)
 
     async def execute(self, spec: PlaybookSpec, params: dict[str, Any]) -> ExecutionPlan:
-        values, questions = _fill_params(spec, params)
-        if questions:
-            asks = "\n".join(f"- {q}" for q in questions)
+        values, missing = _fill_params(spec, params)
+        if missing:
+            return ExecutionPlan(kind="questions", reply=_missing_params_reply(spec, missing))
+        if self._dag_tool is None:
             return ExecutionPlan(
                 kind="questions",
-                reply=f"要跑「{spec.name}」还差几个信息：\n{asks}\n补充后我就开始。",
+                reply="No graph executor is wired up in this environment; describe the task directly and I will handle it ad hoc.",
             )
-        if self._dag_tool is None:
-            return ExecutionPlan(kind="questions", reply="当前环境没有接好图执行器，请直接描述任务由我即兴处理。")
 
         if spec.mode == "dag":
             nodes = [
@@ -144,7 +208,9 @@ class PlaybookExecutor:
             if nodes is None:
                 return ExecutionPlan(
                     kind="questions",
-                    reply="按模板组图失败（" + "; ".join(compose_errors[:3]) + "），请直接描述任务由我即兴处理。",
+                    reply="Graph assembly from the template failed ("
+                    + "; ".join(compose_errors[:3])
+                    + "); describe the task directly and I will handle it ad hoc.",
                 )
         return await self._dispatch(spec, nodes)
 
@@ -175,8 +241,8 @@ class PlaybookExecutor:
             messages.append(
                 {
                     "role": "user",
-                    "content": "组出的图未通过校验，修复后重新提交 emit_graph：\n"
-                    + "\n".join(errors or ["未返回 nodes"]),
+                    "content": "The composed graph failed validation. Fix the errors and submit again through emit_graph:\n"
+                    + "\n".join(errors or ["no nodes returned"]),
                 }
             )
         return None, errors or ["composition failed"]
@@ -192,14 +258,19 @@ class PlaybookExecutor:
         from raven.agent.subagent_dag import AgentCapabilities
 
         tool_nodes: list[dict[str, Any]] = []
-        for node in nodes:
+        # Notes and logs speak the author's plain ids; the runner gets the
+        # namespaced ones.
+        for node, run_node in zip(nodes, _namespace_run(spec.name, nodes)):
+            # mcps degrades with a note rather than failing the graph: unlike a
+            # confirm gate or a shared session (both refused in validate.py), a
+            # missing tool costs capability, not correctness -- the node still
+            # does its own step, just with less reach.
             if node.mcps:
-                notes.append(f"节点 {node.id} 声明的 mcps（{', '.join(node.mcps)}）本期子代理暂不支持，相关能力降级")
-            if node.instance:
-                notes.append(f"节点 {node.id} 的会话续接（instance={node.instance}）暂不支持，已按独立会话执行")
-            if node.confirm:
-                notes.append(f"节点 {node.id} 声明了确认闸，本期确认机制未接入，已直接执行")
-            key = f"pb-{node.id}"
+                notes.append(
+                    f"node {node.id} declares mcps ({', '.join(node.mcps)}) that sub-agents "
+                    "cannot mount in this release; those capabilities are degraded"
+                )
+            key = f"pb-{run_node.id}"
             backends[key] = self._make_backend(
                 RoleBuildSpec(
                     name=key,
@@ -210,21 +281,28 @@ class PlaybookExecutor:
             capabilities[key] = AgentCapabilities(stateful=False, reads_local_files=True)
             tool_nodes.append(
                 {
-                    "id": node.id,
+                    "id": run_node.id,
                     "subagent": key,
-                    "prompt_template": node.prompt_template,
-                    "depends_on": list(node.depends_on),
+                    "prompt_template": run_node.prompt_template,
+                    "depends_on": list(run_node.depends_on),
                 }
             )
 
-        receipt = await self._dag_tool.run_with_roles(tool_nodes, roles=backends, role_capabilities=capabilities)
+        receipt = await self._dag_tool.run_with_roles(
+            tool_nodes, roles=backends, role_capabilities=capabilities, background=self._background
+        )
         text = str(getattr(receipt, "model_text", receipt))
         if text.startswith("Error"):
-            return ExecutionPlan(kind="questions", reply=f"流程启动失败：{text}", notes=notes)
+            return ExecutionPlan(kind="questions", reply=f"Failed to start the run: {text}", notes=notes)
         logger.info("playbook {} dispatched as a DAG run ({} nodes)", spec.name, len(tool_nodes))
-        reply = f"已按「{spec.name}」启动流程（{len(tool_nodes)} 步），跑完我会把结果发回来。"
+        if self._background:
+            reply = (
+                f"Started '{spec.name}' ({len(tool_nodes)} steps); results will be delivered when the run completes."
+            )
+        else:
+            reply = text
         if notes:
-            reply += "\n注：" + "；".join(dict.fromkeys(notes))
+            reply += "\nNote: " + "; ".join(dict.fromkeys(notes))
         return ExecutionPlan(kind="dag", reply=reply, notes=notes)
 
 

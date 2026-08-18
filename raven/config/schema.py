@@ -1276,13 +1276,17 @@ class PlaybookConfig(Base):
 
     enabled: bool = False
     dir: str | None = None
-    """Library directory; defaults to ``<workspace>/playbooks``."""
+    """Override for the user layer of the library; defaults to
+    ``<agent_home>/playbooks``. The builtin layer ships with the package and
+    is not configurable — a user playbook of the same name shadows it."""
 
     model: str | None = None
     """Model for the match gate; defaults to the loop's own model."""
 
-    match_draft: bool = False
-    """Let draft playbooks match too (testing); ready-only otherwise."""
+    disabled: list[str] = Field(default_factory=list)
+    """Deny list of playbook names not matchable on this machine. Local
+    state lives here rather than in playbook.md (the distribution unit):
+    enable/disable edit this list, for builtin and user playbooks alike."""
 
 
 class SubagentsConfig(Base):
@@ -1315,7 +1319,7 @@ class Config(BaseSettings):
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
-    playbook: PlaybookConfig = Field(default_factory=PlaybookConfig)
+    playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"
