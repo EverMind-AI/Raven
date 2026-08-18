@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
-from raven.providers.binding import ModelBinding, resolve
+from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.tracing import semconv, trace
 from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
@@ -1714,7 +1714,7 @@ class MemoryConsolidator:
         self.store = MemoryStore(workspace, now_fn=now_fn)
         self._fallback = ModelBinding(provider, model)
         self.sessions = sessions
-        self.context_window_tokens = context_window_tokens
+        self._fallback_window = int(context_window_tokens)
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         # When True, annotate() asks the LLM for foresight predictions
@@ -1722,6 +1722,20 @@ class MemoryConsolidator:
         # Off by default.
         self.enable_foresight = enable_foresight
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+    @property
+    def context_window_tokens(self) -> int:
+        """The running turn's window; the one built with, outside a turn.
+
+        The consolidator archives down to half this number, so a session on a
+        1M model must not be measured against the window of whichever session
+        built the loop.
+        """
+        return active_window(self._fallback_window)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, tokens: int) -> None:
+        self._fallback_window = int(tokens)
 
     @property
     def provider(self) -> "LLMProvider":

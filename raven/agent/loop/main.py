@@ -59,7 +59,7 @@ from raven.providers.base import (
 )
 from raven.providers.binding import ModelBinding, active_binding, use_binding
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.rates import resolve_context_window
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
@@ -347,7 +347,14 @@ class AgentLoop:
         # session starts on; ``provider``/``model`` below read whichever
         # binding the running turn entered.
         self._provider_pool = provider_pool
-        self._default_binding = ModelBinding(provider, model or provider.get_default_model())
+        # An explicit window rides on the binding, which is what answers for it
+        # from here on -- every binding this loop makes carries it, so a session
+        # switching models cannot shake off a number the user pinned. No special
+        # case for 65536: the retired default the old bootstrap wrote to disk is
+        # cleared where it lives by ``config.loader``, so what arrives here is a
+        # real choice.
+        self._configured_window = context_window_tokens or None
+        self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
         self._session_bindings: dict[str, ModelBinding] = {}
         # Resolved lazily on the first tool result that carries an image. Keyed
         # by model, not a single flag: the loop is a long-lived singleton and
@@ -358,24 +365,6 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        # A caller that passed a positive value set the window explicitly;
-        # None/0 means "figure it out", resolved once here against the model's
-        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
-        # registered term, see CONTEXT.md.)
-        self._context_window_explicit = bool(context_window_tokens)
-        # No special case for 65536 here any more: the retired default the old
-        # bootstrap wrote to disk is cleared where it lives, once, by
-        # ``config.loader._migrate_legacy_context_window``. Whatever reaches
-        # this constructor is therefore a real choice, and warning about a real
-        # choice would just be noise.
-        #
-        # allow_fetch=False: construction must not block on a synchronous
-        # network call for an OpenRouter model's window -- whatever is already
-        # cached (in-process or on disk, any age) answers instead. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = context_window_tokens or effective_context_window(
-            self.model, None, allow_fetch=False
-        )
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -616,15 +605,6 @@ class AgentLoop:
         self._register_default_tools()
         self._apply_disabled_tools()
 
-        # LazyProvider defers the litellm import behind a background prewarm
-        # thread (see providers.lazy); the window this constructor just
-        # resolved above was answered with allow_import=False, so it can be
-        # wrong until that import lands. Wiring the callback fixes it up in
-        # place once the real provider is built -- a no-op for any other
-        # provider, which has no ``on_built`` to set.
-        if hasattr(provider, "on_built"):
-            provider.on_built = self.refresh_context_window
-
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
 
@@ -655,6 +635,18 @@ class AgentLoop:
         """The model id of the binding the running turn entered."""
         binding = active_binding()
         return binding.model if binding is not None else self._default_binding.model
+
+    @property
+    def context_window_tokens(self) -> int:
+        """How much the binding of the running turn can hold.
+
+        A property for the same reason ``provider`` and ``model`` are: two
+        sessions can be on models of different sizes at once, so a single int
+        on the loop has no answer that is right for both. Outside a turn this
+        is the configured default's window.
+        """
+        binding = active_binding() or self._default_binding
+        return binding.context_window
 
     @property
     def provider_pool(self) -> "ProviderPool | None":
@@ -759,35 +751,6 @@ class AgentLoop:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
-
-    def refresh_context_window(self) -> None:
-        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
-
-        A no-op once the window was set explicitly at construction -- an
-        explicit value is a deliberate override, and a model switch afterwards
-        must not quietly discard it. Otherwise the ladder is re-walked so a
-        ``/model`` switch picks up the new model's real window instead of
-        keeping the old one's.
-
-        Also the callback ``LazyProvider.on_built`` fires from its prewarm
-        thread, i.e. off the event loop -- safe because every write this
-        method triggers, transitively through the consolidator and the
-        context engine's builders, is a plain ``int`` attribute assignment,
-        and the GIL makes each one atomic.
-        """
-        if self._context_window_explicit:
-            return
-        # allow_fetch=False: a /model switch runs inside the running event
-        # loop, so this must not block it on a synchronous network call. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
-        # Cascade into the builders that sized themselves against the window
-        # at construction (the Curator's trimmer) and the consolidator --
-        # both would otherwise keep budgeting against the pre-switch model's
-        # window for the rest of the session. The consolidator's window is a
-        # plain attribute (no setter of its own), set directly here.
-        self.context_engine.set_context_window(self.context_window_tokens)
-        self.memory_consolidator.context_window_tokens = self.context_window_tokens
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -2138,8 +2101,8 @@ class AgentLoop:
                 # when LiteLLM lags) answers instead; unknown to that table
                 # too, 0 tells the UI to show its empty state rather than a
                 # number that isn't this model's.
-                if self._context_window_explicit:
-                    context_max = self.context_window_tokens
+                if self._configured_window:
+                    context_max = self._configured_window
                 else:
                     # Off the event loop: allow_fetch=True here can hit the
                     # network for up to 10s on an OpenRouter model with both

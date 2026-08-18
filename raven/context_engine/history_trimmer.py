@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from raven.providers.base import LLMProvider
-from raven.providers.binding import ModelBinding, resolve
+from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.helpers import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
@@ -78,7 +78,7 @@ class HistoryTrimmer:
     ) -> None:
         self._fallback = ModelBinding(provider, model)
         self.get_tool_definitions = get_tool_definitions
-        self.context_window_tokens = context_window_tokens
+        self._fallback_window = int(context_window_tokens)
 
     @property
     def provider(self) -> "LLMProvider":
@@ -179,6 +179,20 @@ class HistoryTrimmer:
     # ------------------------------------------------------------------
     # Budget-driven trimming
     # ------------------------------------------------------------------
+
+    @property
+    def context_window_tokens(self) -> int:
+        """The running turn's window; the one built with, outside a turn.
+
+        A property because this object outlives any number of turns and two
+        sessions can be on models of different sizes at once -- an int copied
+        at construction answers for whichever session happened to build it.
+        """
+        return active_window(self._fallback_window)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, tokens: int) -> None:
+        self._fallback_window = int(tokens)
 
     def trim(
         self,

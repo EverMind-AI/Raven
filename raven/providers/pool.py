@@ -87,7 +87,10 @@ class ProviderPool:
         cfg = self.config.model_copy(deep=True)
         cfg.agents.defaults.model = model
         cfg.agents.defaults.provider = resolved
-        binding = ModelBinding(make_provider(cfg), model)
+        # The pin travels with the binding rather than being read where the
+        # window is used: a session on another model still owes the user the
+        # number they pinned.
+        binding = ModelBinding(make_provider(cfg), model, cfg.agents.defaults.context_window_tokens)
         cache[key] = binding
         return binding
 
