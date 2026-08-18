@@ -47,6 +47,7 @@ from raven.providers.registry import (
     credential_kind,
     find_by_model,
     find_by_name,
+    split_model_id,
 )
 from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
@@ -313,7 +314,20 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     if session_model:
         current_model = session_model
         spec = find_by_model(session_model)
-        current_provider = spec.name if spec else current_provider
+        if spec is not None:
+            current_provider = spec.name
+        else:
+            # No spec of ours -- a passthrough vendor (mistral, xai) that
+            # ``ProvidersConfig`` supports and the picker does list. The stored
+            # id still names its provider, because every switch writes it there
+            # via ``stored_model_id``, so read the head rather than fall through
+            # to ``agents.defaults.provider``: that would star another vendor's
+            # row for a session running on this one's key, which is the exact
+            # question a user reads the marked row to answer. An unknown head
+            # stars nothing, which beats starring the wrong thing.
+            head, _ = split_model_id(session_model)
+            if head:
+                current_provider = canonical_provider_name(head)
     entries = await _entries_off_loop(current_provider)
     return {
         "model": current_model,

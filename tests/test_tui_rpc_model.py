@@ -798,6 +798,65 @@ async def test_options_reports_the_session_model_when_that_session_switched() ->
     assert result["provider"] == "anthropic"
 
 
+async def test_options_reports_a_passthrough_vendor_from_the_id_it_stored(fake_home: Path) -> None:
+    """``find_by_model`` has no spec for a passthrough vendor, so falling through
+    to the configured default stars another vendor's row for a session running on
+    this one's key -- and the marked row is exactly what a user reads to answer
+    "whose key is paying for this". The id names its provider, because every
+    switch writes it there through ``stored_model_id``, so read it.
+    """
+    from types import SimpleNamespace
+
+    from raven.providers.registry import find_by_model
+    from raven.tui_rpc.methods.model import model_options
+
+    assert find_by_model("mistral/mistral-large-latest") is None, "fixture must be a vendor we have no spec for"
+
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "mistral": {"apiKey": "sk-m"}},
+        },
+    )
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: key == "tui:a",
+        session_model=lambda key: "mistral/mistral-large-latest",
+    )
+
+    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "mistral/mistral-large-latest"
+    assert result["provider"] == "mistral"
+    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == ["mistral"]
+
+
+async def test_options_stars_nothing_rather_than_the_wrong_row_for_an_unknown_head(fake_home: Path) -> None:
+    """A head naming no configured provider leaves nothing to mark. Marking a
+    vendor picked to fill the blank is the habit this PR retires everywhere else.
+    """
+    from types import SimpleNamespace
+
+    from raven.tui_rpc.methods.model import model_options
+
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
+            "providers": {"anthropic": {"apiKey": "sk-a"}},
+        },
+    )
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: key == "tui:a",
+        session_model=lambda key: "notavendor/some-model",
+    )
+
+    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "notavendor/some-model"
+    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == []
+
+
 async def test_options_leaves_an_unswitched_session_on_the_configured_answer() -> None:
     """``session_model`` falls back to the default, so asking it alone would
     override a forced ``agents.defaults.provider`` for every session.
