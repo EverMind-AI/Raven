@@ -588,8 +588,9 @@ def test_a_restored_session_stays_on_the_default_once_cleared(tmp_path) -> None:
 
     End to end, not a guard on one line: the key is marked both where the record
     is read and where a caller supplies the pair, so removing either alone still
-    leaves this green. ``test_the_stored_model_is_read_once_per_session`` is what
-    pins the marking itself.
+    leaves this green. ``test_the_stored_model_is_read_once_per_session`` pins
+    the marking in ``_restore_once``; the redundant one in
+    ``restore_session_model`` is unpinned, and deleting it passes the suite.
 
     Named for what it does show, and not for a guarantee
     ``clear_session_binding`` does not give: it deliberately does not mark, so a
