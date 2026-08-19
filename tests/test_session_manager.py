@@ -742,6 +742,39 @@ def test_fork_inherits_last_consolidated(tmp_path: Path):
     assert child.last_consolidated == 1
 
 
+def test_fork_inherits_the_model_the_parent_chose(tmp_path: Path):
+    """A fork continues its parent's conversation, so it continues on its model.
+
+    The branch handler re-points the live binding, but that is in memory only.
+    Without the record the fork reads the default the first time it is resumed
+    in a new process, which is a silent downgrade rather than a visible one.
+    """
+    mgr = SessionManager(tmp_path)
+    src = _seed(mgr, "cli:src08", ("user", "a"))
+    src.metadata["model"] = "anthropic/claude-opus-4-8"
+    src.metadata["provider"] = "anthropic"
+    mgr.save(src)
+
+    child = mgr.fork("cli:src08")
+
+    reloaded = SessionManager(tmp_path).get_or_create(child.key)
+    assert reloaded.metadata["model"] == "anthropic/claude-opus-4-8"
+    assert reloaded.metadata["provider"] == "anthropic"
+
+
+def test_fork_of_an_unswitched_parent_carries_no_model(tmp_path: Path):
+    """The parent never chose one, so the fork must start on the default too --
+    not on a model copied out of nowhere.
+    """
+    mgr = SessionManager(tmp_path)
+    _seed(mgr, "cli:src09", ("user", "a"))
+
+    child = mgr.fork("cli:src09")
+
+    assert "model" not in child.metadata
+    assert "provider" not in child.metadata
+
+
 def test_fork_resets_pending_clarification(tmp_path: Path):
     """The child does not carry the source's clarification wait-state."""
     mgr = SessionManager(tmp_path)

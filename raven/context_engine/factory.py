@@ -59,6 +59,7 @@ if TYPE_CHECKING:
         QueryRewriter,
         SkillForgeRouter,
     )
+    from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
 
@@ -77,8 +78,13 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
+    provider_pool: "ProviderPool | None" = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
+
+    ``provider_pool``, when supplied, is what turns a subsystem's pinned model
+    into a pinned model *and its own credential*. Without it a pin has no
+    credential of its own and the subsystem follows the conversation's model.
 
     ``config.engine`` is no longer a dispatch key — there is a single
     engine. The field is retained in :class:`ContextConfig` for config
@@ -108,7 +114,7 @@ def build_context_engine(
 
     rewriter, gate = _build_rewriter_and_gate(
         provider=provider,
-        model=model,
+        provider_pool=provider_pool,
         skill_forge_config=skill_forge_config,
         skill_forge_router_config=skill_forge_router_config,
     )
@@ -141,6 +147,11 @@ def build_context_engine(
             ),
         ),
         CuratorSegmentBuilder(
+            pin=(
+                provider_pool.bind_pin(config.curator_model, getattr(config, "curator_provider", None))
+                if provider_pool
+                else None
+            ),
             workspace=workspace,
             config=config,
             provider=provider,
@@ -224,9 +235,9 @@ def _build_router(
 def _build_rewriter_and_gate(
     *,
     provider: LLMProvider,
-    model: str,
     skill_forge_config: "SkillForgeConfig | None",
     skill_forge_router_config: "SkillForgeRouterConfig",
+    provider_pool: "ProviderPool | None" = None,
 ) -> "tuple[QueryRewriter | None, LLMGateFilter | None]":
     """Construct the optional rewriter + gate from the parent SkillForge
     config. Both fall to ``None`` when their respective flag is off or
@@ -245,7 +256,6 @@ def _build_rewriter_and_gate(
     if bool(getattr(skill_forge_config, "rewrite_enabled", False)):
         rewriter = QueryRewriter(
             provider,
-            model=model,
             max_tokens=int(getattr(skill_forge_config, "rewrite_max_tokens", 8192) or 8192),
         )
 
@@ -258,7 +268,15 @@ def _build_rewriter_and_gate(
             provider,
             max_select=int(getattr(skill_forge_config, "llm_gate_max_select", 2) or 2),
             legacy_top_k=int(skill_forge_router_config.top_k or 5),
-            model=getattr(skill_forge_config, "llm_gate_model", None) or model or None,
+            model=getattr(skill_forge_config, "llm_gate_model", None) or None,
+            pin=(
+                provider_pool.bind_pin(
+                    getattr(skill_forge_config, "llm_gate_model", None),
+                    getattr(skill_forge_config, "llm_gate_provider", None),
+                )
+                if provider_pool
+                else None
+            ),
             temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
             max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),
         )

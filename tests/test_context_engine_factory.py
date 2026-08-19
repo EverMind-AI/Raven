@@ -37,6 +37,7 @@ from raven.memory_engine.skill_forge import (
     HubSkillSource,
     LocalSkillSource,
 )
+from raven.providers.binding import ModelBinding, use_binding
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -224,23 +225,28 @@ class TestSkillForgeRouterAssembly:
 
 
 class TestRewriterGateModelWiring:
-    def test_rewriter_receives_build_context_engine_model(self, tmp_path: Path) -> None:
+    def test_the_rewriter_carries_no_model_of_its_own(self, tmp_path: Path) -> None:
+        """It follows the conversation, so it must not be pinned to the model
+        that happened to build the engine -- a session on another model would
+        otherwise have its query rewritten by the first session's model."""
         engine = _build_engine(
             tmp_path,
             model="main-model",
             skill_forge_config=SkillForgeConfig(rewrite_enabled=True, llm_gate_enabled=False),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
-        assert skills._rewriter._model == "main-model"
+        assert not hasattr(skills._rewriter, "_model")
 
-    def test_gate_falls_back_to_main_model_when_llm_gate_model_unset(self, tmp_path: Path) -> None:
+    def test_an_unset_gate_model_stays_unset(self, tmp_path: Path) -> None:
+        """Same rule one subsystem over: unset means follow the turn, not
+        "inherit whatever build_context_engine was called with"."""
         engine = _build_engine(
             tmp_path,
             model="main-model",
             skill_forge_config=SkillForgeConfig(rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
-        assert skills._gate._model == "main-model"
+        assert skills._gate._model is None
 
     def test_gate_prefers_dedicated_llm_gate_model(self, tmp_path: Path) -> None:
         engine = _build_engine(
@@ -319,43 +325,46 @@ class TestInjectedIdsFromMetadata:
 # ---------------------------------------------------------------------------
 
 
-class TestRefreshContextWindowCascade:
-    def test_model_switch_updates_curator_trimmer_and_consolidator(self, tmp_path: Path, monkeypatch) -> None:
-        import raven.agent.loop.main as agent_loop_main
+class TestTheWindowFollowsTheTurnsBinding:
+    """The window is a fact about the model, so every holder has to read the
+    one the running turn is bound to. Held as a copy taken at construction, the
+    trimmer and the consolidator would size a 1M session against whatever the
+    session that built them happened to run on."""
+
+    def test_every_holder_reads_the_window_of_the_bound_model(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.providers import rates
 
         windows = {"stub": 8192, "other-model": 4096}
-        monkeypatch.setattr(
-            agent_loop_main,
-            "effective_context_window",
-            lambda model, configured, allow_fetch=True: windows[model],
-        )
+        monkeypatch.setattr(rates, "resolve_context_window", lambda model, **kw: windows.get(model))
 
         agent = _make_loop(tmp_path, backend=None)
-        assert agent.context_window_tokens == 8192
-
         curator = _curator_builder(agent.context_engine)
+
+        assert agent.context_window_tokens == 8192
         assert curator.context_window_tokens == 8192
         assert curator.assembler.trimmer.context_window_tokens == 8192
         assert agent.memory_consolidator.context_window_tokens == 8192
 
-        agent.model = "other-model"
-        agent.refresh_context_window()
+        with use_binding(ModelBinding(_StubProvider(), "other-model")):
+            assert agent.context_window_tokens == 4096
+            assert curator.context_window_tokens == 4096
+            assert curator.assembler.context_window_tokens == 4096
+            assert curator.assembler.trimmer.context_window_tokens == 4096
+            assert agent.memory_consolidator.context_window_tokens == 4096
 
-        assert agent.context_window_tokens == 4096
-        assert curator.context_window_tokens == 4096
-        assert curator.assembler.context_window_tokens == 4096
-        assert curator.assembler.trimmer.context_window_tokens == 4096
-        assert agent.memory_consolidator.context_window_tokens == 4096
+        # And back: leaving the turn leaves nothing behind on the holders.
+        assert agent.context_window_tokens == 8192
+        assert curator.assembler.trimmer.context_window_tokens == 8192
 
-    def test_no_cascade_when_the_window_was_pinned_explicitly(self, tmp_path: Path, monkeypatch) -> None:
-        """An explicit ``context_window_tokens`` is a deliberate override --
-        a later model switch must leave the whole chain untouched."""
-        import raven.agent.loop.main as agent_loop_main
+    def test_a_pinned_window_answers_for_every_model(self, tmp_path: Path, monkeypatch) -> None:
+        """An explicit ``context_window_tokens`` is a deliberate override -- the
+        model a session switched to does not get to discard it."""
+        from raven.providers import rates
 
         monkeypatch.setattr(
-            agent_loop_main,
-            "effective_context_window",
-            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called when explicit")),
+            rates,
+            "resolve_context_window",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be asked when pinned")),
         )
 
         agent = AgentLoop(
@@ -371,10 +380,8 @@ class TestRefreshContextWindowCascade:
         )
         curator = _curator_builder(agent.context_engine)
 
-        agent.model = "other-model"
-        agent.refresh_context_window()
-
-        assert agent.context_window_tokens == 8192
-        assert curator.context_window_tokens == 8192
-        assert curator.assembler.trimmer.context_window_tokens == 8192
-        assert agent.memory_consolidator.context_window_tokens == 8192
+        with use_binding(ModelBinding(_StubProvider(), "other-model", agent._configured_window)):
+            assert agent.context_window_tokens == 8192
+            assert curator.context_window_tokens == 8192
+            assert curator.assembler.trimmer.context_window_tokens == 8192
+            assert agent.memory_consolidator.context_window_tokens == 8192

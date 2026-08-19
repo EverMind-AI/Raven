@@ -130,7 +130,7 @@ def register_aligned_methods_except_system(
     # add_endpoint,remove_endpoint}: real handlers
     # must come AFTER register_stub_methods (Dispatcher.register raises on
     # duplicate; the stub group no longer owns these names).
-    register_model_methods(dispatcher)
+    register_model_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     # harness-command-catalog-dynamic: real ``commands.catalog`` handler;
     # MUST come after ``register_stub_methods`` because the stub list dropped
     # its ``commands.catalog`` entry, and ``Dispatcher.register`` raises on

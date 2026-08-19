@@ -503,6 +503,14 @@ class SessionManager:
             if parent_title and not (source.metadata or {}).get("title_auto"):
                 child.metadata["title"] = f"{parent_title} (fork)"
         child.metadata["parent_session_id"] = source_key
+        # A fork continues its parent's conversation, so it continues on its
+        # parent's model. The caller re-points the live binding, but that lives
+        # in memory only -- without carrying the record too, the fork drops to
+        # the default the first time it is resumed in a new process.
+        for slot in ("model", "provider"):
+            inherited = (source.metadata or {}).get(slot)
+            if inherited:
+                child.metadata[slot] = inherited
         self.save(child)
         return child
 

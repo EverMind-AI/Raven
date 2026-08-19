@@ -552,10 +552,15 @@ def _register_config_commands(app: typer.Typer) -> None:
 
     @app.command("use")
     def provider_use_cmd(
-        model: str = typer.Argument(..., help="Model id, e.g. anthropic/claude-sonnet-5"),
-        provider: str = typer.Option("", "--provider", "-p", help="Provider serving it, when the id does not say"),
+        model: str = typer.Argument(..., help="Model id, e.g. claude-sonnet-5"),
+        provider: str = typer.Option("", "--provider", "-p", help="Required: the provider whose credential serves it"),
     ):
-        """Make this the model the agent runs on.
+        """Make this the model the agent runs on. Requires --provider.
+
+        The pair, not the id alone: `openrouter` serving
+        `anthropic/claude-haiku-4-5` and `anthropic` serving
+        `claude-haiku-4-5` are both real and bill different accounts, and an id
+        cannot tell them apart. `raven provider list` shows the configured ones.
 
         Changing it used to mean re-running the whole wizard: the TUI picker and
         onboarding could both switch models and the CLI could not, so a user on a
@@ -564,33 +569,26 @@ def _register_config_commands(app: typer.Typer) -> None:
         The id is stored the way every other surface stores it -- naming its
         provider -- so the three cannot disagree about what was chosen.
         """
-        from raven.config.loader import load_config
         from raven.config.update import set_default_model
-        from raven.providers import pin
         from raven.providers.auth import credential_status
         from raven.providers.catalog import describe
         from raven.providers.wire import stored_model_id
 
-        try:
-            pinned = load_config().agents.defaults.provider or ""
-        except Exception:
-            pinned = ""
-        # One rule for both entry points: the picker writes this field, and the
-        # CLI used to tell the user to hand-edit it instead.
-        resolved = pin.resolve(model, provider=provider, pinned=pinned)
-        if resolved is None:
-            console.print(f"[red]✗[/red] cannot tell which provider serves {model!r}.")
-            console.print(f"  [dim]Write it as <provider>/{model}, or pass --provider.[/dim]")
+        # Named, not derived. An id does not say whose credential serves it --
+        # `openrouter` serving `anthropic/claude-haiku-4-5` and `anthropic`
+        # serving `claude-haiku-4-5` are both real and bill different accounts,
+        # and a prefix is LiteLLM routing syntax rather than evidence about a
+        # key. The same rule the TUI's `/model` enforces.
+        if not provider:
+            console.print(f"[red]✗[/red] --provider is required: {model!r} does not name whose credential serves it.")
+            console.print(f"  [dim]raven provider use {model} --provider <name>[/dim]")
+            console.print("  [dim]raven provider list  # the ones you have configured[/dim]")
             raise typer.Exit(1)
 
-        name = provider or (resolved if resolved != pin.AUTO else "")
-        if not name:
-            from raven.providers.registry import split_model_id
-
-            name = split_model_id(model)[0]
+        name = provider
 
         stored = stored_model_id(name, model) if name else model
-        previous = set_default_model(stored, provider=resolved)
+        previous = set_default_model(stored, provider=name)
 
         row = describe(name, stored)
         label = f"{row.label} ([dim]{stored}[/dim])" if row.described else stored
@@ -604,14 +602,6 @@ def _register_config_commands(app: typer.Typer) -> None:
         status = credential_status(name, _load_section(name), include_external=True)
         if not status.ok:
             console.print(f"  [yellow]![/yellow] {status.summary}")
-            if resolved == pin.AUTO:
-                # "buy a key from this vendor" is the wrong advice for someone
-                # already paying a gateway to serve that vendor's models. Routing
-                # is left on auto precisely so the gateway can answer.
-                console.print(
-                    f"  [dim]Routing stays on auto, so a configured gateway can serve it. "
-                    f"To pin the gateway instead, write it as <gateway>/{stored}.[/dim]"
-                )
 
         # An Azure deployment can still make this write have no effect, and it
         # fails silently otherwise: the command reports success, the file

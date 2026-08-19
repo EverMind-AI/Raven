@@ -24,6 +24,7 @@ from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -347,10 +348,9 @@ class CuratorAssembler:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         context_window_tokens: int,
     ):
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.get_tool_definitions = get_tool_definitions
-        self.context_window_tokens = context_window_tokens
+        self._fallback_window = int(context_window_tokens)
         self.trimmer = HistoryTrimmer(
             provider,
             model,
@@ -361,10 +361,33 @@ class CuratorAssembler:
         # CuratorSegmentBuilder before any build/validate call.
         self.prefix: "AssembledPrefix | None" = None
 
+    @property
+    def provider(self) -> "LLMProvider":
+        """The provider of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        """The model of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).model
+
+    @property
+    def context_window_tokens(self) -> int:
+        """The running turn's window; the one built with, outside a turn.
+
+        A property because this object outlives any number of turns and two
+        sessions can be on models of different sizes at once -- an int copied
+        at construction answers for whichever session happened to build it.
+        """
+        return active_window(self._fallback_window)
+
+    @context_window_tokens.setter
+    def context_window_tokens(self, tokens: int) -> None:
+        self._fallback_window = int(tokens)
+
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built."""
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.trimmer.set_provider(provider, model)
 
     def set_context_window(self, tokens: int) -> None:

@@ -779,63 +779,146 @@ def test_every_provider_stores_a_model_id_that_finds_it_again(spec) -> None:
     assert resolved is not None and resolved.name == spec.name, f"{stored} resolves to {resolved and resolved.name}"
 
 
-async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> None:
-    """A model the catalogues cannot describe still arrives with a name.
-
-    The list already let a model be added; naming one is what was missing, so a
-    self-hosted deployment reached the picker as a bare id with no description
-    line at all -- `_model_labels` skips every row nothing describes.
+async def test_options_reports_the_session_model_when_that_session_switched() -> None:
+    """The picker sits under the status bar; reading the global default here is
+    how they end up showing two models for one conversation.
     """
+    from types import SimpleNamespace
+
+    from raven.tui_rpc.methods.model import model_options
+
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: key == "tui:a",
+        session_model=lambda key: "anthropic/claude-opus-4-8",
+    )
+
+    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "anthropic/claude-opus-4-8"
+    assert result["provider"] == "anthropic"
+
+
+async def test_options_reports_a_passthrough_vendor_from_the_id_it_stored(fake_home: Path) -> None:
+    """``find_by_model`` has no spec for a passthrough vendor, so falling through
+    to the configured default stars another vendor's row for a session running on
+    this one's key -- and the marked row is exactly what a user reads to answer
+    "whose key is paying for this". The id names its provider, because every
+    switch writes it there through ``stored_model_id``, so read it.
+    """
+    from types import SimpleNamespace
+
+    from raven.providers.registry import find_by_model
+    from raven.tui_rpc.methods.model import model_options
+
+    assert find_by_model("mistral/mistral-large-latest") is None, "fixture must be a vendor we have no spec for"
+
     _write_config(
         fake_home,
         {
-            "agents": {"defaults": {"model": "hosted-vllm/my-finetune-v3"}},
-            "providers": {
-                "hosted_vllm": {
-                    "apiBase": "http://localhost:8000/v1",
-                    "models": ["hosted-vllm/my-finetune-v3"],
-                    "modelOverlay": {"my-finetune-v3": {"label": "Our finetune", "description": "tuned on tickets"}},
-                }
-            },
+            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "mistral": {"apiKey": "sk-m"}},
         },
     )
-    entry = _entry(await model_options({}), "hosted_vllm")
-    label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
-    assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: key == "tui:a",
+        session_model=lambda key: "mistral/mistral-large-latest",
+    )
+
+    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == "mistral/mistral-large-latest"
+    assert result["provider"] == "mistral"
+    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == ["mistral"]
 
 
-async def test_options_config_reads_do_not_scale_with_the_row_count(
-    fake_home: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`_entries_off_loop` hoists the config read: one `load_config` for all
-    rows, one for the current selection, one raw read inside `list_providers`.
-    Without the hoist every row re-parsed the config from disk (the
-    `list_providers` mapping and `_configured_overlays` via `load_config`,
-    the curated models via `get_provider_config`'s raw read), so these counts
-    sat above the row count instead. An absolute bound because the row count
-    itself never varies -- the picker lists every registry provider whether
-    or not it is configured."""
-    import raven.config.loader as loader
-    import raven.config.update_providers as update_providers
+async def test_options_stars_nothing_rather_than_the_wrong_row_for_an_unknown_head(fake_home: Path) -> None:
+    """A head naming no configured provider leaves nothing to mark. Marking a
+    vendor picked to fill the blank is the habit this PR retires everywhere else.
+    """
+    from types import SimpleNamespace
 
-    _write_config(fake_home, {"providers": {"anthropic": {"api_key": "sk-1"}}})
-    real_load = loader.load_config
-    real_raw = update_providers.read_raw_or_raise
-    calls = {"load_config": 0, "raw_read": 0}
+    from raven.tui_rpc.methods.model import model_options
 
-    def counting_load(*args: object, **kwargs: object):
-        calls["load_config"] += 1
-        return real_load(*args, **kwargs)
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "anthropic/claude-opus-4-5", "provider": "anthropic"}},
+            "providers": {"anthropic": {"apiKey": "sk-a"}},
+        },
+    )
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: key == "tui:a",
+        session_model=lambda key: "notavendor/some-model",
+    )
 
-    def counting_raw(*args: object, **kwargs: object):
-        calls["raw_read"] += 1
-        return real_raw(*args, **kwargs)
+    result = await model_options({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
 
-    monkeypatch.setattr(loader, "load_config", counting_load)
-    monkeypatch.setattr(update_providers, "read_raw_or_raise", counting_raw)
-    result = await model_options({})
+    assert result["model"] == "notavendor/some-model"
+    assert [p["slug"] for p in result["providers"] if p.get("is_current")] == []
 
-    assert len(result["providers"]) > 3, "too few rows for the bound to mean anything"
-    assert calls["load_config"] <= 2, f"{calls} for {len(result['providers'])} rows"
-    assert calls["raw_read"] <= 1, f"{calls} for {len(result['providers'])} rows"
+
+async def test_options_leaves_an_unswitched_session_on_the_configured_answer() -> None:
+    """``session_model`` falls back to the default, so asking it alone would
+    override a forced ``agents.defaults.provider`` for every session.
+    """
+    from types import SimpleNamespace
+
+    from raven.tui_rpc.methods.model import _current_selection, model_options
+
+    configured_model, configured_provider = _current_selection()
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: False,
+        session_model=lambda key: "anthropic/claude-opus-4-8",
+    )
+
+    result = await model_options({"session_id": "tui:b"}, agent_loop_factory=lambda: loop)
+
+    assert result["model"] == configured_model
+    assert result["provider"] == (configured_provider or "")
+
+
+async def test_the_production_registration_makes_model_options_session_aware(fake_home: Path) -> None:
+    """The picker asks ``model.options`` which model to show as current, and the
+    answer is per session.
+
+    Registered through the umbrella the production path uses, not by calling
+    the handler with a factory by hand: without the factory threaded here the
+    picker reports the configured default to every session, and calling
+    ``model_options`` directly would never notice.
+    """
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods import register_aligned_methods_except_system
+
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    class _Loop:
+        def has_session_binding(self, session_id: str) -> bool:
+            return session_id == "tui:switched"
+
+        def session_model(self, session_id: str) -> str:
+            return "anthropic/claude-opus-4-8"
+
+    d = Dispatcher()
+    register_aligned_methods_except_system(d, agent_loop_factory=lambda: _Loop())
+
+    switched = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "model.options",
+            "params": {"session_id": "tui:switched"},
+        }
+    )
+    assert switched["result"]["model"] == "anthropic/claude-opus-4-8"
+
+    untouched = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "model.options",
+            "params": {"session_id": "tui:never-switched"},
+        }
+    )
+    assert untouched["result"]["model"] == "anthropic/claude-sonnet-4-5", (
+        "a session that never switched still reports the configured default"
+    )
