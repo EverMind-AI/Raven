@@ -37,6 +37,7 @@ CATALOG = ROOT.parent / "i18n" / "messages.json"
 MARK = "</script>\n</body>"
 I18N_MARK = '/*__I18N__*/{ "slash": {}, "ui": {} }'
 STYLE_MARK = "/*__STYLE__*/"
+MODERN_MARK = "/*__MODERN__*/"
 DEMO_MARK = "/*__DEMO__*/"
 
 
@@ -64,6 +65,7 @@ _DEMO_PARTS = [
     "130-settings.js",
     "140-schedule.js",
     "150-chrome.js",
+    "155-bridge.js",
     "160-boot.js",
 ]
 _LIVE_PARTS = [
@@ -121,7 +123,23 @@ def main() -> None:
     page = (ROOT / "src" / "page.html").read_text(encoding="utf-8")
     style = (ROOT / "src" / "styles" / "page.css").read_text(encoding="utf-8")
     style = style[:-1] if style.endswith("\n") else style
-    for mark, text in ((STYLE_MARK, style), (DEMO_MARK, _concat("seam", _SEAM_PARTS) + "\n" + _concat("demo", _DEMO_PARTS))):
+    # The island bundle (React features) is built by Vite, not committed:
+    # page assembly now has a node step ahead of this python one. Absence is
+    # an error rather than a warning because a page without the bundle ships
+    # working navigation to a blank schedules page.
+    modern_path = ROOT / ".modern" / "modern.iife.js"
+    if not modern_path.is_file():
+        raise SystemExit(
+            "ui/.modern/modern.iife.js not found -- run `npm ci --prefix ui` "
+            "then `npm run --prefix ui build` before ui/build.py"
+        )
+    modern = modern_path.read_text(encoding="utf-8")
+    modern = modern[:-1] if modern.endswith("\n") else modern
+    for mark, text in (
+        (STYLE_MARK, style),
+        (MODERN_MARK, modern),
+        (DEMO_MARK, _concat("seam", _SEAM_PARTS) + "\n" + _concat("demo", _DEMO_PARTS)),
+    ):
         if page.count(mark) != 1:
             raise SystemExit(f"page.html: expected exactly one {mark} marker")
         page = page.replace(mark, text, 1)

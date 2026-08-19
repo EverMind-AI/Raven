@@ -387,16 +387,9 @@
   </div>
 </section>
 
-<div class="veil" id="jobVeil" data-open="false">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="jobTitle" style="width:min(560px,92vw)">
-    <header id="jobTitle" data-i18n="gui.cron_new">新建定时任务</header>
-    <div class="body" id="jobBody"></div>
-    <footer>
-      <button class="btn" id="jobNo" data-i18n="gui.cancel">取消</button>
-      <button class="btn key" id="jobYes" data-i18n="gui.save">保存</button>
-    </footer>
-  </div>
-</div>
+<!-- The new-job sheet renders here from the cron island
+     (ui/src/features/cron/CronPage.tsx); only the veil is static markup. -->
+<div class="veil" id="jobVeil" data-open="false"></div>
 
 <aside class="detail" id="detail" data-open="false" role="dialog" aria-modal="true" data-i18n-aria="gui.cap_detail">
   <div class="dpanel">
@@ -467,6 +460,9 @@
 <div class="menu" id="menu" data-open="false" role="menu"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
+<script>
+/*__MODERN__*/
+</script>
 <script>
 /*__DEMO__*/
 </script>

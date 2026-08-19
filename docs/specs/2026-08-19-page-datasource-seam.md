@@ -88,3 +88,32 @@ memory, settings, workspace, and last the transcript + session rail
   ratchet reaches zero -- that conversion closes P2.
 - No renderer redesign: pixels and behavior stay as they are; only who
   owns data changes. Any visual change belongs to its own MR.
+
+## Islands (the step after a flip)
+
+Once a page's data goes through DS, its renderer can leave the
+concatenated script: a React component in ``ui/src/features/<domain>/``
+reads the same ``DS.<domain>`` source and renders into the page's
+``#<name>Body``, keeping class names and DOM structure as they are.
+Schedules went first (``features/cron/``); its shape is the recipe:
+
+1. Types for the domain's rows and its DS contract (``types.ts``).
+2. A plain store outside React (``store.ts``): the shell drives the page
+   imperatively (nav opens, Esc closes, a finished turn refreshes, a
+   language flip redraws), so state lives where shims can call it and the
+   component subscribes.
+3. The component (``<Domain>Page.tsx``), classes and structure copied.
+   Form inputs stay uncontrolled and mutate the draft in place -- the
+   discipline the legacy form kept -- so focus and IME survive typing.
+4. The legacy part shrinks to shims (the names external callers use,
+   each one line into the island) plus the fixture source, unchanged.
+5. Vitest drives the component through the same two seams production
+   wires: ``window.RavenShell`` (fake) and ``window.DS`` (fixture).
+
+Two page-wide seams exist for this and grow one line per need:
+``window.RavenShell`` (demo/155-bridge.js, late-bound closures so live
+rebinds win) and ``window.DS`` (published by the seam part; a separate
+script cannot see the page script's lexical scope). The island bundle is
+built by Vite as one classic IIFE and inlined by build.py at
+``/*__MODERN__*/`` ahead of the page script; check-page.mjs pins the
+two-inline-scripts shape so the one-file contract stays enforced.

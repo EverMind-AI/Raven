@@ -104,6 +104,8 @@ jobs:
       # marker leaves CI green and blocks the release at `git push v1.2.3`.
       - name: Build served page
         run: |
+          npm ci --prefix ui
+          npm run --prefix ui build
           python3 ui/build.py
           test -f ui/dist/index.html
 
@@ -241,13 +243,15 @@ jobs:
         with:
           node-version: 22
 
-      # Stdlib + node only, no npm install: the gate must stay runnable
-      # before any dependency exists. build.py validates the part seams
-      # (IIFE opener first, closer last); check-page.mjs validates the
-      # assembled artifact (single style/script, no leftover markers,
-      # script parses).
+      # The npm build makes the island bundle build.py inlines; the gate
+      # scripts themselves still run on bare node, straight off the checkout.
+      # build.py validates the part seams (IIFE opener first, closer last);
+      # check-page.mjs validates the assembled artifact (one style, two
+      # inline scripts, no leftover markers, scripts parse).
       - name: Build and check the served page
         run: |
+          npm ci --prefix ui
+          npm run --prefix ui build
           python3 ui/build.py
           node ui/scripts/check-page.mjs
           node ui/scripts/count-shared-globals.mjs
