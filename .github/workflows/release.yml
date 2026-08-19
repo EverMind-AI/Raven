@@ -50,6 +50,8 @@ jobs:
       #     "No front end built here", which is the state this MR exists to end.
       - name: Build the served page
         run: |
+          npm ci --prefix ui
+          npm run --prefix ui build
           python ui/build.py
           test -f ui/dist/index.html  # fail fast if the page didn't land
 

@@ -9,3 +9,7 @@
    clearing, no repaint. Design: docs/specs/2026-08-19-page-datasource-seam.md
    ═══════════════════════════════════════════════════════════════════ */
 const DS = {};
+/* Published for the island bundle: a separate classic script resolves DS
+   through the global object, not this script's lexical scope. Same object,
+   so a source the live layer installs later is what the island reads. */
+window.DS = DS;

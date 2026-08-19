@@ -19,7 +19,7 @@
 // <Name>Result), so the two outputs can be hoisted into one shared package
 // without renaming anything downstream.
 //
-// Adapted from the ui-web front end's generator, by Blockchain-Key.
+// Adapted from ui-web/scripts/gen-rpc-client.mjs (!105) by Blockchain-Key.
 //
 // Usage:
 //   node scripts/gen-rpc-client.mjs           # write generated.ts

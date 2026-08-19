@@ -22,7 +22,6 @@ function bootError(where, e) {
   ['drawPerm', () => drawPerm()],
   ['drawCtx', () => drawCtx()],
   ['drawCaps', () => drawCaps()],
-  ['drawCronBdg', () => drawCronBdg()],
   ['drawFoot', () => drawFoot()],
   ['bumpWs', () => bumpWs()],
   ['drawSettings', () => drawSettings()],

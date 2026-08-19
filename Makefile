@@ -96,6 +96,8 @@ build-tui:
 	npm run build --prefix ui-tui
 
 build-ui:
+	npm ci --prefix ui
+	npm run --prefix ui build
 	python3 ui/build.py
 
 build-bridge:
