@@ -42,29 +42,14 @@ from typing import Any
 # section 4). Both columns are needed -- the value to compare against, and the
 # cumulative GPU minutes that say where in the budget a step sits.
 ARM_A_CURVE: tuple[tuple[int, float, float], ...] = (
-    (200, 0.3527, 4.00),
-    (400, 0.3583, 7.97),
-    (600, 0.3538, 11.92),
-    (800, 0.3558, 15.87),
-    (1000, 0.3523, 19.85),
-    (1200, 0.3606, 23.81),
-    (1400, 0.3557, 27.78),
-    (1600, 0.3531, 31.75),
-    (1800, 0.3505, 35.72),
-    (2000, 0.3483, 39.68),
-    (2200, 0.3523, 43.64),
-    (2400, 0.3518, 47.61),
-    (2600, 0.3497, 51.57),
-    (2800, 0.3538, 55.53),
-    (3000, 0.3509, 59.49),
-    (3200, 0.3454, 63.47),
-    (3400, 0.3548, 67.44),
-    (3600, 0.3432, 71.41),
-    (3800, 0.3447, 75.38),
-    (4000, 0.3450, 79.33),
-    (4200, 0.3472, 83.30),
-    (4400, 0.3507, 87.27),
-    (4548, 0.3421, 90.27),
+    (200, 0.3527, 4.00), (400, 0.3583, 7.97), (600, 0.3538, 11.92),
+    (800, 0.3558, 15.87), (1000, 0.3523, 19.85), (1200, 0.3606, 23.81),
+    (1400, 0.3557, 27.78), (1600, 0.3531, 31.75), (1800, 0.3505, 35.72),
+    (2000, 0.3483, 39.68), (2200, 0.3523, 43.64), (2400, 0.3518, 47.61),
+    (2600, 0.3497, 51.57), (2800, 0.3538, 55.53), (3000, 0.3509, 59.49),
+    (3200, 0.3454, 63.47), (3400, 0.3548, 67.44), (3600, 0.3432, 71.41),
+    (3800, 0.3447, 75.38), (4000, 0.3450, 79.33), (4200, 0.3472, 83.30),
+    (4400, 0.3507, 87.27), (4548, 0.3421, 90.27),
 )
 
 # The determinism gate. Three points spread across the run: if the training side
@@ -114,7 +99,7 @@ def read_curve(path: Path) -> Curve:
     ``eval_points`` is the same series in the job's own words."""
     text = path.read_text(encoding="utf-8")
     points: list[tuple[int, float, float]] = []
-    if path.name == "result.json" or text.lstrip().startswith('{\n  "status"'):
+    if path.name == "result.json" or text.lstrip().startswith("{\n  \"status\""):
         payload = json.loads(text)
         for entry in payload.get("eval_points") or []:
             points.append((int(entry[0]), float(entry[1]), 0.0))
@@ -171,11 +156,9 @@ def interventions(events: list[dict[str, Any]], curve: Curve, arm_a: Curve) -> l
         kind = event.get("kind")
         if kind not in INTERVENTION_KINDS:
             continue
-        row: dict[str, Any] = {
-            "ts": event.get("ts"),
-            "kind": kind,
-            "detail": {k: v for k, v in event.items() if k not in ("ts", "kind")},
-        }
+        row: dict[str, Any] = {"ts": event.get("ts"), "kind": kind, "detail": {
+            k: v for k, v in event.items() if k not in ("ts", "kind")
+        }}
         # The trail timestamps wall-clock, the curve counts elapsed seconds, so a
         # step can only be attached when the event carries one. Left unattached
         # rather than guessed from timestamps.
@@ -316,7 +299,8 @@ def headline_metrics(curve: Curve, official: dict[str, Any] | None) -> dict[str,
             if last in scored:
                 out["last_checkpoint"] = {"name": last, "ndcg": scored[last]}
             else:
-                out["last_checkpoint"] = {"name": last, "ndcg": None, "note": "not present in the scored set"}
+                out["last_checkpoint"] = {"name": last, "ndcg": None,
+                                          "note": "not present in the scored set"}
     else:
         out["official_scored"] = None
         out["note"] = (
@@ -333,18 +317,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--progress", type=Path, required=True, help="job progress.jsonl (or result.json)")
     ap.add_argument("--spans", type=Path, default=None, help="audit-spans.log, for the unguarded paths")
     ap.add_argument("--since", default=None, help="ISO timestamp; only spans at or after it are counted")
-    ap.add_argument(
-        "--session-prefix", default=None, help="restrict the span scan to sessions with this prefix, e.g. cron:"
-    )
-    ap.add_argument(
-        "--official",
-        type=Path,
-        default=None,
-        help='JSON: {"checkpoints": {"step-1200": 0.36}, "last_checkpoint": "step-4554"}',
-    )
-    ap.add_argument(
-        "--self-test", action="store_true", help="expect the three-point check to pass and no interventions"
-    )
+    ap.add_argument("--session-prefix", default=None,
+                    help="restrict the span scan to sessions with this prefix, e.g. cron:")
+    ap.add_argument("--official", type=Path, default=None,
+                    help='JSON: {"checkpoints": {"step-1200": 0.36}, "last_checkpoint": "step-4554"}')
+    ap.add_argument("--self-test", action="store_true",
+                    help="expect the three-point check to pass and no interventions")
     ap.add_argument("--json", action="store_true", help="emit the report as JSON")
     args = ap.parse_args(argv)
 
@@ -380,10 +358,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if args.self_test and report["interventions"]:
-        print(
-            f"\n*** SELF-TEST FAILED: expected no interventions, found {len(report['interventions'])} ***",
-            file=sys.stderr,
-        )
+        print(f"\n*** SELF-TEST FAILED: expected no interventions, found "
+              f"{len(report['interventions'])} ***", file=sys.stderr)
         return 3
     return 0
 
@@ -402,10 +378,8 @@ def _print_human(report: dict[str, Any]) -> None:
     for row in report["interventions"]:
         print(f"  {row['ts']}  {row['kind']}  step={row['step']}")
         if row.get("in_flight") is not None:
-            print(
-                f"      in-flight {row['in_flight']}   arm A at same step {row['arm_a_at_step']}"
-                f"   difference {row.get('delta_vs_arm_a')}"
-            )
+            print(f"      in-flight {row['in_flight']}   arm A at same step {row['arm_a_at_step']}"
+                  f"   difference {row.get('delta_vs_arm_a')}")
         if row.get("note"):
             print(f"      {row['note']}")
         if row["detail"]:
@@ -413,15 +387,11 @@ def _print_human(report: dict[str, Any]) -> None:
 
     c = report["contract"]
     print("\n== interruption contract ==")
-    print(
-        f"  asks attempted {c['asks_attempted']} | delivered {c['asks_delivered']}"
-        f" | delivery failed {c['asks_delivery_failed']} | refused by contract {c['asks_refused_by_contract']}"
-    )
+    print(f"  asks attempted {c['asks_attempted']} | delivered {c['asks_delivered']}"
+          f" | delivery failed {c['asks_delivery_failed']} | refused by contract {c['asks_refused_by_contract']}")
     print(f"  expected_loss_minutes: {c['expected_loss_minutes']}")
-    print(
-        f"    estimated {len(c['expected_loss_minutes'])} / {c['expected_loss_denominator']} asks;"
-        f" unestimated {c['expected_loss_unestimated']}"
-    )
+    print(f"    estimated {len(c['expected_loss_minutes'])} / {c['expected_loss_denominator']} asks;"
+          f" unestimated {c['expected_loss_unestimated']}")
     print("\n== ops_finish ==")
     print(f"  accepted {c['reports_accepted']} | refused {c['reports_refused']}")
     print(f"  refusal reasons: {c['report_refusal_reasons'] or '(none)'}")
@@ -437,10 +407,8 @@ def _print_human(report: dict[str, Any]) -> None:
             print("  no message / ask_user tool.call spans matched")
         for session, tools in sorted(u["per_session"].items()):
             print(f"    {session}: {tools}")
-        print(
-            f"  spans considered {u['spans_considered']}, unparsable {u['spans_unparsable']},"
-            f" with no session.key {u['spans_with_no_session_key']}"
-        )
+        print(f"  spans considered {u['spans_considered']}, unparsable {u['spans_unparsable']},"
+              f" with no session.key {u['spans_with_no_session_key']}")
         print(f"  {u['note']}")
 
     h = report["headline"]

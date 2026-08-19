@@ -75,9 +75,14 @@ def test_the_startup_builder_is_the_thing_that_calls_it(tmp_path: Path) -> None:
     import raven.cli.tui_commands as tui
 
     tree = ast.parse(Path(tui.__file__).read_text(encoding="utf-8"))
-    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build_tui_agent_loop")
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_build_tui_agent_loop"
+    )
     calls = [
-        n for n in ast.walk(fn) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "sync_workspace_templates"
+        n for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", None) == "sync_workspace_templates"
     ]
 
     assert len(calls) == 1, "the startup builder must bootstrap the workspace exactly once"

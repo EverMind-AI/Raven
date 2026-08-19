@@ -38,59 +38,6 @@ def _campaign_backend(campaign: str, ledger: str | None) -> tuple[Any, Any, Path
     return backend_from_meta(meta), Ledger(ledger_path), cdir
 
 
-class OpsObserveTool(Tool):
-    """Return a trial's own output lines, verbatim."""
-
-    timeout_seconds = 120.0
-
-    @property
-    def name(self) -> str:
-        return "ops_observe"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Read the last N output lines of a trial in an ops campaign, exactly as the job "
-            "wrote them. Nothing is summarised, filtered or ranked -- you get the raw lines and "
-            f"decide what they mean. Use a large N (up to {_MAX_TAIL}) when the job writes many "
-            "lines per step, so that a single step's output is not cut in half."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "campaign": {"type": "string", "description": "Campaign name."},
-                "trial": {"type": "string", "description": "Trial key, as shown in the ledger."},
-                "tail": {"type": "integer", "description": f"How many trailing lines to return (1-{_MAX_TAIL})."},
-                "ledger": {"type": "string", "description": "Ledger path (locates the campaign dir)."},
-            },
-            "required": ["campaign", "trial"],
-        }
-
-    async def execute(self, campaign: str, trial: str, tail: int = 80, ledger: str | None = None, **kwargs: Any) -> str:
-        resolved = _campaign_backend(campaign, ledger)
-        if isinstance(resolved, str):
-            return resolved
-        backend, led, _ = resolved
-        rec = led.get(trial)
-        if rec is None or rec.handle is None:
-            known = ", ".join(r.idem_key for r in led.all()) or "none"
-            return f"Unknown trial {trial!r}. Trials in this campaign: {known}."
-        n = max(1, min(int(tail), _MAX_TAIL))
-        rows = await backend.fetch_progress(rec.handle, tail=n)
-        if not rows:
-            return f"{trial}: no output yet."
-        lines = [
-            row.get("line")
-            if isinstance(row, dict) and "line" in row
-            else _json.dumps(row, ensure_ascii=False, default=str)
-            for row in rows
-        ]
-        return f"{trial}: last {len(lines)} line(s) of output\n" + "\n".join(lines)
-
-
 class OpsOutputsTool(Tool):
     """Return what a trial has written out, and whatever its result carries."""
 
@@ -120,7 +67,9 @@ class OpsOutputsTool(Tool):
             "required": ["campaign", "trial"],
         }
 
-    async def execute(self, campaign: str, trial: str, ledger: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, campaign: str, trial: str, ledger: str | None = None, **kwargs: Any
+    ) -> str:
         resolved = _campaign_backend(campaign, ledger)
         if isinstance(resolved, str):
             return resolved
@@ -141,4 +90,4 @@ class OpsOutputsTool(Tool):
         return f"{trial}:\n" + _json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 
-__all__ = ["OpsObserveTool", "OpsOutputsTool"]
+__all__ = ["OpsOutputsTool"]

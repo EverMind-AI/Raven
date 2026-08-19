@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.tools.ops import OpsTuneStatusTool
+from raven.ops import JobResult, JobStatus
 
 SIGFPE = (
     "#0  Foam::error::printStack(Foam::Ostream&) in libOpenFOAM.so\n"
@@ -56,27 +57,17 @@ class _Backend:
 def _campaign(tmp_path: Path, *, status: str, error: str | None) -> Path:
     cdir = tmp_path / "c"
     cdir.mkdir(exist_ok=True)
-    (cdir / "meta.json").write_text(
-        json.dumps(
-            {
-                "backend": "process",
-                "host": "h",
-                "command": "x {config} {job_dir}",
-                "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    rec = {
-        "idem_key": "deltaT5em4_run1",
-        "status": status,
-        "campaign": "c",
-        "handle": {"backend": "process", "job_id": "ops-deltaT5em4_run1"},
-        "result": {"status": status, "metrics": {}, "output": {}, "error": error, "deliverable": None},
-        "attempts": 0,
-        "escalated": False,
-    }
-    (cdir / "ledger.json").write_text(json.dumps({"version": 1, "records": {"deltaT5em4_run1": rec}}), encoding="utf-8")
+    (cdir / "meta.json").write_text(json.dumps({
+        "backend": "process", "host": "h", "command": "x {config} {job_dir}",
+        "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"},
+    }), encoding="utf-8")
+    rec = {"idem_key": "deltaT5em4_run1", "status": status, "campaign": "c",
+           "handle": {"backend": "process", "job_id": "ops-deltaT5em4_run1"},
+           "result": {"status": status, "metrics": {}, "output": {},
+                      "error": error, "deliverable": None},
+           "attempts": 0, "escalated": False}
+    (cdir / "ledger.json").write_text(
+        json.dumps({"version": 1, "records": {"deltaT5em4_run1": rec}}), encoding="utf-8")
     return cdir
 
 

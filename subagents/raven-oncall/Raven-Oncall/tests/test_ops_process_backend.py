@@ -12,10 +12,11 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shlex
 
 import pytest
 
-from raven.ops.backend import JobBackendError, JobSpec, JobStatus
+from raven.ops.backend import JobBackendError, JobHandle, JobSpec, JobStatus
 from raven.ops.process_backend import ProcessExecutor
 
 CMD = "env CUDA_VISIBLE_DEVICES=1 python3 /frozen/train.py --config {config} --run-dir {job_dir}"
@@ -32,6 +33,9 @@ class FakeHost:
         self.staged: list[str] = []
         self.detection: dict[str, dict] = {}
         self.configs: dict[str, dict] = {}
+        self.seen: list[str] = []
+        self.case_written: list[str] | None = None
+        self.remembered_writes: dict[str, list[str]] = {}
 
     @staticmethod
     def _key(cmd: str) -> str:
@@ -45,6 +49,17 @@ class FakeHost:
         return m.group(1) if m else ""
 
     def __call__(self, cmd: str) -> tuple[int, str]:
+        self.seen.append(cmd)
+        if cmd.startswith("cat ") and ".raven-case-writes.json" in cmd:
+            if not self.remembered_writes:
+                return 0, ""
+            return 0, json.dumps(self.remembered_writes)
+        if cmd.startswith("python3 - <<") and ".raven-case-writes.json" in cmd:
+            return 0, ""
+        if cmd.startswith("[ -f ") and " -newer " in cmd:
+            if self.case_written is None:
+                return 3, ""
+            return 0, "\n".join(self.case_written)
         if cmd.startswith("date -u +%s.%N; stat -c %Y"):
             key = self._key(cmd)
             job = self.jobs.get(key, {})
@@ -73,7 +88,6 @@ class FakeHost:
             return 0, "running" if job.get("alive") else "absent"
         if "base64 -d > " in cmd and cmd.rstrip().endswith("detection.json"):
             import base64 as _b64
-
             blob = cmd.split("echo ", 1)[1].split(" | base64 -d", 1)[0].strip().strip("'")
             self.detection[self._key(cmd)] = json.loads(_b64.b64decode(blob))
             return 0, ""
@@ -83,7 +97,7 @@ class FakeHost:
             self.configs[key] = json.loads(base64.b64decode(blob))
             self.staged.append(key)
             return 0, "staged"
-        if cmd.startswith("cd ") and "nohup sh run.sh" in cmd:
+        if cmd.startswith("cd ") and "nohup sh .raven-launch.sh" in cmd:
             key = self._key(cmd)
             self.jobs[key] = {"alive": True, "started_at": self.now}
             self.launched.append(key)
@@ -121,8 +135,7 @@ class FakeHost:
         self.jobs[key]["alive"] = False
         self.jobs[key]["finished_at"] = self.now
         self.jobs[key]["result"] = {
-            "status": status,
-            "gpu_minutes_used": minutes,
+            "status": status, "gpu_minutes_used": minutes,
             "eval_points": points if points is not None else [[200, 0.35], [400, 0.37]],
         }
 
@@ -194,7 +207,8 @@ async def test_an_unreachable_host_is_not_reported_as_a_job_outcome():
 
     exe._run = broken
     assert await exe.poll(handle) is JobStatus.RUNNING, (
-        "an SSH failure says nothing about the job; calling it failed would invent an outcome the host never reported"
+        "an SSH failure says nothing about the job; calling it failed would invent "
+        "an outcome the host never reported"
     )
 
 
@@ -206,7 +220,9 @@ async def test_the_config_budget_is_replaced_by_what_is_actually_left():
     host = FakeHost()
     exe = _exe(host, budget=90)
     await exe.submit(_spec({"budget_gpu_minutes": 10_000}, key="j1"))
-    assert host.configs["j1"]["budget_gpu_minutes"] == 90, "asking for a longer run must not buy one"
+    assert host.configs["j1"]["budget_gpu_minutes"] == 90, (
+        "asking for a longer run must not buy one"
+    )
 
 
 @pytest.mark.asyncio
@@ -276,7 +292,9 @@ async def test_a_finish_that_cannot_be_dated_is_reported_not_defaulted_to_zero()
 
     await exe.poll(handle)
     assert exe.detection_latency_ms("j1") is None
-    assert "no result.json" in exe.unknown_finish_times()["j1"], "a silent zero would read as instant detection"
+    assert "no result.json" in exe.unknown_finish_times()["j1"], (
+        "a silent zero would read as instant detection"
+    )
 
 
 @pytest.mark.asyncio
@@ -297,7 +315,8 @@ async def test_polls_are_counted_so_wake_overhead_pairs_with_latency():
 async def test_the_result_exposes_last_and_best_without_hiding_the_raw_points():
     host = FakeHost()
     exe = _exe(host)
-    exe = ProcessExecutor(host, remote_dir="/w", command=CMD, objective={"metric": "ndcg", "direction": "max"})
+    exe = ProcessExecutor(host, remote_dir="/w", command=CMD,
+                          objective={"metric": "ndcg", "direction": "max"})
     handle = await exe.submit(_spec({"lr": 2e-6}))
     host.finish("j1", points=[[200, 0.35], [400, 0.39], [600, 0.37]])
 
@@ -315,12 +334,8 @@ async def test_a_failed_job_carries_its_error_through():
     handle = await exe.submit(_spec({"lr": 2e-6}))
     host.jobs["j1"]["alive"] = False
     host.jobs["j1"]["finished_at"] = host.now
-    host.jobs["j1"]["result"] = {
-        "status": "failed",
-        "error_kind": "cuda_oom",
-        "error": "out of memory",
-        "gpu_minutes_used": 0.1,
-    }
+    host.jobs["j1"]["result"] = {"status": "failed", "error_kind": "cuda_oom",
+                                 "error": "out of memory", "gpu_minutes_used": 0.1}
 
     res = await exe.fetch_result(handle)
     assert res.status is JobStatus.FAILED
@@ -458,23 +473,28 @@ async def test_a_kill_with_nothing_to_measure_is_recorded_not_silently_free():
     await exe.cancel(handle)  # died before writing any progress
 
     await exe.spent_minutes()
-    assert "j1" in exe.unmeasured_spend(), "a silent zero is the same refund by another route"
+    assert "j1" in exe.unmeasured_spend(), (
+        "a silent zero is the same refund by another route"
+    )
 
 
 @pytest.mark.asyncio
 async def test_the_result_reports_only_the_value_the_run_ended_on():
     host = FakeHost()
     exe = _exe(host)
-    exe = ProcessExecutor(host, remote_dir="/w", command=CMD, objective={"metric": "ndcg", "direction": "max"})
+    exe = ProcessExecutor(host, remote_dir="/w", command=CMD,
+                          objective={"metric": "ndcg", "direction": "max"})
     handle = await exe.submit(_spec({"lr": 2e-6}))
     host.finish("j1", points=[[200, 0.35], [400, 0.39], [600, 0.37]])
 
     res = await exe.fetch_result(handle)
     assert res.metrics["ndcg"] == pytest.approx(0.37), (
-        "named for the metric the campaign declared, or the tool reads a succeeded run as having produced nothing"
+        "named for the metric the campaign declared, or the tool reads a succeeded "
+        "run as having produced nothing"
     )
     assert "best" not in res.metrics, (
-        "the highest point of the curve is the judgement under test; handing it over answers the question for the agent"
+        "the highest point of the curve is the judgement under test; handing it "
+        "over answers the question for the agent"
     )
     assert res.output["eval_points"] == [[200, 0.35], [400, 0.39], [600, 0.37]]
 
@@ -567,9 +587,7 @@ async def test_a_non_positive_request_falls_back_to_what_is_left():
 async def test_the_deliverable_names_the_step_that_scored_best():
     host = FakeHost()
     exe = ProcessExecutor(
-        host,
-        remote_dir="/w",
-        command=CMD,
+        host, remote_dir="/w", command=CMD,
         objective={"metric": "ndcg", "direction": "max"},
     )
     handle = await exe.submit(_spec({"lr": 1e-6}))
@@ -592,9 +610,7 @@ async def test_a_minimised_objective_picks_the_lowest_point():
     a backend that always takes the maximum would hand over the worst checkpoint."""
     host = FakeHost()
     exe = ProcessExecutor(
-        host,
-        remote_dir="/w",
-        command=CMD,
+        host, remote_dir="/w", command=CMD,
         objective={"metric": "loss", "direction": "min"},
     )
     handle = await exe.submit(_spec({"lr": 1e-6}))
@@ -634,10 +650,7 @@ async def test_no_declared_objective_means_no_deliverable():
 async def test_a_failed_job_has_no_deliverable():
     host = FakeHost()
     exe = ProcessExecutor(
-        host,
-        remote_dir="/w",
-        command=CMD,
-        objective={"metric": "ndcg", "direction": "max"},
+        host, remote_dir="/w", command=CMD, objective={"metric": "ndcg", "direction": "max"},
     )
     handle = await exe.submit(_spec({"lr": 1e-6}))
     host.jobs["j1"]["alive"] = False
@@ -656,10 +669,7 @@ async def test_the_declared_metric_name_is_used_not_ndcg():
     its number filed under a name it never asked for."""
     host = FakeHost()
     exe = ProcessExecutor(
-        host,
-        remote_dir="/w",
-        command=CMD,
-        objective={"metric": "recall", "direction": "max"},
+        host, remote_dir="/w", command=CMD, objective={"metric": "recall", "direction": "max"},
     )
     handle = await exe.submit(_spec({"lr": 1e-6}))
     host.finish("j1", points=[[200, 0.5], [400, 0.6]])
@@ -668,3 +678,95 @@ async def test_the_declared_metric_name_is_used_not_ndcg():
 
     assert res.metrics["recall"] == pytest.approx(0.6)
     assert "ndcg" not in res.metrics
+
+
+@pytest.mark.asyncio
+async def test_a_staged_case_is_linked_into_the_trial_not_copied() -> None:
+    # The owner's case can be several GB and every round needs its own working
+    # directory, so the tree is symlinks: what a run creates lands locally, what it
+    # reads stays shared.
+    host = FakeHost()
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD,
+                         staged_case="/srv/case/")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+
+    staged = next(c for c in host.seen if c.startswith("mkdir -p "))
+    assert "cp -asf /srv/case/. /root/ops/jobs/k1/" in staged, staged
+    for name in ("config.json", "result.json", "pid", "job.log", ".raven-launch.sh"):
+        assert f"/root/ops/jobs/k1/{name}" in staged.split("rm -f", 1)[1], (
+            f"a case holding its own {name} would arrive as a link, and writing "
+            f"through that link edits the owner's case"
+        )
+
+
+@pytest.mark.asyncio
+async def test_no_staged_case_means_no_linking_step() -> None:
+    host = FakeHost()
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD)
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+
+    staged = next(c for c in host.seen if c.startswith("mkdir -p "))
+    assert "cp -as" not in staged
+
+
+@pytest.mark.asyncio
+async def test_files_the_run_wrote_back_into_the_case_are_reported() -> None:
+    # This is what decides whether the remaining rounds can run at the same time.
+    host = FakeHost()
+    host.case_written = ["/srv/case/input.dat", "/srv/case/sub/mesh.dat"]
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD, staged_case="/srv/case")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+    host.finish("k1")
+
+    res = await ex.fetch_result(JobHandle(ex.name, "ops-k1"))
+    assert res.output["case_files_written"] == ["input.dat", "sub/mesh.dat"], (
+        "reported relative to the case, so the names read as the case's own"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_case_nothing_wrote_to_reports_an_empty_list_not_nothing() -> None:
+    # An empty list is the finding "parallel rounds are safe". Absence would be
+    # indistinguishable from never having looked.
+    host = FakeHost()
+    host.case_written = []
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD, staged_case="/srv/case")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+    host.finish("k1")
+
+    res = await ex.fetch_result(JobHandle(ex.name, "ops-k1"))
+    assert res.output["case_files_written"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_file_known_to_be_written_is_staged_as_a_copy_not_a_link() -> None:
+    # No confirmation round: the next round the campaign was going to run anyway
+    # stages the copy and measures again. A run of the case costs hours; this costs
+    # one cp.
+    host = FakeHost()
+    host.remembered_writes = {"/srv/case": ["input.dat", "sub/mesh.dat"]}
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD, staged_case="/srv/case")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+
+    staged = next(c for c in host.seen if c.startswith("mkdir -p "))
+    for rel in ("input.dat", "sub/mesh.dat"):
+        expected = (f"cp -p {shlex.quote(f'/srv/case/{rel}')} "
+                    f"{shlex.quote(f'/root/ops/jobs/k1/{rel}')}")
+        assert expected in staged, staged
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_was_measured_is_remembered_on_the_machine() -> None:
+    # Kept on the machine, not in the campaign's meta.json: that file is the
+    # apparatus' declaration and a submit is refused if it changes, while this list
+    # grows as rounds run.
+    host = FakeHost()
+    host.case_written = ["/srv/case/input.dat"]
+    ex = ProcessExecutor(host, remote_dir="/root/ops", command=CMD, staged_case="/srv/case")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+    host.finish("k1")
+    await ex.fetch_result(JobHandle(ex.name, "ops-k1"))
+
+    wrote = [c for c in host.seen if ".raven-case-writes.json" in c and c.startswith("python3")]
+    assert wrote, "nothing persisted the finding, so the next round links the file again"
+    assert "/root/ops/.raven-case-writes.json" in wrote[0]

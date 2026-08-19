@@ -73,9 +73,23 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+def derived_workspace() -> Path:
+    """The workspace this config file implies, without creating it.
+
+    Falls back to ``~/.raven/workspace`` when no config path can be resolved: a
+    workspace is needed to run at all, so it must never be the thing that fails.
+    With no ``--config`` the derived value IS that constant, so nothing moves for
+    anyone who never passed one.
+    """
+    try:
+        return Path(get_config_path()).expanduser().parent / "workspace"
+    except Exception:
+        return Path.home() / ".raven" / "workspace"
+
+
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
-    path = Path(workspace).expanduser() if workspace else Path.home() / ".raven" / "workspace"
+    path = Path(workspace).expanduser() if workspace else derived_workspace()
     return ensure_dir(path)
 
 

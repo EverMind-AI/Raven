@@ -272,7 +272,7 @@ def test_queries_are_deduplicated_on_the_tools_own_normalisation():
 
 
 def test_an_empty_turn_advances_the_counter_and_nothing_else():
-    """ "Three turns, two sources" and "two turns, two sources" are different states."""
+    """"Three turns, two sources" and "two turns, two sources" are different states."""
     memo = ResearchMemo().merge_ledger([], max_sources=9, max_queries=9)
     assert memo.turns == 1 and memo.empty
 
@@ -339,7 +339,7 @@ def test_strip_is_a_no_op_on_a_block_with_no_terminator():
     user's own words, so the message is persisted intact rather than cut at a
     guess - a wrong cut would delete the question.
     """
-    assert strip_memo(f"{MEMO_OPEN}\n- https://a.example\n\nreal question").startswith(MEMO_OPEN)
+    assert strip_memo(f"{MEMO_OPEN}\n- https://a.example\n\nreal question") .startswith(MEMO_OPEN)
 
 
 def test_a_user_message_quoting_the_marker_mid_text_is_not_stripped():
@@ -364,9 +364,8 @@ def test_the_render_cap_does_not_shrink_what_the_grounding_check_accepts():
     for two pressures pointing opposite ways.
     """
     memo = ResearchMemo()
-    memo.merge_ledger(
-        _rows(*[f"https://p{i}.example" for i in range(18)]), max_sources=3, max_queries=9, max_opened=200
-    )
+    memo.merge_ledger(_rows(*[f"https://p{i}.example" for i in range(18)]),
+                      max_sources=3, max_queries=9, max_opened=200)
     assert len(memo.sources) == 3
     assert len(memo.opened) == 18
     memo.merge_ledger(_rows("https://later.example"), max_sources=3, max_queries=9, max_opened=200)
@@ -378,9 +377,8 @@ def test_the_render_cap_does_not_shrink_what_the_grounding_check_accepts():
 def test_the_accept_set_is_still_bounded_so_a_long_conversation_cannot_grow_forever():
     memo = ResearchMemo()
     for turn in range(5):
-        memo.merge_ledger(
-            _rows(*[f"https://t{turn}p{i}.example" for i in range(10)]), max_sources=4, max_queries=9, max_opened=12
-        )
+        memo.merge_ledger(_rows(*[f"https://t{turn}p{i}.example" for i in range(10)]),
+                          max_sources=4, max_queries=9, max_opened=12)
     assert len(memo.opened) == 12
     # Newest kept, like the rendered list: a follow-up is most likely about this turn.
     assert "https://t4p0.example" in memo.opened
@@ -407,7 +405,9 @@ def test_a_conversation_saved_before_the_accept_set_existed_keeps_its_grounding(
 
 
 def test_the_accept_set_survives_a_metadata_round_trip():
-    memo = ResearchMemo().merge_ledger(_rows("https://a.example", "https://b.example"), max_sources=1, max_queries=9)
+    memo = ResearchMemo().merge_ledger(
+        _rows("https://a.example", "https://b.example"), max_sources=1, max_queries=9
+    )
     assert len(memo.sources) == 1 and len(memo.opened) == 2
     restored = ResearchMemo.from_metadata(memo.to_metadata())
     assert restored.opened == memo.opened

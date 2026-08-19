@@ -45,7 +45,6 @@ def _response_text(response: object) -> str:
             parts.append(value)
     return "\n".join(parts)
 
-
 _RESTART_MARKERS = (
     "start from scratch",
     "from scratch",
@@ -191,7 +190,8 @@ class SpinEntryBreaker(AgentHook):
         if self._evidence_round is not None and self._evidence_round.active:
             self._evidence_round.note_spin_pass()
             logger.warning(
-                "spin-breaker: restart language (%r) inside a sanctioned evidence round; standing down (pass %d)",
+                "spin-breaker: restart language (%r) inside a sanctioned evidence "
+                "round; standing down (pass %d)",
                 marker,
                 self._evidence_round.spin_passes,
             )

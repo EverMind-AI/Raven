@@ -66,7 +66,9 @@ class _Patched:
 
     def __init__(self, response):
         self._client = patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: _FakeClient(response))
-        self._validator = patch("raven.agent.tools.web.validate_url_target", lambda u, **_: (True, ""))
+        self._validator = patch(
+            "raven.agent.tools.web.validate_url_target", lambda u, **_: (True, "")
+        )
 
     def __enter__(self):
         self._client.__enter__()
@@ -477,8 +479,12 @@ class _StatusResponse:
 
 
 def _patch_reader(monkeypatch, client):
-    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client)
-    monkeypatch.setattr("raven.agent.tools.web.validate_url_target", lambda u, **_: (True, ""))
+    monkeypatch.setattr(
+        "raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client
+    )
+    monkeypatch.setattr(
+        "raven.agent.tools.web.validate_url_target", lambda u, **_: (True, "")
+    )
     slept = []
 
     async def _record_sleep(seconds):
@@ -698,9 +704,9 @@ async def test_the_ledger_sizes_the_channels_a_dr_profile_switches_off(monkeypat
     # Same payload through a DR profile: every channel off, so every size is 0.
     ledger.unlink()
     with _patch_client(_FakeResponse(json_data=SERPER_DATA)):
-        await WebSearchTool(
-            api_key="k", include_answer_box=False, include_knowledge_graph=False, include_snippets=False
-        ).execute(query="who")
+        await WebSearchTool(api_key="k", include_answer_box=False,
+                            include_knowledge_graph=False,
+                            include_snippets=False).execute(query="who")
     off = json.loads(ledger.read_text().splitlines()[0])
     assert off["answer_box_chars"] == 0
     assert off["knowledge_chars"] == 0
@@ -715,9 +721,9 @@ async def test_the_corpus_renderer_has_no_answer_box_to_switch_off(monkeypatch, 
     monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
     transport = _CorpusTransport()
     _patch_corpus_client(monkeypatch, transport)
-    await WebSearchTool(
-        corpus_endpoint="http://local:8765", include_answer_box=True, include_knowledge_graph=True
-    ).execute(query="q")
+    await WebSearchTool(corpus_endpoint="http://local:8765",
+                        include_answer_box=True,
+                        include_knowledge_graph=True).execute(query="q")
 
     row = json.loads(ledger.read_text().splitlines()[0])
     assert row["source"] == "corpus"

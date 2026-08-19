@@ -211,7 +211,9 @@ def register(app: typer.Typer) -> None:
             telemetry_dir=config.workspace_path / ".token_wise",
             supports_caching=getattr(provider, "supports_prompt_caching", None),
         )
-        if strategies.get("cache_optimizer") is not None and hasattr(provider, "disable_auto_cache_control"):
+        if strategies.get("cache_optimizer") is not None and hasattr(
+            provider, "disable_auto_cache_control"
+        ):
             provider.disable_auto_cache_control = True
 
         # Create agent with cron service

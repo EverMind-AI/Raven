@@ -132,7 +132,8 @@ def test_the_rolling_tail_moves_with_the_conversation():
     marked = [
         i
         for i, m in enumerate(msgs)
-        if isinstance(m.get("content"), list) and any("cache_control" in b for b in m["content"] if isinstance(b, dict))
+        if isinstance(m.get("content"), list)
+        and any("cache_control" in b for b in m["content"] if isinstance(b, dict))
     ]
     assert marked, "no message-level breakpoint at all - only the fixed prefix is cached"
     assert max(marked) >= len(msgs) - 2, (

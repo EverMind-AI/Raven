@@ -521,6 +521,7 @@ async def test_ops_wake_completion_does_not_feed_the_heartbeat():
 async def test_ops_wake_records_its_token_cost_on_the_campaign_trail(tmp_path, monkeypatch):
     """The cost family (tokens per campaign) can only be attributed at the turn
     boundary, so the wake handler writes it to the campaign's event trail."""
+    import raven.ops.instrument as instrument
     from raven.cli._cron_handler import make_on_cron_job
     from raven.ops.metrics import campaign_metrics
     from raven.spine.events import Usage
@@ -552,6 +553,7 @@ async def test_ops_wake_records_its_token_cost_on_the_campaign_trail(tmp_path, m
 
 
 async def test_ordinary_reminder_writes_no_campaign_cost(tmp_path, monkeypatch):
+    import raven.ops.instrument as instrument
     from raven.cli._cron_handler import make_on_cron_job
 
     monkeypatch.setattr("raven.config.paths.get_ops_home", lambda: tmp_path)

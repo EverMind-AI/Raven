@@ -9,10 +9,12 @@ the three things that contract leaves to the caller:
 - **a session identity per conversation.** One call is one turn; the same
   `--session cli:<id>` across calls is a multi-turn conversation. The gateway's
   `{agent_id}` is that id.
-- **a stable workspace per conversation.** Sessions are bucketed by the
-  workspace's absolute path, so the same id against a different workspace is a
-  *different* conversation. The choice is therefore recorded on the first turn
-  and replayed, rather than re-derived from a prompt that no longer carries it.
+- **a stable workspace per conversation.** The gateway spawns a cli subagent with
+  the host agent's session workspace as cwd, so that is the workspace the inner
+  agent gets: the sub-agent works where the caller works, on the caller's files,
+  with nothing to declare and nothing to copy. Sessions are bucketed by the
+  workspace's absolute path, so the same id against a different one is a
+  *different* conversation; the first turn's path is recorded and replayed.
 - **an answer, and a verdict on whether there is one.** Exit 0 does not mean the
   agent produced anything: only a config or credential error maps to non-zero.
 
@@ -87,6 +89,73 @@ STATE_ROOT = Path(
 RUN_ROOT = Path(env_value("CODE_RUN_ROOT") or STATE_ROOT / "runs")
 
 
+# The host raven's config file, read for the fallbacks below. Read as JSON, never
+# imported from raven: this launcher is standard-library only and has to run
+# under a bare python3 that may not have the runtime installed at all.
+HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
+
+
+def host_config() -> dict:
+    """The host raven's config, or an empty dict when there is none to read."""
+    try:
+        return json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def dig(data: dict, path: tuple) -> str:
+    for part in path:
+        if not isinstance(data, dict):
+            return ""
+        data = data.get(part)
+    return data if isinstance(data, str) else ""
+
+
+def put(data: dict, path: tuple, value: str) -> None:
+    node = data
+    for part in path[:-1]:
+        node = node.setdefault(part, {})
+    node[path[-1]] = value
+
+
+def recommended_llm() -> str:
+    """What this folder's manifest says this agent is tuned for."""
+    try:
+        rec = json.loads((HERE / "subagent.json").read_text(encoding="utf-8")).get("recommendedLlm") or {}
+    except (OSError, ValueError):
+        return "unrecorded"
+    return f"{rec.get('model', '?')} via {rec.get('apiBase') or rec.get('provider', '?')}"
+
+
+def inherit_llm(config: dict, host: dict) -> str:
+    """Take the host raven's whole LLM configuration; return what was taken.
+
+    Only reached when this agent has no key of its own. The host's provider block
+    is copied wholesale rather than matched by name: a provider called `custom`
+    here and one called `custom` there can be two different endpoints, so picking
+    by name would silently point this agent at a gateway its model is not served
+    on - a failure that looks like a bad answer rather than an error.
+
+    What is inherited is which brains are reachable, which one is chosen, and how
+    a model name routes to a provider. Deliberately not the rest of
+    `agents.defaults`: the token ceiling, the tool-iteration cap and the timeouts
+    are this agent's operating limits, tuned for its own job, and they have
+    nothing to do with whose key is paying.
+    """
+    providers = host.get("providers") or {}
+    if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
+        return ""
+    for key in ("providers", "routing"):
+        if key in host:
+            config[key] = host[key]
+    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    host_defaults = (host.get("agents") or {}).get("defaults") or {}
+    for key in ("provider", "model"):
+        if key in host_defaults:
+            defaults[key] = host_defaults[key]
+    return f"provider={defaults.get('provider')} model={defaults.get('model')}"
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
 
@@ -100,19 +169,28 @@ def render_config(source: Path) -> Path:
     upstream zip, so a patch would not survive.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
-    missing = [name for name in REQUIRED_SECRETS if not env_value(name)]
-    if missing:
-        raise SystemExit(
-            f"error: {', '.join(missing)} is not set; put it in {HERE / '.env'} (see .env.example) or export it"
-        )
+    host = host_config()
+
+    # Each optional key falls back on its own: a missing Serper or Jina key is a
+    # degradation, not a failure, and the host's is better than nothing.
     for name, path in SECRET_SLOTS.items():
-        value = env_value(name)
-        if not value:
-            continue
-        node = config
-        for part in path[:-1]:
-            node = node.setdefault(part, {})
-        node[path[-1]] = value
+        value = env_value(name) or ("" if name in REQUIRED_SECRETS else dig(host, path))
+        if value:
+            put(config, path, value)
+
+    llm_key = REQUIRED_SECRETS[0]
+    if env_value(llm_key):
+        defaults = config.get("agents", {}).get("defaults", {})
+        log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
+    else:
+        taken = inherit_llm(config, host)
+        if not taken:
+            raise SystemExit(
+                f"error: {llm_key} is not set and {HOST_CONFIG} has no provider key to inherit from; "
+                f"put the key in {HERE / '.env'} (see .env.example), export it, or configure a "
+                f"provider in the host raven"
+            )
+        log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
 
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     # The normal path deletes this in a `finally`; only a SIGKILL strands one, so
@@ -155,24 +233,6 @@ def safe_name(value: str) -> str:
 
 def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
-
-
-def split_repo_directive(task: str) -> tuple[str | None, str]:
-    """Pull a leading `repo: <path>` line off the task text.
-
-    A spawned run only ever receives prose: the registered command is fixed at
-    `--prompt-file {prompt_file}`, so `--repo` is unreachable from the gateway
-    unless the caller can express it in the prompt itself. The directive is that
-    channel, and the subagent description is what tells the dispatching model to
-    write it.
-    """
-    head, sep, rest = task.partition("\n")
-    stripped = head.strip()
-    if stripped.lower().startswith("repo:"):
-        repo = stripped[len("repo:") :].strip()
-        if repo:
-            return repo, rest.strip() if sep else ""
-    return None, task
 
 
 def session_file(python: Path, config: Path, workspace: Path, chat_id: str) -> Path | None:
@@ -251,10 +311,10 @@ def extract_answer(path: Path, skip_lines: int = 0) -> str | None:
 
 
 def describe_changes(repo: Path) -> str:
-    """Summarise the working-tree footprint of an in-place run.
+    """Summarise the working-tree footprint of a run, when the workspace is a checkout.
 
     A name-and-count summary rather than a patch: the agent edits the caller's
-    real checkout, so what the caller needs from the reply is where to look. The
+    real files, so what the caller needs from the reply is where to look. The
     diff itself is already in their working tree, and `git diff` shows it better
     than a copy pasted into conversation.
     """
@@ -275,33 +335,22 @@ def describe_changes(repo: Path) -> str:
     return summary
 
 
-def build_task(task: str, workspace: Path, *, repo_mode: bool, resuming: bool) -> str:
+def build_task(task: str, workspace: Path, *, resuming: bool) -> str:
     """Prefix the task with the facts about this run the agent cannot discover.
 
     On a resumed turn the history is already in context, so the preamble states
     only what changed. Left out, the agent reads a fresh "you are working in"
     line against files it remembers creating and treats it as a contradiction.
     """
-    if repo_mode:
-        where = (
-            f"You are continuing in {workspace}, the same checkout as earlier in this "
-            f"conversation, with your previous edits still in place."
-            if resuming
-            else (
-                f"You are working directly in {workspace}, the caller's real git checkout. "
-                f"Your edits change their files for real - there is no copy and no patch step. "
-                f"Uncommitted work already in the tree is theirs; leave what the task does not "
-                f"concern alone, and do not commit, stash, reset or switch branches unless the "
-                f"task says to."
-            )
+    where = (
+        f"You are continuing in {workspace}, the same directory as earlier in this conversation, "
+        f"so anything you left there is still present."
+        if resuming
+        else (
+            f"You are working in {workspace}, the directory the caller works in. Files already "
+            f"there are theirs and your edits change them for real."
         )
-    else:
-        where = (
-            f"You are continuing in {workspace}, the same scratch directory as earlier in this "
-            f"conversation, so anything you left there is still present."
-            if resuming
-            else f"You are working in {workspace}, an empty scratch directory."
-        )
+    )
     # Task first, environment after. The order is not cosmetic: everos extracts a
     # memory from each turn by summarising the message, and with the preamble
     # leading it stored "raven-code received a runtime context in an empty scratch
@@ -310,47 +359,41 @@ def build_task(task: str, workspace: Path, *, repo_mode: bool, resuming: bool) -
     return (
         f"{task}\n\n"
         f"---\n"
-        f"Environment: {where} You cannot read or write outside {workspace}; absolute paths "
-        f"elsewhere on this host are refused by a safety guard. Nobody is watching this run - "
-        f"there is no channel to ask a question on, so where the task is ambiguous choose the "
-        f"most defensible option and say which assumption you made. Your reply is the whole "
-        f"report the caller receives."
+        f"Environment: {where} You can read and write anywhere on this host. Nobody is watching "
+        f"this run - there is no channel to ask a question on, so where the task is ambiguous "
+        f"choose the most defensible option and say which assumption you made. Your reply is the "
+        f"whole report the caller receives."
     )
 
 
-def resolve_workspace(state_dir: Path, repo_arg: str | None) -> tuple[Path, bool]:
-    """Return (workspace, repo_mode), keeping it stable across turns.
+def resolve_workspace(state_dir: Path, override: str | None) -> Path:
+    """Return the workspace, keeping it stable across turns.
 
-    Sessions are bucketed by the workspace's absolute path, so the same
-    conversation id against a different workspace is a *different* conversation
-    with no history - the one trap `README.SWARM.md` calls out. A later turn does
-    not repeat the `repo:` directive, so the first turn's choice is recorded here
-    and replayed. A directive that contradicts the record is an error rather than
-    a silent new conversation.
+    The default is this process's cwd, which is the host agent's session
+    workspace: the gateway starts a cli subagent there, and inheriting it is what
+    puts this agent on the caller's files rather than in a private directory of
+    its own. Sessions are bucketed by the workspace's absolute path, so a later
+    turn arriving with a different cwd would be a *different* conversation with
+    no history - the first turn's path is recorded here and replayed.
     """
     pointer = state_dir / "workspace"
     recorded = pointer.read_text(encoding="utf-8").strip() if pointer.is_file() else None
 
-    if repo_arg:
-        repo = Path(repo_arg).expanduser().resolve()
-        if not (repo / ".git").exists():
-            raise SystemExit(f"error: {repo} is not a git repository")
-        if recorded and recorded != str(repo):
+    if override:
+        workspace = Path(override).expanduser().resolve()
+        if recorded and recorded != str(workspace):
             raise SystemExit(
-                f"error: this conversation is already bound to {recorded}; a different repo "
-                f"({repo}) would be a new conversation with no history. Drop the 'repo:' line "
-                f"to continue, or use a new conversation for the other repository."
+                f"error: this conversation is already bound to {recorded}; {workspace} would be a "
+                f"new conversation with no history. Drop --workspace to continue it."
             )
-        pointer.write_text(str(repo) + "\n", encoding="utf-8")
-        return repo, True
+        workspace.mkdir(parents=True, exist_ok=True)
+    elif recorded:
+        return Path(recorded)
+    else:
+        workspace = Path.cwd().resolve()
 
-    if recorded:
-        return Path(recorded), recorded != str(state_dir / "scratch")
-
-    scratch = state_dir / "scratch"
-    scratch.mkdir(parents=True, exist_ok=True)
-    pointer.write_text(str(scratch) + "\n", encoding="utf-8")
-    return scratch, False
+    pointer.write_text(str(workspace) + "\n", encoding="utf-8")
+    return workspace
 
 
 def main() -> int:
@@ -362,9 +405,8 @@ def main() -> int:
     ap.add_argument("--session", help="Conversation id; turns sharing one continue the same session")
     ap.add_argument("--job", help="State directory name for a run by hand (default: a unique name)")
     ap.add_argument(
-        "--repo",
-        help="Work directly in this git checkout; a spawned run uses a leading "
-        "'repo: <path>' line in the prompt instead",
+        "--workspace",
+        help="Work in this directory instead of the inherited cwd (for a run by hand)",
     )
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
     # No wall-clock cap by default: a real coding task has no predictable length,
@@ -388,11 +430,6 @@ def main() -> int:
     if not task:
         raise SystemExit("error: the task is empty")
 
-    directive_repo, task = split_repo_directive(task)
-    repo_arg = args.repo or directive_repo
-    if not task:
-        raise SystemExit("error: the task is only a repo directive")
-
     # Resolved: the interpreter path is handed to a subprocess whose cwd is the
     # checkout, so a relative --checkout would not survive the chdir.
     root = Path(args.checkout).expanduser().resolve()
@@ -411,7 +448,7 @@ def main() -> int:
     _LOG_FILE = state_dir / "launcher.log"
 
     config = render_config(Path(args.config).resolve())
-    workspace, repo_mode = resolve_workspace(state_dir, repo_arg)
+    workspace = resolve_workspace(state_dir, args.workspace)
 
     transcript = session_file(root / ".venv" / "bin" / "python", config, workspace, conversation)
     pre_lines = count_lines(transcript) if transcript is not None else 0
@@ -446,10 +483,10 @@ def main() -> int:
         # buffer - so multi-turn conversations still resume normally.
         "--flush-skill-buffer",
         "-m",
-        build_task(task, workspace, repo_mode=repo_mode, resuming=resuming),
+        build_task(task, workspace, resuming=resuming),
     ]
     log(
-        f"[run] workspace={workspace} repo_mode={repo_mode} turn={'resume' if resuming else 'first'} "
+        f"[run] workspace={workspace} cwd={Path.cwd()} turn={'resume' if resuming else 'first'} "
         f"timeout={args.timeout or 'none'} transcript={transcript}"
     )
 
@@ -487,7 +524,7 @@ def main() -> int:
         log("[run] no transcript found")
     log(f"[run] answer_chars={len(answer or '')}")
 
-    changes = describe_changes(workspace) if repo_mode else ""
+    changes = describe_changes(workspace) if (workspace / ".git").exists() else ""
     if changes:
         log(f"[run] {changes.splitlines()[0]}")
 
@@ -510,8 +547,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except SystemExit as exc:
-        # A setup error the caller caused (no task, a path that is not a repo, a
-        # repo that contradicts the conversation) has to reach them as the reply.
+        # A setup error the caller caused (no task, a workspace that contradicts
+        # the conversation) has to reach them as the reply.
         # stderr would too - the backend folds it in - but only when it decides
         # stderr is non-empty, so the reliable channel is stdout, same as every
         # other failure here. Numeric exits (argparse) pass through untouched.

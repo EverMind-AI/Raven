@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.tools import ops_observe as mod
-from raven.agent.tools.ops_observe import OpsObserveTool, OpsOutputsTool
+from raven.agent.tools.ops_observe import OpsOutputsTool
 from raven.ops.backend import JobHandle, JobResult, JobStatus
 
 JUDGEMENT_WORDS = ("diverg", "converg", "hopeless", "nan", "trend", "best", "healthy")
@@ -57,20 +57,17 @@ class FakeLedger:
 
 def _wire(monkeypatch, backend, keys=("t1",)):
     monkeypatch.setattr(
-        mod,
-        "_campaign_backend",
+        mod, "_campaign_backend",
         lambda campaign, ledger: (backend, FakeLedger(list(keys)), None),
     )
 
 
 # One interFoam timestep: 18 lines, of which 2 carry the phase-fraction stats.
 TIMESTEP = [
-    "Time = 0.005",
-    "PIMPLE: iteration 1",
+    "Time = 0.005", "PIMPLE: iteration 1",
     "smoothSolver:  Solving for alpha.water, Initial residual = 0.000106784",
     "Phase-1 volume fraction = 0.130194  Min(alpha.water) = 0  Max(alpha.water) = 1",
-    "MULES: Correcting alpha.water",
-    "MULES: Correcting alpha.water",
+    "MULES: Correcting alpha.water", "MULES: Correcting alpha.water",
     "Phase-1 volume fraction = 0.130194  Min(alpha.water) = -7.1e-21  Max(alpha.water) = 1",
     "DICPCG:  Solving for p_rgh, Initial residual = 0.0016456",
     "time step continuity errors : sum local = 3.03e-05",
@@ -81,30 +78,8 @@ TIMESTEP = [
     "ExecutionTime = 0.07 s  ClockTime = 0 s",
     "Courant Number mean: 0.00217535 max: 0.026189",
     "Interface Courant Number mean: 3.19e-05 max: 0.0212012",
-    "deltaT = 0.005",
-    "Time = 0.01",
+    "deltaT = 0.005", "Time = 0.01",
 ]
-
-
-@pytest.mark.asyncio
-async def test_observe_returns_every_requested_line_not_a_summary(monkeypatch):
-    backend = FakeBackend(TIMESTEP, JobResult(JobStatus.RUNNING))
-    _wire(monkeypatch, backend)
-    out = await OpsObserveTool().execute(campaign="c", trial="t1", tail=18)
-    # A whole timestep must survive, including both phase-fraction rows -- the
-    # compressing status tool would have shown one line, hitting them 2 times in 18.
-    assert out.count("Max(alpha.water)") == 2
-    for line in TIMESTEP:
-        assert line in out
-
-
-@pytest.mark.asyncio
-async def test_observe_tail_is_passed_through_and_capped(monkeypatch):
-    backend = FakeBackend(TIMESTEP, JobResult(JobStatus.RUNNING))
-    _wire(monkeypatch, backend)
-    await OpsObserveTool().execute(campaign="c", trial="t1", tail=5)
-    await OpsObserveTool().execute(campaign="c", trial="t1", tail=99999)
-    assert backend.tails == [5, 400]
 
 
 @pytest.mark.asyncio
@@ -114,11 +89,8 @@ async def test_outputs_prints_the_whole_result_even_with_no_metrics(monkeypatch)
     result = JobResult(
         JobStatus.SUCCEEDED,
         metrics={},
-        output={
-            "log_tail": "SIMPLE solution converged in 281 iterations\nEnd",
-            "time_directories": ["0", "100", "281"],
-            "cores": 4,
-        },
+        output={"log_tail": "SIMPLE solution converged in 281 iterations\nEnd",
+                "time_directories": ["0", "100", "281"], "cores": 4},
     )
     backend = FakeBackend(TIMESTEP, result)
     _wire(monkeypatch, backend)
@@ -129,14 +101,7 @@ async def test_outputs_prints_the_whole_result_even_with_no_metrics(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_unknown_trial_names_the_ones_that_exist(monkeypatch):
-    backend = FakeBackend(TIMESTEP, JobResult(JobStatus.RUNNING))
-    _wire(monkeypatch, backend, keys=("t1", "t2"))
-    out = await OpsObserveTool().execute(campaign="c", trial="nope")
-    assert "Unknown trial" in out and "t1" in out and "t2" in out
-
-
-@pytest.mark.parametrize("tool", [OpsObserveTool(), OpsOutputsTool()])
+@pytest.mark.parametrize("tool", [OpsOutputsTool()])
 def test_descriptions_suggest_no_verdict_and_no_action(tool):
     text = tool.description.lower()
     for word in JUDGEMENT_WORDS:

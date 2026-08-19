@@ -39,7 +39,7 @@ class _Remote:
 
     def __call__(self, cmd: str) -> tuple[int, str]:
         if "result.json" in cmd:
-            return 0, "absent"  # nothing already running
+            return 0, "absent"          # nothing already running
         # Unquoted as often as quoted: shlex.quote leaves a plain base64 blob
         # alone, so a pattern that insisted on quotes matched nothing and the
         # captured config stayed empty while every assertion blamed the backend.
@@ -59,7 +59,8 @@ class _Remote:
 
 def _executor(monkeypatch, *, spent: float, total: float) -> tuple[ProcessExecutor, _Remote]:
     remote = _Remote()
-    ex = ProcessExecutor(remote, remote_dir="/remote", command="run {job_dir} {config}", budget_minutes_total=total)
+    ex = ProcessExecutor(remote, remote_dir="/remote", command="run {job_dir} {config}",
+                         budget_minutes_total=total)
 
     async def _spent() -> float:
         return spent

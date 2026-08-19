@@ -245,7 +245,13 @@ class ChannelsConfig(Base):
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = "~/.raven/workspace"
+    # Empty means "derive it from where the config file sits", like the cron
+    # store, the logs, the ops ledgers and the traces. A literal here stated an
+    # instance's identity a second time, and copying a config to make a new
+    # instance carried the old instance's workspace with it -- measured three
+    # times on 2026-08-13. An explicit value still wins, which is every config
+    # written before this and every --workspace override.
+    workspace: str = ""
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
@@ -596,8 +602,13 @@ class Config(BaseSettings):
 
     @property
     def workspace_path(self) -> Path:
-        """Get expanded workspace path."""
-        return Path(self.agents.defaults.workspace).expanduser()
+        """Get expanded workspace path, derived from the config file when unset."""
+        written = (self.agents.defaults.workspace or "").strip()
+        if written:
+            return Path(written).expanduser()
+        from raven.config.paths import derived_workspace
+
+        return derived_workspace()
 
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.

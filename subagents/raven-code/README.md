@@ -377,24 +377,62 @@ in-place mode would be dead code for every real spawn, which is how it was
 caught. The subagent `description` is what tells the dispatching model to write
 the line, and to write it on the first turn only.
 
-## The boundary, and where it leaks
+## The LLM it runs on
 
-`tools.restrictToWorkspace: true`, so the workspace is the agent's world:
-filesystem tools refuse a path outside it outright, and the shell guard rejects
-any command whose text contains `../` or an absolute path not under the working
-directory. In in-place mode that fence is the repository, which is what makes
-editing it directly reasonable.
+`config.json` pins the model this agent is tuned for, and `subagent.json` records
+the same choice as `recommendedLlm` so a reader does not have to infer it. Two
+files naming one model can drift, so `install.sh` compares them and reports a
+mismatch rather than preferring one.
 
-Two consequences worth knowing before trusting the fence:
+Set this folder's api key and that pinned model is what runs. **Leave the key
+blank and the agent inherits the host raven's LLM instead** - its `providers`
+block, its `agents.defaults.provider` and `model`, and its `routing`. The rest of
+`agents.defaults` stays this folder's: the token ceiling, the tool-iteration cap
+and the timeouts are operating limits tuned for this agent's job, and they have
+nothing to do with whose key is paying. The optional Serper and Jina keys fall
+back the same way, each on its own.
 
-- **It guards command text, not what a program then does.** Measured on the
-  previous drop: the agent ran `pip install pytest -q`, which names no path, and
+The host's provider block is copied wholesale rather than matched by name. A
+provider called `custom` here and one called `custom` there can be two different
+endpoints, so picking by name would point this agent at a gateway its model is
+not served on - which reads as a bad answer, not as an error.
+
+Inheriting is a fallback, not an equivalence: a measurement taken on the pinned
+model does not carry over to whatever the host happens to run. `launcher.log`
+records which one was used on every turn, in the form
+`llm: inherited from <path> (provider=... model=...); tuned for <recommended>`.
+
+With no key here and no provider key in the host config either, the launcher
+refuses rather than starting something that cannot answer.
+
+## The boundary, and what is left of it
+
+`tools.restrictToWorkspace: false`. There is no filesystem fence: the agent
+reads and writes any path on this host that the process user can, and the shell
+takes absolute paths and `../` like any other command. The workspace is now only
+where the agent works by default - a scratch directory, or the checkout named by
+a `repo:` line - not a limit on what it can reach. The launcher preamble says so;
+the `description` does not, because the roster is kept to one or two lines per
+agent.
+
+This is deliberate and interim. The fence it replaced was textual, so it failed
+in both directions and neither failure is fixed by tightening it:
+
+- **It guarded command text, not what a program then did.** Measured on an
+  earlier drop: the agent ran `pip install pytest -q`, which names no path, and
   pytest landed in the host's shared site-packages. A package manager, a
   `git push`, or anything else writing through a program rather than a path
-  argument is outside what this setting can stop. `tools.exec.denyPatterns`
-  (replaces the built-ins) or `extraDenyPatterns` (appends) is the lever.
-- **It also blocks legitimate commands**, since the check is textual: an absolute
-  path in a heredoc, or a redirect to `/tmp`, reads as an escape attempt.
+  argument was never something the setting could stop.
+- **It blocked legitimate commands**, since the check was textual: an absolute
+  path in a heredoc, or a redirect to `/tmp`, read as an escape attempt.
+
+A real boundary has to come from the executor, not from a regex over the command
+string - `tools.sandbox.backend` is where that belongs. Until one is in place,
+what remains is the deny-list in `ExecTool.DEFAULT_DENY_PATTERNS` (unchanged:
+`rm -rf /`, recursive rm of a system tree, `mkfs`, raw writes to a block device,
+`shutdown`, fork bombs) plus `tools.exec.extraDenyPatterns` for anything an
+operator wants to add. Those bound destruction, not reach: assume a task handed
+to this agent can touch anything on the host.
 
 Separately, `DirectExecutor` passes commands a **minimal env allowlist**, not the
 host environment: PATH / HOME / locale / TLS / proxy only, deliberately no API
@@ -519,25 +557,18 @@ and two concurrent spawns cannot share a conversation. `hold_handle` serialises
 turns that do share a handle, which the branch requires: multiple calls on one
 session must not overlap.
 
-Install by writing the host raven's config, which needs nothing running:
+Install through the RPC, not the file-level helper - the helper writes the file in
+whatever process calls it and the live gateway keeps the roster it loaded at
+startup, so the dispatching model never sees the change:
 
 ```bash
-python3 install.py --dry-run   # print the resolved entry and the interpreter
+python3 install.py --dry-run   # print the resolved entry, change nothing
 python3 install.py             # back up the current list, then register
 ```
 
-The write goes through `raven.config.update_subagents`, the only supported write
-path: it validates the entry against the schema, replaces the entry sharing its
-name, refuses a list that would hold duplicates and
-replaces the file atomically, none of which hand-edited JSON gets. That module
-lives in the host raven's environment rather than the installer's, so `install.py`
-reaches it in a subprocess - the shebang of `raven` on `PATH`, or
-`--raven-python`.
-
-What writing the file costs is that nothing running picks it up: a live raven
-holds the roster it read at startup, so **restart it (or the gateway) before the
-dispatching model can see the change**. The previous list is written to a
-timestamped backup beside this file first.
+The endpoint **replaces** the list, so `install.py` reads the live one first,
+merges this entry into it by name, and writes a timestamped backup beside itself
+before the PUT.
 
 `subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved so the
 published file carries no path from the machine that built it. They are resolved
@@ -547,18 +578,17 @@ so neither a relative command nor the entry's `cwd` field can stand in for the
 real path. Moving this folder means re-running `install.py`.
 
 An edit made in the web UI afterwards will not appear here, and re-installing
-would overwrite it. Read the registered entry first: it is `subagents.thirdParty`
-in `~/.raven/config.json`, or
-`curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents` while the service
-is up.
+would overwrite it. Read the live entry first with
+`curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents`.
 
-The `description` is the field that matters most - it is what the dispatching
-model reads when deciding whether to hand work here, so the capability boundary
-lives in it: the two modes, the `repo:` directive and that it belongs on the
-first turn only, **that the edits are real**, no access outside the workspace,
-nobody to ask, and a runtime of about a minute. There are already a `Coder`
-(Claude Code) and a `Writer` (Codex) on the roster, so the description says what
-makes this one different rather than leaving the model to guess.
+The `description` is what the dispatching model reads when deciding whether to
+hand work here, and it is deliberately **one or two lines**: what this agent
+does, plus the `repo:` directive, which is a literal syntax nothing else can
+convey. Everything else a caller needs - that a handle continues a session, that
+it reads local files - is already rendered next to it as a capability tag or
+stated in the `spawn` schema, and the roster is rendered into *two* tool
+descriptions (`spawn` and `run_subagent_dag`), so every sentence here is paid for
+twice on every request.
 
 ## Measured runtimes
 
@@ -605,7 +635,7 @@ blocking.
 | File | |
 |---|---|
 | `run.py` | Host-side launcher (conversation state, workspace binding, session-path resolution, answer-based verdict, change summary) |
-| `install.py` | Resolves the `subagent.json` placeholders and writes the entry into the host raven's config |
+| `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC |
 | `config.json` | Run config. Holds **no** secrets |
 | `.env` / `.env.example` | The real secrets (mode 600, never published) and their template |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders |

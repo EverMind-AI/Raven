@@ -69,7 +69,9 @@ async def _spend(backend: Any) -> float:
     return await value if asyncio.iscoroutine(value) else value
 
 
-async def _evidence_seen(backend: Any, handle: Any, needle: str | None, cmd: str | None, job_dir: str) -> str | bool:
+async def _evidence_seen(
+    backend: Any, handle: Any, needle: str | None, cmd: str | None, job_dir: str
+) -> str | bool:
     """Did the payload change actually reach the executor?
 
     Two mechanisms, because the generic one is not sufficient on its own:
@@ -186,11 +188,9 @@ async def demonstrate(
         say("NOTE  no --evidence-a/-b given, so step 2 did not verify that the change")
         say("      actually took effect. A config written but ignored is indistinguishable")
         say("      from one that was applied; supply the markers to close that hole.")
-    say(
-        f"VERDICT  {'PASS' if verdict else 'FAIL'} - intervention paths "
+    say(f"VERDICT  {'PASS' if verdict else 'FAIL'} - intervention paths "
         f"{'demonstrated' if verdict else 'NOT demonstrated'}; a zero-intervention "
-        f"reading from this unit is {'interpretable' if verdict else 'WITHOUT INFORMATION'}"
-    )
+        f"reading from this unit is {'interpretable' if verdict else 'WITHOUT INFORMATION'}")
     return verdict, log, checks
 
 

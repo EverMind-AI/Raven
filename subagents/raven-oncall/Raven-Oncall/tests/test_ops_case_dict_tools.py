@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from raven.agent.tools.ops_case_dict import OpsEditCaseDictTool, OpsReadCaseDictTool
+from raven.agent.tools.ops_case_dict import OpsEditCaseDictTool
 
 STAGED = "/remote/staged_case"
 
@@ -38,7 +38,11 @@ class _FakeBackend:
     def _run(self, cmd: str):
         self.commands.append(cmd)
         for path, body in self.files.items():
-            if path in cmd and cmd.startswith("cat "):
+            # One command now decides directory-or-file, so a read reaches the
+            # host as `if [ -d p ]; then ...; else cat p; fi` rather than a bare
+            # cat. A fake that keys on the old prefix would answer nothing and
+            # every read would read as a missing file.
+            if path in cmd and "cat " in cmd:
                 return 0, body
         if cmd.startswith("sha256sum"):
             # Different after a set: the tool compares the hash before and after to
@@ -60,19 +64,11 @@ def _campaign(tmp_path, with_staged: bool, trials=("run1",)):
     if with_staged:
         meta["staged_case"] = STAGED
     (cdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    records = {
-        k: {
-            "idem_key": k,
-            "status": "pending",
-            "campaign": "c",
-            "handle": None,
-            "result": None,
-            "attempts": 0,
-            "escalated": False,
-        }
-        for k in trials
-    }
-    (cdir / "ledger.json").write_text(json.dumps({"version": 1, "records": records}), encoding="utf-8")
+    records = {k: {"idem_key": k, "status": "pending", "campaign": "c",
+                   "handle": None, "result": None, "attempts": 0, "escalated": False}
+               for k in trials}
+    (cdir / "ledger.json").write_text(
+        json.dumps({"version": 1, "records": records}), encoding="utf-8")
     return cdir
 
 
@@ -84,82 +80,17 @@ def patched(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reads_the_staged_case_with_no_trial(tmp_path, patched):
-    """The point of the change: before a first submit there is no trial, and the
-    case still has to be readable."""
-    cdir = _campaign(tmp_path, with_staged=True, trials=())
-
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", path="constant/transportProperties", ledger=str(cdir / "ledger.json")
-    )
-
-    assert "nu 0.001" in out
-    assert f"cat {STAGED}/constant/transportProperties" in " ".join(patched.commands)
-
-
-@pytest.mark.asyncio
-async def test_a_trial_still_reads_that_trials_own_case(tmp_path, patched):
-    cdir = _campaign(tmp_path, with_staged=True)
-
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", trial="run1", path="system/controlDict", ledger=str(cdir / "ledger.json")
-    )
-
-    assert "endTime 1" in out
-    assert "/remote/jobs/run1/case/system/controlDict" in " ".join(patched.commands)
-
-
-@pytest.mark.asyncio
-async def test_no_trial_and_no_staged_case_says_so(tmp_path, patched):
-    """Silence would be the wrong answer here: a campaign that declares no staged
-    case cannot serve this call, and the caller needs to know which of the two
-    things is missing."""
-    cdir = _campaign(tmp_path, with_staged=False, trials=())
-
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", path="constant/transportProperties", ledger=str(cdir / "ledger.json")
-    )
-
-    assert "staged_case" in out
-
-
-@pytest.mark.asyncio
-async def test_unknown_trial_names_the_ones_that_exist(tmp_path, patched):
-    cdir = _campaign(tmp_path, with_staged=True)
-
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", trial="nope", path="system/controlDict", ledger=str(cdir / "ledger.json")
-    )
-
-    assert "Unknown trial" in out and "run1" in out
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("bad", ["../outside", "/etc/passwd/../../x"])
-async def test_paths_may_not_escape_the_case(tmp_path, patched, bad):
-    cdir = _campaign(tmp_path, with_staged=True, trials=())
-
-    out = await OpsReadCaseDictTool().execute(campaign="c", path=bad, ledger=str(cdir / "ledger.json"))
-
-    assert "Refusing path" in out
-
-
-@pytest.mark.asyncio
 async def test_editing_the_staged_case_records_which_case_it_was(tmp_path, patched):
     """The event log is the only place the three pre-registered readings come from,
     so an edit with no trial must still say what it touched."""
     cdir = _campaign(tmp_path, with_staged=True, trials=())
 
     out = await OpsEditCaseDictTool().execute(
-        campaign="c",
-        path="constant/transportProperties",
-        entry="water/nu",
-        value="1e-06",
-        reason="test",
-        ledger=str(cdir / "ledger.json"),
-    )
+        campaign="c", path="constant/transportProperties", entry="water/nu",
+        value="1e-06", reason="test", ledger=str(cdir / "ledger.json"))
 
-    events = [json.loads(line) for line in (cdir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    events = [json.loads(line) for line in
+              (cdir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     edits = [e for e in events if e.get("kind") == "edit_case_dict"]
     assert len(edits) == 1
     assert edits[0]["case"] == "staged"
@@ -172,13 +103,8 @@ async def test_editing_a_trial_still_tells_you_to_restart_it(tmp_path, patched):
     cdir = _campaign(tmp_path, with_staged=True)
 
     out = await OpsEditCaseDictTool().execute(
-        campaign="c",
-        trial="run1",
-        path="system/controlDict",
-        entry="endTime",
-        value="2",
-        ledger=str(cdir / "ledger.json"),
-    )
+        campaign="c", trial="run1", path="system/controlDict", entry="endTime",
+        value="2", ledger=str(cdir / "ledger.json"))
 
     assert "Restart trial run1" in out
 
@@ -186,7 +112,7 @@ async def test_editing_a_trial_still_tells_you_to_restart_it(tmp_path, patched):
 def test_descriptions_do_not_name_a_knob_to_look_at():
     """Which entries matter is what the round measures. The examples in these
     descriptions illustrate syntax only."""
-    for tool in (OpsReadCaseDictTool(), OpsEditCaseDictTool()):
+    for tool in (OpsEditCaseDictTool(),):
         text = tool.description.lower()
         for word in ("deltat", "residualcontrol", "nu ", "viscosity", "alpha", "courant"):
             assert word not in text, f"{tool.name} description names {word!r}"
@@ -297,40 +223,36 @@ def _campaign_without_ledger(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_staged_case_reads_before_anything_has_been_submitted(tmp_path, patched):
-    """The ledger records what has been submitted, so it does not exist in round
-    zero -- and round zero is the round these tools are most needed for. The rule
-    these campaigns carry first is "check the magnitudes before submitting", and
-    the case it means is the staged one, which the ledger says nothing about.
 
-    Measured 2026-08-11: three reads refused with "no campaign state", then
-    fourteen ssh calls to read the case by hand and a sed to change it, leaving
-    the change recorded nowhere. The same failure is written in _case_root's own
-    docstring from the round that made the trial argument optional -- the argument
-    was freed and the gate above it was not.
-    """
-    cdir = _campaign_without_ledger(tmp_path)
-    assert not (cdir / "ledger.json").exists()
+# The read tool is gone (ops_exec covers looking), but three of its checks were
+# really checks on helpers the edit path still uses -- the case-root resolution
+# and the refusal of paths that escape the case. Re-aimed at the edit tool so
+# that coverage does not leave with the tool that happened to exercise it.
 
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", ledger=str(cdir / "ledger.json"), path="constant/transportProperties"
-    )
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["../outside", "/etc/passwd/../../x"])
+async def test_an_edit_may_not_escape_the_case(tmp_path, patched, bad):
+    cdir = _campaign(tmp_path, with_staged=True, trials=())
 
-    assert "need ledger.json" not in out and "No campaign meta" not in out
-    assert STAGED in out or "nu" in out
+    out = await OpsEditCaseDictTool().execute(
+        campaign="c", path=bad, entry="nu", value="1e-6",
+        ledger=str(cdir / "ledger.json"))
+
+    assert "Refusing path" in out
 
 
 @pytest.mark.asyncio
-async def test_a_named_trial_still_says_it_is_unknown_rather_than_blaming_the_campaign(tmp_path, patched):
-    """Naming a trial before anything ran is a different mistake from the campaign
-    having no state, and it gets the sentence that names the trial."""
-    cdir = _campaign_without_ledger(tmp_path)
+async def test_an_edit_with_no_trial_and_no_staged_case_says_which_is_missing(tmp_path, patched):
+    """Silence would be the wrong answer: a campaign that declares no staged case
+    cannot serve this call, and the caller needs to know which of the two things
+    is missing."""
+    cdir = _campaign(tmp_path, with_staged=False, trials=())
 
-    out = await OpsReadCaseDictTool().execute(
-        campaign="c", ledger=str(cdir / "ledger.json"), path="constant/g", trial="t1"
-    )
+    out = await OpsEditCaseDictTool().execute(
+        campaign="c", path="constant/transportProperties", entry="nu", value="1e-6",
+        ledger=str(cdir / "ledger.json"))
 
-    assert "Unknown trial" in out
+    assert "staged_case" in out
 
 
 @pytest.mark.asyncio
@@ -338,6 +260,8 @@ async def test_a_campaign_with_no_meta_at_all_still_says_so(tmp_path, patched):
     cdir = tmp_path / "empty"
     cdir.mkdir()
 
-    out = await OpsReadCaseDictTool().execute(campaign="c", ledger=str(cdir / "ledger.json"), path="constant/g")
+    out = await OpsEditCaseDictTool().execute(
+        campaign="c", path="constant/g", entry="value", value="(0 0 -9.81)",
+        ledger=str(cdir / "ledger.json"))
 
     assert "need meta.json" in out

@@ -20,8 +20,8 @@ from raven.agent.harness_text import (
     search_closed_notice,
 )
 
-# --- the emitter and the recognisers share one string -----------------------
 
+# --- the emitter and the recognisers share one string -----------------------
 
 def test_web_search_refusal_is_built_from_the_shared_constant():
     """The tool must emit exactly what the recognisers look for.
@@ -37,7 +37,8 @@ def test_web_search_refusal_is_built_from_the_shared_constant():
     src = inspect.getsource(web.WebSearchTool)
     assert "search_closed_notice(" in src
     assert SEARCH_CLOSED_PREFIX not in src, (
-        "the refusal is spelled out in web.py again - that is the drift this constant exists to prevent"
+        "the refusal is spelled out in web.py again - that is the drift this "
+        "constant exists to prevent"
     )
 
 
@@ -49,7 +50,6 @@ def test_notice_round_trips_through_both_predicates():
 
 
 # --- direction 1: harness bodies are recognised -----------------------------
-
 
 @pytest.mark.parametrize("k", [1, 5, 10, 20, 100])
 def test_search_closed_recognised_for_every_k(k):
@@ -68,7 +68,6 @@ def test_elision_placeholder_recognised_by_both_names():
 
 # --- direction 2: real content is NOT recognised ----------------------------
 
-
 @pytest.mark.parametrize(
     "body",
     [
@@ -86,7 +85,6 @@ def test_real_bodies_are_not_harness_authored(body):
 
 
 # --- ★ the asymmetry itself -------------------------------------------------
-
 
 def test_answer_that_merely_quotes_the_refusal_survives_the_strict_gate():
     """The load-bearing case. An answer ABOUT the refusal is a real answer.
@@ -120,7 +118,6 @@ def test_whitespace_around_a_bare_echo_still_counts():
 
 
 # --- the seam that produced the bug -----------------------------------------
-
 
 def test_evidence_pack_skips_a_pack_that_is_entirely_harness_text():
     """``hle-256`` reproduced: 4 surviving tool bodies, all the same refusal.

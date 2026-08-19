@@ -5,8 +5,8 @@ import json
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from loguru import logger
@@ -239,7 +239,8 @@ class SubagentManager:
             escapes = sorted(n for n in tools.names() if n in ("exec", "spawn") or n.startswith("mcp_"))
             if escapes:
                 raise ValueError(
-                    f"subagent registry is not corpus-contained: {escapes} can reach outside the fixed corpus"
+                    "subagent registry is not corpus-contained: "
+                    f"{escapes} can reach outside the fixed corpus"
                 )
         return tools
 

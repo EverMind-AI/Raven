@@ -45,6 +45,16 @@ class CronPayload:
     # follow the naming rule are exactly the ones that broke it. Shape and wording
     # from the parallel CFD line, which shipped it first.
     campaign: str | None = None
+    # Which window asked for this job, as its session key ("tui:<id>"). channel
+    # and to are "tui"/"default" for every window, so a service claiming by
+    # channel alone could run one campaign's wake inside the window holding a
+    # different experiment's conversation -- and it would look like it worked.
+    # Empty means "any window may serve it", which is what every producer that
+    # predates this field writes.
+    owner: str | None = None
+    # The owning window's process id. Routing asks liveness, and a pid is the one
+    # handle a process can check about another; the session key above is the label.
+    owner_pid: int | None = None
 
 
 @dataclass

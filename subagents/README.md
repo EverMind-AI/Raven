@@ -33,18 +33,28 @@ The three folders differ only in the names:
 
 ## Installing, from a fresh clone
 
+The repo's own `./install.sh` calls this one as its last step, so a clone that
+installs raven installs these too and there is nothing separate to remember. It
+is skipped when raven is installed from the published wheel, which ships no
+sub-agent tree, and when the machine has no `bash` or no `python3`.
+
+Run it directly to install one folder, to re-run after filling in a key, or to
+install into a config other than the host raven's:
+
 ```bash
 cd subagents
 ./install.sh                 # every folder here
 ./install.sh raven-code      # or only the ones named
 ```
 
-`install.sh` runs the three steps below for each folder, and refuses to register
-an agent whose api key is still blank - so the normal sequence is: run it, fill
-in the `.env` files it created, run it again. A second run rebuilds nothing it
-does not have to; the one thing it does overwrite is an entry you have since
-edited by hand (see below). `--dry-run` reports what each step would do, `--no-sync` skips the
-venv build, and `--config PATH` writes a config file other than the host raven's.
+`install.sh` runs the three steps below for each folder. An agent whose api key
+is still blank is registered anyway and runs on the host raven's LLM; it is
+refused only when the host has no key to inherit either - so the normal sequence
+is still: run it, fill in the `.env` files it created, run it again. A second run
+rebuilds nothing it does not have to; the one thing it does overwrite is an entry
+you have since edited by hand (see below). `--dry-run` reports what each step
+would do, `--no-sync` skips the venv build, and `--config PATH` writes a config
+file other than the host raven's.
 It exits non-zero when any folder still needs attention.
 
 **Then restart raven (or the gateway)**, which is the one thing no installer can

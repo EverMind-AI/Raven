@@ -43,7 +43,7 @@ def test_round1_claim_is_refused_when_the_listing_contradicts_the_count():
 
 
 def test_hedged_claim_about_an_unnamed_peak_is_not_refused():
-    """ "the best one may have been discarded" with no step id cannot be resolved
+    """"the best one may have been discarded" with no step id cannot be resolved
     without deciding which is best, which this module must not do. It is counted
     and passes."""
     facts = _facts(checkpoints=("step-200", "step-1200"))
@@ -78,10 +78,12 @@ def test_named_checkpoint_claimed_present_but_absent_is_refused():
 
 
 def test_a_true_claim_passes():
-    facts = _facts(checkpoints=("step-2400", "step-3600"), remaining_minutes=41.0, job_statuses=("running",))
+    facts = _facts(checkpoints=("step-2400", "step-3600"), remaining_minutes=41.0,
+                   job_statuses=("running",))
 
     out = check(
-        "step-1200 was discarded; step-2400 is still there. The job is running with 41 minutes remaining.",
+        "step-1200 was discarded; step-2400 is still there. The job is running with "
+        "41 minutes remaining.",
         facts,
     )
 
@@ -89,7 +91,7 @@ def test_a_true_claim_passes():
 
 
 def test_quoting_the_config_value_is_not_a_claim():
-    """ "keep_recent_checkpoints=3" on its own states a setting, not what exists.
+    """"keep_recent_checkpoints=3" on its own states a setting, not what exists.
     Refusing it would refuse a correct report for citing its own configuration."""
     facts = _facts(checkpoints=("step-200", "step-1200", "step-2400", "step-3600"))
 
@@ -104,7 +106,8 @@ def test_quoting_the_config_value_is_not_a_claim():
 
 def test_nothing_is_refused_when_the_harness_holds_no_facts():
     out = check(
-        "step-1200 was discarded, only three checkpoints are kept, 5 minutes remaining, the job has crashed.",
+        "step-1200 was discarded, only three checkpoints are kept, 5 minutes remaining, "
+        "the job has crashed.",
         StateFacts(),
     )
 
@@ -152,7 +155,7 @@ def test_status_claim_contradicting_the_poll_is_refused():
     out = check("The training job has crashed.", _facts(job_statuses=("running",)))
 
     assert len(out.contradicted) == 1
-    assert "has crashed" in out.contradicted[0] and "running" in out.contradicted[0]
+    assert 'has crashed' in out.contradicted[0] and "running" in out.contradicted[0]
 
 
 def test_status_claim_matching_the_poll_passes():
@@ -186,11 +189,8 @@ def test_counts_expose_numerator_and_denominator():
 
 def test_facts_round_trip(tmp_path):
     facts = StateFacts(
-        checkpoints=("step-200",),
-        remaining_minutes=12.5,
-        job_statuses=("running",),
-        observed_at_ms=1723,
-        sources={"checkpoints": "probe"},
+        checkpoints=("step-200",), remaining_minutes=12.5, job_statuses=("running",),
+        observed_at_ms=1723, sources={"checkpoints": "probe"},
     )
     write_facts(tmp_path, facts)
 
@@ -319,14 +319,11 @@ def test_basis_may_cite_any_number_the_tools_showed_not_only_metric_readings() -
     facts = dataclasses.replace(facts, shown_values=(2e-05, 5224.0, 140.0))
 
     # the reason for acting: cites the hyperparameter the tools printed
-    assert (
-        basis_problems(
-            "lr=2e-05 is 10x too high for this model; killing and resubmitting at 2e-06",
-            facts,
-            last_seq=0,
-        )
-        == []
-    )
+    assert basis_problems(
+        "lr=2e-05 is 10x too high for this model; killing and resubmitting at 2e-06",
+        facts,
+        last_seq=0,
+    ) == []
 
     # the reason for waiting still works
     assert basis_problems("ndcg 0.2937 is below the starting value", facts, last_seq=0) == []

@@ -256,7 +256,8 @@ def test_the_invariant_checker_is_scoped_to_this_turns_messages():
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "turn one"},
         {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "function": {"name": "web_fetch"}}]},
-        {"role": "tool", "tool_call_id": "c1", "name": "web_fetch", "content": "Error: 403 Forbidden"},
+        {"role": "tool", "tool_call_id": "c1", "name": "web_fetch",
+         "content": "Error: 403 Forbidden"},
         {"role": "assistant", "content": "reasoning</think>an answer"},
     ]
     this_turn = [
@@ -283,7 +284,8 @@ def test_a_turn_with_its_own_tool_error_is_still_caught_after_slicing():
     this_turn = [
         {"role": "user", "content": "and Tavily?"},
         {"role": "assistant", "content": None, "tool_calls": [{"id": "c9", "function": {"name": "web_fetch"}}]},
-        {"role": "tool", "tool_call_id": "c9", "name": "web_fetch", "content": "Error: 403 Forbidden"},
+        {"role": "tool", "tool_call_id": "c9", "name": "web_fetch",
+         "content": "Error: 403 Forbidden"},
         {"role": "assistant", "content": "reasoning</think>an answer"},
     ]
     stamp = turn_invariants(this_turn, declared_tools=("web_search", "web_fetch"), closing_tag_required=True)

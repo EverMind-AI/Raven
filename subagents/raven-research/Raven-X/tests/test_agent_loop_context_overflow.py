@@ -153,7 +153,9 @@ def _clamp_agent(workspace, window, *, clamp_enabled=True, factor=0.5):
     # AgentLoop cannot reach it. These unit tests are about the arithmetic, so they
     # switch it on explicitly rather than asserting against the disabled path -
     # ``test_the_reactive_clamp_is_unreachable_by_default`` covers that half.
-    agent._dr_flow = SimpleNamespace(reactive_clamp=clamp_enabled, reactive_clamp_factor=factor)
+    agent._dr_flow = SimpleNamespace(
+        reactive_clamp=clamp_enabled, reactive_clamp_factor=factor
+    )
     return agent
 
 
@@ -194,8 +196,8 @@ def test_completion_clamp_declines_below_the_usable_floor(workspace):
     """Going under the floor trades an overflow for an empty answer - same score,
     harder to detect."""
     agent = _clamp_agent(workspace, window=65_536)
-    assert agent._completion_clamp(4096) == 2048  # exactly at the floor
-    assert agent._completion_clamp(4095) is None  # would land under it
+    assert agent._completion_clamp(4096) == 2048            # exactly at the floor
+    assert agent._completion_clamp(4095) is None            # would land under it
 
 
 def test_completion_clamp_declines_when_the_factor_would_not_shrink(workspace):

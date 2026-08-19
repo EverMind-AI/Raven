@@ -36,7 +36,8 @@ def _home(monkeypatch, tmp_path: Path):
 def _campaign(root: Path, name: str, *, seed: dict | None = None) -> Path:
     cdir = root / name
     cdir.mkdir(parents=True, exist_ok=True)
-    meta = {"backend": "process", "host": "h", "remote_dir": "/r", "command": "c", "budget_minutes_total": 140}
+    meta = {"backend": "process", "host": "h", "remote_dir": "/r", "command": "c",
+            "budget_minutes_total": 140}
     if seed is not None:
         meta["seed_config"] = seed
     (cdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -131,14 +132,12 @@ async def test_submit_says_so_when_there_is_no_seed_and_no_config(tmp_path: Path
 async def test_check_later_needs_no_campaign_name(tmp_path: Path, monkeypatch) -> None:
     root = _home(monkeypatch, tmp_path)
     cdir = _campaign(root, "armb-embed-r14e")
+    from raven.ops.state_claims import read_facts, write_facts
     import dataclasses
 
-    from raven.ops.state_claims import read_facts, write_facts
-
     facts = read_facts(cdir)
-    write_facts(
-        cdir, dataclasses.replace(facts, metric_readings={"ndcg": (0.3046,)}, probe_seq=1, shown_values=(0.3046,))
-    )
+    write_facts(cdir, dataclasses.replace(facts, metric_readings={"ndcg": (0.3046,)},
+                                          probe_seq=1, shown_values=(0.3046,)))
 
     tool = OpsCheckLaterTool(None)
     tool.set_context("tui", "default")
@@ -166,7 +165,11 @@ def test_the_tools_say_a_campaign_is_already_there() -> None:
         assert held in status.lower()
 
     submit = OpsSubmitTool(None).description
-    assert "already set up" in submit
+    # Since the declaration became its own tool, "a campaign is usually already
+    # set up" is no longer true -- declaring one is the normal path. What submit
+    # still has to say is where that state lives, so a round does not re-supply it.
+    assert "declaration" in submit and "ops_declare" in submit
+    assert "only what THIS round does" in submit
     # and the alternative is named as wrong, not merely unmentioned
     assert "ssh" in submit.lower()
 
@@ -184,7 +187,9 @@ def test_the_resident_tool_notes_point_at_the_campaign_first() -> None:
     assert "do not ssh to the host to hunt for paths or ports" in text
 
 
-async def test_the_wake_message_does_not_pin_a_metric_the_campaign_declares(tmp_path: Path, monkeypatch) -> None:
+async def test_the_wake_message_does_not_pin_a_metric_the_campaign_declares(
+    tmp_path: Path, monkeypatch
+) -> None:
     """A wake message that spells out metric='ndcg' overrides whatever the campaign
     declared, and the wake turn has no history to notice with. The status tool reads
     the campaign's objective itself now, so naming a metric here can only be wrong --
@@ -196,14 +201,12 @@ async def test_the_wake_message_does_not_pin_a_metric_the_campaign_declares(tmp_
     meta["objective"] = {"metric": "residual", "direction": "min"}
     (cdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
+    from raven.ops.state_claims import read_facts, write_facts
     import dataclasses
 
-    from raven.ops.state_claims import read_facts, write_facts
-
     facts = read_facts(cdir)
-    write_facts(
-        cdir, dataclasses.replace(facts, metric_readings={"residual": (0.004,)}, probe_seq=1, shown_values=(0.004,))
-    )
+    write_facts(cdir, dataclasses.replace(facts, metric_readings={"residual": (0.004,)},
+                                          probe_seq=1, shown_values=(0.004,)))
 
     from raven.proactive_engine.schedulers.cron.service import CronService
 
@@ -216,10 +219,14 @@ async def test_the_wake_message_does_not_pin_a_metric_the_campaign_declares(tmp_
     wakes = [j for j in svc.list_jobs() if j.name.startswith("ops:cfd-transient:")]
     assert wakes, "the re-check has to actually be scheduled or this proves nothing"
     message = wakes[0].payload.message
-    assert "metric=" not in message, f"the campaign already says what it optimises; message was: {message}"
+    assert "metric=" not in message, (
+        f"the campaign already says what it optimises; message was: {message}"
+    )
 
 
-async def test_an_omitted_campaign_still_names_the_wake_and_the_ledger(tmp_path: Path, monkeypatch) -> None:
+async def test_an_omitted_campaign_still_names_the_wake_and_the_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Making the handle optional was only half the change, and the other half was
     missing here. ops_submit backfills the resolved name; the rest of the tools kept
     using the empty string they were called with, so:
@@ -238,17 +245,12 @@ async def test_an_omitted_campaign_still_names_the_wake_and_the_ledger(tmp_path:
     """
     root = _home(monkeypatch, tmp_path)
     cdir = _campaign(root, "cfd-transient")
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.ops.state_claims import read_facts, write_facts
     import dataclasses
 
-    from raven.ops.state_claims import read_facts, write_facts
-    from raven.proactive_engine.schedulers.cron.service import CronService
-
-    write_facts(
-        cdir,
-        dataclasses.replace(
-            read_facts(cdir), metric_readings={"residual": (0.004,)}, probe_seq=1, shown_values=(0.004,)
-        ),
-    )
+    write_facts(cdir, dataclasses.replace(read_facts(cdir), metric_readings={"residual": (0.004,)},
+                                          probe_seq=1, shown_values=(0.004,)))
     svc = CronService(tmp_path / "jobs.json", allowed_channels={"tui"})
     tool = OpsCheckLaterTool(svc)
     tool.set_context("tui", "default")
@@ -282,17 +284,9 @@ async def test_round_zero_records_the_objective_it_was_given(tmp_path: Path, mon
     tool = OpsSubmitTool(None)
     tool.set_context("tui", "default")
     await tool.execute(
-        objective="minimise the residual",
-        eta_seconds=600,
-        host="h",
-        port=2222,
-        remote_dir="/r",
-        ledger=str(ledger),
-        campaign="c1",
-        round=0,
-        configs=[{"nuWater": "1e-3"}],
-        metric="residual",
-        goal="min",
+        objective="minimise the residual", eta_seconds=600, host="h", port=2222,
+        remote_dir="/r", ledger=str(ledger), campaign="c1", round=0,
+        configs=[{"nuWater": "1e-3"}], metric="residual", goal="min",
     )
 
     meta = json.loads((root / "c1" / "meta.json").read_text(encoding="utf-8"))
@@ -309,23 +303,17 @@ async def test_an_undeclared_direction_records_no_objective(tmp_path: Path, monk
     tool = OpsSubmitTool(None)
     tool.set_context("tui", "default")
     await tool.execute(
-        objective="tune it",
-        eta_seconds=600,
-        host="h",
-        port=2222,
-        remote_dir="/r",
-        ledger=str(ledger),
-        campaign="c2",
-        round=0,
-        configs=[{"lr": 1e-5}],
-        metric="ndcg",
+        objective="tune it", eta_seconds=600, host="h", port=2222, remote_dir="/r",
+        ledger=str(ledger), campaign="c2", round=0, configs=[{"lr": 1e-5}], metric="ndcg",
     )
 
     meta = json.loads((root / "c2" / "meta.json").read_text(encoding="utf-8"))
     assert "objective" not in meta
 
 
-async def test_a_hand_written_meta_gets_the_objective_written_into_it(tmp_path: Path, monkeypatch) -> None:
+async def test_a_hand_written_meta_gets_the_objective_written_into_it(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Every experiment here is set up by writing meta.json before the first submit,
     which took the branch that merges the stored file over this round's arguments
     and never wrote back. The objective assembled from metric= and goal= therefore
@@ -341,17 +329,9 @@ async def test_a_hand_written_meta_gets_the_objective_written_into_it(tmp_path: 
     tool = OpsSubmitTool(None)
     tool.set_context("tui", "default")
     await tool.execute(
-        objective="tune it",
-        eta_seconds=600,
-        host="h",
-        port=2222,
-        remote_dir="/r",
-        ledger=str(cdir / "ledger.json"),
-        campaign="c1",
-        round=0,
-        configs=[{"lr": 1e-5}],
-        metric="f1",
-        goal="max",
+        objective="tune it", eta_seconds=600, host="h", port=2222, remote_dir="/r",
+        ledger=str(cdir / "ledger.json"), campaign="c1", round=0,
+        configs=[{"lr": 1e-5}], metric="f1", goal="max",
     )
 
     meta = json.loads((cdir / "meta.json").read_text(encoding="utf-8"))

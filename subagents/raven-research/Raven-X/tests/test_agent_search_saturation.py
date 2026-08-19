@@ -145,14 +145,9 @@ def test_reset_clears_every_field_a_turn_can_dirty():
     assert not sat.stopped
     assert sat.page == 1
     assert sat.counters() == {
-        "sat_action": "none",
-        "sat_event": None,
-        "sat_dry_streak": 0,
-        "sat_page": 1,
-        "sat_width": None,
-        "sat_pages_opened": 0,
-        "sat_suppressed": 0,
-        "sat_seen": 0,
+        "sat_action": "none", "sat_event": None,
+        "sat_dry_streak": 0, "sat_page": 1, "sat_width": None,
+        "sat_pages_opened": 0, "sat_suppressed": 0, "sat_seen": 0,
     }
 
 

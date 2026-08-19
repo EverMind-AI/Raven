@@ -17,15 +17,24 @@ whether it did" are the same row in the data. So the edit path writes the old
 value, the new value, and a hash of the file before and after, into the campaign's
 own event log.
 
-Neither tool interprets anything. ``ops_read_case_dict`` returns the dictionary
-text as it is on disk; ``ops_edit_case_dict`` reports what changed and nothing
-about whether changing it was wise. Neither description names a particular entry:
-which knobs matter is part of what the round measures, so the examples in them
-illustrate syntax only.
+Reading is not here any more. ``ops_read_case_dict`` could only cat a named file,
+and ``ops_exec`` runs any command on the campaign's machine -- ``ls``, ``cat``,
+``grep``, ``diff`` -- so keeping a second, narrower way to look only cost a tool
+slot and a description. What stayed is the pair that shell cannot replace:
+``ops_edit_case_dict``, because the record of a change is the point, and
+``ops_case_changes``, because it normalises both sides through the solver's own
+dictionary printer before diffing (setting one entry rewrites the whole file, and
+a plain text diff of a one-value change came back as eight hunks).
+
+Neither interprets anything: the edit path reports what changed and nothing about
+whether changing it was wise, and no description names a particular entry --
+which knobs matter is part of what the round measures, so the examples illustrate
+syntax only.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import shlex
 from pathlib import Path
@@ -122,66 +131,6 @@ def _sha(runner, remote_path: str) -> str:
     return out.strip() if rc == 0 and out.strip() else "-"
 
 
-class OpsReadCaseDictTool(Tool):
-    """Return a case dictionary exactly as it is on disk."""
-
-    timeout_seconds = 120.0
-
-    @property
-    def name(self) -> str:
-        return "ops_read_case_dict"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Read a configuration file from a case, verbatim. Paths are relative to the case "
-            "root, e.g. 'system/<name>' or 'constant/<name>'. With a trial, reads that trial's "
-            "case; without one, reads the case the campaign is set up to run, which works "
-            "before anything has been submitted. Returns the file's text as it is on disk."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "campaign": {"type": "string", "description": "Campaign name."},
-                "trial": {
-                    "type": "string",
-                    "description": "Trial key from the ledger. Omit to read the case the "
-                    "campaign will run, before any trial exists.",
-                },
-                "path": {"type": "string", "description": "File path relative to the case root."},
-                "ledger": {"type": "string", "description": "Ledger path (locates the campaign dir)."},
-            },
-            "required": ["campaign", "path"],
-        }
-
-    async def execute(
-        self, campaign: str, path: str, trial: str | None = None, ledger: str | None = None, **kwargs: Any
-    ) -> str:
-        resolved = _campaign(campaign, ledger)
-        if isinstance(resolved, str):
-            return resolved
-        backend, led, _cdir, _meta = resolved
-        root = _case_root(backend, _meta, led, trial)
-        if isinstance(root, str):
-            return root
-        root, label = root
-        remote = _case_path(root, path)
-        if remote is None:
-            return f"Refusing path {path!r}: must be relative to the case root and contain no '..'."
-        runner = getattr(backend, "_run", None)
-        if runner is None:
-            return "This campaign's backend cannot read remote files."
-        rc, out = runner(f"cat {shlex.quote(remote)}")
-        if rc != 0:
-            return f"Could not read {path}: {out.strip()[:300]}"
-        if len(out) > _MAX_BYTES:
-            out = out[:_MAX_BYTES] + f"\n...[truncated, {len(out)} bytes total]"
-        return f"{label}:{path}\n{out}"
-
-
 class OpsEditCaseDictTool(Tool):
     """Change one entry of a case dictionary, and record the change."""
 
@@ -209,13 +158,13 @@ class OpsEditCaseDictTool(Tool):
             "type": "object",
             "properties": {
                 "campaign": {"type": "string", "description": "Campaign name."},
-                "trial": {
-                    "type": "string",
-                    "description": "Trial key from the ledger. Omit to edit the case the "
-                    "campaign will run, before any trial exists.",
-                },
-                "path": {"type": "string", "description": "File path relative to the case root."},
-                "entry": {"type": "string", "description": "Entry name; nested entries use A/B/C form."},
+                "trial": {"type": "string",
+                          "description": "Trial key from the ledger. Omit to edit the case the "
+                                         "campaign will run, before any trial exists."},
+                "path": {"type": "string",
+                         "description": "File path relative to the case root."},
+                "entry": {"type": "string",
+                          "description": "Entry name; nested entries use A/B/C form."},
                 "value": {"type": "string", "description": "New value, as the solver would write it."},
                 "reason": {"type": "string", "description": "Why you are changing it."},
                 "ledger": {"type": "string", "description": "Ledger path (locates the campaign dir)."},
@@ -252,15 +201,15 @@ class OpsEditCaseDictTool(Tool):
             return "This campaign's backend cannot edit remote files."
 
         before_hash = _sha(runner, remote)
-        rc_old, old = runner(_dict_cmd(_meta, f"-entry {shlex.quote(entry)} -value {shlex.quote(remote)} 2>/dev/null"))
+        rc_old, old = runner(_dict_cmd(
+            _meta, f"-entry {shlex.quote(entry)} -value {shlex.quote(remote)} 2>/dev/null"
+        ))
         old_value = old.strip() if rc_old == 0 else "-"
 
-        rc, out = runner(
-            _dict_cmd(
-                _meta,
-                f"-entry {shlex.quote(entry)} -set {shlex.quote(value)} {shlex.quote(remote)} 2>&1",
-            )
-        )
+        rc, out = runner(_dict_cmd(
+            _meta,
+            f"-entry {shlex.quote(entry)} -set {shlex.quote(value)} {shlex.quote(remote)} 2>&1",
+        ))
         after_hash = _sha(runner, remote)
 
         # Recorded whether or not the edit succeeded, and whether or not the file
@@ -293,14 +242,15 @@ class OpsEditCaseDictTool(Tool):
         if rc != 0:
             hint = ""
             if "not found" in out:
-                hint = (
-                    " The solver's command-line tools were not found; the campaign meta's "
-                    "'foam_bashrc' may need to point at this host's installation."
-                )
+                hint = (" The solver's command-line tools were not found; the campaign meta's "
+                        "'foam_bashrc' may need to point at this host's installation.")
             return f"Edit of {path}:{entry} failed (rc={rc}): {out.strip()[:300]}{hint}\nRecorded anyway."
         if not record["file_changed"]:
             if record["already_at_value"]:
-                return f"{path}:{entry} was already {old_value!r}, so the file is unchanged. Recorded as such."
+                return (
+                    f"{path}:{entry} was already {old_value!r}, so the file is unchanged. "
+                    f"Recorded as such."
+                )
             return (
                 f"Edit of {path}:{entry} reported success but the file did not change "
                 f"(hash {before_hash[:12]} both before and after), and the old value was "
@@ -309,8 +259,8 @@ class OpsEditCaseDictTool(Tool):
             )
         takes_effect = (
             f"Restart trial {trial} for it to take effect."
-            if trial
-            else "The next trial submitted will start from this case."
+            if trial else
+            "The next trial submitted will start from this case."
         )
         return (
             f"{path}:{entry}  {old_value!r} -> {value!r}\n"
@@ -344,16 +294,17 @@ class OpsCaseChangesTool(Tool):
             "type": "object",
             "properties": {
                 "campaign": {"type": "string", "description": "Campaign name."},
-                "trial": {
-                    "type": "string",
-                    "description": "Trial key from the ledger. Omit for the case the campaign will run.",
-                },
+                "trial": {"type": "string",
+                          "description": "Trial key from the ledger. Omit for the case the "
+                                         "campaign will run."},
                 "ledger": {"type": "string", "description": "Ledger path (locates the campaign dir)."},
             },
             "required": ["campaign"],
         }
 
-    async def execute(self, campaign: str, trial: str | None = None, ledger: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, campaign: str, trial: str | None = None, ledger: str | None = None, **kwargs: Any
+    ) -> str:
         resolved = _campaign(campaign, ledger)
         if isinstance(resolved, str):
             return resolved
@@ -362,7 +313,7 @@ class OpsCaseChangesTool(Tool):
         if not reference:
             return (
                 "This campaign's meta declares no 'reference_case', so there is nothing to "
-                "compare against. Read individual files with ops_read_case_dict instead."
+                "compare against. Read individual files with ops_exec instead."
             )
         root = _case_root(backend, meta, led, trial)
         if isinstance(root, str):
@@ -387,9 +338,9 @@ class OpsCaseChangesTool(Tool):
         bashrc = shlex.quote(meta.get("foam_bashrc") or _DEFAULT_BASHRC)
         script = (
             f". {bashrc} > /dev/null 2>&1; "
-            f"cd {shlex.quote(reference)} || exit 0; "
+            f'cd {shlex.quote(reference)} || exit 0; '
             f'for f in $(find system constant -type f -not -path "constant/polyMesh/*" | sort); do '
-            f"  b={shlex.quote(root)}/$f; "
+            f'  b={shlex.quote(root)}/$f; '
             f'  [ -f "$b" ] || {{ echo "only in reference: $f"; continue; }}; '
             f'  d=$(diff <(foamDictionary "$f" 2>/dev/null) <(foamDictionary "$b" 2>/dev/null)); '
             f'  [ -n "$d" ] && {{ echo "--- $f"; echo "$d"; }}; '
@@ -402,7 +353,10 @@ class OpsCaseChangesTool(Tool):
         body = (out or "").strip()
         if not body:
             return f"{label} is identical to the reference case at {reference}."
-        return f"{label} vs reference {reference} -- lines starting '-' are the reference, '+' are this case:\n{body}"
+        return (
+            f"{label} vs reference {reference} -- lines starting '-' are the reference, "
+            f"'+' are this case:\n{body}"
+        )
 
 
 __all__ = ["OpsReadCaseDictTool", "OpsEditCaseDictTool", "OpsCaseChangesTool"]

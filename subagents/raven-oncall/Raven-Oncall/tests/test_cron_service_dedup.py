@@ -183,24 +183,14 @@ def test_dedup_false_bypasses_time_window_merge(svc):
     reminders -- each add creates a distinct job."""
     now = svc._now_ms()
     a = svc.add_job(
-        name="ops:c:r1",
-        schedule=CronSchedule(kind="at", at_ms=now + 60_000),
-        message="wake round 1",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
-        dedup=False,
+        name="ops:c:r1", schedule=CronSchedule(kind="at", at_ms=now + 60_000),
+        message="wake round 1", deliver=True, channel="tui", to="default",
+        delete_after_run=True, dedup=False,
     )
     b = svc.add_job(
-        name="ops:c:r2",
-        schedule=CronSchedule(kind="at", at_ms=now + 120_000),
-        message="wake round 2",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
-        dedup=False,
+        name="ops:c:r2", schedule=CronSchedule(kind="at", at_ms=now + 120_000),
+        message="wake round 2", deliver=True, channel="tui", to="default",
+        delete_after_run=True, dedup=False,
     )
     assert a.id != b.id  # not merged despite same channel/to within 15 min
     assert len(svc.list_jobs()) == 2
@@ -210,21 +200,11 @@ def test_dedup_true_still_merges_time_window(svc):
     """Default dedup=True keeps the original reminder-dedup behavior."""
     now = svc._now_ms()
     svc.add_job(
-        name="r1",
-        schedule=CronSchedule(kind="at", at_ms=now + 60_000),
-        message="wake A",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
+        name="r1", schedule=CronSchedule(kind="at", at_ms=now + 60_000),
+        message="wake A", deliver=True, channel="tui", to="default", delete_after_run=True,
     )
     svc.add_job(
-        name="r2",
-        schedule=CronSchedule(kind="at", at_ms=now + 120_000),
-        message="wake B",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
+        name="r2", schedule=CronSchedule(kind="at", at_ms=now + 120_000),
+        message="wake B", deliver=True, channel="tui", to="default", delete_after_run=True,
     )
     assert len(svc.list_jobs()) == 1  # merged by the 15-min window

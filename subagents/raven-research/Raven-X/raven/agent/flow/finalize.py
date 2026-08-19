@@ -36,6 +36,7 @@ import asyncio
 import logging
 
 from raven.agent.flow.answer_text import visible_answer
+from raven.agent.flow.turn_task import task_for
 from raven.agent.harness_text import harness_body_kind, is_harness_echo
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.hook.observers.loopscan import is_spin, spin_stats
@@ -67,7 +68,6 @@ def _commit_nudge(reason: str) -> str:
     """
     opener = _COMMIT_NUDGE_OPENERS.get(reason, _COMMIT_NUDGE_OPENERS["empty_visible_answer"])
     return f"[finalize] {opener} {_COMMIT_NUDGE_TAIL}"
-
 
 _SALVAGE_SYSTEM = (
     "You finalize a deep-research task whose research phase ended without a "
@@ -213,7 +213,7 @@ class ForcedFinalizeGate(AgentHook):
         return ""
 
     async def _salvage(self, ctx: AgentHookContext, content: str) -> str | None:
-        task = self._first_user_text(ctx.messages or [])
+        task = task_for(ctx)
         notes = self._excerpt(content, self._reasoning_excerpt_chars)
         evidence = self._evidence_pack(ctx.messages or [])
         user = (
@@ -225,7 +225,9 @@ class ForcedFinalizeGate(AgentHook):
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                logger.warning("force-finalize: salvage timed out after %.0fs budget; fail-open", self._timeout_seconds)
+                logger.warning(
+                    "force-finalize: salvage timed out after %.0fs budget; fail-open", self._timeout_seconds
+                )
                 return self._fail(ctx, "budget_exhausted")
             attempt_window = min(self._attempt_timeout_seconds, remaining)
             try:
@@ -331,15 +333,6 @@ class ForcedFinalizeGate(AgentHook):
         head = cap * 3 // 5
         tail = cap - head
         return f"{text[:head]}\n[... notes truncated ...]\n{text[-tail:]}"
-
-    @staticmethod
-    def _first_user_text(messages: list[dict]) -> str:
-        for m in messages:
-            if isinstance(m, dict) and m.get("role") == "user":
-                content = m.get("content")
-                if isinstance(content, str) and content:
-                    return content
-        return ""
 
     def _evidence_pack(self, messages: list[dict]) -> str:
         """Last ``evidence_items`` tool results that still carry a body.

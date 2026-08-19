@@ -60,26 +60,9 @@ REPORTS_FILE = "reports.jsonl"
 # through, and the words it does not know are simply not caught. It is not a
 # substitute for the declared field -- it is a second net under an easy mistake.
 _COMPARATIVE = (
-    "improved",
-    "improvement",
-    "better",
-    "worse",
-    "degraded",
-    "declined",
-    "dropped",
-    "increased",
-    "decreased",
-    "gained",
-    "lost",
-    "rose",
-    "fell",
-    "higher",
-    "lower",
-    "outperform",
-    "beat",
-    "regressed",
-    "over where it started",
-    "than before",
+    "improved", "improvement", "better", "worse", "degraded", "declined", "dropped",
+    "increased", "decreased", "gained", "lost", "rose", "fell", "higher", "lower",
+    "outperform", "beat", "regressed", "over where it started", "than before",
 )
 
 
@@ -158,10 +141,16 @@ class OpsAskOwnerTool(Tool):
     interruption metric would be of something that never happened.
     """
 
-    def __init__(self, registry: Any = None) -> None:
+    def __init__(self, registry: Any = None, broker: Any = None) -> None:
         self._registry = registry
+        self._broker = broker
         self._channel = ""
         self._chat_id = ""
+
+    def set_broker(self, broker: Any) -> None:
+        """Late-bound, the same way ask_user gets one: the broker exists before
+        the tool registry does."""
+        self._broker = broker
 
     def set_registry(self, registry: Any) -> None:
         self._registry = registry
@@ -175,7 +164,8 @@ class OpsAskOwnerTool(Tool):
         if tool is None:
             return False, "no messaging tool is registered, so nothing could be sent"
         try:
-            detail = await tool.execute(content=text, channel=self._channel or None, chat_id=self._chat_id or None)
+            detail = await tool.execute(content=text, channel=self._channel or None,
+                                       chat_id=self._chat_id or None)
         except Exception as exc:  # noqa: BLE001 - delivery failure is a fact to report
             return False, f"delivery raised {type(exc).__name__}: {exc}"
         lowered = str(detail).lower()
@@ -196,7 +186,14 @@ class OpsAskOwnerTool(Tool):
             "lost by NOT asking -- because the campaign's contract may refuse the interruption below "
             "a threshold; pass -1 only if you genuinely cannot estimate it. A refused message is not "
             "delivered, so judge before sending. This is the ONLY route to the owner during a "
-            "campaign: do not use general messaging tools for it."
+            "campaign: do not use general messaging tools for it.\n"
+            "blocks_progress says whether anything worth doing is left while you wait. It is "
+            "false when some other branch is worth exploring under either answer -- rule out a "
+            "different parameter, check a second case -- and true when the next useful step is "
+            "one the answer could make wrong, which is usually anything that spends compute you "
+            "may not be authorised to spend. Blocking does NOT mean sitting still: reading logs, "
+            "reading the case and writing down what you found cost nothing and stay open to you. "
+            "What it stops is submitting more trials."
         )
 
     @property
@@ -210,9 +207,14 @@ class OpsAskOwnerTool(Tool):
                     "type": "integer",
                     "description": "Machine time lost by not asking. -1 if you genuinely cannot estimate it.",
                 },
+                "blocks_progress": {
+                    "type": "boolean",
+                    "description": "True when nothing useful is left to do until this is answered; "
+                                   "false when another branch is worth doing under either answer.",
+                },
                 "ledger": {"type": "string", "description": "Ledger path if known (locates the campaign dir)."},
             },
-            "required": ["campaign", "question", "expected_loss_minutes"],
+            "required": ["campaign", "question", "expected_loss_minutes", "blocks_progress"],
         }
 
     async def execute(
@@ -220,6 +222,7 @@ class OpsAskOwnerTool(Tool):
         campaign: str,
         question: str,
         expected_loss_minutes: int,
+        blocks_progress: bool = False,
         ledger: str | None = None,
         **kwargs: Any,
     ) -> str:
@@ -247,17 +250,50 @@ class OpsAskOwnerTool(Tool):
             expected_loss_minutes=expected_loss_minutes,
             reason=decision.reason,
             question=question[:400],
+            blocks_progress=bool(blocks_progress),
         )
-        # Both returns stay at the level of fact: what happened to the message,
-        # and what the owner may do. Telling the loop what to do about silence
-        # would hand it the handling of the exact failure this round is scored on
-        # -- the previous run idled indefinitely after asking -- and the contract
-        # is already stated in the task description, so a third telling here
-        # would make any correct behaviour unattributable.
+        # The returns say what happened to the message and what now follows from
+        # the caller's own reading of it.
+        #
+        # An earlier version deliberately said nothing about silence, on the
+        # grounds that handling it was the judgement being scored. That held while
+        # the judgement was "what do I do if nobody answers". It is now
+        # blocks_progress, declared here by the caller, and the consequence is
+        # mechanical: a blocking question closes the submit path until it is
+        # answered. Withholding a rule that is already enforced only means finding
+        # it out by being refused.
         if not decision.allowed:
             return (
                 f"NOT DELIVERED. The campaign's interruption contract refused it: {decision.reason}\n"
                 "Nobody has seen this."
+            )
+
+        # Waiting for the answer, but only where waiting costs nothing. Nothing is
+        # burning and there is nothing else worth doing, so holding here gets the
+        # answer in seconds instead of at the end of a twenty-minute timer -- and
+        # the owner, who is looking at this window, does not have to wonder
+        # whether their reply landed. With a trial still running, or with another
+        # branch worth exploring, holding would buy nothing and cost the work that
+        # could have happened meanwhile.
+        if blocks_progress and self._broker is not None and not _anything_running(cdir):
+            answer = await self._broker.await_question(
+                f"ops:{campaign}",
+                prompt=f"[ops campaign '{campaign}'] {question}",
+                default="",
+            )
+            if str(answer or "").strip():
+                _append_owner_answer(cdir, str(answer).strip())
+                log_event(cdir, "ask_owner_delivery", sent=True, detail="answered inline")
+                return f"The owner answered: {str(answer).strip()[:500]}"
+            log_event(cdir, "ask_owner_delivery", sent=True, detail="asked inline, no answer yet")
+            return (
+                "Asked, and nobody answered while you waited. Nothing is running, so nothing "
+                "was lost by waiting. The question stays on the record and the campaign stays "
+                "open; the owner's reply will reach the next round.\n"
+                "You called this blocking, so no more trials go out until it is answered. "
+                "Looking is untouched: read the logs, read the case, and write down what you "
+                "find. Do not close the campaign over silence -- that is the one step that "
+                "cannot be undone."
             )
 
         sent, detail = await self._deliver(f"[ops campaign '{campaign}'] {question}")
@@ -266,14 +302,28 @@ class OpsAskOwnerTool(Tool):
             # The contract allowed it and the send failed. Saying "delivered"
             # here would make every interruption reading a reading of something
             # that never happened.
-            return f"The contract allowed this, but it was NOT delivered: {detail}\nNobody has seen it."
+            return (
+                f"The contract allowed this, but it was NOT delivered: {detail}\n"
+                "Nobody has seen it."
+            )
         note = "" if decision.estimated else " (recorded as an interruption you could not price)"
-        return f"Delivered to the owner{note}. They may take a long time to reply, or never reply."
+        follows = (
+            "You called this blocking, so no more trials go out until it is answered. Looking "
+            "is untouched: read the logs, read the case, and write down what you find."
+            if blocks_progress else
+            "You called this non-blocking, so carry on with whatever does not depend on the "
+            "answer -- that was the reading that made it non-blocking."
+        )
+        return (
+            f"Delivered to the owner{note}. "
+            "They may take a long time to reply, or never reply.\n"
+            f"{follows} Do not close the campaign over silence -- that is the one step that "
+            "cannot be undone."
+        )
 
 
-def _finish_summary(
-    campaign: str, subject: str, outcome: str, observed: dict, baseline: dict | None, narrative: str
-) -> str:
+def _finish_summary(campaign: str, subject: str, outcome: str, observed: dict,
+                    baseline: dict | None, narrative: str) -> str:
     """The report, as a message a person reads.
 
     Carries the operands and nothing else: the same observed values, the same
@@ -290,6 +340,149 @@ def _finish_summary(
         lines.append("")
         lines.append(narrative.strip())
     return "\n".join(lines)
+
+
+def blocking_question_open(cdir) -> str:
+    """An unanswered question the loop itself marked as blocking, or "".
+
+    Public because ops_submit needs it: the refusal there rests on the loop's own
+    reading, not on ours -- it said nothing worth doing was left, so spending
+    compute contradicts it.
+    """
+    import json as _j
+
+    path = cdir / "events.jsonl"
+    if not path.exists():
+        return ""
+    asked_at, question = "", ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            e = _j.loads(line)
+        except ValueError:
+            continue
+        if e.get("kind") == "ask_owner" and e.get("allowed") is not False:
+            if e.get("blocks_progress"):
+                asked_at, question = str(e.get("ts") or ""), str(e.get("question") or "a question")
+            else:
+                asked_at, question = "", ""
+    if not question:
+        return ""
+    notes = cdir / "notes.jsonl"
+    if notes.exists():
+        for line in notes.read_text(encoding="utf-8").splitlines():
+            try:
+                n = _j.loads(line)
+            except ValueError:
+                continue
+            if str(n.get("ts") or "") >= asked_at:
+                return ""
+    return question
+
+
+def _anything_running(cdir) -> bool:
+    """Whether a trial of this campaign is still burning machine time."""
+    import json as _j
+
+    try:
+        led = _j.loads((cdir / "ledger.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    terminal = {"succeeded", "failed", "cancelled"}
+    return any(str(r.get("status")) not in terminal
+               for r in (led.get("records") or {}).values())
+
+
+def _append_owner_answer(cdir, answer: str) -> None:
+    """An answer given inline is the same fact as one typed into the chat, and
+    has to land in the same place -- the next wake reads notes, not this turn."""
+    from raven.agent.tools.ops import _append_note
+
+    _append_note(cdir, answer[:2000], source="owner")
+
+
+def _unanswered_question(cdir) -> str:
+    """The question the owner has not come back on, or "".
+
+    Read from the events, which is what a grader and a later turn read anyway; a
+    second place to keep this in sync is a second place for it to be wrong. An
+    owner's note closes it, and so does one the loop writes to say the question
+    no longer matters -- both are a statement on the record that the answer is no
+    longer being waited for.
+    """
+    import json as _j
+
+    path = cdir / "events.jsonl"
+    if not path.exists():
+        return ""
+    asked_at, question = "", ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            e = _j.loads(line)
+        except ValueError:
+            continue
+        if e.get("kind") == "ask_owner" and e.get("allowed") is not False:
+            asked_at, question = str(e.get("ts") or ""), str(e.get("question") or "a question")
+    if not question:
+        return ""
+    # Any note written after the question closes it: the owner's answer arrives
+    # as one (captured from the chat), and so does the loop saying the answer no
+    # longer matters. Timestamps rather than a flag, because notes.jsonl is where
+    # both already land.
+    notes = cdir / "notes.jsonl"
+    if notes.exists():
+        for line in notes.read_text(encoding="utf-8").splitlines():
+            try:
+                n = _j.loads(line)
+            except ValueError:
+                continue
+            if str(n.get("ts") or "") >= asked_at:
+                return ""
+    return question
+
+
+def _write_report_md(cdir, campaign: str, subject: str, outcome: str,
+                     observed: dict, baseline: dict | None, narrative: str) -> "Path | None":
+    """The report as a file, next to the campaign. Returns its path, or None.
+
+    A campaign's result lived in reports.jsonl and in one delivered message.
+    Both are fine for reading once; neither survives what happens next -- the
+    owner comes back a day later and wants to ask about it, and a wake turn is a
+    cold start with no memory of having written it. A file is what both of them
+    can open.
+
+    Nothing about the shape is decided here. The four things the loop already
+    filed are laid out in order and the prose is passed through as it was
+    written, so a single number, a table of twenty rows and a link to a plot are
+    all just what the narrative happens to contain (2026-08-18: a sweep of blade
+    angles wants a table, a tuning run wants one number, and picking a layout for
+    them here would only get in the way of the third thing nobody has asked for
+    yet).
+    """
+    from datetime import datetime as _dt
+
+    try:
+        stamp = _dt.now().strftime("%Y%m%dT%H%M%S")
+        path = cdir / f"report-{stamp}.md"
+        lines = [f"# {subject}", "",
+                 f"- campaign: `{campaign}`",
+                 f"- outcome: **{outcome}**",
+                 f"- filed: {_dt.now().isoformat(timespec='seconds')}", ""]
+        if observed:
+            lines += ["## Observed", ""]
+            lines += [f"- {k}: {v}" for k, v in observed.items()]
+            lines.append("")
+        if baseline:
+            lines += ["## Started at", ""]
+            lines += [f"- {k}: {v}" for k, v in baseline.items()]
+            lines.append("")
+        if narrative.strip():
+            lines += ["## Report", "", narrative.strip(), ""]
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+    except OSError:
+        # A report that cannot be written to disk is still filed in the ledger and
+        # still delivered; losing the copy must not lose the campaign's ending.
+        return None
 
 
 class OpsFinishTool(Tool):
@@ -339,7 +532,8 @@ class OpsFinishTool(Tool):
         if tool is None:
             return False, "no messaging tool is registered"
         try:
-            detail = await tool.execute(content=text, channel=self._channel or None, chat_id=self._chat_id or None)
+            detail = await tool.execute(content=text, channel=self._channel or None,
+                                        chat_id=self._chat_id or None)
         except Exception as exc:  # noqa: BLE001 - a failed delivery is a fact, not a crash
             return False, f"delivery raised {type(exc).__name__}: {exc}"
         lowered = str(detail).lower()
@@ -460,13 +654,8 @@ class OpsFinishTool(Tool):
             )
         comparative = _comparative_words(narrative)
         if condition_type == ABSOLUTE and comparative and not baseline:
-            log_event(
-                cdir,
-                "report_refused",
-                reason="relative_prose_declared_absolute",
-                dedupe_key=dedupe_key,
-                words=comparative,
-            )
+            log_event(cdir, "report_refused", reason="relative_prose_declared_absolute",
+                      dedupe_key=dedupe_key, words=comparative)
             return (
                 f"REFUSED: declared absolute, but the text compares against a starting point "
                 f"({', '.join(sorted(set(comparative)))}). Either set condition_type='relative' "
@@ -476,16 +665,10 @@ class OpsFinishTool(Tool):
         if state.contradicted:
             # All three counts, not just the refusing one: a bare "contradicted=2"
             # reads as a complete audit of the narrative, and it is not one.
-            log_event(
-                cdir,
-                "report_refused",
-                reason="state_claim_contradicted",
-                dedupe_key=dedupe_key,
-                contradicted=state.contradicted,
-                unresolved=state.unresolved,
-                unverifiable=state.unverifiable,
-                claim_counts=state.counts(),
-            )
+            log_event(cdir, "report_refused", reason="state_claim_contradicted",
+                      dedupe_key=dedupe_key, contradicted=state.contradicted,
+                      unresolved=state.unresolved, unverifiable=state.unverifiable,
+                      claim_counts=state.counts())
             return "REFUSED: the report states world state that the recorded readings contradict.\n" + "\n".join(
                 f"- {item}" for item in state.contradicted
             )
@@ -502,6 +685,27 @@ class OpsFinishTool(Tool):
             suggestion=Suggestion(agent=suggestion_agent, reason=suggestion_reason or "") if suggestion_agent else None,
             narrative=narrative,
         )
+
+        # Closing is the one irreversible step here: the ledger shuts, the wakes
+        # are cleared, the budget stops. A question the owner has not answered yet
+        # is the strongest reason not to take it. Measured 2026-08-14: an arm
+        # asked twice, heard nothing, and concluded 'done' with 84% of the budget
+        # unspent and its objective never measured -- neither waited nor
+        # continued, just quit. Waiting costs nothing; the campaign sits open and
+        # one sentence restarts it.
+        unanswered = _unanswered_question(cdir)
+        if unanswered:
+            log_event(cdir, "report_refused", reason="unanswered_question", dedupe_key=dedupe_key)
+            return (
+                "REFUSED: you asked the owner something and have not heard back:\n"
+                f"  {unanswered[:300]}\n"
+                "Closing now ends the campaign for good -- the ledger shuts, the wakes are "
+                "cleared, and what is left of the budget goes with them. Waiting costs nothing "
+                "by comparison: the campaign stays open and one sentence from the owner starts "
+                "it again.\n"
+                "If the answer no longer changes anything, say so with ops_note and finish "
+                "again. Otherwise keep going on whatever does not depend on it, or wait."
+            )
 
         seen = self._seen_keys(cdir)
         if dedupe_key in seen:
@@ -531,7 +735,10 @@ class OpsFinishTool(Tool):
             # Says which field carries no reading, and stops. Naming what the
             # value should have been would hand over the comparison the run is
             # being scored on.
-            return f"REFUSED: {', '.join(placeholders)} is present but is not a measured value. Fix and send again."
+            return (
+                f"REFUSED: {', '.join(placeholders)} is present but is not a measured value. "
+                f"Fix and send again."
+            )
 
         # A starting value the campaign already stated to the loop can be checked
         # for having been copied across. That is transcription, not the
@@ -542,20 +749,13 @@ class OpsFinishTool(Tool):
         if expected:
             wrong = baseline_mismatches(report, expected)
             if wrong:
-                log_event(
-                    cdir, "report_refused", reason="baseline_mismatch", missing=["baseline"], dedupe_key=dedupe_key
-                )
+                log_event(cdir, "report_refused", reason="baseline_mismatch",
+                          missing=["baseline"], dedupe_key=dedupe_key)
                 return "REFUSED: " + "; ".join(wrong) + ".\nFix and send again."
 
         self._append(cdir, report)
-        log_event(
-            cdir,
-            "report_accepted",
-            dedupe_key=dedupe_key,
-            report_kind=_REPORT_KIND[outcome],
-            subject=subject,
-            outcome=outcome,
-        )
+        log_event(cdir, "report_accepted", dedupe_key=dedupe_key, report_kind=_REPORT_KIND[outcome],
+                  subject=subject, outcome=outcome)
 
         # The closing half, in the same call. Nothing here is a judgement: the
         # report just said the campaign ended, so the marker goes down and the
@@ -566,10 +766,8 @@ class OpsFinishTool(Tool):
         from datetime import datetime as _dt
 
         (cdir / "concluded.json").write_text(
-            _json.dumps(
-                {"concluded_at": _dt.now().isoformat(timespec="seconds"), "outcome": outcome, "reason": subject},
-                ensure_ascii=False,
-            ),
+            _json.dumps({"concluded_at": _dt.now().isoformat(timespec="seconds"),
+                         "outcome": outcome, "reason": subject}, ensure_ascii=False),
             encoding="utf-8",
         )
         removed = 0
@@ -589,12 +787,14 @@ class OpsFinishTool(Tool):
         # unverified content. Sent AFTER the close, and its failure is reported
         # rather than raised: a finished campaign whose announcement did not go
         # out is still finished.
+        md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative)
         summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative)
+        if md is not None:
+            summary += f"\n\nWritten to {md}"
         sent, detail = await self._deliver(summary)
         log_event(cdir, "report_delivery", sent=sent, detail=detail[:200], dedupe_key=dedupe_key)
         delivery_note = (
-            ""
-            if sent
+            "" if sent
             else f" The result could not be delivered to the owner ({detail}); it is in the campaign's reports."
         )
         return (

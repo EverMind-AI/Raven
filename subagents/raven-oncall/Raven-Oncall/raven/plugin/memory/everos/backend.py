@@ -39,7 +39,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
 
@@ -365,43 +364,6 @@ def _jsonify(obj: Any) -> Any:
 
 # Default timeout — HTTP mode is per-turn, so we keep it tight.
 _DEFAULT_HTTP_TIMEOUT_S: float = 10.0
-
-
-def _timestamp_ms(value: object, *, default_ms: int) -> int:
-    """Coerce a message's timestamp to the ms epoch EverOS's DTO declares.
-
-    Raven stamps its own records with an ISO-8601 string while
-    ``MessageItemDTO.timestamp`` is an ``int``, so passing one straight
-    through fails the whole write -- ``422 INVALID_INPUT`` over HTTP, and an
-    ``int()`` parse error embedded. The failure is logged at warning level and
-    nothing else reports it, so the store simply stops receiving turns.
-
-    An unparseable value falls back to now rather than dropping the message:
-    the timestamp is bookkeeping about the turn, the content is the part worth
-    keeping.
-    """
-    if value is None or isinstance(value, bool):
-        return default_ms
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if not isinstance(value, str):
-        return default_ms
-    text = value.strip()
-    if not text:
-        return default_ms
-    if text.isdigit():
-        return int(text)
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return default_ms
-    # Raven writes a naive isoformat() and its clock is UTC; reading it as
-    # local time would shift every stored turn by the host's offset.
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
 
 
 class _HttpEverosAdapter:
@@ -823,7 +785,7 @@ class EverosBackend:
           ``recall(user_id=<X>)`` must use that same ``<X>``.
 
         Other conversions: drop ``system``; missing ``sender_id`` on a
-        user message → ``user_id``; ``timestamp`` coerced to ms epoch (unparseable → now);
+        user message → ``user_id``; missing ``timestamp`` → now (ms);
         multimodal ``content`` → space-joined text; empty text → drop.
         """
         now_ms = int(time.time() * 1000)
@@ -851,7 +813,7 @@ class EverosBackend:
             entry: dict[str, Any] = {
                 "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
                 "role": role,
-                "timestamp": _timestamp_ms(m.get("timestamp"), default_ms=now_ms),
+                "timestamp": m.get("timestamp") or now_ms,
                 "content": content,
             }
             if tool_calls:

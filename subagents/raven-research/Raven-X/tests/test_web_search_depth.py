@@ -63,7 +63,11 @@ def _patch(monkeypatch, transport):
 
 
 def _docids(rendered: str) -> list[str]:
-    return [line.split("/")[-1].strip() for line in rendered.splitlines() if line.strip().startswith("https://corpus/")]
+    return [
+        line.split("/")[-1].strip()
+        for line in rendered.splitlines()
+        if line.strip().startswith("https://corpus/")
+    ]
 
 
 @pytest.mark.asyncio
@@ -98,7 +102,9 @@ def test_both_class_defaults_are_off():
 async def test_a_second_query_gets_documents_the_first_one_did_not_show(monkeypatch):
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
-    tool = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20)
+    tool = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20
+    )
 
     first = await tool.execute(query="a")
     second = await tool.execute(query="b")
@@ -123,7 +129,9 @@ async def test_the_rendered_width_never_grows(monkeypatch):
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
     plain = WebSearchTool(corpus_endpoint="http://local:8765")
-    deep = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=50)
+    deep = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=50
+    )
 
     baseline = await plain.execute(query="a")
     widened = await deep.execute(query="a")
@@ -162,7 +170,9 @@ async def test_width_is_preserved_no_matter_how_much_is_deduped(monkeypatch):
     """
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
-    tool = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=8)
+    tool = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=8
+    )
 
     widths = [len(_docids(await tool.execute(query=f"q{i}"))) for i in range(4)]
 
@@ -180,7 +190,9 @@ async def test_an_exhausted_query_falls_back_to_its_own_head(monkeypatch):
     """
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
-    tool = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=5)
+    tool = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=5
+    )
 
     await tool.execute(query="a")
     second = await tool.execute(query="b")
@@ -195,7 +207,9 @@ async def test_skips_are_recorded_so_a_dead_mechanism_is_visible(monkeypatch, tm
     monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
-    tool = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20)
+    tool = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20
+    )
 
     await tool.execute(query="a")
     await tool.execute(query="b")
@@ -212,7 +226,9 @@ async def test_skips_are_recorded_so_a_dead_mechanism_is_visible(monkeypatch, tm
 async def test_dedup_is_scoped_to_the_turn(monkeypatch):
     transport = _RankedCorpus()
     _patch(monkeypatch, transport)
-    tool = WebSearchTool(corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20)
+    tool = WebSearchTool(
+        corpus_endpoint="http://local:8765", cross_query_dedup=True, search_depth=20
+    )
 
     await tool.execute(query="a")
     tool.start_turn()
@@ -242,7 +258,11 @@ async def test_live_web_dedups_but_never_asks_for_more(monkeypatch):
             sent.append(_json.loads(request.content)["num"])
             return httpx.Response(
                 200,
-                json={"organic": [{"title": f"T{i}", "link": f"https://corpus/{i}"} for i in range(1, 9)]},
+                json={
+                    "organic": [
+                        {"title": f"T{i}", "link": f"https://corpus/{i}"} for i in range(1, 9)
+                    ]
+                },
             )
 
     transport = _Serper()

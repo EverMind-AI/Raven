@@ -74,12 +74,51 @@ def search_closed_notice(k: int) -> str:
     )
 
 
+FETCH_GATE_PREFIX = "Search is paused for this task:"
+"""Opening of the fetch gate's notice (``fetch_gate``).
+
+Deliberately not the saturation rule's wording. The two rules fire on different
+predicates - that one on *dry* searches, this one on *unread* ones - and a turn
+can hit either without the other, so a reader who finds this sentence in a
+trajectory has to be able to tell which rule wrote it.
+"""
+
+
+def fetch_gate_notice() -> str:
+    """The one sentence the fetch gate writes when it closes ``web_search``.
+
+    Takes no argument, and that is a decision rather than an omission. The
+    obvious version interpolates the streak that triggered it, which would make
+    the string vary per firing and force the strict recogniser below into
+    reconstructing it across a range of counts - the workaround
+    ``search_closed_notice`` already needs, and one that cannot be right for a
+    streak with no bound (171 was observed on one dr@3.0 turn). The count is a
+    counter; it belongs in ``counters()`` and the log line, where something can
+    aggregate it. Nothing downstream can aggregate a number embedded in prose.
+    """
+    return (
+        f"{FETCH_GATE_PREFIX} an answer has to rest on pages you have opened, "
+        "and this turn has run a long stretch of searches without opening one. "
+        "web_search will come back once you open a page with web_fetch. Pick "
+        "the most promising result you already have and open it."
+    )
+
+
 # Permissive recognisers: (name, matcher). Used only where a false positive is
 # free. Keep the names stable - they are the diagnostic a reader gets back.
 _HARNESS_BODIES: tuple[tuple[str, object], ...] = (
     ("tool_output_elided", lambda s: TOOL_OUTPUT_ELIDED in s),
     ("search_closed", lambda s: s.lstrip().startswith(SEARCH_CLOSED_PREFIX)),
 )
+# ``fetch_gate`` is deliberately absent from the permissive table, which inverts
+# the rule stated at the top of this module. The reason is that it is the first
+# harness body that does not occupy a message of its own: the gate appends its
+# sentence to the newest tool result, because a turn whose tool list just shrank
+# needs the explanation attached to what it is already reading. So a permissive
+# match on it would condemn the *real tool result it rides on*, and the stated
+# price of a permissive false positive - "the pack reaches one item further
+# back" - is not what would be paid; the pack would lose evidence. Strict-only,
+# below, where the whole-string test cannot mistake a note for its host.
 
 
 def is_elided_tool_output(content: object) -> bool:
@@ -107,7 +146,7 @@ def harness_body_kind(content: object) -> str | None:
     if not s.strip():
         return None
     for name, matches in _HARNESS_BODIES:
-        if matches(s):  # type: ignore[operator]
+        if matches(s):                                    # type: ignore[operator]
             return name
     return None
 
@@ -142,6 +181,8 @@ def is_harness_echo(answer: object) -> bool:
         return False
     if s == TOOL_OUTPUT_ELIDED:
         return True
+    if s == fetch_gate_notice():
+        return True
     # ``k`` is a small configured integer (``saturation.k``, default 10). Rather
     # than plumb the live value into every caller - which would make the check
     # depend on config and therefore fail open when the config is absent - the
@@ -151,8 +192,10 @@ def is_harness_echo(answer: object) -> bool:
 
 
 __all__ = [
+    "FETCH_GATE_PREFIX",
     "SEARCH_CLOSED_PREFIX",
     "TOOL_OUTPUT_ELIDED",
+    "fetch_gate_notice",
     "harness_body_kind",
     "is_elided_tool_output",
     "is_harness_authored",

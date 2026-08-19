@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -105,9 +106,23 @@ def make_provider(config: Config):
         # interactive use and for high-volume benchmark runs. The
         # ``reasoning.enabled=false`` flag is OpenRouter-specific and
         # forwards through LiteLLM's ``extra_body``.
-        extra_body = None
+        extra_body: dict[str, Any] = {}
         if provider_name == "openrouter" and "qwen" in (model or "").lower():
-            extra_body = {"reasoning": {"enabled": False}}
+            extra_body["reasoning"] = {"enabled": False}
+        # ``providers.<name>.routing`` pins the OpenRouter upstream — see
+        # ProviderConfig.routing for why. Merged into extra_body rather than
+        # assigned over it: the qwen clause above and this one are independent
+        # conditions on the same request body, and a config that happened to
+        # satisfy both would otherwise get whichever branch ran last.
+        routing = getattr(p, "routing", None) if p else None
+        if routing:
+            if provider_name == "openrouter":
+                extra_body["provider"] = routing
+            else:
+                console.print(
+                    f"[yellow]Note: providers.{provider_name}.routing is OpenRouter-only "
+                    f"and was ignored.[/yellow]"
+                )
         provider = LiteLLMProvider(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model),

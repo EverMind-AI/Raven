@@ -194,7 +194,11 @@ class SearchSaturation:
             self._width = self.widen_to
             self._dry_streak = 0
             return
-        can_page = self.on_saturate in ("paginate", "widen") and self.paginates and self._page < self.max_pages
+        can_page = (
+            self.on_saturate in ("paginate", "widen")
+            and self.paginates
+            and self._page < self.max_pages
+        )
         if can_page:
             self._page += 1
             self._pages_opened += 1

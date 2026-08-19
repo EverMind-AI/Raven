@@ -592,9 +592,14 @@ async def _run_rpc_server_until_done(
 
     # Late-bind the QuestionBroker into the ask_user tool now that the loop
     # (and its tool registry) exists; the broker itself was built up-front.
-    if agent_loop is not None and (ask_tool := agent_loop.tools.get("ask_user")) is not None:
-        if hasattr(ask_tool, "set_broker"):
-            ask_tool.set_broker(question_broker)
+    # ops_ask_owner takes one too: during a campaign it is the only route to the
+    # owner, and when nothing is running and nothing else is worth doing it waits
+    # here rather than posting into the void.
+    if agent_loop is not None:
+        for _name in ("ask_user", "ops_ask_owner"):
+            _tool = agent_loop.tools.get(_name)
+            if _tool is not None and hasattr(_tool, "set_broker"):
+                _tool.set_broker(question_broker)
 
     def _agent_loop_factory():
         if agent_loop is not None:

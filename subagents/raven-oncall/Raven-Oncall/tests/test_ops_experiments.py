@@ -77,8 +77,10 @@ async def test_wake_tradeoff_pays_latency_for_fewer_wakes(tmp_path: Path) -> Non
 
     scripts = {"t1": JobScript(finish_after_ms=60_000, metrics={"score": 0.5})}  # finishes at 1 min
 
-    tight = await experiment_wake_tradeoff(scripts, tmp_path, check_interval_ms=10_000, horizon_ms=3_600_000)
-    slack = await experiment_wake_tradeoff(scripts, tmp_path, check_interval_ms=600_000, horizon_ms=3_600_000)
+    tight = await experiment_wake_tradeoff(
+        scripts, tmp_path, check_interval_ms=10_000, horizon_ms=3_600_000)
+    slack = await experiment_wake_tradeoff(
+        scripts, tmp_path, check_interval_ms=600_000, horizon_ms=3_600_000)
 
     assert tight["completed"] and slack["completed"]
     assert tight["detection_latency_max_ms"] < slack["detection_latency_max_ms"]  # faster detection
@@ -92,8 +94,8 @@ async def test_wake_tradeoff_bounds_a_no_op_script(tmp_path: Path) -> None:
     from raven.ops import JobScript, experiment_wake_tradeoff
 
     report = await experiment_wake_tradeoff(
-        {"noop": JobScript(finish_after_ms=None)}, tmp_path, check_interval_ms=3_600_000, horizon_ms=3 * 86_400_000
-    )  # hourly checks over 3 campaign days
+        {"noop": JobScript(finish_after_ms=None)}, tmp_path,
+        check_interval_ms=3_600_000, horizon_ms=3 * 86_400_000)  # hourly checks over 3 campaign days
 
     assert report["completed"] is False
     assert report["detection_latency_ms"] == {"noop": None}
@@ -104,7 +106,8 @@ async def test_wake_tradeoff_curve_is_monotone_in_the_expected_direction(tmp_pat
     from raven.ops import JobScript, wake_tradeoff_curve
 
     scripts = {f"t{i}": JobScript(finish_after_ms=120_000 + i * 30_000) for i in range(3)}
-    curve = await wake_tradeoff_curve(scripts, tmp_path, intervals_ms=[15_000, 60_000, 300_000], horizon_ms=3_600_000)
+    curve = await wake_tradeoff_curve(
+        scripts, tmp_path, intervals_ms=[15_000, 60_000, 300_000], horizon_ms=3_600_000)
 
     wakes = [point["wakes"] for point in curve]
     latency = [point["detection_latency_mean_ms"] for point in curve]
@@ -131,54 +134,18 @@ def test_cost_metrics_pair_with_outcome(tmp_path: Path) -> None:
     from raven.ops import log_event
     from raven.ops.metrics import campaign_metrics
 
-    (tmp_path / "ledger.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "succeeded",
-                        "campaign": "c",
-                        "handle": None,
-                        "result": {"status": "succeeded", "metrics": {"score": 1.0}, "output": {}, "error": None},
-                        "attempts": 1,
-                        "escalated": False,
-                    },
-                    "t2": {
-                        "idem_key": "t2",
-                        "status": "failed",
-                        "campaign": "c",
-                        "handle": None,
-                        "result": {"status": "failed", "metrics": {}, "output": {}, "error": "x"},
-                        "attempts": 1,
-                        "escalated": False,
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    log_event(
-        tmp_path,
-        "wake_turn",
-        total_tokens=800,
-        prompt_tokens=600,
-        completion_tokens=200,
-        total_prompt_tokens=4000,
-        total_completion_tokens=900,
-        usage_calls=6,
-    )
-    log_event(
-        tmp_path,
-        "wake_turn",
-        total_tokens=1200,
-        prompt_tokens=900,
-        completion_tokens=300,
-        total_prompt_tokens=7000,
-        total_completion_tokens=1100,
-        usage_calls=8,
-    )
+    (tmp_path / "ledger.json").write_text(json.dumps({"version": 1, "records": {
+        "t1": {"idem_key": "t1", "status": "succeeded", "campaign": "c", "handle": None,
+               "result": {"status": "succeeded", "metrics": {"score": 1.0}, "output": {}, "error": None},
+               "attempts": 1, "escalated": False},
+        "t2": {"idem_key": "t2", "status": "failed", "campaign": "c", "handle": None,
+               "result": {"status": "failed", "metrics": {}, "output": {}, "error": "x"},
+               "attempts": 1, "escalated": False},
+    }}), encoding="utf-8")
+    log_event(tmp_path, "wake_turn", total_tokens=800, prompt_tokens=600, completion_tokens=200,
+              total_prompt_tokens=4000, total_completion_tokens=900, usage_calls=6)
+    log_event(tmp_path, "wake_turn", total_tokens=1200, prompt_tokens=900, completion_tokens=300,
+              total_prompt_tokens=7000, total_completion_tokens=1100, usage_calls=8)
 
     m = campaign_metrics(tmp_path)
 
@@ -200,36 +167,14 @@ def test_cost_per_trial_is_refused_when_a_wake_predates_the_summed_caliber(tmp_p
     from raven.ops import log_event
     from raven.ops.metrics import campaign_metrics
 
-    (tmp_path / "ledger.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "succeeded",
-                        "campaign": "c",
-                        "handle": None,
-                        "result": {"status": "succeeded", "metrics": {"score": 1.0}, "output": {}, "error": None},
-                        "attempts": 1,
-                        "escalated": False,
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    (tmp_path / "ledger.json").write_text(json.dumps({"version": 1, "records": {
+        "t1": {"idem_key": "t1", "status": "succeeded", "campaign": "c", "handle": None,
+               "result": {"status": "succeeded", "metrics": {"score": 1.0}, "output": {}, "error": None},
+               "attempts": 1, "escalated": False},
+    }}), encoding="utf-8")
     log_event(tmp_path, "wake_turn", total_tokens=800, prompt_tokens=600, completion_tokens=200)
-    log_event(
-        tmp_path,
-        "wake_turn",
-        total_tokens=1200,
-        prompt_tokens=900,
-        completion_tokens=300,
-        total_prompt_tokens=7000,
-        total_completion_tokens=1100,
-        usage_calls=8,
-    )
+    log_event(tmp_path, "wake_turn", total_tokens=1200, prompt_tokens=900, completion_tokens=300,
+              total_prompt_tokens=7000, total_completion_tokens=1100, usage_calls=8)
 
     m = campaign_metrics(tmp_path)
 

@@ -61,6 +61,12 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+Run `./install.sh` from a clone and it also installs the sub-agents in
+`subagents/` - one venv each, and an entry in your config for each one, using its
+own api key when you set one and the host raven's provider otherwise. The
+published installer cannot: the release artifacts carry `raven/` only. See
+[`subagents/README.md`](subagents/README.md).
+
 ### Onboard and run
 
 ```bash

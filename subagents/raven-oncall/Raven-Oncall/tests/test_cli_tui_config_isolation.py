@@ -16,7 +16,7 @@ import pytest
 import typer
 
 from raven.cli.tui_commands import apply_config_path
-from raven.config.loader import get_config_path
+from raven.config.loader import get_config_path, set_config_path
 from raven.config.paths import get_cron_dir, get_data_dir
 
 

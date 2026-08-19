@@ -34,13 +34,8 @@ from raven.agent.tools.ops import OpsTuneStatusTool
 class _Backend:
     """Stands in for a real backend: answers spend, nothing else interesting."""
 
-    def __init__(
-        self,
-        spent: float | None = 16.65,
-        remaining: float | None = 133.35,
-        unmeasured: dict | None = None,
-        raises: bool = False,
-    ) -> None:
+    def __init__(self, spent: float | None = 16.65, remaining: float | None = 133.35,
+                 unmeasured: dict | None = None, raises: bool = False) -> None:
         self._spent, self._remaining = spent, remaining
         self._unmeasured = unmeasured or {}
         self._raises = raises
@@ -60,7 +55,6 @@ class _Backend:
 
     async def poll(self, handle):
         from raven.ops import JobStatus
-
         return JobStatus.RUNNING
 
 
@@ -73,26 +67,17 @@ def _campaign(tmp_path: Path, *, with_trial: bool = True, **meta_over) -> Path:
     """
     cdir = tmp_path / "c"
     cdir.mkdir(exist_ok=True)
-    meta = {
-        "backend": "process",
-        "host": "h",
-        "command": "x {config} {job_dir}",
-        "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"},
-    }
+    meta = {"backend": "process", "host": "h", "command": "x {config} {job_dir}",
+            "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"}}
     meta.update(meta_over)
     (cdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     records = {}
     if with_trial:
-        records["t1"] = {
-            "idem_key": "t1",
-            "status": "running",
-            "campaign": "c",
-            "handle": {"backend": "process", "job_id": "ops-t1"},
-            "result": None,
-            "attempts": 0,
-            "escalated": False,
-        }
-    (cdir / "ledger.json").write_text(json.dumps({"version": 1, "records": records}), encoding="utf-8")
+        records["t1"] = {"idem_key": "t1", "status": "running", "campaign": "c",
+                         "handle": {"backend": "process", "job_id": "ops-t1"},
+                         "result": None, "attempts": 0, "escalated": False}
+    (cdir / "ledger.json").write_text(
+        json.dumps({"version": 1, "records": records}), encoding="utf-8")
     return cdir
 
 
@@ -132,9 +117,8 @@ async def test_jobs_whose_spend_is_unmeasurable_are_named(tmp_path, monkeypatch)
     cdir = _campaign(tmp_path)
     monkeypatch.setattr(
         "raven.ops.backends.backend_from_meta",
-        lambda meta: _Backend(
-            spent=57.76, remaining=82.24, unmeasured={"trial-a": "killed with nothing to measure its spend from"}
-        ),
+        lambda meta: _Backend(spent=57.76, remaining=82.24,
+                              unmeasured={"trial-a": "killed with nothing to measure its spend from"}),
     )
     out = await OpsTuneStatusTool().execute(ledger=str(cdir / "ledger.json"))
 

@@ -91,7 +91,8 @@ def vocabulary_fingerprint() -> str:
     flagged rather than quietly compared.
     """
     payload = "\x00".join(
-        [*(f"{p}\x01{tag}" for p, tag in _ARTIFACT_PATTERNS), _BENCHMARK_NAMES, _NAMED_CARRIER.pattern]
+        [*(f"{p}\x01{tag}" for p, tag in _ARTIFACT_PATTERNS), _BENCHMARK_NAMES,
+         _NAMED_CARRIER.pattern]
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 

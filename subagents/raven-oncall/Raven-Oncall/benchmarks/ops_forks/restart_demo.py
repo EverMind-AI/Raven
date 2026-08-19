@@ -31,15 +31,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_forks import Episode  # noqa: E402
-
 from raven.ops.action_log import CANCEL, ActionLog, Claim  # noqa: E402
+from raven.ops.backend import JobSpec  # noqa: E402
 from raven.ops.handoff import MockOrchestrator, Report  # noqa: E402
 from raven.ops.interruption import InterruptionContract  # noqa: E402
 from raven.ops.oncall_forks import Fork  # noqa: E402
 from raven.ops.scripted_backend import diverging_curve  # noqa: E402
 from raven.ops.scripted_human import HumanReply  # noqa: E402
 from raven.ops.world_state import load, restore  # noqa: E402
+from run_forks import Episode  # noqa: E402
 
 _MIN = 60_000
 _HOUR = 60 * _MIN
@@ -73,41 +73,26 @@ async def leg1(state_dir: Path) -> None:
     await ep.act("observe", {"job": "train-x"})
     await ep.act("wait", {"seconds": 25 * 60})
     await ep.act("observe", {"job": "train-x"})
-    await ep.act(
-        "ask_human",
-        {
-            "topic": "train-x",
-            "message": "loss turned upward at step 20 and has not recovered for 5 steps; cancel?",
-            "expected_loss_minutes": 200,
-        },
-    )
-    await ep.act(
-        "report",
-        {
-            "subject": "train-x",
-            "kind": "needs_decision",
-            "dedupe_key": "train-x:diverged",
-            "observed": {"loss": 3.1, "step": 25},
-            "baseline": {"loss": 2.3, "step": 0},
-            "condition_type": "relative",
-            "suggestion_agent": "none",
-            "suggestion_reason": "owner decision pending",
-        },
-    )
+    await ep.act("ask_human", {
+        "topic": "train-x",
+        "message": "loss turned upward at step 20 and has not recovered for 5 steps; cancel?",
+        "expected_loss_minutes": 200,
+    })
+    await ep.act("report", {
+        "subject": "train-x", "kind": "needs_decision",
+        "dedupe_key": "train-x:diverged", "observed": {"loss": 3.1, "step": 25},
+        "baseline": {"loss": 2.3, "step": 0}, "condition_type": "relative",
+        "suggestion_agent": "none", "suggestion_reason": "owner decision pending",
+    })
     ep.save(state_dir / "world.json")
-    print(
-        json.dumps(
-            {
-                "leg": 1,
-                "campaign_seconds": ep.clock.now_ms() // 1000,
-                "asked": ep.human.ask_count("train-x"),
-                "reply_readable_yet": ep.human.poll("train-x") is not None,
-                "reported": sorted(ep.orchestrator._seen_keys),
-                "cancels": [r.target for r in ep.action_log.records if r.kind == CANCEL],
-            },
-            indent=2,
-        )
-    )
+    print(json.dumps({
+        "leg": 1,
+        "campaign_seconds": ep.clock.now_ms() // 1000,
+        "asked": ep.human.ask_count("train-x"),
+        "reply_readable_yet": ep.human.poll("train-x") is not None,
+        "reported": sorted(ep.orchestrator._seen_keys),
+        "cancels": [r.target for r in ep.action_log.records if r.kind == CANCEL],
+    }, indent=2))
     sys.stdout.flush()
 
 
@@ -135,54 +120,34 @@ async def leg2(state_dir: Path, downtime_ms: int) -> None:
     checks["ask_count"] = (before, ep.human.ask_count("train-x"))
 
     # 4. The signal reported before the kill must be refused now.
-    repeat = ep.orchestrator.receive(
-        Report(
-            campaign=WATCH.key,
-            subject="train-x",
-            kind="needs_decision",
-            at_ms=ep.clock.now_ms(),
-            dedupe_key="train-x:diverged",
-            observed={"loss": 4.4},
-            baseline={"loss": 2.3},
-            condition_type="relative",
-            suggestion=None,
-        )
-    )
+    repeat = ep.orchestrator.receive(Report(
+        campaign=WATCH.key, subject="train-x", kind="needs_decision",
+        at_ms=ep.clock.now_ms(), dedupe_key="train-x:diverged",
+        observed={"loss": 4.4}, baseline={"loss": 2.3}, condition_type="relative",
+        suggestion=None,
+    ))
     checks["repeat_report_accepted"] = repeat.accepted
     checks["repeat_report_reason"] = repeat.reason
 
     # 5. Acting on the instruction after the restart, and being able to prove it.
     await ep.act("cancel", {"job": "train-x", "reason": "owner authorized before the restart"})
-    accepted = ep.orchestrator.receive(
-        Report(
-            campaign=WATCH.key,
-            subject="train-x",
-            kind="failed",
-            at_ms=ep.clock.now_ms(),
-            dedupe_key="train-x:cancelled",
-            observed={"loss": 4.4},
-            baseline={"loss": 2.3},
-            condition_type="relative",
-            claims=[Claim("cancelled", "train-x")],
-            narrative="I cancelled train-x on the owner's instruction.",
-        )
-    )
+    accepted = ep.orchestrator.receive(Report(
+        campaign=WATCH.key, subject="train-x", kind="failed",
+        at_ms=ep.clock.now_ms(), dedupe_key="train-x:cancelled",
+        observed={"loss": 4.4}, baseline={"loss": 2.3}, condition_type="relative",
+        claims=[Claim("cancelled", "train-x")],
+        narrative="I cancelled train-x on the owner's instruction.",
+    ))
     checks["post_restart_claim_accepted"] = accepted.accepted
 
     # 6. The same claim without having called cancel would be refused. Proven on a
     #    second orchestrator so the demo does not mutate its own result.
     empty = MockOrchestrator(ActionLog())
-    unbacked = empty.receive(
-        Report(
-            campaign=WATCH.key,
-            subject="train-x",
-            kind="failed",
-            at_ms=1,
-            dedupe_key="k",
-            observed={"loss": 4.4},
-            claims=[Claim("cancelled", "train-x")],
-        )
-    )
+    unbacked = empty.receive(Report(
+        campaign=WATCH.key, subject="train-x", kind="failed", at_ms=1,
+        dedupe_key="k", observed={"loss": 4.4},
+        claims=[Claim("cancelled", "train-x")],
+    ))
     checks["unbacked_claim_accepted"] = unbacked.accepted
     checks["unbacked_claim_reason"] = unbacked.reason
 
@@ -207,9 +172,8 @@ def main() -> None:
     ap.add_argument("leg", choices=["leg1", "leg2"])
     ap.add_argument("--state", required=True)
     ap.add_argument("--downtime-seconds", type=int, default=0)
-    ap.add_argument(
-        "--hold", action="store_true", help="after leg1, stay alive so the process can be SIGKILLed from outside"
-    )
+    ap.add_argument("--hold", action="store_true",
+                    help="after leg1, stay alive so the process can be SIGKILLed from outside")
     args = ap.parse_args()
     state = Path(args.state)
 

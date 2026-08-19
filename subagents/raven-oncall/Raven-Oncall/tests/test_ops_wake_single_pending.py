@@ -72,7 +72,9 @@ def _campaign(monkeypatch, tmp_path: Path) -> Path:
 def test_scheduling_twice_leaves_one_pending_wake(tmp_path: Path) -> None:
     svc = _svc(tmp_path)
 
-    first = _schedule_ops_wake(svc, "tui", "default", name=f"ops:{CAMPAIGN}:r1", message="look now", eta_seconds=600)
+    first = _schedule_ops_wake(
+        svc, "tui", "default", name=f"ops:{CAMPAIGN}:r1", message="look now", eta_seconds=600
+    )
     second = _schedule_ops_wake(
         svc, "tui", "default", name=f"ops:{CAMPAIGN}:recheck", message="look later", eta_seconds=1800
     )
@@ -103,7 +105,9 @@ def test_replacing_says_so(tmp_path: Path) -> None:
     otherwise 'Scheduled a wake' reads as 'now there are two'."""
     svc = _svc(tmp_path)
     _schedule_ops_wake(svc, "tui", "default", name=f"ops:{CAMPAIGN}:r1", message="a", eta_seconds=600)
-    note = _schedule_ops_wake(svc, "tui", "default", name=f"ops:{CAMPAIGN}:recheck", message="b", eta_seconds=1800)
+    note = _schedule_ops_wake(
+        svc, "tui", "default", name=f"ops:{CAMPAIGN}:recheck", message="b", eta_seconds=1800
+    )
 
     assert "replac" in note.lower() or "moved" in note.lower()
 

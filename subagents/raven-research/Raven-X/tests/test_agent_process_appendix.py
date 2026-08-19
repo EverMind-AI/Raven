@@ -142,7 +142,9 @@ def test_the_appendix_is_gated_on_the_assembly_so_the_anchor_cannot_reach_it():
     assert build_dr_flow(DRFlowConfig(enabled=False), None, 10, 1000) is None
     on = build_dr_flow(DRFlowConfig(enabled=True), None, 10, 1000)
     assert on.process_appendix is True
-    off = build_dr_flow(DRFlowConfig(enabled=True, final_shape={"process_appendix": False}), None, 10, 1000)
+    off = build_dr_flow(
+        DRFlowConfig(enabled=True, final_shape={"process_appendix": False}), None, 10, 1000
+    )
     assert off.process_appendix is False
 
 
@@ -164,8 +166,8 @@ def test_the_appendix_never_reaches_the_model():
     # earlier reference (the turn-scoped ledger is opened at the top of the loop), and a
     # "first occurrence" anchor silently retargets to whichever line mentions it soonest.
     seam = src.index("appendix, trail = build_appendix")
-    tail = src[seam : seam + 1200]
-    assert 'final_content = (final_content or "").rstrip()' in tail
+    tail = src[seam:seam + 1200]
+    assert "final_content = (final_content or \"\").rstrip()" in tail
     assert "add_assistant_message" not in tail, (
         "the appendix must not be persisted as a message - that is the feedback path"
     )
@@ -304,12 +306,13 @@ def test_the_ascii_forms_every_published_reading_was_measured_on_are_unchanged()
     assert build_trail(LEDGER, "see https://a.example/one).").cited == ["https://a.example/one"]
     assert build_trail(LEDGER, "(https://a.example/one)").cited == ["https://a.example/one"]
     assert build_trail(LEDGER, "https://a.example/one, and more").cited == ["https://a.example/one"]
-    assert build_trail(LEDGER, "per https://a.example/one and https://never.example/x it holds").cited == [
-        "https://a.example/one",
-        "https://never.example/x",
-    ]
+    assert build_trail(
+        LEDGER, "per https://a.example/one and https://never.example/x it holds"
+    ).cited == ["https://a.example/one", "https://never.example/x"]
     # Query strings and fragments are part of the link, not sentence punctuation.
-    assert build_trail(LEDGER, "at https://a.example/one?q=1&b=2#frag.").cited == ["https://a.example/one?q=1&b=2#frag"]
+    assert build_trail(LEDGER, "at https://a.example/one?q=1&b=2#frag.").cited == [
+        "https://a.example/one?q=1&b=2#frag"
+    ]
 
 
 def test_a_chinese_answer_can_still_be_caught_fabricating():
@@ -318,3 +321,51 @@ def test_a_chinese_answer_can_still_be_caught_fabricating():
     t = build_trail(LEDGER, "依据 https://never.example/x（原文：xxx）")
     assert t.cited_not_opened == ["https://never.example/x"]
     assert t.counters()["citation_grounding_rate"] == 0.0
+
+
+# ── dr@3.3: the grounding line is rendered in every direction ─────────
+#
+# Before dr@3.3 only the failing direction reached the page. A check that is
+# visible when it fails and invisible when it passes trains its reader to read
+# silence as "not checked", which is the same failure shape as a gate that only
+# prints on red. All three states are asserted here so none can be dropped as
+# "the obvious case".
+
+
+def test_a_clean_answer_says_so_instead_of_saying_nothing():
+    t = build_trail(LEDGER, "see https://a.example/one")
+    out = t.render()
+    assert "All 1 cited link was opened" in out
+    assert "⚠️" not in out
+
+
+def test_an_answer_that_cites_nothing_is_not_rendered_as_perfect():
+    """Undefined, not 1.0 - the ``counters()`` rule, now also on the page."""
+    t = build_trail(LEDGER, "no links here at all")
+    out = t.render()
+    assert "nothing to check" in out
+    assert "All 0" not in out
+    assert t.counters()["citation_grounding_rate"] is None
+
+
+def test_the_warning_carries_its_denominator():
+    """The module rule is that the rate never appears without ``urls_cited``.
+    Rendering "2 links were never opened" without the total states a numerator
+    on its own, which is the same number saying two different things depending
+    on whether the answer cited two links or forty."""
+    t = build_trail(LEDGER, "see https://a.example/one and https://ghost.example/x")
+    out = t.render()
+    assert "of 2 link(s) cited" in out
+    assert t.counters()["urls_cited"] == 2
+
+
+def test_the_conversation_scope_travels_with_the_fraction():
+    t = build_trail(LEDGER, "see https://a.example/one")
+    t.opened_earlier = 1
+    assert "opened on an earlier turn" in t.render()
+
+
+def test_scope_note_is_absent_when_nothing_was_cited():
+    t = build_trail(LEDGER, "no links")
+    t.opened_earlier = 3
+    assert "earlier turn" not in t.render()

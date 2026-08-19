@@ -164,32 +164,20 @@ def shape_final_answer(
     visible = visible_answer(raw, closing_tag_required=closing_tag_required)
     if not visible:
         return ShapedAnswer(
-            text="",
-            visible="",
-            form="empty",
-            span=None,
-            shaped=False,
+            text="", visible="", form="empty", span=None, shaped=False,
             reason="no_visible_answer",
         )
 
     found = _find_span(visible)
     if found is None:
         return ShapedAnswer(
-            text=visible,
-            visible=visible,
-            form="unmarked",
-            span=None,
-            shaped=False,
+            text=visible, visible=visible, form="unmarked", span=None, shaped=False,
             reason="no_marker",
         )
     form, span = found
     if form.startswith("refused_"):
         return ShapedAnswer(
-            text=visible,
-            visible=visible,
-            form="unmarked",
-            span=None,
-            shaped=False,
+            text=visible, visible=visible, form="unmarked", span=None, shaped=False,
             reason=form,
         )
 
@@ -208,20 +196,12 @@ def shape_final_answer(
     # ``refused_shorter`` in any back-feed report means that edit happened.
     if _content_len(shaped_text) < _content_len(visible):
         return ShapedAnswer(
-            text=visible,
-            visible=visible,
-            form="unmarked",
-            span=span,
-            shaped=False,
+            text=visible, visible=visible, form="unmarked", span=span, shaped=False,
             reason="refused_shorter",
         )
 
     return ShapedAnswer(
-        text=shaped_text,
-        visible=visible,
-        form=form,
-        span=span,
-        shaped=did,
+        text=shaped_text, visible=visible, form=form, span=span, shaped=did,
         reason="shaped" if did else "already_canonical",
     )
 

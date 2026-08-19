@@ -58,7 +58,7 @@ class Tool(ABC):
         Some tools do not just do a thing, they say "and now we wait" -- an ops
         wake is scheduled, so there is nothing further to decide until it fires.
         Wording alone does not settle it: measured 2026-08-06, a turn ran
-        ops_tune_status / ops_observe / ops_check_later round and round until it
+        ops_tune_status / ops_exec / ops_check_later round and round until it
         hit the iteration cap, each call succeeding, because "Scheduled a wake"
         reads as a completed step rather than as a closing one.
 

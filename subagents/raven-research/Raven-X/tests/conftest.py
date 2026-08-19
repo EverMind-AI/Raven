@@ -33,7 +33,7 @@ def _missing_sdk(channel: str) -> bool:
     except ModuleNotFoundError:
         return True
     except Exception:
-        return False  # imports fine but blows up for another reason: let it fail loudly
+        return False        # imports fine but blows up for another reason: let it fail loudly
     return False
 
 

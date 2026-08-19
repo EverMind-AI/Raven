@@ -92,6 +92,73 @@ STATE_ROOT = Path(
 RUN_ROOT = Path(env_value("RESEARCH_RUN_ROOT") or STATE_ROOT / "runs")
 
 
+# The host raven's config file, read for the fallbacks below. Read as JSON, never
+# imported from raven: this launcher is standard-library only and has to run
+# under a bare python3 that may not have the runtime installed at all.
+HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
+
+
+def host_config() -> dict:
+    """The host raven's config, or an empty dict when there is none to read."""
+    try:
+        return json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def dig(data: dict, path: tuple) -> str:
+    for part in path:
+        if not isinstance(data, dict):
+            return ""
+        data = data.get(part)
+    return data if isinstance(data, str) else ""
+
+
+def put(data: dict, path: tuple, value: str) -> None:
+    node = data
+    for part in path[:-1]:
+        node = node.setdefault(part, {})
+    node[path[-1]] = value
+
+
+def recommended_llm() -> str:
+    """What this folder's manifest says this agent is tuned for."""
+    try:
+        rec = json.loads((HERE / "subagent.json").read_text(encoding="utf-8")).get("recommendedLlm") or {}
+    except (OSError, ValueError):
+        return "unrecorded"
+    return f"{rec.get('model', '?')} via {rec.get('apiBase') or rec.get('provider', '?')}"
+
+
+def inherit_llm(config: dict, host: dict) -> str:
+    """Take the host raven's whole LLM configuration; return what was taken.
+
+    Only reached when this agent has no key of its own. The host's provider block
+    is copied wholesale rather than matched by name: a provider called `custom`
+    here and one called `custom` there can be two different endpoints, so picking
+    by name would silently point this agent at a gateway its model is not served
+    on - a failure that looks like a bad answer rather than an error.
+
+    What is inherited is which brains are reachable, which one is chosen, and how
+    a model name routes to a provider. Deliberately not the rest of
+    `agents.defaults`: the token ceiling, the tool-iteration cap and the timeouts
+    are this agent's operating limits, tuned for its own job, and they have
+    nothing to do with whose key is paying.
+    """
+    providers = host.get("providers") or {}
+    if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
+        return ""
+    for key in ("providers", "routing"):
+        if key in host:
+            config[key] = host[key]
+    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    host_defaults = (host.get("agents") or {}).get("defaults") or {}
+    for key in ("provider", "model"):
+        if key in host_defaults:
+            defaults[key] = host_defaults[key]
+    return f"provider={defaults.get('provider')} model={defaults.get('model')}"
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of `source` with the `.env` secrets merged in, under STATE_ROOT.
 
@@ -107,20 +174,28 @@ def render_config(source: Path) -> Path:
     transcripts, because all four hang off that one parent.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
-    missing = [name for name in REQUIRED_SECRETS if not env_value(name)]
-    if missing:
-        raise SystemExit(
-            f"error: {', '.join(missing)} is not set; put it in {HERE / '.env'} "
-            f"(see .env.example) or export it"
-        )
+    host = host_config()
+
+    # Each optional key falls back on its own: a missing Serper or Jina key is a
+    # degradation, not a failure, and the host's is better than nothing.
     for name, path in SECRET_SLOTS.items():
-        value = env_value(name)
-        if not value:
-            continue
-        node = config
-        for part in path[:-1]:
-            node = node.setdefault(part, {})
-        node[path[-1]] = value
+        value = env_value(name) or ("" if name in REQUIRED_SECRETS else dig(host, path))
+        if value:
+            put(config, path, value)
+
+    llm_key = REQUIRED_SECRETS[0]
+    if env_value(llm_key):
+        defaults = config.get("agents", {}).get("defaults", {})
+        log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
+    else:
+        taken = inherit_llm(config, host)
+        if not taken:
+            raise SystemExit(
+                f"error: {llm_key} is not set and {HOST_CONFIG} has no provider key to inherit from; "
+                f"put the key in {HERE / '.env'} (see .env.example), export it, or configure a "
+                f"provider in the host raven"
+            )
+        log(f"[run] llm: inherited from {HOST_CONFIG} ({taken}); tuned for {recommended_llm()}")
 
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     # The normal path deletes this in a `finally`; only a SIGKILL strands one, so

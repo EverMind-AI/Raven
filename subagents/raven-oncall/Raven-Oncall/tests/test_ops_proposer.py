@@ -43,7 +43,7 @@ async def test_llm_parses_filters_tried_and_caps_batch() -> None:
 
 
 async def test_llm_stops_at_max_rounds() -> None:
-    proposer = LLMProposer(_completer('[{"k1": 9}]'), objective="x", seed=[], max_rounds=2)
+    proposer = LLMProposer(_completer("[{\"k1\": 9}]"), objective="x", seed=[], max_rounds=2)
     assert await proposer.propose([], 2) == []
 
 

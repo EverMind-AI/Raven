@@ -43,11 +43,9 @@ def test_both_knobs_default_on():
         assert cfg.report_structure is True
     # Every boolean here is on. If a future knob should default off, it needs its
     # own reason written down and this assertion narrowed deliberately.
-    bools = {
-        n: getattr(DRFlowFinalShapeConfig(), n)
-        for n, f in DRFlowFinalShapeConfig.model_fields.items()
-        if f.annotation is bool
-    }
+    bools = {n: getattr(DRFlowFinalShapeConfig(), n)
+             for n, f in DRFlowFinalShapeConfig.model_fields.items()
+             if f.annotation is bool}
     assert all(bools.values()), bools
 
 
@@ -83,18 +81,23 @@ def test_off_state_contract_is_byte_identical_to_pre_flip():
     # Both layers must agree on the default, or "the default contract" means two
     # different things depending on the call path - which is what the flow/anchor
     # contract test caught when only the config default was flipped.
-    assert (
-        DRModeSegmentBuilder()._contract
-        == DRModeSegmentBuilder(require_answer_marker=DRFlowFinalShapeConfig().require_marker)._contract
-    )
+    assert DRModeSegmentBuilder()._contract == DRModeSegmentBuilder(
+        require_answer_marker=DRFlowFinalShapeConfig().require_marker
+    )._contract
     # ``report_structure`` is held off on both sides: this test is about one knob,
     # and letting the other vary would make it pass for the wrong reason.
     marker = _DR_ANSWER_MARKER_CLAUSE.format(n=6).strip()
-    pre_flip = DRModeSegmentBuilder(require_answer_marker=False, report_structure=False)._contract
+    pre_flip = DRModeSegmentBuilder(
+        require_answer_marker=False, report_structure=False
+    )._contract
     off = build_dr_flow(
-        DRFlowConfig(enabled=True, final_shape={"require_marker": False, "report_structure": False}), None, 10, 1000
+        DRFlowConfig(
+            enabled=True, final_shape={"require_marker": False, "report_structure": False}
+        ), None, 10, 1000
     )
-    on = build_dr_flow(DRFlowConfig(enabled=True, final_shape={"report_structure": False}), None, 10, 1000)
+    on = build_dr_flow(
+        DRFlowConfig(enabled=True, final_shape={"report_structure": False}), None, 10, 1000
+    )
     assert marker not in off.segment_builder._contract
     assert marker in on.segment_builder._contract
     assert pre_flip.rstrip() in off.segment_builder._contract
@@ -281,9 +284,11 @@ def test_bench_and_pre_dr28_product_segments_are_byte_identical_to_their_stamps(
         return len(text), hashlib.sha256(text.encode()).hexdigest()[:16]
 
     # Every bench arm: both clauses off. Its readings are the whole corpus axis.
-    assert sha(require_answer_marker=False, report_structure=False) == (3485, "593c46c416c3f4cf")
+    assert sha(require_answer_marker=False, report_structure=False) == (
+        3485, "593c46c416c3f4cf")
     # The product surface through dr@2.7: marker only. Renumbering must not move it.
-    assert sha(require_answer_marker=True, report_structure=False) == (3796, "7ad4b42cc78aec62")
+    assert sha(require_answer_marker=True, report_structure=False) == (
+        3796, "7ad4b42cc78aec62")
 
 
 def test_the_report_clause_is_product_only_and_purely_appended():
@@ -306,7 +311,9 @@ def test_the_report_clause_is_product_only_and_purely_appended():
     assert _DR_ANSWER_MARKER_CLAUSE.format(n=6).strip() in product
     assert _DR_REPORT_STRUCTURE_CLAUSE.format(n=7).strip() in product
 
-    report_only = DRModeSegmentBuilder(require_answer_marker=False, report_structure=True)._contract
+    report_only = DRModeSegmentBuilder(
+        require_answer_marker=False, report_structure=True
+    )._contract
     assert _DR_REPORT_STRUCTURE_CLAUSE.format(n=6).strip() in report_only
     assert "7." not in report_only.split("Contract", 1)[1]
 
@@ -362,13 +369,8 @@ def test_counters_payload_is_wire_safe_scalars():
     r = shape_final_answer("Body.\n<answer>X</answer>")
     c = r.counters()
     assert set(c) == {
-        "form",
-        "marked",
-        "shaped",
-        "reason",
-        "visible_chars",
-        "shaped_chars",
-        "span_chars",
+        "form", "marked", "shaped", "reason",
+        "visible_chars", "shaped_chars", "span_chars",
     }
     for v in c.values():
         assert isinstance(v, (str, int, bool)), v

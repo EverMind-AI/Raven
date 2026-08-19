@@ -20,9 +20,10 @@ import logging
 import time
 
 from raven.agent.context import is_elided_tool_output
+from raven.agent.harness_text import harness_body_kind
 from raven.agent.evidence_round import EvidenceRound
 from raven.agent.flow.answer_text import visible_answer
-from raven.agent.harness_text import harness_body_kind
+from raven.agent.flow.turn_task import task_for
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.ledger import ledger_append
 from raven.security.trust import wrap_untrusted
@@ -169,18 +170,16 @@ class DraftReviewerGate(AgentHook):
         # whose evidence was elided is NOT unsupported. Those collide exactly when
         # a constraint fails because its evidence is gone, so the carve-out has to
         # be the last word rather than the first.
-        ledger_append(
-            {
-                "ts": time.time(),
-                "op": _LEDGER_OP_GATE,
-                "event": "installed",
-                "max_revisions": max_revisions,
-                "strict_reject_only": strict_reject_only,
-                "fail_open_on_elided_evidence": fail_open_on_elided_evidence,
-                "constraint_rubric": constraint_rubric,
-                "evidence_round": evidence_round is not None,
-            }
-        )
+        ledger_append({
+            "ts": time.time(),
+            "op": _LEDGER_OP_GATE,
+            "event": "installed",
+            "max_revisions": max_revisions,
+            "strict_reject_only": strict_reject_only,
+            "fail_open_on_elided_evidence": fail_open_on_elided_evidence,
+            "constraint_rubric": constraint_rubric,
+            "evidence_round": evidence_round is not None,
+        })
         self._reviewer_system = _REVIEWER_SYSTEM
         if constraint_rubric:
             self._reviewer_system += _CONSTRAINT_RUBRIC
@@ -210,26 +209,24 @@ class DraftReviewerGate(AgentHook):
         """
         claims = (verdict or {}).get("unsupported_claims") or []
         issues = (verdict or {}).get("issues") or []
-        ledger_append(
-            {
-                "ts": time.time(),
-                "op": _LEDGER_OP,
-                "outcome": outcome,
-                "reviewed": reviewed,
-                "review": state.get("reviews", 0) if reviewed else None,
-                "reviewer_pass": None if verdict is None else bool(verdict.get("pass", True)),
-                "n_unsupported_claims": len(claims) if verdict is not None else None,
-                "n_issues": len(issues) if verdict is not None else None,
-                "elided_in_context": state.get("evidence_elided_in_context") if reviewed else None,
-                "elided_skipped_total": state.get("evidence_elided_skipped", 0) if reviewed else None,
-                "revisions": state.get("revisions", 0),
-                # Null, not 0, when the feature is off: "no round was granted here" and
-                # "rounds do not exist on this arm" are different claims, and only the
-                # second one makes a zero in an aggregate mean anything.
-                "evidence_rounds": state.get("evidence_rounds"),
-                "draft_chars": len(draft) if draft is not None else None,
-            }
-        )
+        ledger_append({
+            "ts": time.time(),
+            "op": _LEDGER_OP,
+            "outcome": outcome,
+            "reviewed": reviewed,
+            "review": state.get("reviews", 0) if reviewed else None,
+            "reviewer_pass": None if verdict is None else bool(verdict.get("pass", True)),
+            "n_unsupported_claims": len(claims) if verdict is not None else None,
+            "n_issues": len(issues) if verdict is not None else None,
+            "elided_in_context": state.get("evidence_elided_in_context") if reviewed else None,
+            "elided_skipped_total": state.get("evidence_elided_skipped", 0) if reviewed else None,
+            "revisions": state.get("revisions", 0),
+            # Null, not 0, when the feature is off: "no round was granted here" and
+            # "rounds do not exist on this arm" are different claims, and only the
+            # second one makes a zero in an aggregate mean anything.
+            "evidence_rounds": state.get("evidence_rounds"),
+            "draft_chars": len(draft) if draft is not None else None,
+        })
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
@@ -258,13 +255,12 @@ class DraftReviewerGate(AgentHook):
                 if verdict is not None:
                     state["reviews"] += 1
                 self._record(
-                    state,
-                    "budget_spent_reviewed",
-                    verdict=verdict,
-                    draft=draft,
+                    state, "budget_spent_reviewed", verdict=verdict, draft=draft,
                     reviewed=verdict is not None,
                 )
-                return HookDecision(notes=["verify_gate: revision budget spent; reviewed for the record, accepting"])
+                return HookDecision(
+                    notes=["verify_gate: revision budget spent; reviewed for the record, accepting"]
+                )
             self._record(state, "budget_spent", draft=draft, reviewed=False)
             return HookDecision(notes=["verify_gate: revision budget spent; accepting"])
 
@@ -303,7 +299,9 @@ class DraftReviewerGate(AgentHook):
 
         if self._strict_reject_only and not (verdict.get("unsupported_claims") or []):
             state["strict_overrides"] = state.get("strict_overrides", 0) + 1
-            logger.warning("verify-gate: reject named no unsupported claim; degraded to pass (strict_reject_only)")
+            logger.warning(
+                "verify-gate: reject named no unsupported claim; degraded to pass (strict_reject_only)"
+            )
             self._record(state, "degraded_no_claim", verdict=verdict, draft=draft)
             return HookDecision(notes=["verify_gate: reject degraded to pass (no named claim)"])
 
@@ -337,7 +335,7 @@ class DraftReviewerGate(AgentHook):
         )
 
     async def _review(self, ctx: AgentHookContext, draft: str) -> dict | None:
-        task = self._first_user_text(ctx.messages or [])
+        task = task_for(ctx)
         messages = ctx.messages or []
         evidence, elided_skipped = self._evidence_pack(messages)
         # Two different quantities, and only the second is a valid trigger.
@@ -350,7 +348,9 @@ class DraftReviewerGate(AgentHook):
         # a latch that degrades every later reject in the turn once any review has
         # skipped one body.
         elided_in_context = sum(
-            1 for m in messages if m.get("role") == "tool" and is_elided_tool_output(str(m.get("content") or ""))
+            1
+            for m in messages
+            if m.get("role") == "tool" and is_elided_tool_output(str(m.get("content") or ""))
         )
         if ctx.metadata is not None:
             state = ctx.metadata.setdefault("verify_gate", {})
@@ -365,7 +365,9 @@ class DraftReviewerGate(AgentHook):
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                logger.warning("verify-gate: reviewer timed out after %.0fs budget; fail-open", self._timeout_seconds)
+                logger.warning(
+                    "verify-gate: reviewer timed out after %.0fs budget; fail-open", self._timeout_seconds
+                )
                 return None
             try:
                 response = await asyncio.wait_for(
@@ -450,15 +452,6 @@ class DraftReviewerGate(AgentHook):
                 return verdict
         logger.warning("verify-gate: reviewer output missing boolean 'pass'; fail-open")
         return None
-
-    @staticmethod
-    def _first_user_text(messages: list[dict]) -> str:
-        for m in messages:
-            if isinstance(m, dict) and m.get("role") == "user":
-                content = m.get("content")
-                if isinstance(content, str) and content:
-                    return content
-        return ""
 
     def _evidence_pack(self, messages: list[dict]) -> tuple[str, int]:
         """Last ``evidence_items`` tool results that still carry a body.

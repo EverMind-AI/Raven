@@ -136,7 +136,9 @@ async def test_the_second_call_is_made_with_no_tools(tmp_path):
     loop = AgentLoop(provider=_Recorder(), workspace=tmp_path, model="stub", max_iterations=6)
     loop.tools.register(_Waiter())
 
-    content, used, _msgs, _outcome = await loop._run_agent_loop([{"role": "user", "content": "watch it"}])
+    content, used, _msgs, _outcome = await loop._run_agent_loop(
+        [{"role": "user", "content": "watch it"}]
+    )
 
     assert used == ["waiter"], "the tool must actually have run"
     assert len(seen_tools) == 2, f"expected exactly two model calls, got {len(seen_tools)}"

@@ -32,25 +32,18 @@ def _campaign(tmp_path: Path, name: str, records: dict, concluded: bool = False)
     d = tmp_path / name
     d.mkdir(parents=True)
     (d / "ledger.json").write_text(json.dumps({"version": 1, "records": records}), encoding="utf-8")
-    (d / "meta.json").write_text(
-        json.dumps({"host": "h", "port": 22, "key": "~/.ssh/id_rsa", "remote_dir": "/root/raven-ops", "image": "img"}),
-        encoding="utf-8",
-    )
+    (d / "meta.json").write_text(json.dumps(
+        {"host": "h", "port": 22, "key": "~/.ssh/id_rsa", "remote_dir": "/root/raven-ops", "image": "img"}
+    ), encoding="utf-8")
     if concluded:
         (d / "concluded.json").write_text("{}", encoding="utf-8")
     return d
 
 
 def _running_record(key: str, campaign: str) -> dict:
-    return {
-        "idem_key": key,
-        "status": "running",
-        "campaign": campaign,
-        "handle": {"backend": "docker", "job_id": f"ops-{key}"},
-        "result": None,
-        "attempts": 1,
-        "escalated": False,
-    }
+    return {"idem_key": key, "status": "running", "campaign": campaign,
+            "handle": {"backend": "docker", "job_id": f"ops-{key}"},
+            "result": None, "attempts": 1, "escalated": False}
 
 
 def _patch_runner(monkeypatch, behavior):

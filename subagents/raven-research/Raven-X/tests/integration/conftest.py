@@ -122,14 +122,14 @@ def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:
     """
     import os
 
-    wanted = "real_llm" in (config.getoption("-m") or "") or os.environ.get("RAVEN_TEST_REAL_LLM") in {
-        "1",
-        "true",
-        "yes",
-    }
+    wanted = "real_llm" in (config.getoption("-m") or "") or os.environ.get(
+        "RAVEN_TEST_REAL_LLM"
+    ) in {"1", "true", "yes"}
     if wanted:
         return
-    skip = pytest.mark.skip(reason="real_llm is opt-in (billable): select with -m real_llm or RAVEN_TEST_REAL_LLM=1")
+    skip = pytest.mark.skip(
+        reason="real_llm is opt-in (billable): select with -m real_llm or RAVEN_TEST_REAL_LLM=1"
+    )
     for item in items:
         if "real_llm" in item.keywords:
             item.add_marker(skip)

@@ -61,6 +61,7 @@ def _ask(msg: _FakeMessageTool | None = None) -> OpsAskOwnerTool:
     return OpsAskOwnerTool(registry=_FakeRegistry(msg if msg is not None else _FakeMessageTool()))
 
 
+
 # --------------------------------------------------------------------------- #
 # ops_ask_owner                                                               #
 # --------------------------------------------------------------------------- #
@@ -79,7 +80,9 @@ async def test_an_interruption_over_the_bar_is_delivered(tmp_path):
 @pytest.mark.asyncio
 async def test_an_interruption_under_the_bar_is_not_delivered(tmp_path):
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 30 * 60_000})
-    out = await _ask().execute(campaign="c", question="looks odd", expected_loss_minutes=4, ledger=_ledger(cdir))
+    out = await _ask().execute(
+        campaign="c", question="looks odd", expected_loss_minutes=4, ledger=_ledger(cdir)
+    )
     assert "NOT DELIVERED" in out
     assert "under the" in out
     assert "Nobody has seen this" in out, "that nobody saw it is the load-bearing fact"
@@ -93,8 +96,12 @@ async def test_an_interruption_under_the_bar_is_not_delivered(tmp_path):
 async def test_the_interruption_budget_survives_a_cold_wake(tmp_path):
     """Each wake turn constructs the tool afresh, as a cron-woken turn does."""
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 0, "max_asks": 1})
-    first = await _ask().execute(campaign="c", question="q1", expected_loss_minutes=100, ledger=_ledger(cdir))
-    second = await _ask().execute(campaign="c", question="q2", expected_loss_minutes=100, ledger=_ledger(cdir))
+    first = await _ask().execute(
+        campaign="c", question="q1", expected_loss_minutes=100, ledger=_ledger(cdir)
+    )
+    second = await _ask().execute(
+        campaign="c", question="q2", expected_loss_minutes=100, ledger=_ledger(cdir)
+    )
     assert "Delivered" in first
     assert "NOT DELIVERED" in second, (
         "a budget held only in memory is handed back on every wake, which is no budget at all"
@@ -115,14 +122,18 @@ async def test_an_unpriced_interruption_is_delivered_and_counted_apart(tmp_path)
 @pytest.mark.asyncio
 async def test_a_campaign_with_no_contract_configured_does_not_get_a_secret_default(tmp_path):
     cdir = _campaign(tmp_path, contract=None)
-    out = await _ask().execute(campaign="c", question="q", expected_loss_minutes=1, ledger=_ledger(cdir))
+    out = await _ask().execute(
+        campaign="c", question="q", expected_loss_minutes=1, ledger=_ledger(cdir)
+    )
     assert "Delivered" in out, "no contract means no threshold, not an invented one"
 
 
 @pytest.mark.asyncio
 async def test_the_delivered_reply_stays_at_the_level_of_fact(tmp_path):
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 0})
-    out = await _ask().execute(campaign="c", question="q", expected_loss_minutes=100, ledger=_ledger(cdir))
+    out = await _ask().execute(
+        campaign="c", question="q", expected_loss_minutes=100, ledger=_ledger(cdir)
+    )
     assert "Delivered" in out
     assert "never reply" in out, "that the owner may not answer is a fact about the world"
     for directive in ("Silence is not consent", "ops_check_later", "keep watching"):
@@ -152,13 +163,8 @@ async def test_every_ask_lands_in_the_campaign_trail(tmp_path):
 async def test_a_relative_report_without_its_baseline_is_refused(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="relative",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="relative", ledger=_ledger(cdir),
     )
     assert "REFUSED" in out and "baseline" in out
     assert "STARTED at" in out, "the refusal must name what the field is"
@@ -173,14 +179,9 @@ async def test_a_relative_report_without_its_baseline_is_refused(tmp_path):
 async def test_the_same_report_with_its_baseline_is_accepted(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        baseline={"ndcg": 0.3663},
-        condition_type="relative",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, baseline={"ndcg": 0.3663},
+        condition_type="relative", ledger=_ledger(cdir),
     )
     assert "Accepted" in out
     row = json.loads((cdir / "reports.jsonl").read_text().splitlines()[0])
@@ -198,13 +199,8 @@ async def test_a_report_whose_state_claim_the_readings_contradict_is_refused(tmp
     write_facts(cdir, StateFacts(checkpoints=("step-200", "step-1200", "step-2400", "step-4800")))
 
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="absolute", ledger=_ledger(cdir),
         narrative="Only the three most recent checkpoints are kept, so the peak is gone.",
     )
 
@@ -230,13 +226,8 @@ async def test_a_state_claim_with_no_recorded_reading_is_accepted(tmp_path):
     cdir = _campaign(tmp_path)
 
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="absolute", ledger=_ledger(cdir),
         narrative="Only the three most recent checkpoints are kept, so the peak is gone.",
     )
 
@@ -251,13 +242,8 @@ async def test_a_state_claim_the_readings_support_is_accepted(tmp_path):
     write_facts(cdir, StateFacts(checkpoints=("step-2400", "step-4800"), job_statuses=("running",)))
 
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="absolute", ledger=_ledger(cdir),
         narrative="step-2400 is still there and the job is still running.",
     )
 
@@ -268,13 +254,8 @@ async def test_a_state_claim_the_readings_support_is_accepted(tmp_path):
 async def test_a_report_with_no_observation_is_refused(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+        observed={}, condition_type="absolute", ledger=_ledger(cdir),
     )
     assert "REFUSED" in out and "observed" in out
 
@@ -282,15 +263,8 @@ async def test_a_report_with_no_observation_is_refused(tmp_path):
 @pytest.mark.asyncio
 async def test_reporting_the_same_signal_twice_is_refused_across_cold_wakes(tmp_path):
     cdir = _campaign(tmp_path)
-    kw = dict(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
-    )
+    kw = dict(campaign="c", subject="train-a", outcome="done", dedupe_key="k1",
+              observed={"ndcg": 0.36}, condition_type="absolute", ledger=_ledger(cdir))
     assert "Accepted" in await OpsFinishTool().execute(**kw)
     out = await OpsFinishTool().execute(**kw)
     assert "REFUSED" in out and "already reported" in out
@@ -300,14 +274,8 @@ async def test_reporting_the_same_signal_twice_is_refused_across_cold_wakes(tmp_
 @pytest.mark.asyncio
 async def test_a_different_finding_still_gets_through(tmp_path):
     cdir = _campaign(tmp_path)
-    base = dict(
-        campaign="c",
-        subject="train-a",
-        outcome="done",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
-    )
+    base = dict(campaign="c", subject="train-a", outcome="done",
+                observed={"ndcg": 0.36}, condition_type="absolute", ledger=_ledger(cdir))
     assert "Accepted" in await OpsFinishTool().execute(dedupe_key="k1", **base)
     assert "Accepted" in await OpsFinishTool().execute(dedupe_key="k2", **base)
 
@@ -320,13 +288,8 @@ async def test_needing_the_owner_to_choose_is_not_an_ending(tmp_path):
     ops_ask_owner's job; this tool only ends things."""
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="train-a",
-        outcome="needs_decision",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="train-a", outcome="needs_decision", dedupe_key="k1",
+        observed={"ndcg": 0.36}, condition_type="absolute", ledger=_ledger(cdir),
     )
     assert "REFUSED" in out and "ops_ask_owner" in out
     assert not (cdir / "concluded.json").exists()
@@ -335,24 +298,10 @@ async def test_needing_the_owner_to_choose_is_not_an_ending(tmp_path):
 @pytest.mark.asyncio
 async def test_refusals_and_acceptances_both_land_in_the_trail(tmp_path):
     cdir = _campaign(tmp_path)
-    await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
-        observed={},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
-    )
-    await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
-    )
+    await OpsFinishTool().execute(campaign="c", subject="s", outcome="done", dedupe_key="k1",
+                                  observed={}, condition_type="absolute", ledger=_ledger(cdir))
+    await OpsFinishTool().execute(campaign="c", subject="s", outcome="done", dedupe_key="k1",
+                                  observed={"ndcg": 0.36}, condition_type="absolute", ledger=_ledger(cdir))
     kinds = [e["kind"] for e in read_events(cdir)]
     assert "report_refused" in kinds and "report_accepted" in kinds
 
@@ -368,11 +317,13 @@ async def test_an_allowed_interruption_actually_reaches_the_messaging_tool(tmp_p
     msg = _FakeMessageTool()
     tool = _ask(msg)
 
-    out = await tool.execute(campaign="c", question="cancel?", expected_loss_minutes=100, ledger=_ledger(cdir))
+    out = await tool.execute(campaign="c", question="cancel?", expected_loss_minutes=100,
+                             ledger=_ledger(cdir))
 
     assert "Delivered" in out
     assert len(msg.sent) == 1, (
-        "a guarded path that reaches nobody makes every interruption reading a reading of something that never happened"
+        "a guarded path that reaches nobody makes every interruption reading a "
+        "reading of something that never happened"
     )
     assert "cancel?" in msg.sent[0]
 
@@ -381,7 +332,9 @@ async def test_an_allowed_interruption_actually_reaches_the_messaging_tool(tmp_p
 async def test_a_refused_interruption_never_reaches_the_messaging_tool(tmp_path):
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 30 * 60_000})
     msg = _FakeMessageTool()
-    await _ask(msg).execute(campaign="c", question="minor", expected_loss_minutes=1, ledger=_ledger(cdir))
+    await _ask(msg).execute(
+        campaign="c", question="minor", expected_loss_minutes=1, ledger=_ledger(cdir)
+    )
     assert msg.sent == [], "the guard is the enforcement; a refused ask must not be sent"
 
 
@@ -390,7 +343,8 @@ async def test_a_delivery_failure_is_not_reported_as_delivered(tmp_path):
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 0})
     tool = _ask(_FakeMessageTool(reply="Error: not configured"))
 
-    out = await tool.execute(campaign="c", question="q", expected_loss_minutes=100, ledger=_ledger(cdir))
+    out = await tool.execute(campaign="c", question="q", expected_loss_minutes=100,
+                             ledger=_ledger(cdir))
 
     assert "NOT delivered" in out or "NOT DELIVERED" in out
     assert "Nobody has seen it" in out
@@ -410,7 +364,9 @@ async def test_with_no_messaging_tool_registered_it_says_so(tmp_path):
 @pytest.mark.asyncio
 async def test_delivery_outcome_lands_in_the_campaign_trail(tmp_path):
     cdir = _campaign(tmp_path, {"min_expected_loss_ms": 0})
-    await _ask().execute(campaign="c", question="q", expected_loss_minutes=100, ledger=_ledger(cdir))
+    await _ask().execute(
+        campaign="c", question="q", expected_loss_minutes=100, ledger=_ledger(cdir)
+    )
     deliveries = [e for e in read_events(cdir) if e["kind"] == "ask_owner_delivery"]
     assert deliveries and deliveries[0]["sent"] is True
 
@@ -426,10 +382,7 @@ async def test_omitting_condition_type_is_refused_rather_than_defaulted(tmp_path
     claiming improvement, no baseline -- previously accepted and stored."""
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
+        campaign="c", subject="s", outcome="done", dedupe_key="k1",
         observed={"ndcg": 0.36},
         narrative="Training improved the model over where it started",
         ledger=_ledger(cdir),
@@ -442,12 +395,8 @@ async def test_omitting_condition_type_is_refused_rather_than_defaulted(tmp_path
 async def test_prose_that_compares_cannot_be_declared_absolute_without_a_baseline(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
+        campaign="c", subject="s", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.36}, condition_type="absolute",
         narrative="Training improved the model over where it started",
         ledger=_ledger(cdir),
     )
@@ -460,13 +409,8 @@ async def test_prose_that_compares_cannot_be_declared_absolute_without_a_baselin
 async def test_the_same_claim_declared_relative_with_a_baseline_is_accepted(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        baseline={"ndcg": 0.3674},
-        condition_type="relative",
+        campaign="c", subject="s", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.36}, baseline={"ndcg": 0.3674}, condition_type="relative",
         narrative="Training improved the model over where it started",
         ledger=_ledger(cdir),
     )
@@ -477,12 +421,8 @@ async def test_the_same_claim_declared_relative_with_a_baseline_is_accepted(tmp_
 async def test_an_absolute_claim_with_no_comparison_in_the_prose_is_fine(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="s",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
+        campaign="c", subject="s", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.36}, condition_type="absolute",
         narrative="The run reached nDCG@10 of 0.36 and then exhausted its budget.",
         ledger=_ledger(cdir),
     )
@@ -500,15 +440,9 @@ async def _report(cdir, **over):
     from raven.agent.tools.ops_escalation import OpsFinishTool
 
     args = dict(
-        campaign="c",
-        ledger=str(cdir / "ledger.json"),
-        subject="eval_ndcg",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"best": 0.34},
-        baseline={"ndcg": 0.30},
-        condition_type="relative",
-        narrative="",
+        campaign="c", ledger=str(cdir / "ledger.json"), subject="eval_ndcg",
+        outcome="done", dedupe_key="k1", observed={"best": 0.34},
+        baseline={"ndcg": 0.30}, condition_type="relative", narrative="",
     )
     args.update(over)
     return await OpsFinishTool().execute(**args)

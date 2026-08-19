@@ -85,20 +85,15 @@ def test_the_deliverable_survives_a_reopen(tmp_path):
     path = tmp_path / "ledger.json"
     led = Ledger(path)
     led.record("j1")
-    led.set_result(
-        "j1",
-        JobResult(
-            JobStatus.SUCCEEDED,
-            metrics={"ndcg": 0.3564},
-            output={"eval_points": [[1200, 0.362], [1518, 0.3564]]},
-            deliverable={"ref": "/w/jobs/j1/step-1200", "label": "ndcg", "value": 0.362},
-        ),
-    )
+    led.set_result("j1", JobResult(
+        JobStatus.SUCCEEDED,
+        metrics={"ndcg": 0.3564},
+        output={"eval_points": [[1200, 0.362], [1518, 0.3564]]},
+        deliverable={"ref": "/w/jobs/j1/step-1200", "label": "ndcg", "value": 0.362},
+    ))
 
     reopened = Ledger(path).all()
 
     assert reopened[0].result.deliverable == {
-        "ref": "/w/jobs/j1/step-1200",
-        "label": "ndcg",
-        "value": 0.362,
+        "ref": "/w/jobs/j1/step-1200", "label": "ndcg", "value": 0.362,
     }

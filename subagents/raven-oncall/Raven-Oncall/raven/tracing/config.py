@@ -46,14 +46,29 @@ def enabled() -> bool:
 def state_dir() -> Path:
     """Trace state dir (``~/.raven/traces``). Spans land at ``<dir>/logs/audit-spans.log``.
 
-    Overridable with ``RAVEN_TRACING_DIR`` (absolute) or ``RAVEN_HOME``.
+    Overridable with ``RAVEN_TRACING_DIR`` (absolute) or ``RAVEN_HOME``; with
+    neither, it follows the config file, the way the cron store, the logs and the
+    ops ledgers already do. Two instances started with different ``--config`` were
+    otherwise appending to one span log, and that file is where an arm's token
+    count comes from -- so the count silently became the sum of both arms.
+
+    Deriving it changes nothing for anyone who does not pass ``--config``: the
+    config path is then ``~/.raven/config.json`` and its parent is the constant
+    this replaces.
     """
     override = os.environ.get("RAVEN_TRACING_DIR")
     if override:
         return Path(override).expanduser()
     home = os.environ.get("RAVEN_HOME")
-    base = Path(home).expanduser() if home else Path.home() / ".raven"
-    return base / "traces"
+    if home:
+        return Path(home).expanduser() / "traces"
+    try:
+        from raven.config.paths import get_config_path
+
+        return Path(get_config_path()).expanduser().parent / "traces"
+    except Exception:
+        # Tracing must never be the reason a run cannot start.
+        return Path.home() / ".raven" / "traces"
 
 
 def port() -> int:

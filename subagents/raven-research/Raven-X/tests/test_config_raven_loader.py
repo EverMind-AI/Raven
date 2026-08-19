@@ -273,15 +273,8 @@ def test_a_profile_suffix_cannot_smuggle_a_superseded_flow_label():
     # restoration on the candidate-selection arm); dr@2.2 joined it when dr@2.3 shipped.
     # The just-superseded label carries the highest smuggle risk (it is closest to the
     # current one), so it leads the list.
-    for smuggled in (
-        "dr@2.3-futurex",
-        "dr@2.2-futurex",
-        "dr@2.1-futurex",
-        "dr@2.0-futurex",
-        "dr@1.9-futurex",
-        "dr@1.4-web",
-        "dr@1",
-    ):
+    for smuggled in ("dr@2.3-futurex", "dr@2.2-futurex", "dr@2.1-futurex", "dr@2.0-futurex",
+                     "dr@1.9-futurex", "dr@1.4-web", "dr@1"):
         with pytest.raises(Exception):
             DRFlowConfig(enabled=True, version=smuggled)
 
@@ -326,7 +319,8 @@ def test_the_shipped_example_configs_load_on_this_build():
         flow = json.loads(path.read_text()).get("drFlow")
         assert flow is not None, f"{path.name}: no drFlow block"
         assert "version" not in flow, (
-            f"{path.name} pins drFlow.version; examples must inherit it or they break on the next bump"
+            f"{path.name} pins drFlow.version; examples must inherit it or they "
+            f"break on the next bump"
         )
         cfg = DRFlowConfig(**flow)
         assert cfg.version == DRFlowConfig.model_fields["version"].default

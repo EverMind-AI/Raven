@@ -8,29 +8,24 @@ from pathlib import Path
 import pytest
 
 import raven.ops as ops_pkg
+from raven.config import paths as config_paths
 from raven.agent.tools import ops as ops_tools
 from raven.agent.tools.ops import OpsTuneLaunchTool, OpsTuneStatusTool
-from raven.config import paths as config_paths
+
 
 
 def _write_running_ledger(cdir: Path) -> None:
     (cdir / "ledger.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
-            }
-        ),
+        json.dumps({
+            "version": 1,
+            "records": {
+                "t1": {
+                    "idem_key": "t1", "status": "running", "campaign": "c",
+                    "handle": {"backend": "process", "job_id": "ops-t1"},
+                    "result": None, "attempts": 1, "escalated": False,
+                }
+            },
+        }),
         encoding="utf-8",
     )
 
@@ -117,29 +112,19 @@ async def test_status_reconciles_pending_against_remote(monkeypatch, tmp_path: P
     # A pending trial whose container already finished on the host: status must
     # poll the remote, pick up result.json (container reaped), and report it done.
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "b0p6_k11p5": {
-                        "idem_key": "b0p6_k11p5",
-                        "status": "pending",
-                        "campaign": "bm25",
-                        "handle": {"backend": "docker", "job_id": "ops-b0p6_k11p5"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "b0p6_k11p5": {
+                "idem_key": "b0p6_k11p5", "status": "pending", "campaign": "bm25",
+                "handle": {"backend": "docker", "job_id": "ops-b0p6_k11p5"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
-    (tmp_path / "meta.json").write_text(
-        json.dumps({"host": "h", "port": 22, "key": "~/.ssh/id_rsa", "remote_dir": "/root/raven-ops", "image": "img"}),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps(
+        {"host": "h", "port": 22, "key": "~/.ssh/id_rsa", "remote_dir": "/root/raven-ops", "image": "img"}
+    ), encoding="utf-8")
 
     def fake_runner(cmd: str):
         if cmd.startswith("docker inspect"):
@@ -166,41 +151,20 @@ async def test_status_reports_best_and_progress(tmp_path: Path) -> None:
         "version": 1,
         "records": {
             "k1p0p8_b0p4": {
-                "idem_key": "k1p0p8_b0p4",
-                "status": "succeeded",
-                "campaign": "bm25_tune",
-                "handle": None,
-                "attempts": 1,
-                "escalated": False,
-                "result": {
-                    "status": "succeeded",
-                    "metrics": {"ndcg": 0.28},
-                    "output": {"config": {"k1": 0.8, "b": 0.4}},
-                    "error": None,
-                },
+                "idem_key": "k1p0p8_b0p4", "status": "succeeded", "campaign": "bm25_tune",
+                "handle": None, "attempts": 1, "escalated": False,
+                "result": {"status": "succeeded", "metrics": {"ndcg": 0.28},
+                           "output": {"config": {"k1": 0.8, "b": 0.4}}, "error": None},
             },
             "k1p1p2_b0p6": {
-                "idem_key": "k1p1p2_b0p6",
-                "status": "succeeded",
-                "campaign": "bm25_tune",
-                "handle": None,
-                "attempts": 1,
-                "escalated": False,
-                "result": {
-                    "status": "succeeded",
-                    "metrics": {"ndcg": 0.31},
-                    "output": {"config": {"k1": 1.2, "b": 0.6}},
-                    "error": None,
-                },
+                "idem_key": "k1p1p2_b0p6", "status": "succeeded", "campaign": "bm25_tune",
+                "handle": None, "attempts": 1, "escalated": False,
+                "result": {"status": "succeeded", "metrics": {"ndcg": 0.31},
+                           "output": {"config": {"k1": 1.2, "b": 0.6}}, "error": None},
             },
             "k1p2p0_b0p9": {
-                "idem_key": "k1p2p0_b0p9",
-                "status": "running",
-                "campaign": "bm25_tune",
-                "handle": None,
-                "result": None,
-                "attempts": 1,
-                "escalated": False,
+                "idem_key": "k1p2p0_b0p9", "status": "running", "campaign": "bm25_tune",
+                "handle": None, "result": None, "attempts": 1, "escalated": False,
             },
         },
     }
@@ -210,7 +174,10 @@ async def test_status_reports_best_and_progress(tmp_path: Path) -> None:
     out = await OpsTuneStatusTool().execute(ledger=str(ledger), metric="ndcg")
 
     assert "in progress" in out
-    assert "ndcg=0.31" in out and "'k1': 1.2" in out  # best of the two succeeded
+    # A trial now prints its config as key=value rather than a Python dict repr:
+    # the config comes from the ledger instead of from whatever the job echoed,
+    # so it reads the same whether or not the job wrote one back.
+    assert "ndcg=0.31" in out and "k1=1.2" in out  # best of the two succeeded
     assert "round 2 proposing" in out  # log tail surfaced
 
 
@@ -220,25 +187,16 @@ async def test_status_states_the_compute_budget_as_a_fact(tmp_path: Path) -> Non
     elapsed time with nothing to measure it against. The remainder is deliberately
     not computed -- deciding when to look again is the judgement being measured."""
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {
+                "idem_key": "t1", "status": "running", "campaign": "c",
+                "handle": {"backend": "process", "job_id": "ops-t1"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
     (tmp_path / "meta.json").write_text(
         json.dumps({"backend": "process", "host": "h", "budget_minutes_total": 90}), encoding="utf-8"
     )
@@ -262,25 +220,16 @@ async def test_status_says_so_when_the_campaign_declares_no_budget(tmp_path: Pat
     can show a run has gone long.
     """
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {
+                "idem_key": "t1", "status": "running", "campaign": "c",
+                "handle": {"backend": "process", "job_id": "ops-t1"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
     (tmp_path / "meta.json").write_text(json.dumps({"backend": "process", "host": "h"}), encoding="utf-8")
 
     out = await OpsTuneStatusTool().execute(ledger=str(ledger), metric="ndcg")
@@ -329,25 +278,16 @@ async def test_status_prints_both_series_as_logged(monkeypatch, tmp_path: Path) 
     the loop is being scored on.
     """
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {
+                "idem_key": "t1", "status": "running", "campaign": "c",
+                "handle": {"backend": "process", "job_id": "ops-t1"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
     (tmp_path / "meta.json").write_text(
         json.dumps({"backend": "process", "host": "h", "remote_dir": "/r", "command": "c"}), encoding="utf-8"
     )
@@ -393,25 +333,16 @@ async def test_status_series_omitted_when_the_field_never_appears(monkeypatch, t
     """A field the job never logs gets no line at all, rather than an empty one:
     an empty series reads as "measured, and there is nothing there"."""
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {
+                "idem_key": "t1", "status": "running", "campaign": "c",
+                "handle": {"backend": "process", "job_id": "ops-t1"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
     (tmp_path / "meta.json").write_text(
         json.dumps({"backend": "process", "host": "h", "remote_dir": "/r", "command": "c"}), encoding="utf-8"
     )
@@ -469,25 +400,16 @@ async def test_recorded_readings_match_what_the_series_printed(monkeypatch, tmp_
     from raven.ops.state_claims import read_facts
 
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "ops-t1"},
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    }
-                },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {
+                "idem_key": "t1", "status": "running", "campaign": "c",
+                "handle": {"backend": "process", "job_id": "ops-t1"},
+                "result": None, "attempts": 1, "escalated": False,
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }), encoding="utf-8")
     (tmp_path / "meta.json").write_text(
         json.dumps({"backend": "process", "host": "h", "remote_dir": "/r", "command": "c"}), encoding="utf-8"
     )
@@ -658,36 +580,26 @@ async def test_policy_and_budget_print_before_the_first_submit(tmp_path: Path) -
     assert "140 gpu-minute in total" in out
     assert "ndcg = 0.3674" in out
     assert "NaN: stop, do not wait." in out
-    assert "seed" in out.lower()
+    assert "declared starting config" in out and '"lr"' in out
 
 
 def _ledger_with(tmp_path: Path, deliverable) -> Path:
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "lr1em06": {
-                        "idem_key": "lr1em06",
-                        "status": "succeeded",
-                        "campaign": "c",
-                        "handle": None,
-                        "attempts": 1,
-                        "escalated": False,
-                        "result": {
-                            "status": "succeeded",
-                            "metrics": {"ndcg": 0.3564},
-                            "output": {"config": {"lr": 1e-6}, "eval_points": [[1200, 0.362], [1518, 0.3564]]},
-                            "error": None,
-                            "deliverable": deliverable,
-                        },
-                    },
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "lr1em06": {
+                "idem_key": "lr1em06", "status": "succeeded", "campaign": "c",
+                "handle": None, "attempts": 1, "escalated": False,
+                "result": {
+                    "status": "succeeded", "metrics": {"ndcg": 0.3564},
+                    "output": {"config": {"lr": 1e-6},
+                               "eval_points": [[1200, 0.362], [1518, 0.3564]]},
+                    "error": None, "deliverable": deliverable,
                 },
-            }
-        ),
-        encoding="utf-8",
-    )
+            },
+        },
+    }), encoding="utf-8")
     return ledger
 
 
@@ -703,7 +615,9 @@ async def test_a_finished_trial_names_what_it_would_hand_over(tmp_path: Path) ->
     the backend gave it; it does not know that a checkpoint is a checkpoint or that
     higher is better.
     """
-    ledger = _ledger_with(tmp_path, {"ref": "/w/jobs/lr1em06/step-1200", "label": "ndcg", "value": 0.362})
+    ledger = _ledger_with(
+        tmp_path, {"ref": "/w/jobs/lr1em06/step-1200", "label": "ndcg", "value": 0.362}
+    )
 
     out = await OpsTuneStatusTool().execute(ledger=str(ledger), metric="ndcg")
 
@@ -725,7 +639,7 @@ async def test_a_finished_trial_without_a_deliverable_prints_no_extra_line(tmp_p
 
 
 async def test_the_metric_name_comes_from_the_campaign_not_from_a_default(tmp_path: Path) -> None:
-    """ "ndcg" was the default in five tool signatures, and this tool layer is shared
+    """"ndcg" was the default in five tool signatures, and this tool layer is shared
     with every domain -- a CFD campaign had to pass the metric on every single call or
     read back nothing. The campaign already declares what it optimises; the tool
     should ask the campaign, not assume an embedding benchmark.
@@ -735,31 +649,18 @@ async def test_the_metric_name_comes_from_the_campaign_not_from_a_default(tmp_pa
         encoding="utf-8",
     )
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "run1": {
-                        "idem_key": "run1",
-                        "status": "succeeded",
-                        "campaign": "c",
-                        "handle": None,
-                        "attempts": 1,
-                        "escalated": False,
-                        "result": {
-                            "status": "succeeded",
-                            "metrics": {"residual": 0.004},
-                            "output": {"config": {"nuWater": "1e-3"}},
-                            "error": None,
-                            "deliverable": None,
-                        },
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "run1": {
+                "idem_key": "run1", "status": "succeeded", "campaign": "c",
+                "handle": None, "attempts": 1, "escalated": False,
+                "result": {"status": "succeeded", "metrics": {"residual": 0.004},
+                           "output": {"config": {"nuWater": "1e-3"}}, "error": None,
+                           "deliverable": None},
+            },
+        },
+    }), encoding="utf-8")
 
     out = await OpsTuneStatusTool().execute(ledger=str(ledger))
 
@@ -772,31 +673,17 @@ async def test_without_a_declared_objective_the_old_default_still_reads(tmp_path
     disk and their reports have to stay readable."""
     (tmp_path / "meta.json").write_text(json.dumps({"backend": "process"}), encoding="utf-8")
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "run1": {
-                        "idem_key": "run1",
-                        "status": "succeeded",
-                        "campaign": "c",
-                        "handle": None,
-                        "attempts": 1,
-                        "escalated": False,
-                        "result": {
-                            "status": "succeeded",
-                            "metrics": {"ndcg": 0.3579},
-                            "output": {"config": {"lr": 5e-7}},
-                            "error": None,
-                            "deliverable": None,
-                        },
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "run1": {
+                "idem_key": "run1", "status": "succeeded", "campaign": "c",
+                "handle": None, "attempts": 1, "escalated": False,
+                "result": {"status": "succeeded", "metrics": {"ndcg": 0.3579},
+                           "output": {"config": {"lr": 5e-7}}, "error": None, "deliverable": None},
+            },
+        },
+    }), encoding="utf-8")
 
     out = await OpsTuneStatusTool().execute(ledger=str(ledger))
 

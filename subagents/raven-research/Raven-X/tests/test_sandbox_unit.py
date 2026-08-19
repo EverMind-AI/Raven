@@ -1004,9 +1004,12 @@ class TestConnectMcpSandboxGuard:
         # on identical code, and a full-suite green therefore carried less information
         # than it looked like. The guard under test is about executor=None, so a real
         # subprocess is incidental: fail the client deterministically instead.
-        with patch("mcp.client.stdio.stdio_client", side_effect=RuntimeError("stdio client unavailable in this test")):
+        with patch("mcp.client.stdio.stdio_client",
+                   side_effect=RuntimeError("stdio client unavailable in this test")):
             try:
-                await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+                await connect_mcp_servers(
+                    {"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None
+                )
             except SandboxInitError:
                 pytest.fail("SandboxInitError should not be raised when executor=None")
 

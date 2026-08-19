@@ -107,7 +107,7 @@ line after it is a message with `role` in `user` / `assistant` / `tool`.
 | You want | Read |
 |---|---|
 | The final answer | The last row with `role == "assistant"` and `finish_reason == "stop"`. |
-| Which build produced it | `flow_version` on any message row — `"<drFlow.version>/<package version>"`, e.g. `"dr@3.2/raven-0.1.5"`. |
+| Which build produced it | `flow_version` on any message row — `"<drFlow.version>/<package version>"`, e.g. `"dr@3.3/raven-0.1.5"`. |
 | What the flow did | `observers` on the final assistant row. |
 | Tool calls and their results | `tool_calls` on assistant rows; `role == "tool"` rows carry `name` and the result. |
 
@@ -392,9 +392,15 @@ questions into a boxed field on 58/120, producing nothing new and dropping 10.83
 
 ### Version labels
 
-`drFlow.version` is **the key of the measurement ledger**, not a product name. Every
-version changes the generated distribution, so the config validator rejects a superseded
-label on a newer build. Current: `dr@3.2`.
+`drFlow.version` is **the key of the measurement ledger**, not a product name. A new label
+means the generated distribution changed, so the config validator rejects a superseded label
+on a newer build. Current: `dr@3.3`.
+
+The converse does not hold, and assuming it will mislead you: a distribution change does not
+always get a new label. What a bump protects is a *reading that already carries the old one*,
+so a label with zero batches behind it can be widened in place instead — nothing is
+mislabelled by doing so. `dr@3.3` is such a case: the turn-task fix landed under it rather
+than under a number of its own.
 
 Note that this is not the same number as `raven --version`, which reports the package
 version inherited from upstream. `drFlow.version` is the one that identifies behaviour.
@@ -405,16 +411,26 @@ tag `dr2.4-published` (`raven/` tree_sha `2db7aa62042eb97c`); the `dr@2.7` corpu
 readings were measured from the working tree, so they reproduce only from each run's own
 `_src_snapshot`, with `dr2.7-base` marking the commit they were cut from. Two consequences of `main`
 being ahead, both intended: its `tree_sha` differs from the measured one, and a config still
-labelled anything from `dr@2.4` through `dr@3.1` is rejected on it — the validator matches the base label,
-so a profile suffix such as `dr@2.4-futurex` is rejected too. Update such configs to `dr@3.2`;
+labelled anything from `dr@2.4` through `dr@3.2` is rejected on it — the validator matches the base label,
+so a profile suffix such as `dr@2.4-futurex` is rejected too. Update such configs to `dr@3.3`;
 the error message names the value to use.
 
-**There is no commit that "is" `dr@3.1`.** It was developed and measured, but never became its
-own commit; it landed together with `dr@3.2`, behind the tag `dr3.0-base`, which marks `main`
-as it stood at `dr@3.0`. Its two batches of readings are still reproducible, because provenance
-here runs through each batch's own `_src_snapshot` plus the per-arm fingerprints in
-`iso_manifest.json` — never through git granularity. Treat git as a convenience for reading
-history, not as the measurement ledger; when a batch and a tag disagree, the batch is right.
+**A label and a commit do not map onto each other, in either direction.** `dr@3.1` never
+became its own commit — it was developed and measured, then landed together with `dr@3.2`,
+behind the tag `dr3.0-base` that marks `main` as it stood at `dr@3.0`. `dr@3.3` went the other
+way and got two commits with different behaviour: one when the fetch gate landed, one when the
+turn-task fix was folded in rather than bumped.
+
+Both readings stay reproducible, because provenance never ran through git in the first place:
+it runs through each batch's own `_src_snapshot` plus the per-arm fingerprints in
+`iso_manifest.json`. Treat git as a convenience for reading history, not as the measurement
+ledger — when a batch and a tag disagree, the batch is right.
+
+The ladder below is deliberately two-tier. Labels up to `dr@2.9` get one line each: their
+readings are settled, and what is worth knowing about them is *which* thing changed, not why.
+From `dr@3.0` the entries stay long, because those are the ones still being argued about — the
+measurement each rests on, and what it does **not** establish, is the part a reader needs.
+Full per-version detail for every label lives in `raven_train/notes/`, not here.
 
 | Label | The one thing it changed |
 |---|---|
@@ -430,19 +446,20 @@ history, not as the measurement ledger; when a batch and a tag disagree, the bat
 | `dr@1.9` | the restart detector stops reading two idioms the identity segment itself taught the model |
 | `dr@2.0` | the product identity segment is replaced by a DR one; the reviewer stops failing claims whose evidence was elided |
 | `dr@2.1` | the dr@2.0 prompt bytes a refactor moved are restored; the elision trigger reads the whole context |
-| `dr@2.2` | fixes and instruments at a score budget of 0: a committed salvage stops being miscounted as answerless, and the corpus retrieval log stops merging batches that share an arm directory name |
-| `dr@2.3` | the instruments stop lying: `status` no longer reads "ok" on a run that hit the context window, every answerless run is attributed, and `answer_rate` becomes a pre-registered secondary endpoint |
-| `dr@2.4` | the corpus SERP snippet is restored, deduplicated by docid, on the arm that measures candidate selection — per-config, so the live-web arms and the flow-off anchor do not move |
-| `dr@2.5` | terminal-answer shaping arrives, off by default, two independently gated pieces: a read-only observer that records the shaped form beside the raw answer (distribution-free by construction), and one appended contract clause asking for an explicit `<answer>` marker (a distribution change, hence the bump) |
-| `dr@2.6` | terminal-answer shaping is on by default, and every shipped arm pins the pair explicitly instead of inheriting it |
-| `dr@2.7` | the reader path stops discarding pages it could have read: a local resolver failure no longer refuses a fetch the reader service performs on our behalf, and a transport failure that never produced a response is retried twice before the page is abandoned |
-| `dr@2.8` | three changes, every one class-default-off and gated per arm, so the flow-off anchor cannot move: cross-query dedup with pagination on the corpus path (three call sites capped results at ten while the service clamps to fifty), the live-web result snippet restored together with its per-docid dedup, and a verify rejection that may buy retrieval instead of only a rewrite. Product surface only: the research-report body and the deterministic process appendix |
-| `dr@2.9` | a wrap-up for turns killed by the completion budget rather than the tool-calling budget - **not** gated on the flow, because it repairs a defect the anchor suffers from most, which is why it carries its own label. Two ledger repairs in the same direction (a cancelled fetch records an `aborted` row instead of none; a write failure can no longer kill the run it measures). Product surface: the process appendix can finally render, because the trail no longer depends on an environment variable only a batch launcher sets |
+| `dr@2.2` | fixes and instruments at a score budget of 0; a committed salvage stops counting as answerless |
+| `dr@2.3` | the instruments stop lying: no "ok" on an overflowed run, and every answerless run is attributed |
+| `dr@2.4` | the corpus SERP snippet is restored and deduplicated by docid, per-config so the anchor cannot move |
+| `dr@2.5` | terminal-answer shaping arrives off by default: a read-only observer, plus a clause asking for `<answer>` |
+| `dr@2.6` | terminal-answer shaping is on by default, and every shipped arm pins it explicitly |
+| `dr@2.7` | the reader path stops discarding pages it could have read - a resolver failure is no longer a refusal |
+| `dr@2.8` | three per-arm, class-default-off retrieval changes, so the anchor cannot move |
+| `dr@2.9` | a wrap-up for turns killed by the completion budget - **not** flow-gated, so it carries its own label |
 | `dr@3.0` | the two observers that divide by the context window now divide by the window the turn actually runs on — both were handed the configured default, and on the served student that resolved to the same number, so the divergence was latent for the whole `dr@2.x` ladder. Also three criteria whose scope said "this turn" but were fed a whole conversation, all found by running one rather than by the suite: the fabricated-citation check now spans the conversation (reported as `opened_earlier`), its URL extractor stops at CJK punctuation instead of swallowing the rest of a Chinese clause, and `turn_invariants` is handed one turn. Everything else is default-off or product-only: multi-turn conversations, the search-saturation ladder, `dr@2.9`'s wrap-up moved behind a gate, and a reviewable shipping draft |
 | `dr@3.1` | the replay cache key gains `page`. The key was `(query, n_requested, k)`, so once a turn had paged to 2, re-asking a query already asked that turn returned the page-1 entry: 206 of 289 page-2 retrievals were page-1 replays, 71.3%. The waste is the smaller half — a replay is observed as a dry search, so every fake page turn also pushed the turn one step toward `stopped`, and the broken rung was feeding the rung above it. The comment directly above the key had already written the rule down correctly, but enumerated the dimensions by hand and listed only `n_requested` and `k`; a rule that has to be re-applied by hand to each new parameter is a rule that will be missed. Also `sat_event`, non-empty only on a real tier transition, because `sat_action` is a sticky label stamped on every row and counting rows overstates `stopped` by 67x |
 | `dr@3.2` | the context-window fallback doubles, 65536 to 131072, and the window is resolved **once** rather than at each consumer — `HistoryTrimmer`, `MemoryConsolidator` and `BudgetObserver` were still reading the unresolved configured value, and `BudgetObserver` is installed only on the flow-off branch, which made the divergence arm-correlated. On the served student all three agreed by accident, because the resolver returns `None` and every consumer fell back to the same number. Also `harness_text.py`, which splits one predicate into two that deliberately disagree: permissive where a false positive costs one item of look-back, strict where it would destroy a real answer. Instrument-only otherwise: `scored_by` stamps the scorer's caliber and file hash on every scored row, the ledger records `n_served`, and `renderedWidth` becomes a knob that is byte-identical at its default |
+| `dr@3.3` | `drFlow.fetchGate`, off by class default: after 15 consecutive searches with no successful fetch, `web_search` is removed from the iteration's tool schema until a page opens, so re-asking for it is not an available move. The two mechanisms already watching that shape both fail differently — `fetch_floor` only appends a sentence (+4.2pp on a ~10% base rate, real and an order of magnitude too small), and the saturation stop refuses in the tool's *return value*, which the model can simply re-request: 72 of the 84 questions it fired on chose search as their very next action, and one accumulated 195 suppressed rows. The predicates do not overlap either — saturation asks whether searches come back dry, this asks whether they come back unread. Same label, folded in later: the reviewer and the salvage gate stop reading the FIRST user message as the task. On a single-turn benchmark first-user *is* this turn's, so the derivation was correct by accident; in a conversation it judged every follow-up against turn one's question, and a reject naming no unsupported claim then rewrote a correct answer into an answer to the wrong question. The task string also stops carrying the `[Runtime Context …]` / memo / recovery envelopes, which is the half that reaches a treated arm and has not been measured |
 
-Human-facing name for the current build is **Raven-X 3.2**; every superseded label stays
+Human-facing name for the current build is **Raven-X 3.3**; every superseded label stays
 in code so historical results remain indexable, and the validator matches the BASE label
 so a profile suffix such as `-futurex` cannot smuggle a retired one onto a new build.
 
