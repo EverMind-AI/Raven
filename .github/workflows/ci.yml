@@ -97,10 +97,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
 
-      # Stdlib only, and the only place outside the release job that runs it:
-      # `ui/build.py` matches two exact literals into a 476 KB base.html and
-      # hard-exits on either, so an edit that reflows the file or appends a
-      # script leaves CI green and blocks the release at `git push v1.2.3`.
+      # Stdlib only. The dedicated gate is the `page` job below; this step
+      # keeps the build honest inside the test matrix too, because
+      # `ui/build.py` matches exact literal markers in the page sources and
+      # hard-exits on a miss, so an edit that reflows a source or drops a
+      # marker leaves CI green and blocks the release at `git push v1.2.3`.
       - name: Build served page
         run: |
           python3 ui/build.py
@@ -199,6 +200,28 @@ jobs:
           npm test
           npm run build
         working-directory: ui-tui
+
+  page:
+    name: page checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      # Stdlib + node only, no npm install: the gate must stay runnable
+      # before any dependency exists. build.py validates the part seams
+      # (IIFE opener first, closer last); check-page.mjs validates the
+      # assembled artifact (single style/script, no leftover markers,
+      # script parses).
+      - name: Build and check the served page
+        run: |
+          python3 ui/build.py
+          node ui/scripts/check-page.mjs
 
   bridge:
     name: bridge checks

@@ -172,7 +172,7 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
     version until it happened to ask again.
 
     Announcing a version the poll already announced is harmless: the client
-    writes one element's text (``showUpNote`` in ``ui/src/live.js``), so a repeat
+    writes one element's text (``showUpNote`` in ``ui/src/live/210-update-notice.js``), so a repeat
     lands on the banner already on screen. That is why this path keeps no memory
     of what the announcer has sent -- sharing that state across two schedules
     would buy nothing a re-rendered banner does not already give.
