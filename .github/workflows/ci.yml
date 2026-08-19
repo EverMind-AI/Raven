@@ -201,6 +201,34 @@ jobs:
           npm run build
         working-directory: ui-tui
 
+  ui-rpc:
+    name: ui rpc contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui
+
+      # generated.ts is committed; a schema edit without regeneration is the
+      # drift this catches. Then the transport layer compiles against it and
+      # the fixture transport's behaviour is pinned by vitest.
+      - name: Check contract, types, and tests
+        run: |
+          npm run gen:check
+          npm run type-check
+          npm test
+        working-directory: ui
+
   page:
     name: page checks
     runs-on: ubuntu-latest
