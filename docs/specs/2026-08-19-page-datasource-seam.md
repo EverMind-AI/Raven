@@ -49,6 +49,31 @@ guard, and the boot order below already makes the question unaskable.
 5. Lower the ratchet ceiling by the strands removed, same diff.
 6. Verify both modes in a browser (``?stub=1`` and live) before pushing.
 
+## Sources that are watched, not opened
+
+Some pages are not read once when opened; something keeps them fresh while
+they are on screen. The subagents panel is the first: a run in flight has to
+move without being reopened. That does not need a different seam, only a
+clear answer to who owns the watch.
+
+The source stays a plain fetch -- `DS.agents.list(sessionId)` -- and the page
+keeps every judgement that is about what is drawn: whether to ask at all,
+whether the answer still belongs to the conversation the reader is in, and
+whether anything changed enough to repaint. All three are page state, and all
+three were living in the live layer, which is why the live layer had to reach
+back into the shell and call its renderer.
+
+The watch itself belongs to the live layer, and that is the part worth saying
+out loud: it exists because a real server has work in flight. Behind the
+fixture source nothing ever changes, so a timer there would ask a question
+that cannot have a new answer. A live layer calling a page function to say
+"ask again now" is the right direction of travel -- the page owns drawing, and
+the live layer owns knowing that something might have moved.
+
+A surface the server does not implement answers with no rows rather than an
+error, so the empty state is the page's to word: `rpcAbsent` is what lets it
+say "this server does not report delegated work" instead of "no work yet".
+
 ## Order of pages
 
 Schedules (cron*) first: 6 strands, self-contained, both sides small.
