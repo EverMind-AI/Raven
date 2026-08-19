@@ -10,4 +10,5 @@ window.RavenShell = {
   menuAt: (x, y, items) => menuAt(x, y, items),
   confirmAsk: (title, body, label, fn) => confirmAsk(title, body, label, fn),
   showPage: (id) => showPage(id),
+  closeDetail: () => closeDetail(),
 };
