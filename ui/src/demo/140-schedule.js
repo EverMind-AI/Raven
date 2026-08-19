@@ -12,33 +12,76 @@ function drawMem() {
 /* ══ module 4: scheduled work ═════════════════════════════════════
    Each run produces a session, so every row links to what it actually
    did. A schedule you cannot inspect is a schedule you stop trusting. */
-function openCron() { cronView = null; showPage('cronPage'); drawCron(); }
+function openCron() { cronView = null; showPage('cronPage'); refreshCron(); }
 function closeCron() { showPage(null); }
 
-/* Detail state: which job the page is showing, and the edit draft that
-   survives redraws while the reader types. */
+/* Page state: the rows on show, which job the detail is on, and the edit
+   draft that survives redraws while the reader types. Rows come only from
+   DS.cron -- the fixture source below in stub mode, the rpc source in live
+   mode; this page never knows which. */
+let cronRows = [];
 let cronView = null;
 let cronDraft = null;
 function openCronDetail(j) { cronView = j.id; cronDraft = { ...j }; drawCron(); }
 
-/* layer hooks: the demo mutates CRONS in place; live.js repoints these
-   at the cron.* RPCs. */
-let cronToggle = (j) => {
-  j.on = !j.on;
-  j.next = j.on ? (j.at.match(/\d{2}:\d{2}/) || ['08:00'])[0] : T('gui.cron.paused');
+/* Draw what is already known, then refresh through the seam. On the first
+   open there is nothing to draw yet, so the stage clears instead of showing
+   a stale list. */
+async function refreshCron() {
+  if (cronRows.length) { drawCron(); drawCronBdg(); }
+  else $('#cronBody').innerHTML = '';
+  try { cronRows = await DS.cron.rows(); } catch (e) { toast(`\u52a0\u8f7d\u5931\u8d25\uff1a${e.message || e}`); }
   drawCron(); drawCronBdg();
-  toast(T(j.on ? 'gui.cron.resumed_x' : 'gui.cron.paused_x', { name: j.name }));
-};
-let cronDelete = (j) => {
-  const i = CRONS.indexOf(j); if (i >= 0) CRONS.splice(i, 1);
-  cronView = null; drawCron(); drawCronBdg();
-  toast(T('gui.cron.deleted_x', { name: j.name }));
-};
-let cronRunsLoad = async (j) => (j.runs || []);
-let cronPersist = (draft, done) => {
-  const j = CRONS.find((x) => x.id === draft.id);
-  if (j) Object.assign(j, draft, { when: cronWhen(draft) });
-  if (done) done(j || draft);
+}
+/* Boot calls this to fill the rail badge without opening the page. */
+function cronWarm() { return DS.cron.rows().then((rs) => { cronRows = rs; drawCronBdg(); }).catch(() => {}); }
+
+/* The fixture source: the demo's canned jobs behind the same interface the
+   rpc source implements. Registered, not declared-for-override -- live mode
+   installs its own DS.cron and this object is never consulted. */
+DS.cron ??= {
+  rows: async () => CRONS,
+  toggle: async (j) => {
+    j.on = !j.on;
+    j.next = j.on ? (j.at.match(/\d{2}:\d{2}/) || ['08:00'])[0] : T('gui.cron.paused');
+    toast(T(j.on ? 'gui.cron.resumed_x' : 'gui.cron.paused_x', { name: j.name }));
+  },
+  remove: async (j) => {
+    const i = CRONS.indexOf(j); if (i >= 0) CRONS.splice(i, 1);
+    toast(T('gui.cron.deleted_x', { name: j.name }));
+  },
+  save: async (draft) => {
+    const j = CRONS.find((x) => x.id === draft.id);
+    if (j) { Object.assign(j, draft, { when: cronWhen(draft) }); return j; }
+    const fresh = { ...draft };
+    delete fresh.fresh;
+    fresh.when = fresh.freq === 'hour' ? T('gui.cron.h.every_h', { n: 1 })
+      : fresh.freq === 'cron' ? cronExprHuman(fresh.at) : `${T(FREQ.find((f) => f.id === fresh.freq).label)} ${fresh.at}`;
+    fresh.next = fresh.on ? fresh.at : T('gui.cron.paused');
+    CRONS.push(fresh);
+    return fresh;
+  },
+  runs: async (j) => (j.runs || []),
+  runNow: async (j) => {
+    closeCron();
+    const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
+      run: null, from: 'cron', job: j.id };
+    SESS.unshift(s); cur = s.id; drawList(); openSession(s);
+    send(j.what);
+    toast(T('gui.cron.running_x', { name: j.name }));
+  },
+  openRun: async (j, run) => {
+    closeCron();
+    const s = { id: 'n' + Date.now(), title: j.name, last: run ? run.note : '',
+      when: run ? run.at : '', run: run && run.ok ? 'gtm' : null, status: run && !run.ok ? 'err' : null,
+      from: 'cron', job: j.id };
+    SESS.unshift(s); cur = s.id; drawList(); openSession(s);
+    if (run && !run.ok) {
+      $('#stage').innerHTML = '';
+      ask(j.what);
+      noteRow(run.note, T('gui.cron.rerun_note'));
+    }
+  },
 };
 
 /* What a schedule means, in words. The raw five-field expression stays in
@@ -90,7 +133,7 @@ function drawCron() {
   const box = $('#cronBody'); box.innerHTML = '';
 
   if (cronView) {
-    const j = CRONS.find((x) => x.id === cronView);
+    const j = cronRows.find((x) => x.id === cronView);
     if (j) { drawCronDetail(box, j); return; }
     cronView = null;
   }
@@ -104,24 +147,24 @@ function drawCron() {
   row.appendChild(add);
   box.appendChild(row);
 
-  const fail = CRONS.filter((j) => j.on && j.runs[0] && !j.runs[0].ok);
+  const fail = cronRows.filter((j) => j.on && j.runs[0] && !j.runs[0].ok);
   if (fail.length) {
     const b = mk('div', 'banner'); b.style.margin = '0 0 18px';
     b.append(mk('b', null, T('gui.cron.failing', { n: fail.length })));
     b.appendChild(mk('span', null, fail.map((j) => j.name).join(', ')));
     const go = mk('button', null, T('gui.cron.why'));
-    go.onclick = () => openRun(fail[0], fail[0].runs[0]);
+    go.onclick = () => DS.cron.openRun(fail[0], fail[0].runs[0]);
     b.appendChild(go);
     box.appendChild(b);
   }
 
-  if (!CRONS.length) {
+  if (!cronRows.length) {
     box.appendChild(mk('div', 'empty-note', T('gui.cron.none')));
     return;
   }
 
   const set = mk('div', 'cronlist');
-  CRONS.forEach((j) => set.appendChild(cronRow(j)));
+  cronRows.forEach((j) => set.appendChild(cronRow(j)));
   box.appendChild(set);
 }
 
@@ -130,25 +173,21 @@ function cronRow(j) {
   const r = mk('div', 'cronjob' + (j.on && last && !last.ok ? ' bad' : ''));
   r.style.cursor = 'pointer';
   r.onclick = (e) => { if (e.target.closest('button')) return; openCronDetail(j); };
-
   const nm = mk('div', 'nm');
   nm.appendChild(mk('span', 'dot' + (!j.on ? '' : last && !last.ok ? ' err' : ' run')));
   nm.appendChild(mk('span', null, j.name));
-  nm.appendChild(mk('span', 'when', T(DELIVER[j.deliver] || 'gui.deliver.app')));
+  nm.appendChild(mk('span', 'when', j.when));
   r.appendChild(nm);
-
   const meta = mk('div', 'mo');
-  meta.textContent = j.on ? T('gui.cron.next', { when: j.when, next: j.next })
-    : T('gui.cron.paused_meta', { when: j.when });
+  meta.textContent = j.on ? T('gui.cron.next_only', { next: j.next }) : T('gui.cron.paused');
   r.appendChild(meta);
-
   const foot = mk('div', 'foot');
   if (last) {
     const chip = mk('button', 'mini ghost');
-    chip.textContent = T('gui.cron.last_run',
-      { at: last.at, state: T(last.ok ? 'gui.cron.ok' : 'gui.cron.failed'), dur: dur(last.ms) });
+    chip.textContent = T('gui.cron.last_run_short',
+      { at: last.at, state: T(last.ok ? 'gui.cron.ok' : 'gui.cron.failed') });
     if (!last.ok) chip.classList.add('danger');
-    chip.onclick = () => openRun(j, last);
+    chip.onclick = () => DS.cron.openRun(j, last);
     foot.appendChild(chip);
     foot.appendChild(mk('span', 'mono', last.note)).style.cssText =
       'font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1';
@@ -156,53 +195,29 @@ function cronRow(j) {
     foot.appendChild(mk('span', 'mono', T('gui.cron.never'))).style.cssText = 'font-size:11px;color:var(--faint)';
   }
   r.appendChild(foot);
-
   const ctl = mk('div', 'ctl');
   const s = mk('button', 'swi');
   s.setAttribute('role', 'switch');
   s.setAttribute('aria-checked', String(j.on));
   s.setAttribute('aria-label', T('gui.caps.toggle_aria', { name: j.name }));
-  s.onclick = () => cronToggle(j);
-  const more = mk('button', 'mini ghost', '⋯');
+  s.onclick = () => DS.cron.toggle(j).then(refreshCron);
+  const more = mk('button', 'mini ghost', '\u22ef');
   more.setAttribute('aria-label', T('gui.cron.menu_aria', { name: j.name }));
   more.onclick = (e) => {
     const b = e.currentTarget.getBoundingClientRect();
     menuAt(b.right - 150, b.bottom + 6, [
-      { label: T('gui.cron.run_now'), fn: () => runNow(j) },
+      { label: T('gui.cron.run_now'), fn: () => DS.cron.runNow(j).then(refreshCron) },
       { label: T('gui.cron.history'), fn: () => openCronDetail(j) },
+      { label: T('gui.cron.open_session'), fn: () => DS.cron.openRun(j) },
       '-',
       { label: T('gui.cron.delete'), bad: true, fn: () => confirmAsk(T('gui.cron.delete_title'),
-          T('gui.cron.delete_body', { name: j.name }), T('gui.cron.delete'), () => cronDelete(j)) }
+          T('gui.cron.delete_body', { name: j.name }), T('gui.cron.delete'), () =>
+            DS.cron.remove(j).then(() => { cronView = null; refreshCron(); }).catch(cronKeepPlace)) },
     ]);
   };
   ctl.append(s, more);
   r.appendChild(ctl);
   return r;
-}
-
-/* A run is a session. Opening one leaves the schedule and lands in the
-   transcript, which is the whole point of scheduling anything. */
-function openRun(j, run) {
-  closeCron();
-  const s = { id: 'n' + Date.now(), title: j.name, last: run.note,
-    when: run.at, run: run.ok ? 'gtm' : null, status: run.ok ? null : 'err',
-    from: 'cron', job: j.id };
-  SESS.unshift(s); cur = s.id; drawList(); openSession(s);
-  if (!run.ok) {
-    $('#stage').innerHTML = '';
-    ask(j.what);
-    noteRow(run.note, T('gui.cron.rerun_note'));
-  }
-  toast(`打开了 ${run.at} 那次运行`);
-}
-
-function runNow(j) {
-  closeCron();
-  const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
-    run: null, from: 'cron', job: j.id };
-  SESS.unshift(s); cur = s.id; drawList(); openSession(s);
-  send(j.what);
-  toast(T('gui.cron.running_x', { name: j.name }));
 }
 
 /* The job's own page: header actions, the editable schedule, and every run
@@ -219,11 +234,12 @@ function drawCronDetail(box, j) {
   trow.appendChild(mk('b', null, j.name));
   const acts = mk('div', 'cdacts');
   const run = mk('button', 'mini gold', T('gui.cron.run_now'));
-  run.onclick = () => runNow(j);
+  run.onclick = () => DS.cron.runNow(j).then(refreshCron);
   const del = mk('button', 'mini ghost danger', T('gui.cron.delete'));
   del.onclick = () => confirmAsk(T('gui.cron.delete_title'),
-    T('gui.cron.delete_body', { name: j.name }), T('gui.cron.delete'), () => cronDelete(j));
-  acts.append(run, del, swi(j.on, () => cronToggle(j), T('gui.caps.toggle_aria', { name: j.name })));
+    T('gui.cron.delete_body', { name: j.name }), T('gui.cron.delete'), () =>
+      DS.cron.remove(j).then(() => { cronView = null; refreshCron(); }).catch(cronKeepPlace));
+  acts.append(run, del, swi(j.on, () => DS.cron.toggle(j).then(refreshCron), T('gui.caps.toggle_aria', { name: j.name })));
   trow.appendChild(acts);
   hd.appendChild(trow);
   const st = mk('div', 'cdstat');
@@ -244,11 +260,11 @@ function drawCronDetail(box, j) {
   const sv = mk('button', 'mini gold', T('gui.cron.save'));
   sv.onclick = () => {
     if (!cronDraft.name.trim() || !cronDraft.what.trim()) { cronDraft.blank = true; drawCron(); return; }
-    cronPersist(cronDraft, (saved) => {
+    DS.cron.save(cronDraft).then((saved) => {
       cronView = saved ? saved.id : null; cronDraft = null;
-      drawCron(); drawCronBdg();
+      refreshCron();
       toast(T('gui.cron.saved'));
-    });
+    }).catch((e) => jobRefuse(cronDraft, e, drawCron));
   };
   save.appendChild(sv);
   cfg.appendChild(save);
@@ -260,7 +276,7 @@ function drawCronDetail(box, j) {
   const list = mk('div', 'cdruns');
   hs.appendChild(list);
   box.appendChild(hs);
-  cronRunsLoad(j).then((rows) => {
+  DS.cron.runs(j).then((rows) => {
     if (cronView !== j.id) return;
     list.innerHTML = '';
     if (!rows.length) { list.appendChild(mk('div', 'empty-note', T('gui.cron.hist_none'))); return; }
@@ -271,7 +287,7 @@ function drawCronDetail(box, j) {
       row.appendChild(mk('span', 'at', run.at));
       row.appendChild(mk('span', 'note', run.note || ''));
       row.appendChild(mk('span', 'chev', '›'));
-      row.onclick = () => openRun(j, run);
+      row.onclick = () => DS.cron.openRun(j, run);
       list.appendChild(row);
     });
   }).catch(() => { list.innerHTML = ''; list.appendChild(mk('div', 'empty-note', T('gui.cron.hist_none'))); });
@@ -381,6 +397,26 @@ function buildJobForm(b, draft, redraw) {
   return nameIn;
 }
 
+/* Which message a refusal shows, keyed by what a source could not read.
+   The sheet is redrawn so the note lands under the control the reader has
+   to fix; a toast would not, because live mode sends those to the console. */
+const JOB_BAD = { 'no instant': 'gui.job.need_instant', 'bad weekday': 'gui.job.bad_weekday' };
+/* A delete that failed leaves the reader on the job they were looking at: the
+   source has already said why, and what must not happen is the success branch
+   running anyway and bouncing them out to a list where the row is still there.
+   Anything the source did not speak for is a fault rather than a refusal, so it
+   goes to the console instead of inventing a second message about it. */
+function cronKeepPlace(err) {
+  if (err && err.handled) return;
+  console.error('cron delete', err);
+}
+
+function jobRefuse(draft, err, redraw) {
+  if (err && err.handled) return; // the source already told the reader
+  draft.bad = JOB_BAD[err && err.message] || 'gui.job.bad_time';
+  if (redraw) redraw();
+}
+
 function openJobSheet(j) {
   jobDraft = j || { id: 'j' + Date.now(), name: '', what: '', freq: 'day', at: '08:00',
     on: true, deliver: 'app', runs: [], fresh: true };
@@ -394,15 +430,13 @@ function openJobSheet(j) {
 $('#jobNo').onclick = () => { $('#jobVeil').dataset.open = 'false'; jobDraft = null; };
 $('#jobYes').onclick = () => {
   const j = jobDraft;
-  if (!j.name.trim() || !j.what.trim()) { toast('名称和要做什么都得填'); return; }
-  const label = FREQ.find((f) => f.id === j.freq).label;
-  j.when = j.freq === 'hour' ? '每小时' : j.freq === 'cron' ? `cron ${j.at}` : `${label} ${j.at}`;
-  j.next = j.on ? (j.freq === 'day' ? `明天 ${j.at}` : j.at) : '已暂停';
-  if (j.fresh) { delete j.fresh; CRONS.push(j); }
-  $('#jobVeil').dataset.open = 'false';
-  drawCron(); drawCronBdg();
-  toast(`已保存「${j.name}」`, { label: '立即跑一次', fn: () => runNow(j) });
-  jobDraft = null;
+  if (!j || !j.name.trim() || !j.what.trim()) { j.blank = true; openJobSheet(j); return; }
+  DS.cron.save(j).then((saved) => {
+    $('#jobVeil').dataset.open = 'false'; jobDraft = null;
+    toast(T('gui.job.saved_x', { name: saved.name }),
+      { label: T('gui.job.run_once'), fn: () => DS.cron.runNow(saved).then(refreshCron) });
+    refreshCron();
+  }).catch((e) => jobRefuse(j, e, () => openJobSheet(j)));
 };
 $('#jobVeil').onclick = (e) => { if (e.target === $('#jobVeil')) $('#jobNo').click(); };
 

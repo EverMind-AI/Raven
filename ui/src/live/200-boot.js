@@ -64,7 +64,7 @@
        the demo mock's phantom counts. */
     Promise.allSettled([
       loadExt().then(() => drawCapsBadge()),
-      loadCrons().then(() => drawCronBdg()),
+      cronWarm(),
     ]).then(() => {
       const r = document.querySelector('.rail');
       if (r) delete r.dataset.counts;

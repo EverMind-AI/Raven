@@ -1,7 +1,9 @@
-/* -- external agents --------------------------------------------------
+/* -- external agents: the rpc source ---------------------------------
    `subagents.*` is one surface shared with the TUI and the web UI: the rows,
    the install grouping and the write path all live server-side, so this layer
-   only maps a row into what the page draws and sends the mutation back.
+   only maps a row into what the page draws and sends the mutation back. The
+   page (demo/120-capabilities.js) owns the renderers and every flag they read;
+   installing onto the seam replaces the fixture source before the first paint.
 
    The list is re-fetched after every mutation rather than patched locally: the
    handler recomputes `group`, `enabled` and the probe verdict together, and a
@@ -28,93 +30,83 @@ function xaRowOf(r) {
   };
 }
 
+/* What the last fetch reported, kept here rather than read back off the page:
+   the carry-over below is a fact about this transport (a probe-less list says
+   "unknown" for every row), so the source answers it from its own memory
+   instead of reaching into the array the page is rendering. */
+let xaSeen = new Map();
+
 async function xaFetch(probe) {
   const res = await rpc.call('subagents.list', { probe: !!probe });
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
      config, so the last known one is carried over. */
-  const was = new Map(XAGENTS.map((a) => [a.name, a]));
-  XAGENTS.length = 0;
-  (res.rows || []).forEach((r) => {
+  const rows = (res.rows || []).map((r) => {
     const row = xaRowOf(r);
-    const prev = was.get(row.name);
+    const prev = xaSeen.get(row.name);
     if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status;
       row.probe_detail = prev.probe_detail;
     }
-    XAGENTS.push(row);
+    return row;
   });
-  return XAGENTS;
+  xaSeen = new Map(rows.map((r) => [r.name, r]));
+  return rows;
 }
 
-xaLoad = () => xaFetch(true);
-
-xaAct = async function (op, row, args) {
-  const a = args || {};
-  if (op === 'probe') {
-    xaProbing = true;
-    drawXa();
-    try { await xaFetch(true); } finally { xaProbing = false; }
-    return;
-  }
-  if (op === 'connect') {
-    /* Only name / description / key travel: every execution field comes from
-       the preset server-side. A page that could post a command line would make
-       "which agent is this" unanswerable. */
-    await rpc.call('subagents.add', {
-      preset: row.preset || row.name,
-      name: a.new_name || undefined,
-      description: a.description || undefined,
-      api_key: a.api_key || undefined,
-    });
-  } else if (op === 'update') {
-    await rpc.call('subagents.update', {
-      name: row.name,
-      new_name: a.new_name && a.new_name !== row.name ? a.new_name : undefined,
-      description: a.description,
-      api_key: a.api_key || undefined,
-    });
-  } else if (op === 'toggle') {
-    await rpc.call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
-  } else if (op === 'remove') {
-    await rpc.call('subagents.remove', { name: row.name });
-  } else if (op === 'upgrade') {
-    /* There is no "change the transport" write: `subagents.update` touches name,
-       description and key only, on purpose. So the switch is a remove plus an add
-       from the preset, which is also what makes it visible in config as one
-       entry replaced rather than an entry mutated underneath its session handles. */
-    await rpc.call('subagents.remove', { name: row.name });
-    await rpc.call('subagents.add', {
-      preset: row.preset || row.name,
-      name: row.name,
-      description: row.description || undefined,
-    });
-  } else if (op === 'test_cancel') {
-    await rpc.call('subagents.test_cancel', { name: row.name });
-  } else if (op === 'test') {
-    /* The call runs the agent for real and does not return until it answers, so
-       the row is marked running first and the page redrawn -- otherwise the
-       button looks dead for the length of a model turn. */
-    row.test_running = true;
-    drawXa();
-    try {
+DS.xa = {
+  load: (probe) => xaFetch(!!probe),
+  act: async (op, row, args) => {
+    const a = args || {};
+    if (op === 'connect') {
+      /* Only name / description / key travel: every execution field comes from
+         the preset server-side. A page that could post a command line would make
+         "which agent is this" unanswerable. */
+      await rpc.call('subagents.add', {
+        preset: row.preset || row.name,
+        name: a.new_name || undefined,
+        description: a.description || undefined,
+        api_key: a.api_key || undefined,
+      });
+    } else if (op === 'update') {
+      await rpc.call('subagents.update', {
+        name: row.name,
+        new_name: a.new_name && a.new_name !== row.name ? a.new_name : undefined,
+        description: a.description,
+        api_key: a.api_key || undefined,
+      });
+    } else if (op === 'toggle') {
+      await rpc.call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
+    } else if (op === 'remove') {
+      await rpc.call('subagents.remove', { name: row.name });
+    } else if (op === 'upgrade') {
+      /* There is no "change the transport" write: `subagents.update` touches name,
+         description and key only, on purpose. So the switch is a remove plus an add
+         from the preset, which is also what makes it visible in config as one
+         entry replaced rather than an entry mutated underneath its session handles. */
+      await rpc.call('subagents.remove', { name: row.name });
+      await rpc.call('subagents.add', {
+        preset: row.preset || row.name,
+        name: row.name,
+        description: row.description || undefined,
+      });
+    } else if (op === 'test_cancel') {
+      await rpc.call('subagents.test_cancel', { name: row.name });
+    } else if (op === 'test') {
+      /* The call runs the agent for real and does not return until it answers.
+         The page marks the row running and redraws before handing over, so the
+         button does not look dead for the length of a model turn. */
       const res = await rpc.call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
-      row.last_test_ok = res.cancelled ? row.last_test_ok : !!res.ok;
-      row.last_test_detail = res.detail || '';
-      if (!res.cancelled) row.last_test_at_ms = Date.now();
       if (!res.ok && res.detail && !res.cancelled) toast(`${row.name}: ${res.detail}`);
-    } finally {
-      row.test_running = false;
+      /* probe:true here, unlike every other mutation: a test is the one write that
+         changes the probe verdict. An acp test records the capability snapshot the
+         probe reads, so carrying the old "not recorded yet" over would leave the
+         row telling the user to run the test they just ran. */
+      return xaFetch(true);
     }
-    /* probe:true here, unlike every other mutation: a test is the one write that
-       changes the probe verdict. An acp test records the capability snapshot the
-       probe reads, so carrying the old "not recorded yet" over would leave the
-       row telling the user to run the test they just ran. */
-    await xaFetch(true);
-    return;
-  }
-  await xaFetch(false);
+    return xaFetch(false);
+  },
 };
 
 /* ── the dag sheet: what a `run_subagent_dag` call is orchestrating ────────

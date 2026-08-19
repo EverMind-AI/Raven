@@ -192,7 +192,7 @@ function onEvent(ev) {
     // keeps the finished marker until it is opened.
     if (s) { s.status = p.ok ? 'done' : 'err'; touchSession(s.id); }
     refreshList();
-    if ($('#cronPage').dataset.open === 'true') reloadCronPage();
+    if ($('#cronPage').dataset.open === 'true') refreshCron();
   } else if (ev.type === 'dag.run_started') {
     /* The trail's delegation card paints the same events as the sheet below:
        one feed call per branch, before the sheet's own bookkeeping. */
