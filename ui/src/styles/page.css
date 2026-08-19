@@ -906,11 +906,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .upnote:hover { color: var(--text); border-color: var(--faint); }
 .upnote .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
   flex: none; animation: breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .upnote .pip { animation: none; } }
 .upnote .t { flex: 1; min-width: 0; }
 .upnote .rl { color: var(--amber); font-weight: 600; flex: none; }
 
 /* upgrade shade: the server is being replaced under us, so the page holds
-   still and reports what it is waiting for until serve answers again */
+   still until serve answers again. A bar and one line -- there is nothing to
+   decide while an install runs, and nothing the reader can do to hurry it. */
 .upshade {
   position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
   background: color-mix(in oklab, var(--ink) 72%, transparent); backdrop-filter: blur(3px);
@@ -922,16 +924,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
   box-shadow: var(--shadow);
 }
-.upshade .hd { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--text); }
-.upshade .hd .t { flex: 1; min-width: 0; }
-.upshade .hd .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--amber);
-  flex: none; animation: breathe 1.4s ease-in-out infinite; }
+/* Same indeterminate bar the browser pane uses, for the same reason: the helper
+   reports nothing back until it relaunches serve, so there is no progress to
+   show and a bar that pretended to measure one would be lying. */
+.upshade .upbar { height: 2px; overflow: hidden; border-radius: 2px; background: var(--surface); }
+.upshade .upbar i {
+  display: block; height: 100%; width: 34%; background: var(--amber); border-radius: 2px;
+  animation: bslide 1.1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .upshade { backdrop-filter: none; }
+  .upshade .upbar i { animation: none; width: 100%; opacity: .45; }
+}
+.upshade .upcard > .t { margin-top: 14px; font-size: 14px; color: var(--text); }
 /* pre-line, because a failure sets `<reason>\n<what to run instead>` in one
    text node: collapsed, the two sentences run together into one. */
 .upshade .sub { margin-top: 8px; font-size: 12.5px; color: var(--muted); line-height: 1.6;
   white-space: pre-line; }
-.upshade .el { margin-top: 6px; font-size: 12px; color: var(--faint);
-  font-variant-numeric: tabular-nums; }
 .upshade .cmd {
   margin-top: 10px; display: flex; align-items: center; gap: 8px;
   font-family: var(--mono); font-size: 11.5px; color: var(--text);

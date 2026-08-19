@@ -34,46 +34,28 @@ function upShade() {
   document.querySelectorAll('.upshade').forEach((n) => n.remove());
   const shade = mk('div', 'upshade');
   const card = mk('div', 'upcard');
-  const hd = mk('div', 'hd');
-  const pip = mk('span', 'pip');
-  const title = mk('span', 't');
-  hd.append(pip, title);
-  const sub = mk('div', 'sub');
-  const el = mk('div', 'el');
-  el.hidden = true;
-  card.append(hd, sub, el);
+  /* The waiting state is a bar and one line. An install the reader cannot
+     hurry does not become shorter by being described, and the staged copy this
+     replaced -- a stage name, a running clock, and a paragraph after ninety
+     seconds explaining itself -- spent the whole wait telling someone with
+     nothing to decide that there was still nothing to decide. */
+  const bar = mk('div', 'upbar');
+  bar.appendChild(mk('i'));
+  const title = mk('div', 't');
+  card.append(bar, title);
   shade.appendChild(card);
   document.body.appendChild(shade);
-  let clockTimer = null;
-  const stopClock = () => { if (clockTimer) { clearInterval(clockTimer); clockTimer = null; } };
   return {
-    /* An install with no visible progress reads as a hang, and this one can
-       run for minutes. A running count is the honest signal available: the
-       helper reports nothing back until it relaunches serve. */
-    clock(t0) {
-      stopClock();
-      el.hidden = false;
-      const paint = () => {
-        const s = Math.max(0, Math.round((Date.now() - t0) / 1000));
-        const mm = Math.floor(s / 60);
-        el.textContent = T('gui.upg.elapsed', { t: `${mm}:${String(s % 60).padStart(2, '0')}` });
-      };
-      paint();
-      clockTimer = setInterval(paint, 1000);
-    },
-    say(text, detail) {
+    say(text) {
       title.textContent = text;
-      sub.textContent = detail || '';
     },
-    /* A failure must leave the reader a way forward, so it always ends with the
-       command they can run themselves. */
+    /* A failure is the one state with something to decide, so it is the one
+       state that gets more than a line: what went wrong, and the command that
+       does it by hand. */
     fail(text, detail) {
-      stopClock();
-      el.hidden = true;
-      pip.style.animation = 'none';
-      pip.style.background = 'var(--clay)';
+      bar.hidden = true;
       title.textContent = text;
-      sub.textContent = detail ? `${detail}\n${T('gui.upg.manual')}` : T('gui.upg.manual');
+      const sub = mk('div', 'sub', detail ? `${detail}\n${T('gui.upg.manual')}` : T('gui.upg.manual'));
       const cmd = mk('div', 'cmd');
       const code = mk('code', null, 'raven upgrade');
       const cp = mk('button', null, T('gui.dtl.copy'));
@@ -83,7 +65,7 @@ function upShade() {
       const close = mk('button', 'btn', T('gui.upg.close'));
       close.onclick = () => shade.remove();
       foot.appendChild(close);
-      card.append(cmd, foot);
+      card.append(sub, cmd, foot);
     },
   };
 }
@@ -95,8 +77,6 @@ function upShade() {
    and the reader is shown the raw failure of a doomed call. */
 const UPG_KEY = 'raven.upgrade';
 const UPG_CEILING_MS = 1200000;
-/* Past this, stop implying it is nearly done and say what is taking so long. */
-const UPG_PATIENCE_MS = 90000;
 
 function upMark(to) {
   try { localStorage.setItem(UPG_KEY, JSON.stringify({ to: to || null, t0: Date.now() })); } catch { /* private mode */ }
@@ -142,7 +122,7 @@ function resumeUpgrade() {
    session token. */
 async function runUpgrade() {
   const shade = upShade();
-  shade.say(T('gui.upg.installing', { v: `v${upLatest || '?'}` }));
+  shade.say(T('gui.upg.working'));
   try {
     await rpc.call('system.upgrade', {});
   } catch (e) {
@@ -169,19 +149,12 @@ async function runUpgrade() {
    which is what taught the reader to click upgrade a second time. */
 function watchUpgrade(shade, since) {
   const t0 = since || Date.now();
-  shade.say(T('gui.upg.waiting'));
-  shade.clock(t0);
-  let saidLong = false;
+  shade.say(T('gui.upg.working'));
   const tick = async () => {
-    const waited = Date.now() - t0;
-    if (waited > UPG_CEILING_MS) {
+    if (Date.now() - t0 > UPG_CEILING_MS) {
       upMarkClear();
       shade.fail(T('gui.upg.failed'), T('gui.upg.gave_up'));
       return;
-    }
-    if (waited > UPG_PATIENCE_MS && !saidLong) {
-      saidLong = true;
-      shade.say(T('gui.upg.waiting'), T('gui.upg.waiting_long'));
     }
     let r = null;
     try {
@@ -193,8 +166,7 @@ function watchUpgrade(shade, since) {
     if (r.status === 401 || r.status === 403) { upMarkClear(); shade.fail(T('gui.upg.reauth'), ''); return; }
     if (!r.ok) { setTimeout(tick, 1500); return; }
     upMarkClear();
-    shade.say(T('gui.upg.done'));
-    setTimeout(() => window.location.reload(), 600);
+    window.location.reload();
   };
   /* wait out the handoff: probing too early answers from the process that is
      about to exit, and the page would reload onto a dying server */

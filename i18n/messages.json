@@ -4515,14 +4515,6 @@
       "en": "close",
       "zh": "关闭"
     },
-    "gui.upg.done": {
-      "en": "Upgraded. Reloading...",
-      "zh": "升级完成，正在刷新…"
-    },
-    "gui.upg.elapsed": {
-      "en": "{t} so far",
-      "zh": "已等待 {t}"
-    },
     "gui.upg.failed": {
       "en": "The upgrade did not finish",
       "zh": "升级没有完成"
@@ -4534,10 +4526,6 @@
     "gui.upg.go": {
       "en": "upgrade",
       "zh": "升级"
-    },
-    "gui.upg.installing": {
-      "en": "Installing {v}...",
-      "zh": "正在安装 {v}…"
     },
     "gui.upg.manual": {
       "en": "Run this in a terminal instead:",
@@ -4559,13 +4547,9 @@
       "en": "Upgrade Raven?",
       "zh": "升级 Raven？"
     },
-    "gui.upg.waiting": {
-      "en": "Waiting for Raven to come back...",
-      "zh": "等待 Raven 重启…"
-    },
-    "gui.upg.waiting_long": {
-      "en": "Still installing. A first upgrade compiles every dependency, which can take several minutes -- leaving this open is safe.",
-      "zh": "仍在安装。首次升级要编译全部依赖，可能需要几分钟，这个窗口开着就行。"
+    "gui.upg.working": {
+      "en": "Upgrading Raven...",
+      "zh": "正在升级 Raven…"
     },
     "gui.workspace": {
       "en": "Workspace",
