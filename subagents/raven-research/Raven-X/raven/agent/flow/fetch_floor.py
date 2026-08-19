@@ -58,7 +58,8 @@ class FetchFloorObserver(AgentHook):
         messages = ctx.messages or []
         state = ctx.metadata.setdefault(
             "fetch_floor",
-            {"searches": 0, "fetches": 0, "notes": 0, "watermark": 0, "streak": 0, "max_streak": 0},
+            {"searches": 0, "fetches": 0, "notes": 0, "watermark": 0, "streak": 0,
+             "max_streak": 0},
         )
         state.setdefault("streak", 0)
         state.setdefault("max_streak", 0)

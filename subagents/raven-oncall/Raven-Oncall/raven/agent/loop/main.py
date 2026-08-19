@@ -33,15 +33,19 @@ from raven.agent.tools.media_gen import (
     VideoGenerateTool,
 )
 from raven.agent.tools.message import MessageTool
+from raven.agent.tools.ops_connections import OpsConnectionsTool
+from raven.agent.tools.ops_declare import OpsDeclareTool
+from raven.agent.tools.ops_exec import OpsExecTool
 from raven.agent.tools.ops import (
     OpsCheckLaterTool,
     OpsKillTool,
+    OpsCampaignsTool,
     OpsNoteTool,
     OpsSubmitTool,
     OpsTuneStatusTool,
 )
-from raven.agent.tools.ops_case_dict import OpsCaseChangesTool, OpsEditCaseDictTool, OpsReadCaseDictTool
-from raven.agent.tools.ops_observe import OpsObserveTool, OpsOutputsTool
+from raven.agent.tools.ops_case_dict import OpsCaseChangesTool, OpsEditCaseDictTool
+from raven.agent.tools.ops_observe import OpsOutputsTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.spawn import SpawnTool
@@ -215,6 +219,95 @@ def _loop_break_nudge(tool: str, n: int) -> str:
         "do not call it again unchanged. Otherwise change approach: a different tool, "
         "command, or strategy."
     )
+
+
+def _capture_owner_instruction(session_key: str, content: str, origin: "Origin",
+                               cron_service: Any = None) -> None:
+    """Put what the owner typed into the campaign this window is watching.
+
+    A wake turn is a cold start: it reads the ledger, the events and the notes,
+    and nothing else. So anything said in the chat reaches the next round only if
+    something writes it down, and the only thing that could was the loop
+    remembering to call ops_note. Measured across four campaigns that asked the
+    owner a question: four asked, zero recorded, and every answer would have been
+    invisible to the turn that needed it.
+
+    Recording every message rather than the ones that look like instructions is
+    deliberate. Deciding which sentence is an instruction is the same judgement
+    that was being missed, and the volume does not justify the risk: an owner
+    types a handful of lines over an evening, against 38 wake replies on
+    2026-08-17. A stray "how is it going" costs a line; a lost "widen the angle
+    range" costs a round.
+
+    Only a window that has said which campaign it is watching, and only messages
+    from a person -- a wake turn's own prompt is not the owner speaking.
+    """
+    from raven.spine import Origin as _Origin
+
+    if origin is not _Origin.USER or not session_key or session_key.startswith("cron:"):
+        return
+    text = (content or "").strip()
+    if not text or text.startswith("/"):
+        return
+    try:
+        from raven.agent.tools.ops import _append_note, _ops_home
+        from raven.ops.window import campaign_for_window
+
+        campaign = campaign_for_window(_ops_home(), session_key)
+        if not campaign:
+            return
+        cdir = _ops_home() / campaign
+        if (cdir / "concluded.json").exists():
+            return
+        _append_note(cdir, text[:2000], source="owner")
+        # If the loop is waiting on this answer, it should not sit out the rest of
+        # a twenty-minute timer to hear it. The owner is right here; the wake it
+        # scheduled is pulled to now and it reads the note within seconds.
+        #
+        # Only when a question is outstanding. An owner who volunteers a
+        # direction ("also widen the range") is usually not urgent, and waking on
+        # every typed line would turn a stray "ok" into a round of work.
+        if cron_service is not None and _has_unanswered_question(cdir):
+            _advance_campaign_wake(cron_service, campaign, cdir)
+    except Exception:  # noqa: BLE001 -- a note that cannot be written must not drop the message
+        pass
+
+
+def _has_unanswered_question(cdir) -> bool:
+    """Whether the loop asked the owner something it has not heard back on.
+
+    Read from the events rather than a flag file: the trail is what a grader and
+    a later turn both read anyway, and a second place to keep this in sync is a
+    second place for it to be wrong.
+    """
+    import json as _j
+
+    path = cdir / "events.jsonl"
+    if not path.exists():
+        return False
+    asked_at = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            e = _j.loads(line)
+        except ValueError:
+            continue
+        if e.get("kind") == "ask_owner":
+            asked_at = e.get("ts")
+        elif e.get("kind") == "owner_answered":
+            asked_at = None
+    return asked_at is not None
+
+
+def _advance_campaign_wake(cron_service: Any, campaign: str, cdir) -> None:
+    from raven.ops.instrument import log_event
+
+    prefix = f"ops:{campaign}:"
+    jobs = [j for j in cron_service.list_jobs() if j.name.startswith(prefix)]
+    log_event(cdir, "owner_answered", woke=bool(jobs))
+    if not jobs:
+        return
+    target = min(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
+    cron_service.advance_job_to_now(target.id)
 
 
 class AgentLoop:
@@ -635,19 +728,21 @@ class AgentLoop:
         self.tools.register(OpsSubmitTool(cron_service=self.cron_service))
         self.tools.register(OpsCheckLaterTool(cron_service=self.cron_service))
         self.tools.register(OpsNoteTool())
+        self.tools.register(OpsCampaignsTool())
+        self.tools.register(OpsConnectionsTool())
+        self.tools.register(OpsDeclareTool())
+        self.tools.register(OpsExecTool())
         self.tools.register(OpsKillTool())
         # Raw-output pair. ops_tune_status compresses a trial's progress to one
         # line, which loses almost everything when a job writes many lines per
         # step (measured on a solver: 18 lines a step, 2 of them informative), and
         # it shows nothing at all for a finished trial whose backend reports no
         # metrics. These two hand the lines and the outputs over unchanged.
-        self.tools.register(OpsObserveTool())
         self.tools.register(OpsOutputsTool())
         # Reading and changing a case's configuration. These add no capability an
         # agent lacks with a shell, only the record: three pre-registered readings
         # are counted from the edit log and from nothing else, and without it "it
         # did not change this" and "we cannot tell" are the same row.
-        self.tools.register(OpsReadCaseDictTool())
         self.tools.register(OpsEditCaseDictTool())
         # What changed, as opposed to what is set. A case is derived from a known
         # reference and only a few entries move; measured across seven watch rounds,
@@ -1187,8 +1282,26 @@ class AgentLoop:
                 self._mcp_stack = None
             raise
 
+    @staticmethod
+    def _task_statement(session: Any, content: str) -> str:
+        """The statement driving this turn.
+
+        This turn's own message, not the session's first. One window doing task A,
+        then some chat, then task B is how a chat window is used, and reading the
+        session's first message froze the answer at task A forever -- so task B's
+        campaign was stamped with task A's fingerprint and two campaigns claimed
+        one task. A window that opened with "hi" had the same problem in the other
+        direction.
+
+        A wake turn offers its wake message here, which is not a statement, but it
+        cannot do any harm: the fingerprint is written once, at the campaign's
+        origin, and a campaign that already has one keeps it.
+        """
+        return content or ""
+
     def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+        self, channel: str, chat_id: str, message_id: str | None = None,
+        session_key: str | None = None, task: str = "",
     ) -> None:
         """Update context for all tools that need routing info."""
         for name in ("message", "spawn", "cron", "deep_research", "ops_submit", "ops_check_later"):
@@ -1197,8 +1310,17 @@ class AgentLoop:
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research"):
-                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
+                elif name in ("spawn", "deep_research", "ops_submit", "ops_check_later"):
+                    # The ops tools need the session key for the same reason spawn
+                    # does: channel/chat_id are "tui"/"default" for every window,
+                    # so they cannot say which window this is -- and the campaign a
+                    # window is watching, plus which window owns a wake, both hang
+                    # off that.
+                    if name in ("ops_submit", "ops_check_later"):
+                        tool.set_context(channel, chat_id,
+                                         session_key or f"{channel}:{chat_id}", task)
+                    else:
+                        tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
 
@@ -1756,7 +1878,9 @@ class AgentLoop:
                     # which most APIs require.
                     messages = self.context.add_assistant_message(messages, "(empty)")
                     messages[-1]["_recovery_synthetic"] = True
-                    messages.append({"role": "user", "content": EMPTY_RETRY_NUDGE, "_recovery_synthetic": True})
+                    messages.append(
+                        {"role": "user", "content": EMPTY_RETRY_NUDGE, "_recovery_synthetic": True}
+                    )
                     prev_had_tool_calls = False
                     continue
 
@@ -1965,6 +2089,7 @@ class AgentLoop:
 
         key = session_key or msg_session_key
         session = self.sessions.get_or_create(key)
+        _capture_owner_instruction(key, content, origin, self.cron_service)
 
         # Slash commands
         cmd = content.strip().lower()
@@ -2099,7 +2224,12 @@ class AgentLoop:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"), session_key=key)
+        from raven.ops.window import task_fingerprint
+
+        self._set_tool_context(
+            channel, chat_id, metadata.get("message_id"), session_key=key,
+            task=task_fingerprint(self._task_statement(session, content)),
+        )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()

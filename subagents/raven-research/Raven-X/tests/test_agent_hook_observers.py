@@ -426,9 +426,7 @@ def test_terminal_state_reports_a_terminal_only_salvage():
     """A salvage from the turn-end seam records ``terminal_hits`` and no
     ``empty_hits`` — the namespace must still be emitted, because the train-side
     render exemption keys off ``force_finalize.synthesized``."""
-    state = terminal_state(
-        {"force_finalize": {"terminal_hits": 1, "nudges": 0, "synth_failed": 0, "synthesized": True}}
-    )
+    state = terminal_state({"force_finalize": {"terminal_hits": 1, "nudges": 0, "synth_failed": 0, "synthesized": True}})
     assert state["force_finalize"] == {
         "terminal_hits": 1,
         "nudges": 0,
@@ -537,7 +535,7 @@ def test_terminal_state_exports_the_salvage_exempt_counter():
             "turn_end": {
                 "status": "ok",
                 "answerless": False,
-                "answerless_shape": True,  # raw: no closing tag
+                "answerless_shape": True,          # raw: no closing tag
                 "answerless_shape_exempt": False,  # corrected: salvage committed
                 "salvage_committed_at_terminal": True,
             }

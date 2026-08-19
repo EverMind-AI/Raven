@@ -13,6 +13,7 @@ campaign optimizes stays verifiable.
 from __future__ import annotations
 
 import dataclasses as _dataclasses
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -26,8 +27,6 @@ if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
 def _ops_home() -> Path:
     """The ops root for this instance, resolved per call rather than bound at
     import so that it follows ``--config``. See ``config.paths.get_ops_home``."""
@@ -46,7 +45,10 @@ def _campaign_dir(host: str, objective: str) -> Path:
     return _ops_home() / f"{host.replace('.', '-')}_{_slug(objective)}"
 
 
-def _resolve_campaign_dir(campaign: str | None, ledger: str | None = None) -> Path:
+def _resolve_campaign_dir(
+    campaign: str | None, ledger: str | None = None, session_key: str = "",
+    task: str = "",
+) -> Path:
     """The campaign's state directory.
 
     An explicit ledger path wins, then an explicit name. With neither, fall back to
@@ -61,14 +63,229 @@ def _resolve_campaign_dir(campaign: str | None, ledger: str | None = None) -> Pa
     if ledger and str(ledger).strip():
         return Path(ledger).expanduser().parent
     if campaign:
-        return _ops_home() / _slug(campaign)
+        d = _ops_home() / _slug(campaign)
+        # Naming a campaign IS this window saying what it is working on. Claiming
+        # used to happen only as a side effect of a successful submit, but a
+        # window's first call is a read -- so the two-window case broke on the
+        # first thing either window did. Not for a campaign that has already
+        # finished: reading its report is ordinary, and the window is still
+        # working on whatever it was working on.
+        if session_key and d.is_dir() and not (d / "concluded.json").exists():
+            from raven.ops.window import bind_window
+
+            bind_window(_ops_home(), session_key, d.name, pid=os.getpid())
+        return d
     home = _ops_home()
+    # What this window said it was working on, before any guessing. Counting
+    # directories cannot tell two windows apart, and two windows each watching an
+    # experiment is the ordinary case of using this without --config.
+    # Tier 1: what this window claimed. Tier 2: what this task belongs to -- a
+    # session key dies with its window, the statement the operator handed over
+    # does not, and that is how a fresh window recognises the watch it is taking
+    # over. Tier 3 is the error below, reached once per window at most.
+    if session_key:
+        from raven.ops.window import campaign_for_window
+
+        bound = campaign_for_window(home, session_key)
+        for cand in ([home / bound, home / _slug(bound)] if bound else []):
+            # A finished experiment does not hold the window. One window doing one
+            # experiment after another is ordinary, and the binding named the
+            # finished one -- so the next statement's fingerprint was never asked,
+            # and the agent's first call answered "there is nothing left to do
+            # here" to "start the second experiment". The same exclude-concluded
+            # rule already applied to counting directories; this is the level it
+            # was missing from.
+            if cand.is_dir() and (cand / "concluded.json").exists():
+                break
+            # Literally first: a name is not always its own slug, and on a
+            # case-sensitive filesystem re-slugging "dambreak-legA" points at a
+            # directory that does not exist. macOS matched both and hid it.
+            if cand.is_dir():
+                return cand
+    if task:
+        from raven.ops.window import bind_window, campaign_for_task
+
+        rejoined = campaign_for_task(home, task, exclude_live=True)
+        if rejoined and (home / rejoined).is_dir():
+            if session_key:
+                bind_window(home, session_key, rejoined, pid=os.getpid())
+            return home / rejoined
     found = sorted(d.name for d in home.iterdir() if d.is_dir()) if home.exists() else []
-    if len(found) == 1:
-        return home / found[0]
+    # Finished campaigns are not candidates. From the second task in one instance
+    # onward every unnamed call read as ambiguous, which is the whole of "you
+    # cannot do two tasks in one window" -- and the cron service, deciding the
+    # same question, already skipped them. Two answers to one question, and this
+    # was the wrong one.
+    live = [n for n in found if not (home / n / "concluded.json").exists()]
+    if len(live) == 1:
+        # Unless another window is watching it. "Only one campaign is live, so it
+        # must be the one you mean" holds for a single window and hands one
+        # window the other's experiment as soon as there are two -- measured while
+        # walking one window finishing its first experiment while a second window
+        # still ran its own.
+        from raven.ops.window import has_live_window
+
+        if not has_live_window(home, live[0], exclude_session=session_key):
+            return home / live[0]
+    elif len(live) > 1:
+        pass
     if not found:
         raise ValueError(f"no campaign under {home}; name one or create it first")
-    raise ValueError(f"{len(found)} campaigns under {home} ({', '.join(found)}); say which one")
+    if not live:
+        # Listing finished names points at the wrong action: the answer is not
+        # "which of these", it is "that work is over, this is new work".
+        raise ValueError(
+            f"every campaign under {home} has finished ({', '.join(found)}); "
+            f"this is new work, so give it a new name"
+        )
+    # Names alone cannot be matched against a task statement. The host, the case
+    # and the budget can -- they are the things a statement names -- so an agent
+    # holding one can pick without being told, and so can a person.
+    raise ValueError(
+        f"{len(live)} live campaigns under {home}; this window has not said which "
+        f"one it is watching:\n"
+        + "\n".join(f"  {n}   {_campaign_gist(home / n)}" for n in live)
+        # And what to do when none of them is the task in hand. Without this line the
+        # cheapest move is to take the nearest row, which is worse than asking:
+        # naming a campaign binds this window to it, and the work then goes to
+        # another experiment's ledger and budget. Two of the six live on
+        # 2026-08-17 differed only in their objective.
+        + "\nCall any ops tool once with campaign='<name>'; this window then stays on it."
+        + " If none of these is the task you were given, do not take the nearest one:"
+        + " say so with ops_ask_owner, because naming one binds this window to it."
+    )
+
+
+def _effective_config_lines(runner, remote_dir: str, keys: list[str],
+                            declared: dict | None = None) -> dict[str, list[str]]:
+    """Per trial, how the run differs from what was asked for.
+
+    One remote call for the whole campaign: a status that opened a connection per
+    trial would make looking expensive, and looking often is the behaviour the
+    whole loop is built to encourage.
+
+    Best effort throughout. A host that cannot answer, a job that writes no
+    ``config.effective.json`` (most do not), a file that is not JSON -- all mean
+    "nothing to say here", never a failed status call.
+    """
+    import json as _eff_json
+    import shlex as _eff_shlex
+
+    from raven.ops.effective import describe
+
+    if not runner or not remote_dir or not keys:
+        return {}
+    parts = []
+    for k in keys:
+        d = _eff_shlex.quote(f"{remote_dir.rstrip('/')}/jobs/{k}")
+        parts.append(
+            f'echo "@@{k}"; cat {d}/config.json 2>/dev/null; echo "@@EFF"; '
+            f"cat {d}/config.effective.json 2>/dev/null"
+        )
+    try:
+        rc, out = runner("; ".join(parts))
+    except Exception:  # noqa: BLE001 -- looking must not fail on the host
+        return {}
+    # Not gated on rc: the chain's status is its last command's, and a trial with
+    # no config.effective.json ends in a failed cat -- which threw away every
+    # other trial's answer while looking like "nothing to report". Emptiness is
+    # the only reliable signal that the host said nothing.
+    if not out.strip():
+        return {}
+
+    def _load(s: str):
+        try:
+            v = _eff_json.loads(s.strip() or "null")
+            return v if isinstance(v, dict) else None
+        except ValueError:
+            return None
+
+    # Blocks come out in pairs: the trial's name then "EFF", each followed by a
+    # file's contents. Split consumed the markers, so they are matched by order.
+    found: dict[str, list[str]] = {}
+    pending: str | None = None
+    submitted: dict | None = None
+    for block in out.split("@@")[1:]:
+        head, _, body = block.partition("\n")
+        head = head.strip()
+        if head == "EFF":
+            if pending:
+                lines = describe(submitted, _load(body), declared)
+                if lines:
+                    found[pending] = lines
+            pending, submitted = None, None
+        elif head in keys:
+            pending, submitted = head, _load(body)
+    return found
+
+
+def _where(meta: dict[str, Any]) -> str:
+    """Where a campaign's work runs, in the owner's words when there are any.
+
+    Never raises: a campaign that names a connection carries no address of its
+    own, and a line that only says where the work went must not be the thing
+    that fails the submit.
+    """
+    conn = str(meta.get("connection") or "").strip()
+    if conn:
+        from raven.ops.connections import display_name
+
+        return display_name(conn)
+    return str(meta.get("host") or "the campaign's machine")
+
+
+def _has_live_watcher(campaign: str) -> bool:
+    """Whether some open window is watching this campaign.
+
+    A campaign whose window was closed keeps its pending wake, and that wake
+    stays put rather than firing in whatever window is open next. So the listing
+    has to say which ones are in that state: it is the only way a window can ask
+    "what is waiting for someone" before naming one to take over.
+    """
+    try:
+        from raven.ops.window import window_for_campaign
+        from raven.proactive_engine.schedulers.cron.service import _pid_alive
+
+        bound = window_for_campaign(_ops_home(), campaign)
+    except Exception:  # noqa: BLE001 -- an unreadable index must not break a listing
+        return True
+    return bool(bound and bound[1] and _pid_alive(int(bound[1])))
+
+
+def _campaign_gist(campaign_dir: Path) -> str:
+    """One line saying what a campaign is, in the terms a task statement uses."""
+    import json as _gist_json
+
+    try:
+        meta = _gist_json.loads((campaign_dir / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "(no readable meta.json)"
+    bits: list[str] = []
+    # The owner's word for the machine, when the campaign names one. An address
+    # does not identify a machine -- two connections can share one -- so the name
+    # is what makes "which box is this experiment on" answerable at a glance.
+    if conn := str(meta.get("connection") or "").strip():
+        from raven.ops.connections import display_name
+
+        bits.append(f"on {display_name(conn)}")
+    elif host := str(meta.get("host") or "").strip():
+        bits.append(f"host {host}")
+    for key in ("staged_case", "remote_dir"):
+        if val := str(meta.get(key) or "").strip():
+            bits.append(f"{key.replace('_', ' ')} {val}")
+            break
+    budget = meta.get("budget")
+    if isinstance(budget, dict) and budget.get("total") is not None:
+        bits.append(f"{budget['total']} {budget.get('unit') or 'unit'}")
+    # What each one is for. Two campaigns can share a machine, a case directory and
+    # a budget and differ only in what they are optimising -- measured 2026-08-17,
+    # when two FEA campaigns rendered as the same line but for their names, leaving
+    # a window to tell them apart by guessing which name meant which task.
+    obj = meta.get("objective")
+    if isinstance(obj, dict) and obj.get("metric"):
+        arrow = {"max": "max", "min": "min"}.get(str(obj.get("direction")), "")
+        bits.append(f"{arrow} {obj['metric']}".strip())
+    return "   ".join(bits) or "(meta.json names nothing to tell it by)"
 
 
 def _read_notes(campaign_dir: Path) -> list[dict]:
@@ -92,6 +309,70 @@ _HISTORY_LIMIT = 12
 # A failed job's own last words, capped. Long enough for a stack frame or an
 # OpenFOAM FATAL line, short enough that the campaign's state stays readable.
 _FAILURE_REASON_CHARS = 400
+
+
+def _case_isolation_lines(records: list[Any], has_staged_case: bool = True) -> list[str]:
+    """Whether trials of this campaign can run at the same time, as measured.
+
+    A trial gets the owner's case as a tree of symlinks, so anything a run creates
+    lands in its own directory. Overwriting a file that already exists is the one
+    thing that escapes -- that write follows the link back into the case -- and the
+    backend lists exactly which files it happened to.
+
+    Four states, and the difference between the first two is the point: a campaign
+    where no round has finished has not been shown to be safe, which is not the
+    same claim as having looked and found nothing. There is no confirmation round:
+    every round measures this, so whichever round runs next says whether the last
+    finding settled, at no extra compute.
+
+    Reported here rather than left in the trial's raw output because it decides how
+    the rest of the campaign is allowed to run. Twenty cases overwriting each
+    other's inputs read as twenty results.
+    """
+    latest: list[str] | None = None
+    ever: set[str] = set()
+    for r in records:
+        if r.result is None:
+            continue
+        written = (r.result.output or {}).get("case_files_written")
+        if written is None:
+            continue
+        latest = [str(w) for w in written]
+        ever.update(latest)
+    if latest is None:
+        if not has_staged_case:
+            return []
+        return [
+            "Case isolation: not measured yet -- no round has finished. Until one "
+            "has, run trials one at a time: whether they can share the owner's case "
+            "is unproven, not proven safe."
+        ]
+    if not latest:
+        if ever:
+            settled = ", ".join(sorted(ever)[:10])
+            return [
+                f"Case isolation: earlier rounds wrote {settled}; those are real "
+                "copies in the trial directory now, and the last round wrote nothing. "
+                "Trials can run at the same time."
+            ]
+        return [
+            "Case isolation: measured, and no file in the owner's case was written. "
+            "Trials can run at the same time."
+        ]
+    shown = ", ".join(sorted(latest)[:10])
+    more = " ..." if len(latest) > 10 else ""
+    return [
+        f"Case isolation: the last round wrote into the owner's case -- {shown}{more}",
+        "  Those files are real copies from the next round on, so the write should "
+        "land in the trial directory instead. Whichever round runs next says whether "
+        "it did -- there is nothing to run on purpose to find out.",
+        "  Until then, do NOT run trials at the same time: each one is overwriting "
+        "what the others read, and the numbers would be of a case that kept changing "
+        "underneath.",
+        "  If a path is fixed inside a compiled binary and the source cannot be "
+        "changed, raven cannot make it local -- that is the owner's call, so ask with "
+        "ops_ask_owner.",
+    ]
 
 
 # Keys this layer writes itself. They are readings about the run, not the score
@@ -223,7 +504,12 @@ def _meta_lines(meta_path: Path) -> list[str]:
     seed = meta.get("seed_config")
     if isinstance(seed, dict) and seed:
         out.append(
-            f"Campaign seed config (round 0 runs this unless you change it): {_j.dumps(seed, ensure_ascii=False)}"
+            f"Campaign declared starting config: {_j.dumps(seed, ensure_ascii=False)} "
+            "-- round 0 runs exactly this. You may correct a value here you can show is wrong "
+            "(a water viscosity of 1e-3, a unit off by a thousand) by submitting the correction "
+            "with a basis saying how you know; you may not change it because it is expensive or "
+            "awkward -- a smaller mesh or fewer batches answers a different question than the "
+            "one you were given. From round 1 change it freely, once a reading says what to change"
         )
     policy = _policy_lines(meta.get("operating_policy"))
     if policy:
@@ -292,6 +578,50 @@ def _policy_lines(policy: Any) -> list[str]:
     return out
 
 
+def _same_value(a: Any, b: Any) -> bool:
+    """Whether two config values name the same setting.
+
+    Compared as numbers when both read as numbers, so a declaration of "5e-4"
+    and a submit of 0.0005 are one starting point rather than two; otherwise as
+    trimmed text, so 1 and "1" agree as well.
+    """
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a).strip() == str(b).strip()
+
+
+def _seed_departures(seed: Any, configs: list[dict[str, Any]]) -> list[str]:
+    """How a round-0 submit differs from the declared starting point.
+
+    Returns one line per difference, empty when the submit is the declaration.
+    The keys are not interpreted -- this holds for any domain, because what is
+    compared is the campaign's own words against the submit.
+    """
+    declared: list[dict[str, Any]] = []
+    if isinstance(seed, dict) and seed:
+        declared = [seed]
+    elif isinstance(seed, (list, tuple)) and seed:
+        declared = [dict(c) for c in seed if isinstance(c, dict)]
+    if not declared:
+        return []
+
+    if len(configs) != len(declared):
+        return [f"the campaign declares {len(declared)} config(s) for round 0, "
+                f"this submit has {len(configs)}"]
+
+    out: list[str] = []
+    for want, got in zip(declared, configs):
+        for k, v in want.items():
+            if k not in got:
+                out.append(f"{k}: declared {v!r}, not passed at all")
+            elif not _same_value(v, got[k]):
+                out.append(f"{k}: declared {v!r}, submitted {got[k]!r}")
+        for k in got.keys() - want.keys():
+            out.append(f"{k}: not part of the declared start, submitted {got[k]!r}")
+    return out
+
+
 def _campaign_history(campaign_dir: Path) -> list[str]:
     """The campaign's own events, oldest first, one line each, verbatim.
 
@@ -329,15 +659,34 @@ def _campaign_history(campaign_dir: Path) -> list[str]:
     return out[-_HISTORY_LIMIT:]
 
 
-def _append_note(campaign_dir: Path, note: str) -> None:
+def _append_note(campaign_dir: Path, note: str, *, source: str = "agent") -> None:
+    """Append one instruction to the campaign's notes.
+
+    ``source`` says who it came from. A note the owner typed and a note the loop
+    wrote about itself carry different weight on a later read, and a wake turn
+    that cannot tell them apart has to guess.
+
+    ``round`` is stamped from the ledger so a later turn can tell whether an
+    instruction has already been acted on: an instruction recorded at round 3,
+    read again at round 5 with a round-4 submit that matches it, has been
+    handled. Without it the same "add two more angles" gets acted on at every
+    wake -- which is the one new failure the automatic capture introduces.
+    """
     import json
     from datetime import datetime
 
+    rnd = None
+    try:
+        led = json.loads((campaign_dir / "ledger.json").read_text(encoding="utf-8"))
+        rnd = len(led.get("records") or {})
+    except (OSError, ValueError):
+        pass
     campaign_dir.mkdir(parents=True, exist_ok=True)
+    row = {"ts": datetime.now().isoformat(timespec="seconds"), "note": note, "source": source}
+    if rnd is not None:
+        row["trials_at_the_time"] = rnd
     with open(campaign_dir / "notes.jsonl", "a", encoding="utf-8") as f:
-        f.write(
-            json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "note": note}, ensure_ascii=False) + "\n"
-        )
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 class OpsTuneLaunchTool(Tool):
@@ -431,38 +780,13 @@ class OpsTuneLaunchTool(Tool):
         log_path = cdir / "run.log"
 
         argv = [
-            sys.executable,
-            "-m",
-            "raven",
-            "ops",
-            "tune",
-            "--adaptive",
-            "--host",
-            host,
-            "--port",
-            str(port),
-            "--key",
-            key,
-            "--remote-dir",
-            remote_dir,
-            "--image",
-            image,
-            "--app-dir",
-            app_dir,
-            "--metric",
-            metric,
-            "--goal",
-            goal,
-            "--max-rounds",
-            str(max_rounds),
-            "--objective",
-            objective,
-            "--llm-base-url",
-            llm_base_url,
-            "--llm-model",
-            llm_model,
-            "--ledger",
-            str(ledger_path),
+            sys.executable, "-m", "raven", "ops", "tune", "--adaptive",
+            "--host", host, "--port", str(port), "--key", key,
+            "--remote-dir", remote_dir, "--image", image, "--app-dir", app_dir,
+            "--metric", metric, "--goal", goal, "--max-rounds", str(max_rounds),
+            "--objective", objective,
+            "--llm-base-url", llm_base_url, "--llm-model", llm_model,
+            "--ledger", str(ledger_path),
         ]
         for v in k1 or [0.6, 1.0, 1.4]:
             argv += ["--k1", str(v)]
@@ -498,9 +822,10 @@ class OpsTuneStatusTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Report the progress of a tuning campaign launched by ops_tune_launch: how many "
-            "configs have finished, whether it is still running, and the best config so far. "
-            "Pass the ledger path that ops_tune_launch returned."
+            "Report the progress of a campaign -- a long remote computation of any kind, solver "
+            "case or training run alike: how many trials have finished, whether it is still "
+            "running, and the best result so far. "
+            "Pass the ledger path that ops_tune_launch returned. "
             "Call it with NO ARGUMENTS to read the campaign that is already set up: that is where the host and port, the starting config, the compute budget, the starting value and the operating policy live, so this is the first thing to do on an ops task rather than looking for the machine yourself. Name the campaign only when more than one exists. "
         )
 
@@ -510,10 +835,7 @@ class OpsTuneStatusTool(Tool):
             "type": "object",
             "properties": {
                 "ledger": {"type": "string", "description": "Ledger path returned by ops_tune_launch."},
-                "metric": {
-                    "type": "string",
-                    "description": "Metric to rank by; defaults to the campaign's declared objective.",
-                },
+                "metric": {"type": "string", "description": "Metric to rank by; defaults to the campaign's declared objective."},
             },
             "required": [],
         }
@@ -557,6 +879,11 @@ class OpsTuneStatusTool(Tool):
         # curve, and spent its first fifty minutes recording "no nDCG eval
         # results captured yet" while the job was writing them all along.
         metric = _campaign_metric(meta_path, metric, led.all())
+        # Bound here because a campaign with no meta.json never enters the block
+        # that builds one, and later readers must not depend on that block having
+        # run.
+        backend = None
+        meta: dict[str, Any] = {}
         progress_lines: list[str] = []
         progress_samples: list[dict] = []
         # Read alongside the reconcile below, from the same backend, because the
@@ -639,14 +966,18 @@ class OpsTuneStatusTool(Tool):
                             for field, cap in (("loss", _LOSS_SERIES_LIMIT), (metric, _METRIC_SERIES_LIMIT)):
                                 series = _as_logged_series(samples, field, limit=cap)
                                 if series is not None:
-                                    progress_lines.append(f"  {rec.idem_key} {field}, as logged: {series}")
+                                    progress_lines.append(
+                                        f"  {rec.idem_key} {field}, as logged: {series}"
+                                    )
                 # Record what was just probed, so a later report's claims about
                 # budget, job state and which checkpoints exist can be checked
                 # against a reading rather than against nothing. Written here
                 # because this is where the probe happens; the loop cannot write it.
                 from raven.ops.state_claims import collect_facts, read_facts, write_facts
 
-                facts = await collect_facts(backend, led.all(), now_ms=int(datetime.now().timestamp() * 1000))
+                facts = await collect_facts(
+                    backend, led.all(), now_ms=int(datetime.now().timestamp() * 1000)
+                )
                 # Carry the readings this probe saw, and advance a probe counter.
                 # A decision tool can then ask "did an observation happen since
                 # your last one?" without a clock or a turn boundary: citing a
@@ -654,7 +985,10 @@ class OpsTuneStatusTool(Tool):
                 # Exactly the readings the series printed, via the same thinning,
                 # so the basis check never accepts a number that was not shown.
                 seen: list[float] = [
-                    float(value) for _, value in _series_points(progress_samples, metric, limit=_METRIC_SERIES_LIMIT)[0]
+                    float(value)
+                    for _, value in _series_points(
+                        progress_samples, metric, limit=_METRIC_SERIES_LIMIT
+                    )[0]
                 ]
                 for rec in led.all():
                     if rec.result is not None:
@@ -700,7 +1034,8 @@ class OpsTuneStatusTool(Tool):
         running = any(not r.is_terminal for r in records)
         state = "in progress" if running else "done"
         lines = [
-            f"Campaign {state}: {len(records)} trials ({', '.join(f'{k}={v}' for k, v in sorted(counts.items()))}).",
+            f"Campaign {state}: {len(records)} trials "
+            f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items()))}).",
         ]
         # The campaign's compute budget, as a fact and not a derived remainder.
         # It was previously invisible here: the training job writes it once in its
@@ -712,15 +1047,11 @@ class OpsTuneStatusTool(Tool):
         meta_path = path.with_name("meta.json")
         if meta_path.exists():
             try:
-                lines.append(
-                    _budget_line(
-                        _json.loads(meta_path.read_text(encoding="utf-8")),
-                        spent=budget_spent,
-                        remaining=budget_remaining,
-                        unmeasured=budget_unmeasured,
-                        spend_error=budget_spend_error,
-                    )
-                )
+                lines.append(_budget_line(
+                    _json.loads(meta_path.read_text(encoding="utf-8")),
+                    spent=budget_spent, remaining=budget_remaining,
+                    unmeasured=budget_unmeasured, spend_error=budget_spend_error,
+                ))
             except (OSError, ValueError):
                 pass
         # The starting values this campaign recorded, as a campaign-level fact, next
@@ -789,32 +1120,38 @@ class OpsTuneStatusTool(Tool):
         if concluded_path.exists():
             try:
                 c = _json.loads(concluded_path.read_text(encoding="utf-8"))
-                lines.insert(
-                    0,
-                    (
-                        f"\u26a0\ufe0f CONCLUDED at {c.get('concluded_at', '?')}"
-                        + (f" ({c['outcome']})" if c.get("outcome") else "")
-                        + (f" -- {c['reason']}" if c.get("reason") else "")
-                        + ". This campaign is over: do NOT submit more rounds, and do "
-                        "not report again. There is nothing left to do here."
-                    ),
-                )
+                lines.insert(0, (
+                    f"\u26a0\ufe0f CONCLUDED at {c.get('concluded_at', '?')}"
+                    + (f" ({c['outcome']})" if c.get("outcome") else "")
+                    + (f" -- {c['reason']}" if c.get("reason") else "")
+                    + ". This campaign is over: do NOT submit more rounds, and do "
+                      "not report again. There is nothing left to do here."
+                ))
             except (OSError, ValueError):
-                lines.insert(
-                    0,
-                    "\u26a0\ufe0f CONCLUDED. This campaign is over: do NOT submit "
-                    "more rounds, and do not report again.",
-                )
+                lines.insert(0, "\u26a0\ufe0f CONCLUDED. This campaign is over: do NOT submit "
+                                "more rounds, and do not report again.")
         notes = _read_notes(path.parent)
         if notes:
-            lines.append("User instructions (latest first):")
-            lines.extend(f"  [{n.get('ts', '?')}] {n.get('note', '')}" for n in reversed(notes[-5:]))
+            # The count at the time is what tells a later read whether an
+            # instruction has already been acted on: "add two more angles",
+            # recorded when the ledger held 3 trials and read now that it holds 5,
+            # was probably handled by those two.
+            lines.append("Owner's instructions (latest first). The trial count is the "
+                         "one at the time it was said, so compare it with the ledger "
+                         "before acting on an old one again:")
+            for n in reversed(notes[-5:]):
+                who = "owner" if n.get("source") == "owner" else "you"
+                at = n.get("trials_at_the_time")
+                stamp = f", {at} trial(s) then" if at is not None else ""
+                lines.append(f"  [{n.get('ts', '?')}, from {who}{stamp}] {n.get('note', '')}")
         history = _campaign_history(path.parent)
         if history:
             lines.append("This campaign's record so far, oldest first:")
             lines.extend(f"  {h}" for h in history)
         if progress_lines:
-            lines.append("Running-trial progress, as logged:")
+            lines.append(
+                "Running-trial progress, as logged:"
+            )
             lines.extend(progress_lines)
         if terminal_records:
             # Every finished trial, in submission order, with its numbers as
@@ -837,14 +1174,34 @@ class OpsTuneStatusTool(Tool):
             # a stable plateau are different things). Listing is strictly more
             # informative than ranking: the ordering is still derivable, the
             # judgement is left where it belongs.
+            # What the runs differ from what was asked for. Computed once for the
+            # whole campaign, and printed under whichever trials have something to
+            # say -- a key that was submitted and then not used is invisible
+            # everywhere else, and on 2026-08-13 that invisibility reached a
+            # delivered conclusion.
+            _eff = _effective_config_lines(
+                getattr(backend, "_run", None), str(meta.get("remote_dir") or ""),
+                [r.idem_key for r in records],
+                meta.get("seed_config") if isinstance(meta.get("seed_config"), dict) else None,
+            ) if meta else {}
             lines.append("Finished trials, in submission order:")
             for r in records:
                 if not r.is_terminal or r.result is None:
                     continue
-                cfg = r.result.output.get("config", r.idem_key)
+                # The config as submitted, from the ledger. The job's own result
+                # rarely echoes one and the folded idem_key is not a config: a wake
+                # turn reading only the key has to decode "m2p0e6" back to -2.0e6
+                # and "nx80_ny12_nz12" back to a mesh, and one arm decoded it wrong
+                # (2026-08-17, it reported round 0 as a mesh and load neither of
+                # which had run).
+                cfg = r.result.output.get("config") or r.config or r.idem_key
+                if isinstance(cfg, dict):
+                    cfg = " ".join(f"{k}={v}" for k, v in sorted(cfg.items()))
                 numbers = " ".join(f"{k}={v}" for k, v in sorted((r.result.metrics or {}).items()))
                 note = "" if r.status is JobStatus.SUCCEEDED else f" [{r.status.value}]"
                 lines.append(f"  {cfg}{note}  {numbers or 'no metrics reported'}")
+                for _line in _eff.get(r.idem_key, []):
+                    lines.append(f"      config: {_line}")
                 if r.status is not JobStatus.SUCCEEDED:
                     # What the job itself said on the way out, verbatim and
                     # truncated. Backends put a log tail here exactly for this,
@@ -881,15 +1238,17 @@ class OpsTuneStatusTool(Tool):
             # Trials finished but none reported the metric asked for. Saying "no
             # successful trial yet" here contradicts the count on the first line and
             # reads as "nothing came back", which is the opposite of the truth.
-            available = sorted({name for r in records if r.result is not None for name in (r.result.metrics or {})})
+            available = sorted({
+                name
+                for r in records
+                if r.result is not None
+                for name in (r.result.metrics or {})
+            })
             if metric:
                 lines.append(
                     f"Trials succeeded but none reported metric '{metric}'. "
-                    + (
-                        f"Metrics they do report: {', '.join(available)}."
-                        if available
-                        else "They reported no metrics at all."
-                    )
+                    + (f"Metrics they do report: {', '.join(available)}." if available
+                       else "They reported no metrics at all.")
                 )
             else:
                 # No name asked for, none declared, and the records do not settle it
@@ -897,15 +1256,13 @@ class OpsTuneStatusTool(Tool):
                 # nobody chose, and that reads exactly like a real ranking.
                 lines.append(
                     "This campaign declares no objective, so there is no metric to rank by. "
-                    + (
-                        f"The trials report: {', '.join(available)}. Pass metric= to read one of them, "
-                        if available
-                        else "The trials report no metrics at all. "
-                    )
+                    + (f"The trials report: {', '.join(available)}. Pass metric= to read one of them, "
+                       if available else "The trials report no metrics at all. ")
                     + "or set objective {metric, direction} on the campaign so every round reads the same one."
                 )
         else:
             lines.append("No successful trial yet.")
+        lines.extend(_case_isolation_lines(records, bool((meta or {}).get("staged_case"))))
 
         log_path = path.with_name("run.log")
         if log_path.exists():
@@ -1045,6 +1402,7 @@ def _schedule_ops_wake(
     name: str,
     message: str,
     eta_seconds: int,
+    owner: str = "",
 ) -> str:
     """Schedule a one-shot self-wake via the CronService directly.
 
@@ -1084,6 +1442,22 @@ def _schedule_ops_wake(
         except Exception:
             replaced = 0
 
+    # Whose wake this is. A window that schedules for a campaign is that
+    # campaign's window from here on, which also fills the gap left by binding
+    # only on an ambiguous name: a campaign named once and never contested had no
+    # row at all, so nothing could say which window its wakes belonged to.
+    owner_pid = os.getpid()
+    if campaign:
+        from raven.ops.window import bind_window, window_for_campaign
+
+        home = _ops_home()
+        if owner and not owner.startswith("cron:"):
+            bind_window(home, owner, campaign, pid=owner_pid)
+        else:
+            bound = window_for_campaign(home, campaign)
+            if bound:
+                owner, owner_pid = bound[0], bound[1] or owner_pid
+
     at = datetime.now() + timedelta(seconds=max(1, int(eta_seconds)))
     try:
         job = cron.add_job(
@@ -1094,6 +1468,13 @@ def _schedule_ops_wake(
             deliver=True,
             channel=channel,
             to=chat_id,
+            # Which window asked for this, and the process that is that window.
+            # channel/to are "tui"/"default" for every window, so a service
+            # claiming by channel alone could run one campaign's wake inside the
+            # window holding the other's conversation. The pid is what makes
+            # "and only while that window is still open" checkable.
+            owner=owner,
+            owner_pid=owner_pid,
             delete_after_run=True,
             dedup=False,  # Ops wakes fire in quick succession to the same channel/to; never treat as duplicate reminders
         )
@@ -1115,10 +1496,19 @@ class _OpsScheduler(Tool):
         self._cron = cron_service
         self._channel = ""
         self._chat_id = ""
+        self._session_key = ""
+        self._task = ""
 
-    def set_context(self, channel: str, chat_id: str) -> None:
+    def set_context(self, channel: str, chat_id: str, session_key: str = "",
+                    task: str = "") -> None:
         self._channel = channel
         self._chat_id = chat_id
+        # Which window this is. channel/chat_id are "tui"/"default" for every
+        # window, so they cannot tell two apart; the session key can. The task
+        # fingerprint outlives the window, which is how a fresh one recognises
+        # the watch it is taking over.
+        self._session_key = session_key or ""
+        self._task = task or ""
 
 
 class OpsSubmitTool(_OpsScheduler):
@@ -1142,15 +1532,21 @@ class OpsSubmitTool(_OpsScheduler):
     @property
     def description(self) -> str:
         return (
-            "Train, fine-tune, tune, sweep or optimize a MODEL on a remote machine -- ONE ROUND AT A "
-            "TIME, steering it yourself. Use this for any such request, however it is worded: "
-            '"fine-tune a model on host X", "train this", "run this config and watch it", '
-            '"tune these hyperparameters". DO NOT do it yourself with exec or ssh: routing the job '
+            "Run a long computation on a remote machine -- ONE ROUND AT A TIME, steering it "
+            "yourself. The work is whatever the owner wants run and watched on a host: a solver "
+            "case (CFD, FEA, any simulation), a training or fine-tuning run, a parameter sweep. "
+            "Use this for any such request, however it is worded: \"run this OpenFOAM case on "
+            "host X\", \"compute the limit load with CalculiX on that box\", \"fine-tune a model "
+            "on host X\", \"run this config and watch it\", \"tune these hyperparameters\". What "
+            "makes it this tool's job is the shape -- a remote host, a long run, a result worth "
+            "waiting for -- not the field it comes from. DO NOT do it yourself with exec or ssh: routing the job "
             "through this tool is what makes its compute budget enforceable, its state survive a "
             "restart, and its results wake you when they are due.\n"
-            "A campaign is usually already set up, and then its host, port, backend, compute budget "
-            "and starting config all come from its own state -- omit them and omit the campaign name; "
-            "supply only what THIS round changes. Read it with ops_tune_status first.\n"
+            "The machine, the case, how a trial starts, the budget and the starting config "
+            "all belong to the campaign's declaration, not to this call: supply only what "
+            "THIS round does. Read it with ops_tune_status, and ops_campaigns for which "
+            "exist. A campaign not declared yet needs ops_declare first, which runs "
+            "nothing.\n"
             "Each round YOU choose the config(s) and submit them: start small -- one config, or a "
             "few only if the host has the capacity to run them at once, and NEVER a full grid -- "
             "because the whole point is to read each round's results "
@@ -1170,63 +1566,53 @@ class OpsSubmitTool(_OpsScheduler):
 
     @property
     def parameters(self) -> dict[str, Any]:
+        # Five, and it stays five. Everything a campaign is set up with belongs to
+        # ops_declare: those fields are read once at round 0 and overridden from the
+        # campaign on every round after, so carrying them here made sixteen of
+        # twenty parameters dead weight on every call but the first -- and left an
+        # agent choosing which of them this round even cared about.
         return {
             "type": "object",
             "properties": {
-                "host": {"type": "string", "description": "Remote host running Docker."},
+                "campaign": {
+                    "type": "string",
+                    "description": "The campaign this round belongs to, as declared with "
+                                   "ops_declare. Omit only when the ops home holds exactly one.",
+                },
+                "round": {
+                    "type": "integer",
+                    "description": "This round index. Start at 0 and increment each call.",
+                },
                 "configs": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": 'Config dict(s) to run this round, e.g. [{"k1": 1.5, "b": 0.75}]. Batch = many.',
+                    "description": "Config dict(s) to run this round, e.g. [{\"deltaT\": 1e-4}]. "
+                                   "One is usual. Several only if the machine can run them at "
+                                   "once, and NEVER a full grid -- a sweep submitted in one round "
+                                   "spends the budget before any of it has been read.",
                 },
-                "objective": {"type": "string", "description": "What you are optimizing, in words."},
-                "ledger": {
+                "basis": {
                     "type": "string",
-                    "description": "Ledger path for this campaign; reuse the same path every round so history accumulates.",
+                    "description": "What you read that supports this round -- cite the actual "
+                                   "numbers from the last one. Required from round 1 on. "
+                                   "Round 0 runs the declared starting point, so it needs one "
+                                   "only if it departs from that.",
                 },
                 "eta_seconds": {
                     "type": "integer",
-                    "description": (
-                        "When to look next, in seconds of wall-clock time. Not an estimate of when the "
-                        "job finishes. The compute budget is counted in GPU minutes, which on a "
-                        "multi-GPU host is a different quantity. The pace is yours to choose."
-                    ),
-                },
-                "round": {"type": "integer", "description": "This round index (start at 0, increment each call)."},
-                "basis": {
-                    "type": "string",
-                    "description": (_BASIS_HELP + " Required from round 1 onward; round 0 has nothing observed yet."),
-                },
-                "max_rounds": {
-                    "type": "integer",
-                    "description": "Runaway backstop; refuses to submit at/after this (default 8).",
-                },
-                "port": {"type": "integer", "description": "SSH port (default 22)."},
-                "key": {"type": "string", "description": "SSH key path (default ~/.ssh/id_rsa)."},
-                "remote_dir": {"type": "string", "description": "Remote working dir (default /root/raven-ops)."},
-                "image": {"type": "string", "description": "Container image (default python:3.12-slim)."},
-                "app_dir": {"type": "string", "description": "Local trial dir to sync (default benchmarks/ops_bm25)."},
-                "metric": {
-                    "type": "string",
-                    "description": "Metric the campaign optimises, e.g. 'ndcg', 'residual'. Recorded on the campaign at round 0; later calls read it from there.",
-                },
-                "goal": {
-                    "type": "string",
-                    "enum": ["max", "min"],
-                    "description": "Whether the metric should be maximised or minimised. Recorded with the metric at round 0; without it no artifact can be named as the one to hand over, because the direction cannot be inferred from the metric name.",
-                },
-                "campaign": {
-                    "type": "string",
-                    "description": "Campaign name grouping the ledger records. Omit when the ops home holds exactly one campaign.",
+                    "description": "When to look next, in seconds of wall-clock time. Not an "
+                                   "estimate of the run: it is how long you choose to leave it "
+                                   "before deciding anything. The pace is yours.",
                 },
             },
-            "required": ["objective", "eta_seconds"],
+            "required": ["configs", "eta_seconds"],
         }
 
     async def execute(
         self,
-        objective: str,
         eta_seconds: int,
+        objective: str = "",
+        connection: str = "",
         host: str = "",
         configs: list[dict] | None = None,
         ledger: str = "",
@@ -1238,6 +1624,13 @@ class OpsSubmitTool(_OpsScheduler):
         remote_dir: str = "/root/raven-ops",
         image: str = "python:3.12-slim",
         app_dir: str = "benchmarks/ops_bm25",
+        # How to start the owner's own case, as opposed to the container trial this
+        # tool was born running. All three are fixed at round 0 and read from the
+        # campaign afterwards, so a later round that omits them keeps running the
+        # same thing.
+        command: str = "",
+        backend: str = "",
+        staged_case: str = "",
         # metric + goal are recorded on the campaign at round 0 as its objective, and
         # every later reader takes the metric name from there. Neither is guessed:
         # this backend is shared with every domain that runs a plain command, and the
@@ -1266,9 +1659,21 @@ class OpsSubmitTool(_OpsScheduler):
             )
         if not campaign:
             try:
-                campaign = _resolve_campaign_dir("", ledger).name
+                campaign = _resolve_campaign_dir(
+                    "", ledger, self._session_key, self._task
+                ).name
             except ValueError as exc:
                 return f"Cannot tell which campaign to submit to: {exc}"
+        # This window is working on this campaign. Written here rather than at the
+        # end because every later unnamed call in this window resolves through it,
+        # including the ones this round's own wake will make.
+        from raven.ops.window import bind_window, remember_task
+
+        bind_window(_ops_home(), self._session_key,
+                    _resolve_campaign_dir(campaign, ledger, "", "").name, pid=os.getpid())
+        # And which statement it was started for, so a window opened after this
+        # one is gone can find it again from the statement alone.
+        remember_task(_ops_home() / _slug(campaign), self._task)
         if not configs:
             # Round zero's config belongs to whoever set the campaign up -- the code
             # and its defaults are the upstream deliverable -- not to the person
@@ -1278,9 +1683,7 @@ class OpsSubmitTool(_OpsScheduler):
             try:
                 import json as _seed_json
 
-                seed_meta = _seed_json.loads(
-                    (_resolve_campaign_dir(campaign, ledger) / "meta.json").read_text(encoding="utf-8")
-                )
+                seed_meta = _seed_json.loads((_resolve_campaign_dir(campaign, ledger) / "meta.json").read_text(encoding="utf-8"))
                 seed = seed_meta.get("seed_config")
             except (OSError, ValueError):
                 seed = None
@@ -1289,7 +1692,9 @@ class OpsSubmitTool(_OpsScheduler):
             elif isinstance(seed, (list, tuple)) and seed:
                 configs = [dict(c) for c in seed if isinstance(c, dict)]
             if not configs:
-                return "No configs given and the campaign has no seed_config; nothing to submit."
+                return (
+                    "No configs given and the campaign has no seed_config; nothing to submit."
+                )
 
         # Tolerate the agent packing the port into host ("1.2.3.4:64106") -- the
         # prompt phrasing "host (SSH port N)" invites it. Split it so the SSH runner
@@ -1316,9 +1721,30 @@ class OpsSubmitTool(_OpsScheduler):
         # campaign is concluded, no turn -- a late wake, the heartbeat, anyone --
         # may submit more rounds, regardless of what its own context says.
         if (led.parent / "concluded.json").exists():
+            # Say that the *name* is taken, not that permission was withdrawn.
+            # "CONCLUDED by the user; not submitting" reads as a state or
+            # permission problem, and an agent reading it that way reaches for
+            # concluded.json with edit_file, or edits meta.json -- the
+            # apparatus-editing behaviour measured 2026-08-12, triggered by our
+            # own wording. Task statements no longer carry a campaign name, so the
+            # agent invents one and two similar tasks colliding is not unlikely.
+            when = "?"
+            try:
+                import json as _taken_json
+
+                when = _taken_json.loads(
+                    (led.parent / "concluded.json").read_text(encoding="utf-8")
+                ).get("concluded_at", "?")
+            except (OSError, ValueError):
+                pass
             return (
-                f"Campaign '{campaign}' was CONCLUDED by the user; not submitting. "
-                f"Report the recorded best instead, or start a new campaign name if more experiments are wanted."
+                f"REFUSED: the name '{campaign}' already belongs to a campaign that finished "
+                f"at {when}, and its record is what a report was filed against.\n"
+                f"If this is that same work, there is nothing left to submit -- read it with "
+                f"ops_tune_status and report the recorded best.\n"
+                f"If this is different work, submit it under a different name. Do not delete "
+                f"concluded.json and do not edit meta.json to free the name up: that would "
+                f"overwrite the finished campaign's record. Nothing was submitted."
             )
 
         # The declaration itself, before anything else is asked of this round. It is
@@ -1327,8 +1753,7 @@ class OpsSubmitTool(_OpsScheduler):
         # rewrote remote_dir/staged_case/command because the task text named a
         # different case path, and the job then ran out of an undeclared directory
         # while the budget guard watched the declared one.
-        from raven.ops.apparatus import load_baseline as _load_baseline
-        from raven.ops.apparatus import meta_sha as _meta_sha
+        from raven.ops.apparatus import load_baseline as _load_baseline, meta_sha as _meta_sha
         from raven.ops.instrument import log_event
 
         _base = _load_baseline(led.parent)
@@ -1341,6 +1766,89 @@ class OpsSubmitTool(_OpsScheduler):
                 "experiment measures, and where it runs.\n"
                 "If you believe something in it is wrong, say so with ops_ask_owner. To carry on, "
                 "restore it to what it was. Nothing was submitted."
+            )
+
+        # Round 0 runs the starting point the campaign declared. This is the basis
+        # rule one round earlier: from round 1 on a config change has to cite a
+        # reading, and at round 0 no reading exists yet, so there is nothing a
+        # change could be grounded in. Measured 2026-08-13 -- both CFD legs read
+        # the declared seed off the status line and submitted something else (one
+        # dropped the declared key entirely, one halved the declared value), and
+        # each then ran a question nobody had asked.
+        #
+        # A ledger that already holds trials is the exception, and it is the same
+        # premise read the other way: their scores and spend ARE a reading, so the
+        # incoming shift of a handover is free to act on them. Holding it to the
+        # declared seed there would order it to re-run a configuration whose result
+        # is already in the ledger.
+        if round == 0 and not Ledger(led).all():
+            try:
+                import json as _gate_json
+
+                _seed_declared = _gate_json.loads(
+                    (led.parent / "meta.json").read_text(encoding="utf-8")
+                ).get("seed_config")
+            except (OSError, ValueError):
+                _seed_declared = None
+            _departures = _seed_departures(_seed_declared, configs)
+            if _departures and not (basis or "").strip():
+                # A value handed over can be wrong, and a first run that spends an
+                # hour on a viscosity nobody believes is a poor way to find that
+                # out. So departing at round 0 is allowed -- and has to be said out
+                # loud, because the only thing that separates correcting a value
+                # from making the first run cheaper is why it was done, and no
+                # check can read that from the numbers.
+                #
+                # Measured 2026-08-17, six campaigns: five departed at round 0, and
+                # four of the five were after a cheaper start -- a coarser mesh, six
+                # keys left to the script's defaults, six batches instead of the
+                # corpus. The fifth raised a length limit it had reason to think
+                # truncated the data. Refusing them all cost 7 to 27 seconds each;
+                # allowing them silently would have cost the declared baseline in
+                # four campaigns out of five.
+                log_event(led.parent, "seed_refused", round=round, changes=_departures)
+                return (
+                    "REFUSED: this changes the starting point the campaign declared, and gives "
+                    "no reason.\n"
+                    + "\n".join(f"  {d}" for d in _departures)
+                    + "\nThat config is the handover -- the code and its defaults as they were "
+                    "given to you. You may correct a value you can show is wrong: a water "
+                    "viscosity of 1e-3, a path that does not exist, a unit that is off by a "
+                    "thousand. Pass 'basis' saying which value is wrong and how you know.\n"
+                    "What is NOT a reason is that the declared start is expensive or awkward: a "
+                    "smaller mesh, fewer batches, a shorter run, leaving keys to the job's "
+                    "defaults. Those change the question rather than answer it, and the reading "
+                    "they produce is about a different problem than the one you were given.\n"
+                    "Submit it as declared (or with no configs at all, which runs it) if you "
+                    "have no such reason. If you suspect the declared start is wrong but cannot "
+                    "yet show it, say so with ops_ask_owner rather than changing it quietly. "
+                    "Nothing was submitted."
+                )
+            if _departures:
+                # Allowed, and recorded with the reason: what it changed, and what it
+                # said was wrong with the declared value. Both halves are needed --
+                # the diff alone cannot tell a correction from a shortcut.
+                log_event(led.parent, "seed_departed", round=round,
+                          changes=_departures, basis=(basis or "")[:400])
+
+        # A question the loop itself called blocking, still unanswered. It said
+        # nothing worth doing was left until it heard back; submitting now
+        # contradicts that, and spends compute on a branch the answer may make
+        # wrong. Looking is untouched -- ops_exec, the logs, the case are all
+        # still open, and writing down what was found is how the wait gets used.
+        from raven.agent.tools.ops_escalation import blocking_question_open
+
+        _blocked = blocking_question_open(led.parent)
+        if _blocked:
+            log_event(led.parent, "submit_refused", reason="blocking_question_open")
+            return (
+                "REFUSED: you asked the owner this and called it blocking, and it is still "
+                f"unanswered:\n  {_blocked[:300]}\n"
+                "Blocking was your own reading that nothing worth doing was left until you "
+                "heard back -- so spending compute now contradicts it. Reading logs, reading "
+                "the case and writing down what you find cost nothing and are still open to "
+                "you. If you have since found something that makes the answer unnecessary, "
+                "record it with ops_note and submit again. Nothing was submitted."
             )
 
         if round >= 1:
@@ -1365,12 +1873,48 @@ class OpsSubmitTool(_OpsScheduler):
         led.parent.mkdir(parents=True, exist_ok=True)
         meta_file = led.parent / "meta.json"
         meta: dict[str, Any] = {
-            "host": host,
-            "port": port,
-            "key": key,
-            "remote_dir": remote_dir,
-            "image": image,
+            "host": host, "port": port, "key": key, "remote_dir": remote_dir, "image": image,
         }
+        if connection:
+            from raven.ops.connections import describe as _conn_describe, get as _conn_get
+
+            if _conn_get(connection) is None:
+                # Refused here rather than at the staging step: a campaign written
+                # with an id nothing resolves has no address, and every round after
+                # it fails for a reason that looks like the machine is down.
+                return (
+                    f"REFUSED: there is no connection with id {connection!r}, so nothing was "
+                    f"written or submitted.\n{_conn_describe()}"
+                )
+            # Named by the caller from ops_connections. Kept instead of an address:
+            # the address is the connection's business, and a campaign that stores
+            # one goes stale the moment a port changes.
+            meta["connection"] = connection
+            for _t in ("host", "port", "key"):
+                meta.pop(_t, None)
+        if command:
+            meta["command"] = command
+            # A command and a container are two different ways to start a trial, and
+            # only one of them runs what the owner installed. Inferred rather than
+            # asked for again: nothing on the docker path reads "command", so a call
+            # that carries one has already said which it means.
+            meta["backend"] = backend or "process"
+        elif backend:
+            meta["backend"] = backend
+        if staged_case:
+            meta["staged_case"] = staged_case
+        if not meta_file.exists() and not connection and not str(host).strip():
+            # Nothing here says what this campaign is. Creating one from a round's
+            # arguments is what ops_declare is for, and it refuses in one place
+            # rather than leaving the checks scattered through a submit.
+            return (
+                f"REFUSED: there is no campaign called '{campaign}' -- it has not been declared, "
+                f"so there is nothing saying which machine it runs on, how a trial starts, or "
+                f"what it is optimising.\n"
+                f"Declare it first with ops_declare, then submit round 0 against it. "
+                f"ops_campaigns lists the ones that do exist, if you meant one of those. "
+                f"Nothing was submitted."
+            )
         if metric and goal in ("max", "min"):
             meta["objective"] = {"metric": metric, "direction": goal}
         if meta_file.exists():
@@ -1381,7 +1925,27 @@ class OpsSubmitTool(_OpsScheduler):
             try:
                 stored = _json.loads(meta_file.read_text(encoding="utf-8"))
                 meta.update(stored)
-                meta["host"], meta["port"] = _split_hostport(meta.get("host", host), int(meta.get("port", port)))
+                if stored.get("connection"):
+                    # A campaign that names a connection keeps no address of its
+                    # own, so the merge above leaves this round's arguments in
+                    # place -- including a port that defaulted to 22 because the
+                    # caller had no reason to pass one. Measured 2026-08-17: both
+                    # FEA campaigns declared a connection on port 64106 and every
+                    # submit was refused with "connect to host ... port 22".
+                    #
+                    # Cleared and then filled from the connection, rather than
+                    # only cleared: the rest of this call reads meta["host"] to
+                    # say where the work went, and a meta with no address at all
+                    # made that a KeyError the agent could only read as "the tool
+                    # wants a host" -- measured minutes later, when it passed one
+                    # by hand and then edited the campaign's own declaration.
+                    from raven.ops.connections import resolve_into as _conn_resolve
+
+                    for _t in ("host", "port", "key", "user"):
+                        meta.pop(_t, None)
+                    meta = _conn_resolve(meta)
+                else:
+                    meta["host"], meta["port"] = _split_hostport(meta.get("host", host), int(meta.get("port", port)))
                 if "objective" not in stored and meta.get("objective"):
                     # A campaign whose meta was written by hand before the first
                     # submit -- how every experiment here is set up -- reached this
@@ -1397,6 +1961,11 @@ class OpsSubmitTool(_OpsScheduler):
         else:
             meta_file.write_text(_json.dumps(meta), encoding="utf-8")
 
+
+        # The campaign's own words for what it is doing. Declared once and read
+        # from there on every round, because the wake message that carries it is
+        # written by a turn that no longer has the task statement in front of it.
+        objective = objective or str(meta.get("objective_words") or "") or metric
         if round == 0:
             prepare_from_meta(meta, app_dir=app_dir)
 
@@ -1434,9 +2003,36 @@ class OpsSubmitTool(_OpsScheduler):
         ledger_obj = Ledger(ledger)
         submitted = []
         refused = []
+        # A trial is its config AND the apparatus it ran against. Named from the
+        # config alone, "same config, edited case" reused one job directory: the
+        # restart branch keeps system/ so the edits never reached the job, the
+        # previous round's log was overwritten in place, and its spend vanished
+        # with the directory the backend measures by. Ten edits, two identical
+        # eleven-minute failures, 8.8% of the campaign's spend off the books.
+        #
+        # This does not weaken idempotency, it corrects it: the same config
+        # against a changed case is a different run. A campaign with no staged
+        # case has no digest and its names are unchanged.
+        _apparatus = ""
+        if _now and _now.get("case"):
+            import hashlib as _ap_hash
+
+            _apparatus = _ap_hash.sha1(
+                "\n".join(f"{k}:{v}" for k, v in sorted(_now["case"].items())).encode()
+            ).hexdigest()[:8]
         for cfg in configs:
             key_id = config_key(cfg)
-            ledger_obj.record(key_id, campaign=campaign)
+            if _apparatus:
+                key_id = f"{key_id}__{_apparatus}"
+            # A campaign started before the key was shortened holds its records
+            # under the old spelling; recomputing would read them as trials that
+            # never ran and spend the compute again.
+            from raven.ops.proposer import legacy_config_key
+
+            _known = {r.idem_key for r in ledger_obj.all()}
+            if key_id not in _known and legacy_config_key(cfg) in _known:
+                key_id = legacy_config_key(cfg)
+            ledger_obj.record(key_id, campaign=campaign, config=dict(cfg))
             try:
                 handle = await backend.submit(JobSpec(cfg, idem_key=key_id, labels={"campaign": campaign}))
             except JobBackendError as exc:
@@ -1466,23 +2062,32 @@ class OpsSubmitTool(_OpsScheduler):
             submitted_note = "\n".join(f"  - {x}" for x in _drift_lines)
         else:
             submitted_note = ""
+        # The failure branch is split by whether the text states a cause, not by
+        # whether the run failed. Measured 2026-08-14: a trial killed from outside
+        # left no result.json, the backend filled `error` with `tail -30 job.log`,
+        # and for a training script that tail is checkpoint-writing progress bars.
+        # The loop read the bars as the crash site, called it a code fault in the
+        # trial script, and took the branch below to hand it back -- with 88% of the
+        # budget unspent and nothing wrong with the code. An unexplained death is
+        # the case the previous wording had no name for, so it borrowed this one.
         message = (
-            f"[Ops campaign '{campaign}' round {round} due] Jobs on {meta['host']} for objective "
+            f"[Ops campaign '{campaign}' round {round} due] Jobs on {_where(meta)} for objective "
             f"'{objective}' should be ready. Call ops_tune_status(ledger='{ledger}') "
             f"to read results, then decide: ops_submit the next config(s) with round={next_round} "
             f"exactly (always increment the round, never reuse a previous number; max_rounds={max_rounds}) "
             f"if ready, ops_check_later if still running, ops_finish to end it and hand the result "
-            f"back, or ops_ask_owner if the decision is genuinely the owner's. If trials FAILED with a "
-            f"code error in the trial script, do NOT rewrite the trial code yourself: triage it -- "
-            f"ops_finish with outcome='failed' to hand it off."
+            f"back, or ops_ask_owner if the decision is genuinely the owner's. When a trial FAILED, "
+            f"decide from what the failure text actually states: a named exception or a traceback is a "
+            f"stated cause, and if that cause is a code error in the trial script, do NOT rewrite the "
+            f"trial code yourself -- triage it, ops_finish with outcome='failed' to hand it off. Output "
+            f"that merely stops -- progress bars, library warnings, an ordinary last line, no traceback "
+            f"-- states no cause at all: the job was ended from outside and the reason is not in its "
+            f"artifacts, so report it as unexplained rather than naming a cause, and with budget left "
+            f"resubmit before handing it back."
         )
         wake_note = _schedule_ops_wake(
-            self._cron,
-            self._channel,
-            self._chat_id,
-            name=f"ops:{campaign}:r{next_round}",
-            message=message,
-            eta_seconds=eta_seconds,
+            self._cron, self._channel, self._chat_id, owner=self._session_key,
+            name=f"ops:{campaign}:r{next_round}", message=message, eta_seconds=eta_seconds,
         )
         from raven.ops.instrument import log_event
 
@@ -1502,7 +2107,7 @@ class OpsSubmitTool(_OpsScheduler):
                 "this round's results are read against the earlier ones.\n"
             )
         return (
-            f"Submitted {len(submitted)} job(s) for campaign '{campaign}' round {round} on {meta['host']}: "
+            f"Submitted {len(submitted)} job(s) for campaign '{campaign}' round {round} on {_where(meta)}: "
             f"{', '.join(submitted)}.\nLedger: {ledger}\n{drift_note}{wake_note}"
         )
 
@@ -1553,10 +2158,7 @@ class OpsCheckLaterTool(_OpsScheduler):
                     ),
                 },
                 "basis": {"type": "string", "description": _BASIS_HELP},
-                "metric": {
-                    "type": "string",
-                    "description": "Metric name to read back; defaults to the campaign's declared objective.",
-                },
+                "metric": {"type": "string", "description": "Metric name to read back; defaults to the campaign's declared objective."},
                 "objective": {"type": "string", "description": "Objective text, for the wake message (optional)."},
             },
             "required": ["eta_seconds", "basis"],
@@ -1572,7 +2174,8 @@ class OpsCheckLaterTool(_OpsScheduler):
         objective: str = "",
         **kwargs: Any,
     ) -> str:
-        cdir = _resolve_campaign_dir(campaign, ledger)
+        cdir = _resolve_campaign_dir(campaign, ledger, getattr(self, '_session_key', ''),
+                                     getattr(self, '_task', ''))
         # Backfill both handles from the resolved campaign. Omitting them is allowed,
         # and without this the wake was named "ops::recheck" -- outside the
         # "ops:<campaign>:" prefix that every dedup and re-arm check keys on, so the
@@ -1605,13 +2208,103 @@ class OpsCheckLaterTool(_OpsScheduler):
         log_event(cdir, "check_later", eta_seconds=eta_seconds)
         _record_basis(cdir, basis, "check_later")
         return _schedule_ops_wake(
-            self._cron,
-            self._channel,
-            self._chat_id,
-            name=f"ops:{campaign}:recheck",
-            message=message,
-            eta_seconds=eta_seconds,
+            self._cron, self._channel, self._chat_id, owner=self._session_key,
+            name=f"ops:{campaign}:recheck", message=message, eta_seconds=eta_seconds,
         )
+
+
+class OpsCampaignsTool(Tool):
+    """List the campaigns in this instance. Lists; does not decide.
+
+    A campaign's name used to reach the loop in exactly one place -- the error
+    raised when an unnamed call could not tell which campaign was meant -- so the
+    only way to see what existed was to trip over that ambiguity on purpose. For
+    the shape this is used in (several windows, several experiments, some
+    finished) that is not a listing.
+
+    Which campaign is "current" is deliberately absent: that is a per-window fact
+    the resolver answers, and answering it a second way here is how two sources of
+    one truth begin to disagree.
+
+    Each line carries what a task statement would name -- host, case, budget --
+    so an incoming window can match its own statement against the list.
+    """
+
+    @property
+    def name(self) -> str:
+        return "ops_campaigns"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List the ops campaigns in this instance: name, whether each is still being watched "
+            "or has finished, its host and case, its budget and what it has spent. Use when the "
+            "user asks what experiments exist or which one something refers to, or when you need "
+            "a campaign's name and do not have it. Read-only."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs: Any) -> str:
+        import json as _c_json
+
+        home = _ops_home()
+        dirs = sorted(d for d in home.iterdir() if d.is_dir()) if home.exists() else []
+        if not dirs:
+            return f"No campaign under {home} yet."
+
+        lines: list[str] = []
+        for d in dirs:
+            try:
+                meta = _c_json.loads((d / "meta.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                lines.append(f"  {d.name}   (no readable meta.json)")
+                continue
+            concluded = d / "concluded.json"
+            bits: list[str] = []
+            if concluded.exists():
+                try:
+                    c = _c_json.loads(concluded.read_text(encoding="utf-8"))
+                    bits.append(f"finished {c.get('concluded_at', '?')} ({c.get('outcome', '?')})")
+                except (OSError, ValueError):
+                    bits.append("finished")
+                # Where the result actually is. A finished campaign's report is the
+                # reason anyone comes back to it -- a day later, in a new window
+                # with no memory of the run -- and saying only that it finished
+                # leaves them to search for it.
+                reports = sorted(d.glob("report-*.md"))
+                if reports:
+                    bits.append(f"report {reports[-1]}")
+            else:
+                bits.append("being watched" if _has_live_watcher(d.name) else
+                            "waiting, no window is watching it")
+            bits.append(_campaign_gist(d))
+            # Spend is measured on the host, so only live campaigns are probed: a
+            # finished one's number is already in its record, and a listing has to
+            # stay cheap enough to ask casually.
+            if not concluded.exists():
+                try:
+                    from raven.ops.backends import backend_from_meta
+
+                    spent = await backend_from_meta(meta).spent_minutes()
+                    total = (meta.get("budget") or {}).get("total")
+                    unit = (meta.get("budget") or {}).get("unit") or ""
+                    bits.append(f"spent {spent:.2f}" + (f" of {total} {unit}" if total else ""))
+                except Exception:  # noqa: BLE001 -- an unread spend is a dash, never a failure
+                    bits.append("spent unread (host did not answer)")
+            trials = 0
+            try:
+                trials = len((_c_json.loads((d / "ledger.json").read_text(encoding="utf-8"))
+                              .get("records") or {}))
+            except (OSError, ValueError):
+                pass
+            if trials:
+                bits.append(f"{trials} trial(s)")
+            lines.append(f"  {d.name}   " + "   ".join(bits))
+        return (f"{len(dirs)} campaign(s) under {home}:\n" + "\n".join(lines) +
+                "\nWhich one a call means is per window; name one to work on it.")
 
 
 class OpsNoteTool(Tool):
@@ -1631,7 +2324,7 @@ class OpsNoteTool(Tool):
     def description(self) -> str:
         return (
             "Record the user's mid-campaign instruction or decision for a running ops campaign "
-            "(e.g. 'explore larger k1 next round', 'prefer fewer trials'). Wake turns cannot see "
+            "(e.g. 'try a finer time step next round', 'prefer fewer trials'). Wake turns cannot see "
             "this chat -- writing the note is the ONLY way your instruction reaches the next round. "
             "Use whenever the user gives guidance about an ongoing campaign."
         )
@@ -1649,12 +2342,16 @@ class OpsNoteTool(Tool):
         }
 
     async def execute(self, campaign: str, note: str, ledger: str | None = None, **kwargs: Any) -> str:
-        cdir = _resolve_campaign_dir(campaign, ledger)
+        cdir = _resolve_campaign_dir(campaign, ledger, getattr(self, '_session_key', ''),
+                                     getattr(self, '_task', ''))
         _append_note(cdir, note)
         from raven.ops.instrument import log_event
 
         log_event(cdir, "note", note=note)
-        return f"Noted for campaign '{campaign}': {note}\nThe next wake turn will see it via ops_tune_status."
+        return (
+            f"Noted for campaign '{campaign}': {note}\n"
+            f"The next wake turn will see it via ops_tune_status."
+        )
 
 
 class OpsKillTool(Tool):
@@ -1691,11 +2388,8 @@ class OpsKillTool(Tool):
             "type": "object",
             "properties": {
                 "campaign": {"type": "string", "description": "Campaign name."},
-                "trials": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Trial keys to kill (as shown in ops_tune_status).",
-                },
+                "trials": {"type": "array", "items": {"type": "string"},
+                           "description": "Trial keys to kill (as shown in ops_tune_status)."},
                 "reason": {"type": "string", "description": "Why, in your own words."},
                 "basis": {"type": "string", "description": _BASIS_HELP},
                 "ledger": {"type": "string", "description": "Ledger path (locates the campaign dir)."},
@@ -1704,13 +2398,8 @@ class OpsKillTool(Tool):
         }
 
     async def execute(
-        self,
-        trials: list[str],
-        campaign: str = "",
-        basis: str = "",
-        reason: str = "",
-        ledger: str | None = None,
-        **kwargs: Any,
+        self, trials: list[str], campaign: str = "", basis: str = "", reason: str = "",
+        ledger: str | None = None, **kwargs: Any
     ) -> str:
         import json as _json
 
@@ -1718,7 +2407,8 @@ class OpsKillTool(Tool):
         from raven.ops.backends import backend_from_meta
         from raven.ops.instrument import log_event
 
-        cdir = _resolve_campaign_dir(campaign, ledger)
+        cdir = _resolve_campaign_dir(campaign, ledger, getattr(self, '_session_key', ''),
+                                     getattr(self, '_task', ''))
         ledger_path = cdir / "ledger.json"
         meta_path = cdir / "meta.json"
         if not ledger_path.exists() or not meta_path.exists():
@@ -1736,9 +2426,7 @@ class OpsKillTool(Tool):
                 skipped.append(key)
                 continue
             await backend.cancel(rec.handle)
-            led.set_result(
-                rec.idem_key, JobResult(JobStatus.FAILED, error=f"killed early: {reason or 'agent decision'}")
-            )
+            led.set_result(rec.idem_key, JobResult(JobStatus.FAILED, error=f"killed early: {reason or 'agent decision'}"))
             log_event(cdir, "kill", trial=key, reason=reason)
             killed.append(key)
         if killed:

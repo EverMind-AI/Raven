@@ -29,6 +29,26 @@ from raven.ops.backend import JobBackendError, JobHandle, JobResult, JobStatus
 from raven.ops.budget import ADDITIVE, Budget, accumulate, from_meta as budget_from_meta
 from raven.ops.process_backend import ProcessExecutor, _num
 
+# How much of the solver's own ending to carry in the failure reason. Enough for
+# the crash banner and the first frames under it; the reader truncates again.
+_LAST_WORDS_LINES = 12
+_LAST_WORDS_CHARS = 200
+
+
+def _failure_reason(log_tail: str) -> str:
+    """Why a job is failed: how it was detected, then what it last printed.
+
+    Detection alone is a tautology -- "solver did not print End" restates the rule
+    that produced the verdict. The lines are appended verbatim and unranked:
+    deciding which one explains the crash is domain knowledge, and this backend
+    serves every solver that writes a log.
+    """
+    detected = "solver did not print End"
+    lines = [ln.strip()[:_LAST_WORDS_CHARS] for ln in log_tail.splitlines() if ln.strip()]
+    if not lines:
+        return f"{detected}; no log to read either"
+    return detected + ", and its last lines were:\n" + "\n".join(lines[-_LAST_WORDS_LINES:])
+
 
 class OpenFoamExecutor(ProcessExecutor):
     """``ProcessExecutor`` whose budget is core-minutes and whose evidence is a solver log.
@@ -223,7 +243,7 @@ class OpenFoamExecutor(ProcessExecutor):
             status,
             metrics={},
             output=output,
-            error=None if status is JobStatus.SUCCEEDED else "solver did not print End",
+            error=None if status is JobStatus.SUCCEEDED else _failure_reason(output["log_tail"]),
         )
 
     async def fetch_progress(self, handle: JobHandle, tail: int = 5) -> list[dict]:

@@ -26,7 +26,9 @@ def _spec(key: str) -> JobSpec:
 @pytest.mark.asyncio
 async def test_killing_a_doomed_job_is_correct_and_saves_its_remaining_time():
     clock = _clock()
-    backend = ScriptedJobBackend(clock, scripts={"doomed": JobScript(finish_after_ms=10_000, fail=True)})
+    backend = ScriptedJobBackend(
+        clock, scripts={"doomed": JobScript(finish_after_ms=10_000, fail=True)}
+    )
     handle = await backend.submit(_spec("doomed"))
     clock.advance_ms(2_000)
     await backend.cancel(handle)
@@ -41,7 +43,9 @@ async def test_killing_a_doomed_job_is_correct_and_saves_its_remaining_time():
 @pytest.mark.asyncio
 async def test_killing_a_job_that_would_have_succeeded_is_wrong_and_wastes_its_run():
     clock = _clock()
-    backend = ScriptedJobBackend(clock, scripts={"fine": JobScript(finish_after_ms=10_000, fail=False)})
+    backend = ScriptedJobBackend(
+        clock, scripts={"fine": JobScript(finish_after_ms=10_000, fail=False)}
+    )
     handle = await backend.submit(_spec("fine"))
     clock.advance_ms(9_000)
     await backend.cancel(handle)
@@ -56,7 +60,9 @@ async def test_killing_a_job_that_would_have_succeeded_is_wrong_and_wastes_its_r
 @pytest.mark.asyncio
 async def test_a_job_left_to_finish_is_not_counted_as_any_kill():
     clock = _clock()
-    backend = ScriptedJobBackend(clock, scripts={"fine": JobScript(finish_after_ms=1_000, fail=False)})
+    backend = ScriptedJobBackend(
+        clock, scripts={"fine": JobScript(finish_after_ms=1_000, fail=False)}
+    )
     await backend.submit(_spec("fine"))
     clock.advance_ms(5_000)
 
@@ -69,7 +75,9 @@ async def test_a_job_left_to_finish_is_not_counted_as_any_kill():
 @pytest.mark.asyncio
 async def test_killing_a_never_finishing_job_is_reported_apart_from_saved_time():
     clock = _clock()
-    backend = ScriptedJobBackend(clock, scripts={"hangs": JobScript(finish_after_ms=None)})
+    backend = ScriptedJobBackend(
+        clock, scripts={"hangs": JobScript(finish_after_ms=None)}
+    )
     handle = await backend.submit(_spec("hangs"))
     clock.advance_ms(3_000)
     await backend.cancel(handle)

@@ -1,7 +1,7 @@
 {
   "name": "Raven-Code",
   "kind": "cli",
-  "description": "Writes, runs and debugs code for one engineering task, then reports what it did. Two modes, chosen by the prompt. Plain prose: it works in a private scratch directory and returns the code it wrote plus what it observed running it. A first line of exactly 'repo: /absolute/path' followed by the task: it works DIRECTLY IN THAT CHECKOUT - the edits are real and left uncommitted for you to review with git diff, it can see work already in the tree, and it is told not to commit, stash, reset or switch branches. Its reply ends with the resulting working-tree summary. Stateful: spawn again with the same 'instance' handle to continue - it keeps its conversation history and stays bound to the same checkout, so give the repo path on the first turn only; a second, different path is refused rather than silently starting a fresh conversation. It has a shell with interactive sessions and background jobs, file read/write/edit/grep/find, and web search, but it cannot reach any path outside its workspace and has nobody to ask, so state the acceptance criteria in the task. A small fix takes about a minute. Distinct from 'Coder' (Claude Code) and 'Writer' (Codex): this is Raven-X's swarm-integration build driven by claude-opus-5.",
+  "description": "A powerful coding agent that can write, run and debug code for one engineering task on this host, then report what it did. Use this agent for a fix, a small feature, a script, or a failing test. IMPORTANT: it edits your files for real and has nobody to ask, so put the acceptance criteria in the task.",
   "enabled": true,
   "command": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
   "resumeCommand": "{PYTHON} {SUBAGENT_DIR}/run.py --prompt-file {prompt_file} --session {agent_id}",
@@ -9,5 +9,10 @@
   "readsLocalFiles": true,
   "maxOutputChars": 60000,
   "timeout": null,
-  "transcriptFormat": "text"
+  "transcriptFormat": "text",
+  "recommendedLlm": {
+    "provider": "custom",
+    "model": "anthropic/claude-opus-5",
+    "apiBase": "https://openrouter.ai/api/v1"
+  }
 }

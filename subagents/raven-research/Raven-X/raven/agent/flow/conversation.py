@@ -139,7 +139,6 @@ def take_turn_rows() -> list[dict[str, Any]]:
     _TURN_LEDGER_ROWS.set(None)
     return rows or []
 
-
 _GATE_SYSTEM = """You decide whether a follow-up message in an ongoing research \
 conversation needs a new round of web research, or can be answered from what is \
 already in the conversation.

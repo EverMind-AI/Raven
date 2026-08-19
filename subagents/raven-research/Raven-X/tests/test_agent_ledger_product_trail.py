@@ -32,7 +32,9 @@ from raven.agent.ledger import (
 def _isolate(monkeypatch, tmp_path):
     """No env ledger, and the instance data dir points into tmp."""
     monkeypatch.delenv(LEDGER_ENV, raising=False)
-    monkeypatch.setattr("raven.config.paths.get_product_ledger_dir", lambda: tmp_path, raising=True)
+    monkeypatch.setattr(
+        "raven.config.paths.get_product_ledger_dir", lambda: tmp_path, raising=True
+    )
 
 
 def test_product_default_gives_the_appendix_a_ledger_to_read(monkeypatch, tmp_path):
@@ -100,7 +102,9 @@ def test_an_env_ledger_always_wins_and_is_never_deleted(monkeypatch, tmp_path):
     arm = tmp_path / "arm_dr_q17.jsonl"
     arm.write_text('{"op": "search", "query": "measured"}\n', encoding="utf-8")
     monkeypatch.setenv(LEDGER_ENV, str(arm))
-    monkeypatch.setattr("raven.config.paths.get_product_ledger_dir", lambda: tmp_path / "never", raising=True)
+    monkeypatch.setattr(
+        "raven.config.paths.get_product_ledger_dir", lambda: tmp_path / "never", raising=True
+    )
 
     assert open_product_ledger("turn-3") is None, "took over a launcher-owned ledger"
     assert ledger_path() == str(arm)
@@ -244,9 +248,9 @@ def test_a_rerun_of_the_same_question_gets_the_next_session(monkeypatch, tmp_pat
     path = tmp_path / "led.jsonl"
     monkeypatch.setenv(LEDGER_ENV, str(path))
 
-    ledger_mod._session_seq.clear()  # first process
+    ledger_mod._session_seq.clear()          # first process
     ledger_append({"op": "search", "query": "first-run"})
-    ledger_mod._session_seq.clear()  # a second process opens the same file
+    ledger_mod._session_seq.clear()          # a second process opens the same file
     ledger_append({"op": "search", "query": "second-run"})
 
     rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -281,7 +285,8 @@ def test_the_sequence_is_resolved_once_not_per_row(monkeypatch, tmp_path):
 
     calls = []
     real = ledger_mod._resolve_session_seq
-    monkeypatch.setattr(ledger_mod, "_resolve_session_seq", lambda p: (calls.append(p), real(p))[1])
+    monkeypatch.setattr(ledger_mod, "_resolve_session_seq",
+                        lambda p: (calls.append(p), real(p))[1])
     for i in range(5):
         ledger_append({"op": "search", "query": f"q{i}"})
 

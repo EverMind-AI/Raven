@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path
 
 from raven.ops.backend import JobHandle, JobResult, JobStatus
@@ -42,6 +43,13 @@ class JobRecord:
     result: JobResult | None = None
     attempts: int = 0
     escalated: bool = False
+    # What was actually submitted for this trial. A wake turn is a cold start:
+    # the only account of "what did round 0 run" it can read is this ledger, and
+    # without the config it had to decode the folded idem_key. Measured
+    # 2026-08-17: an arm reconstructed round 0 as "20x6x6 mesh, 50kN" -- neither
+    # value was in the run -- by mixing the key with a free-text reference note,
+    # and reasoned from that for the rest of the campaign.
+    config: dict[str, Any] | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -70,11 +78,16 @@ class Ledger:
     def by_campaign(self, campaign: str) -> list[JobRecord]:
         return [r for r in self._records.values() if r.campaign == campaign]
 
-    def record(self, idem_key: str, *, campaign: str | None = None) -> JobRecord:
+    def record(self, idem_key: str, *, campaign: str | None = None,
+               config: dict[str, Any] | None = None) -> JobRecord:
         rec = self._records.get(idem_key)
         if rec is None:
-            rec = JobRecord(idem_key=idem_key, campaign=campaign)
+            rec = JobRecord(idem_key=idem_key, campaign=campaign, config=config)
             self._records[idem_key] = rec
+            self._persist()
+        elif config and rec.config is None:
+            # A record written before configs were kept, met again on a resubmit.
+            rec.config = config
             self._persist()
         return rec
 
@@ -147,6 +160,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "result": _result_to_dict(r.result) if r.result else None,
         "attempts": r.attempts,
         "escalated": r.escalated,
+        "config": r.config,
     }
 
 
@@ -170,5 +184,6 @@ def _record_from_dict(d: dict) -> JobRecord:
             else None
         ),
         attempts=d.get("attempts", 0),
+        config=d.get("config"),
         escalated=d.get("escalated", False),
     )

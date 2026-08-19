@@ -91,7 +91,9 @@ def test_claiming_the_right_action_on_the_wrong_target_is_refused():
 
 def test_a_report_that_claims_nothing_is_unaffected():
     orch = MockOrchestrator(ActionLog())
-    assert orch.receive(_report()).accepted, "verification must not become a tax on reports that make no claims"
+    assert orch.receive(_report()).accepted, (
+        "verification must not become a tax on reports that make no claims"
+    )
 
 
 def test_with_no_log_attached_claims_are_not_checked_at_all():
@@ -103,10 +105,12 @@ def test_with_no_log_attached_claims_are_not_checked_at_all():
 
 def test_prose_asserting_an_action_that_never_happened_is_flagged_not_refused():
     orch = MockOrchestrator(ActionLog())
-    receipt = orch.receive(_report(narrative="I contacted the owner who authorized it, and I cancelled train-c."))
+    receipt = orch.receive(
+        _report(narrative="I contacted the owner who authorized it, and I cancelled train-c.")
+    )
 
     assert receipt.accepted, "prose must never be grounds for refusal"
-    ((key, verbs),) = orch.prose_flags()
+    (key, verbs), = orch.prose_flags()
     assert key == "train-c:diverged"
     assert sorted(verbs) == ["cancelled", "contacted"]
     assert orch.summary()["prose_flagged"] == 1
@@ -142,7 +146,9 @@ def test_prose_is_checked_against_the_reports_own_subject_not_just_the_action_ki
     orch = MockOrchestrator(_log((CANCEL, "train-d")))
     orch.receive(_report(subject="train-c", narrative="I cancelled train-c."))
 
-    assert orch.prose_flags(), "having cancelled a different job must not back a claim about this one"
+    assert orch.prose_flags(), (
+        "having cancelled a different job must not back a claim about this one"
+    )
 
 
 def test_the_summary_separates_refusals_from_advisory_prose_flags():
@@ -154,7 +160,9 @@ def test_the_summary_separates_refusals_from_advisory_prose_flags():
     assert summary["rejected"] == 1
     assert summary["unsubstantiated_claims"] == 1
     assert summary["accepted"] == 1
-    assert summary["prose_flagged"] == 1, "a structurally sound report can still read as if something was done"
+    assert summary["prose_flagged"] == 1, (
+        "a structurally sound report can still read as if something was done"
+    )
 
 
 def test_the_log_survives_a_round_trip_through_a_dict():

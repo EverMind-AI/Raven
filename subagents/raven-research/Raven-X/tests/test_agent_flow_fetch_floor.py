@@ -115,7 +115,7 @@ async def test_max_streak_survives_a_fetch_that_zeroes_the_tail():
     and applied to the other is not a stricter version of the same rule - it selects
     a different population.
     """
-    observer = FetchFloorObserver(min_searches=5, max_notes=0)  # record only, no notes
+    observer = FetchFloorObserver(min_searches=5, max_notes=0)   # record only, no notes
     ctx = _ctx()
     _add_tool_results(ctx, "web_search", 7)
     await observer.after_iteration(ctx)

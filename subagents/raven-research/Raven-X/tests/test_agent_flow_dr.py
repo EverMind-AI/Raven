@@ -129,15 +129,13 @@ async def test_prompt_section_override_replaces_the_contract():
     default = await DRModeSegmentBuilder().build(None)
     assert (await DRModeSegmentBuilder(None).build(None)).text == default.text
 
-    base = build_dr_flow(DRFlowConfig(enabled=True), _StubProvider(), max_iterations=40, context_window_tokens=65536)
+    base = build_dr_flow(
+        DRFlowConfig(enabled=True), _StubProvider(), max_iterations=40, context_window_tokens=65536
+    )
     assert (await base.segment_builder.build(None)).text == default.text
 
     custom = build_dr_flow(
-        DRFlowConfig(
-            enabled=True,
-            version=f"{DRFlowConfig().version}-profile",
-            prompt_section_override="# Custom\n\nEnd with a box.",
-        ),
+        DRFlowConfig(enabled=True, version=f"{DRFlowConfig().version}-profile", prompt_section_override="# Custom\n\nEnd with a box."),
         _StubProvider(),
         max_iterations=40,
         context_window_tokens=65536,
@@ -837,7 +835,9 @@ async def test_digest_folds_closing_tag_only_reasoning():
 
 @pytest.mark.asyncio
 async def test_digest_appends_verbatim_head_after_folding():
-    provider = _ReviewerProvider([LLMResponse(content="reasoning</think>extracted fact", finish_reason="stop")])
+    provider = _ReviewerProvider(
+        [LLMResponse(content="reasoning</think>extracted fact", finish_reason="stop")]
+    )
     digest = _make_digest_fn(provider, None, verbatim_head_chars=8)
 
     out = await digest("PAGEHEAD rest of the page", "fact")

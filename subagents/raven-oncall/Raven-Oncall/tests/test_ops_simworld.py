@@ -153,28 +153,16 @@ async def test_full_loop_through_the_tools_in_compressed_time(tmp_path) -> None:
     the real tools against a job that takes two campaign hours, in zero wall time."""
     from raven.agent.tools.ops import OpsSubmitTool, OpsTuneStatusTool
 
-    clock, _ = _install(
-        tmp_path,
-        "w1",
-        {
-            "b0p6_k11p6": JobScript(
-                finish_after_ms=2 * 3_600_000, metrics={"ndcg": 0.31}, output={"config": {"k1": 1.6, "b": 0.6}}
-            ),
-        },
-    )
+    clock, _ = _install(tmp_path, "w1", {
+        "b0p6_k11p6": JobScript(finish_after_ms=2 * 3_600_000, metrics={"ndcg": 0.31},
+                                output={"config": {"k1": 1.6, "b": 0.6}}),
+    })
     ledger = str(tmp_path / "ledger.json")
     submit = OpsSubmitTool(cron_service=_FakeCron())
     submit.set_context("cli", "direct")
 
-    out = await submit.execute(
-        host="sim",
-        configs=[{"k1": 1.6, "b": 0.6}],
-        objective="max ndcg",
-        ledger=ledger,
-        eta_seconds=3600,
-        round=0,
-        campaign="w1",
-    )
+    out = await submit.execute(host="sim", configs=[{"k1": 1.6, "b": 0.6}], objective="max ndcg",
+                              ledger=ledger, eta_seconds=3600, round=0, campaign="w1")
     assert "Submitted 1 job(s)" in out
 
     status = OpsTuneStatusTool()
@@ -194,34 +182,24 @@ async def test_kill_through_the_tools_stops_a_diverged_trial(tmp_path) -> None:
 
     from raven.agent.tools.ops import OpsKillTool, OpsSubmitTool, OpsTuneStatusTool
 
-    clock, world = _install(
-        tmp_path,
-        "w2",
-        {
-            "k11p0": JobScript(
-                finish_after_ms=86_400_000,  # a day-long run...
-                progress=[(0, {"step": 1, "loss": 2.0}), (3_600_000, {"step": 2, "loss": float("nan")})],
-            ),
-        },
-    )
+    clock, world = _install(tmp_path, "w2", {
+        "k11p0": JobScript(finish_after_ms=86_400_000,  # a day-long run...
+                           progress=[(0, {"step": 1, "loss": 2.0}),
+                                     (3_600_000, {"step": 2, "loss": float("nan")})]),
+    })
     ledger = str(tmp_path / "ledger.json")
     submit = OpsSubmitTool(cron_service=_FakeCron())
     submit.set_context("cli", "direct")
-    await submit.execute(
-        host="sim", configs=[{"k1": 1.0}], objective="o", ledger=ledger, eta_seconds=3600, round=0, campaign="w2"
-    )
+    await submit.execute(host="sim", configs=[{"k1": 1.0}], objective="o",
+                         ledger=ledger, eta_seconds=3600, round=0, campaign="w2")
 
     clock.advance(hours=1)  # ... that diverges after one hour
     report = await OpsTuneStatusTool().execute(ledger=ledger, metric="ndcg")
     assert "Running-trial progress" in report and "NaN" in report.replace("nan", "NaN")
 
-    killed = await OpsKillTool().execute(
-        campaign="w2",
-        trials=["k11p0"],
-        reason="loss NaN at step 2",
-        ledger=ledger,
-        basis="the sample just read has loss NaN",
-    )
+    killed = await OpsKillTool().execute(campaign="w2", trials=["k11p0"],
+                                         reason="loss NaN at step 2", ledger=ledger,
+                                         basis="the sample just read has loss NaN")
 
     assert "Killed 1 trial(s)" in killed
     assert world.finished_at_ms("k11p0") == 3_600_000  # stopped at the hour, not after a day
@@ -240,24 +218,16 @@ async def test_conclusion_stands_down_through_the_tools(tmp_path) -> None:
     cron = _FakeCron()
     submit = OpsSubmitTool(cron_service=cron)
     submit.set_context("cli", "direct")
-    await submit.execute(
-        host="sim", configs=[{"k1": 1.0}], objective="o", ledger=ledger, eta_seconds=60, round=0, campaign="w3"
-    )
+    await submit.execute(host="sim", configs=[{"k1": 1.0}], objective="o",
+                         ledger=ledger, eta_seconds=60, round=0, campaign="w3")
 
     await OpsFinishTool(cron_service=cron).execute(
-        campaign="w3",
-        subject="w3 sweep",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3},
-        condition_type="absolute",
-        ledger=ledger,
-    )
-    late = await submit.execute(
-        host="sim", configs=[{"k1": 2.0}], objective="o", ledger=ledger, eta_seconds=60, round=1, campaign="w3"
-    )
+        campaign="w3", subject="w3 sweep", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3}, condition_type="absolute", ledger=ledger)
+    late = await submit.execute(host="sim", configs=[{"k1": 2.0}], objective="o",
+                               ledger=ledger, eta_seconds=60, round=1, campaign="w3")
 
-    assert "CONCLUDED" in late
+    assert "REFUSED" in late and "w3" in late
     assert cron.jobs == []
 
 
@@ -266,19 +236,14 @@ async def test_campaign_survives_a_restart_through_the_tools(tmp_path) -> None:
     disk) reconciles the campaign it never submitted, without re-running it."""
     from raven.agent.tools.ops import OpsSubmitTool, OpsTuneStatusTool
 
-    clock, world = _install(
-        tmp_path,
-        "w4",
-        {
-            "k11p4": JobScript(finish_after_ms=600_000, metrics={"ndcg": 0.29}, output={"config": {"k1": 1.4}}),
-        },
-    )
+    clock, world = _install(tmp_path, "w4", {
+        "k11p4": JobScript(finish_after_ms=600_000, metrics={"ndcg": 0.29}, output={"config": {"k1": 1.4}}),
+    })
     ledger = str(tmp_path / "ledger.json")
     submit = OpsSubmitTool(cron_service=_FakeCron())
     submit.set_context("cli", "direct")
-    await submit.execute(
-        host="sim", configs=[{"k1": 1.4}], objective="o", ledger=ledger, eta_seconds=600, round=0, campaign="w4"
-    )
+    await submit.execute(host="sim", configs=[{"k1": 1.4}], objective="o",
+                         ledger=ledger, eta_seconds=600, round=0, campaign="w4")
     submitted_jobs = world.poll_count()  # the world remembers what was actually started
 
     clock.advance(minutes=20)

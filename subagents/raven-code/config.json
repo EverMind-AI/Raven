@@ -20,7 +20,7 @@
     }
   },
   "tools": {
-    "restrictToWorkspace": true,
+    "restrictToWorkspace": false,
     "sandbox": {
       "backend": "none"
     },

@@ -30,6 +30,26 @@ _MAX_OPS_WAKE_REARMS = 3
 _OPS_REARM_DELAY_MS = 600_000
 
 
+def _pid_alive(pid: int) -> bool:
+    """Whether a claiming process is still running on this host.
+
+    The cron store is per-instance and local, so every claimer is a local pid.
+    Signal 0 checks existence without delivering anything; EPERM means it exists
+    and belongs to someone else.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
 # Cap the sleep-until-next-wake so _on_timer runs at least this often. This
 # is how we pick up jobs written to jobs.json by a peer process — _on_timer
 # reloads the store on mtime change. Without this cap, a gateway armed for
@@ -213,6 +233,8 @@ class CronService:
                                 to=j["payload"].get("to"),
                                 topic_tag=j["payload"].get("topicTag"),
                                 campaign=j["payload"].get("campaign"),
+                                owner=j["payload"].get("owner"),
+                                owner_pid=j["payload"].get("ownerPid"),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -271,6 +293,8 @@ class CronService:
                         # does not survive a write/read cycle is gone by the time
                         # the next producer is checked against it.
                         "campaign": j.payload.campaign,
+                        "owner": j.payload.owner,
+                        "ownerPid": j.payload.owner_pid,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -366,10 +390,54 @@ class CronService:
             )
 
     @staticmethod
+    def _owner_is_elsewhere(job: CronJob, my_pid: int) -> bool:
+        """Whether this wake belongs to a window that is not this process.
+
+        A wake with an owner is that owner's alone, open or closed. When the
+        window is closed the wake stays pending until a window takes the
+        campaign over by name, which rewrites the owner; it is never handed to
+        whoever happens to be open. Measured 2026-08-14: two closed windows'
+        wakes ran inside a third window, read a different experiment's ledger
+        and submitted jobs, and removing them did not stop it because each turn
+        armed the next one.
+
+        An absent owner is every job written before the field existed, and those
+        must keep running.
+
+        The campaign's current window outranks the owner recorded when the wake
+        was written: that is how a takeover works. A window says which campaign
+        it is watching by naming it, which writes the binding, and the pending
+        wake follows without anyone rewriting the job. When no window is bound,
+        the recorded owner decides -- and if that window is closed, nobody runs
+        it.
+        """
+        campaign = getattr(job.payload, "campaign", None)
+        if campaign:
+            try:
+                from raven.config.paths import get_ops_home
+                from raven.ops.window import window_for_campaign
+
+                bound = window_for_campaign(get_ops_home(), str(campaign))
+            except Exception:  # noqa: BLE001 -- an unreadable index costs the takeover, not the tick
+                bound = None
+            if bound and bound[1]:
+                return bound[1] != my_pid
+        owner_pid = getattr(job.payload, "owner_pid", None)
+        return bool(owner_pid) and owner_pid != my_pid
+
+    @staticmethod
     def _claim_is_live(job: CronJob, now_ms: int) -> bool:
         """Whether another process currently holds an unexpired claim on job."""
         pid = job.state.claimed_by_pid
         claimed_at = job.state.claimed_at_ms
+        if pid is not None and not _pid_alive(pid):
+            # A claim whose holder is gone is not a claim. Without this, closing
+            # the window that held one froze its campaign for the whole TTL --
+            # and the point of keeping the campaign's state on disk is that
+            # another window can take the wake over, which "in half an hour" is
+            # not. A reused pid reads as alive, which errs toward waiting out the
+            # TTL rather than running a turn twice.
+            return False
         if pid is None or claimed_at is None:
             return False
         if pid == os.getpid():
@@ -456,10 +524,31 @@ class CronService:
                 if self.allowed_channels is not None and j.payload.channel:
                     if j.payload.channel not in self.allowed_channels:
                         continue
+                # Window routing, one step finer than channel. Every TUI window is
+                # channel "tui" to "default", so channel alone cannot say which of
+                # them a campaign's wake belongs to -- and running it in the wrong
+                # one puts the turn in front of a different experiment's
+                # conversation, while looking entirely normal.
+                #
+                # A wake belongs to one window and to no other. When that window
+                # is closed the wake waits rather than moving: it stays pending,
+                # and a window that wants it says so by naming the campaign,
+                # which rebinds it here. Handing it to whoever is open instead
+                # was measured on 2026-08-14 -- two closed windows' wakes ran in
+                # the windows of a different experiment, read its ledger and
+                # submitted jobs, and deleting them did not stop it because each
+                # turn armed the next one.
+                # Asked by pid, not by session key: "is that window still there"
+                # is "is the process that owns that session still running", and a
+                # pid is the one handle every process can check about another. The
+                # session key rides along as the label the trail reads by. An
+                # empty owner is every job written before this field.
+                if self._owner_is_elsewhere(j, my_pid):
+                    continue
                 # Skip if a live peer already has it.
                 cb = j.state.claimed_by_pid
                 ca = j.state.claimed_at_ms
-                if cb is not None and cb != my_pid and ca is not None and (now - ca) < _CLAIM_TTL_MS:
+                if cb is not None and cb != my_pid and _pid_alive(cb) and ca is not None and (now - ca) < _CLAIM_TTL_MS:
                     continue
                 j.state.claimed_by_pid = my_pid
                 j.state.claimed_at_ms = now
@@ -672,6 +761,8 @@ class CronService:
                     deliver=job.payload.deliver,
                     channel=job.payload.channel or "",
                     to=job.payload.to or "",
+                    owner=getattr(job.payload, "owner", None),
+                    owner_pid=getattr(job.payload, "owner_pid", None),
                     delete_after_run=True,
                     dedup=False,
                 )
@@ -785,6 +876,8 @@ class CronService:
         topic_tag: str | None = None,
         dedup: bool = True,
         campaign: str | None = None,
+        owner: str | None = None,
+        owner_pid: int | None = None,
     ) -> CronJob:
         """Add a new job, or update an existing job with the same
         (schedule, channel, to) triple — agents often re-register the
@@ -978,6 +1071,8 @@ class CronService:
                     to=to,
                     topic_tag=topic_tag,
                     campaign=campaign,
+                    owner=owner,
+                    owner_pid=owner_pid,
                 ),
                 state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
                 created_at_ms=now,

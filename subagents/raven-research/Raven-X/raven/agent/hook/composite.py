@@ -22,6 +22,13 @@ Semantics:
   ``ctx.outbound_content``. The final return value carries the
   fully-chained ``modified_content``.
 
+- **Tool withholding chains too.** ``modified_tools`` from any phase
+  is propagated through ``ctx.tools`` so a later hook decides against
+  the already-narrowed list, and the last non-``None`` value is
+  returned. Unlike content this is not restricted to one phase: it is
+  a control-flow decision, and a phase that could produce one but had
+  it silently dropped is the failure this chaining exists to prevent.
+
 - **Exceptions are isolated.** A hook that raises is logged and
   treated as a pass-through no-op; the chain continues with the next
   hook. This mirrors the EventBus contract and is what lets a single
@@ -32,7 +39,7 @@ Semantics:
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from typing import Any, Iterable
 
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 
@@ -105,6 +112,7 @@ class CompositeHook(AgentHook):
         """
         chain_content = phase in _CHAIN_MODIFIED_PHASES
         last_modified: str | None = None
+        last_tools: list[dict[str, Any]] | None = None
 
         for hook in self._hooks:
             method = getattr(hook, phase)
@@ -126,7 +134,15 @@ class CompositeHook(AgentHook):
                 ctx.outbound_content = decision.modified_content
                 last_modified = decision.modified_content
 
-        return HookDecision(modified_content=last_modified)
+            if decision.modified_tools is not None:
+                # Chained like content, and through ``ctx`` for the same reason: a
+                # later hook deciding what to withhold must see what an earlier one
+                # already withheld. Narrowing is the only operation any hook has
+                # here, so chaining cannot restore a tool a previous hook removed.
+                ctx.tools = decision.modified_tools
+                last_tools = decision.modified_tools
+
+        return HookDecision(modified_content=last_modified, modified_tools=last_tools)
 
 
 __all__ = ["CompositeHook"]

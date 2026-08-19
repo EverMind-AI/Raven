@@ -18,7 +18,6 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.ops_oncall.round_report import (  # noqa: E402
     ARM_A_CURVE,
     DETERMINISM_POINTS,
-    Curve,  # noqa: E402
     check_determinism,
     contract_readings,
     interventions,
@@ -26,12 +25,14 @@ from benchmarks.ops_oncall.round_report import (  # noqa: E402
     read_curve,
     unguarded_paths,
 )
+from benchmarks.ops_oncall.round_report import Curve  # noqa: E402
 
 
 def _write_progress(path: Path, points, extra_lines=()) -> Path:
     lines = [json.dumps({"event": "start", "elapsed_s": 0.0})]
     lines += [
-        json.dumps({"step": s, "eval_ndcg": v, "elapsed_s": float(i * 240)}) for i, (s, v) in enumerate(points, start=1)
+        json.dumps({"step": s, "eval_ndcg": v, "elapsed_s": float(i * 240)})
+        for i, (s, v) in enumerate(points, start=1)
     ]
     lines += list(extra_lines)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -118,8 +119,7 @@ def test_curve_reads_a_result_json(tmp_path):
 
 def test_curve_skips_unparsable_and_non_eval_lines(tmp_path):
     path = _write_progress(
-        tmp_path / "progress.jsonl",
-        [(200, 0.3527)],
+        tmp_path / "progress.jsonl", [(200, 0.3527)],
         extra_lines=["not json at all", json.dumps({"event": "heartbeat", "elapsed_s": 1.0})],
     )
 
@@ -207,20 +207,13 @@ def test_message_spans_are_broken_down_by_session_never_totalled(tmp_path):
     written on, 25 such spans were 12 CLI + 9 TUI + 3 unattributed + 1 cron; a
     single total would have been a fabricated finding."""
     path = tmp_path / "spans.log"
-    path.write_text(
-        "\n".join(
-            [
-                _span("cli:c", "message"),
-                _span("cli:c", "message"),
-                _span("tui:default", "message"),
-                _span("cron:abc", "message"),
-                _span(None, "message"),
-                _span("cron:abc", "read_file"),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    path.write_text("\n".join([
+        _span("cli:c", "message"), _span("cli:c", "message"),
+        _span("tui:default", "message"),
+        _span("cron:abc", "message"),
+        _span(None, "message"),
+        _span("cron:abc", "read_file"),
+    ]) + "\n", encoding="utf-8")
 
     out = unguarded_paths(path, None, None)
 
@@ -252,16 +245,10 @@ def test_unparsable_span_lines_are_counted_not_dropped(tmp_path):
 
 def test_since_filters_by_timestamp(tmp_path):
     path = tmp_path / "spans.log"
-    path.write_text(
-        "\n".join(
-            [
-                _span("cron:abc", "message", start="2026-08-03T00:00:00+00:00"),
-                _span("cron:abc", "message", start="2026-08-04T12:00:00+00:00"),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    path.write_text("\n".join([
+        _span("cron:abc", "message", start="2026-08-03T00:00:00+00:00"),
+        _span("cron:abc", "message", start="2026-08-04T12:00:00+00:00"),
+    ]) + "\n", encoding="utf-8")
 
     out = unguarded_paths(path, "2026-08-04T00:00", None)
 

@@ -49,12 +49,15 @@ def test_the_two_curves_are_indistinguishable_before_the_turn():
     conv = _losses(converging_curve(samples=40, seed=3))
     div = _losses(diverging_curve(samples=40, diverge_at=20, seed=3))
     assert conv[:20] == div[:20], (
-        "sharing the pre-turn prefix is what forces the agent to wait for a trend instead of reacting to the first rise"
+        "sharing the pre-turn prefix is what forces the agent to wait for a "
+        "trend instead of reacting to the first rise"
     )
 
 
 def test_curves_are_deterministic_for_a_given_seed():
-    assert _losses(converging_curve(samples=20, seed=7)) == _losses(converging_curve(samples=20, seed=7))
+    assert _losses(converging_curve(samples=20, seed=7)) == _losses(
+        converging_curve(samples=20, seed=7)
+    )
 
 
 def test_progress_offsets_advance_so_samples_reveal_over_campaign_time():

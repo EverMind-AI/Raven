@@ -1589,7 +1589,9 @@ class DRFlowSearchConfig(_Base):
     batch 34.2% of this flow's searches were exact repeats against 24.7% for the
     unshaped arm, and 63% of the calls inside budget-exhausted questions were
     repeats. The rollback seam cannot carry this - it is capped at 6 per turn."""
-    saturation: DRFlowSearchSaturationConfig = Field(default_factory=DRFlowSearchSaturationConfig)
+    saturation: DRFlowSearchSaturationConfig = Field(
+        default_factory=DRFlowSearchSaturationConfig
+    )
     """Stop or deepen a turn whose searches have stopped returning new documents."""
 
 
@@ -1798,6 +1800,33 @@ class DRFlowFetchFloorConfig(_Base):
     max_notes: int = 2
 
 
+class DRFlowFetchGateConfig(_Base):
+    """Search-without-fetch guard at the action-space layer (dr@3.3).
+
+    ``fetch_floor`` above observes the same streak and appends a sentence; that
+    channel was measured on the four dr@3.0 arms at +4.2pp / +2.3pp on a ~10%
+    base rate, i.e. real and an order of magnitude too small. This one withholds
+    ``web_search`` from the iteration instead, so the refusal is not a move the
+    model can re-request - the dr@3.0 saturation stop, which refuses in the tool's
+    return value, was re-requested 195 times on one question.
+
+    Off by default and gated on the flow, so the anchor cannot reach it.
+
+    ``k`` defaults to 15, and that number was chosen after looking at the batch
+    that motivated the rule: healthy first-fetch position has p90 = 13, and the
+    advisory's second note at streak 10 is where the per-step fetch probability
+    collapses. A data-chosen threshold has to be reported as one; the
+    pre-registration says so in its own multiplicity section.
+    """
+
+    enabled: bool = False
+    k: int = 15
+    release_after_failed_fetches: int = 2
+    """Consecutive failed fetch attempts while closed that reopen search for the
+    rest of the turn. A threshold that can strand a run is structurally a
+    zero-score bucket only the treated arm can fall into."""
+
+
 class DRFlowFinalShapeConfig(_Base):
     """Terminal-answer shaping: make the turn's ending an observable.
 
@@ -1991,7 +2020,27 @@ class DRFlowConfig(_Base):
     """
 
     enabled: bool = False
-    version: str = "dr@3.2"
+    version: str = "dr@3.3"
+    """dr@3.3 also carries the turn-task fix: the draft reviewer and the salvage gate
+    are handed the question this turn actually asked, with the harness's own
+    ``[Runtime Context …]`` / memo / recovery envelopes removed. Both used to read the
+    FIRST user message verbatim - correct by accident on a single-turn benchmark, and
+    on a conversation it judged every follow-up against turn one's question. See
+    ``raven/agent/flow/turn_task.py`` for the measured reproduction.
+
+    Folded into dr@3.3 rather than bumped (user's call, 2026-08-17). The label is the
+    key of the measurement ledger, and the thing a bump protects is a reading that
+    already carries the old label - dr@3.3 has run ZERO batches, so no reading is
+    mislabelled by widening it. What this does cost is that the label no longer maps
+    to a single commit: dbef506 and the fix commit both call themselves dr@3.3 with
+    different behaviour. Provenance for any future batch therefore has to come from
+    its own ``_src_snapshot`` plus the per-arm fingerprints in ``iso_manifest.json``,
+    never from the label alone - which is already this project's standing rule (see
+    the README on there being no commit that "is" dr@3.1).
+
+    The envelope half of the fix DOES change what the reviewer reads on every treated
+    arm, and it has never been measured. It cannot move an anchor - both gates are
+    flow hooks, absent when the flow is off."""
     max_iterations: int | None = None
     """Iteration budget for DR turns. ``None`` keeps the agent default."""
     tools_allowlist: tuple[str, ...] = ("web_search", "web_fetch")
@@ -2053,9 +2102,13 @@ class DRFlowConfig(_Base):
     fence and in-history notes, so the persisted trajectory equals what
     the model saw (train-serve homomorphism)."""
     search: DRFlowSearchConfig = Field(default_factory=DRFlowSearchConfig)
-    truncation_wrapup: DRFlowTruncationWrapupConfig = Field(default_factory=DRFlowTruncationWrapupConfig)
+    truncation_wrapup: DRFlowTruncationWrapupConfig = Field(
+        default_factory=DRFlowTruncationWrapupConfig
+    )
     """dr@2.9's completion-truncation wrap-up, gated off by default from dr@3.0."""
-    reactive_clamp: DRFlowReactiveClampConfig = Field(default_factory=DRFlowReactiveClampConfig)
+    reactive_clamp: DRFlowReactiveClampConfig = Field(
+        default_factory=DRFlowReactiveClampConfig
+    )
     """The reactive completion clamp, off by default. Structurally unreachable on
     every arm until switched on, therefore no version bump - same reasoning as
     dr@3.0's multi-turn surface."""
@@ -2065,6 +2118,10 @@ class DRFlowConfig(_Base):
     force_finalize: DRFlowForceFinalizeConfig = Field(default_factory=DRFlowForceFinalizeConfig)
     spin_breaker: DRFlowSpinBreakerConfig = Field(default_factory=DRFlowSpinBreakerConfig)
     fetch_floor: DRFlowFetchFloorConfig = Field(default_factory=DRFlowFetchFloorConfig)
+    fetch_gate: DRFlowFetchGateConfig = Field(default_factory=DRFlowFetchGateConfig)
+    """dr@3.3. Off by default, and unlike the reactive clamp this one DOES carry a
+    version bump: an arm that switches it on changes both what the model reads and
+    which tools it can call, so the label has to be able to tell that arm apart."""
     final_shape: DRFlowFinalShapeConfig = Field(default_factory=DRFlowFinalShapeConfig)
     conversation: DRFlowConversationConfig = Field(default_factory=DRFlowConversationConfig)
     """dr@3.0 product surface: multi-turn. Off by default and turn-two-onwards
@@ -2073,304 +2130,284 @@ class DRFlowConfig(_Base):
     measured build, and this cannot appear in a measurement."""
 
     _SUPERSEDED_VERSIONS = (
-        "dr@1",
-        "dr@1.0",
-        "dr@1.1",
-        "dr@1.2",
-        "dr@1.3",
-        "dr@1.4",
-        "dr@1.5",
-        "dr@1.6",
-        "dr@1.7",
-        "dr@1.8",
-        "dr@1.9",
-        "dr@2.0",
-        "dr@2.1",
-        "dr@2.2",
-        "dr@2.3",
-        "dr@2.4",
-        "dr@2.5",
-        "dr@2.6",
-        "dr@2.7",
-        "dr@2.8",
-        "dr@2.9",
-        "dr@3.0",
-        "dr@3.1",
+        "dr@1", "dr@1.0", "dr@1.1", "dr@1.2", "dr@1.3", "dr@1.4", "dr@1.5", "dr@1.6", "dr@1.7", "dr@1.8",
+        "dr@1.9", "dr@2.0", "dr@2.1", "dr@2.2", "dr@2.3", "dr@2.4", "dr@2.5", "dr@2.6",
+        "dr@2.7", "dr@2.8", "dr@2.9", "dr@3.0", "dr@3.1", "dr@3.2",
     )
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "DRFlowConfig":
         """Reject a superseded label on this build.
 
-        This build's flow semantics are dr@3.1: everything dr@3.0 carried, plus (9) below.
-        (5) and (7) are product-surface only and reach no arm; they are listed so the label's contents
-        are complete.
+    This build's flow semantics are dr@3.1: everything dr@3.0 carried, plus (9) below.
+    (5) and (7) are product-surface only and reach no arm; they are listed so the label's contents
+    are complete.
 
-        (9) The replay cache is keyed on the page as well as the two widths. dr@3.0 made pagination
-        reachable and left ``page`` out of that key, so a page-2 request could be answered from the
-        page-1 entry the same query had cached earlier in the turn. Measured on the 302 per-question
-        ledgers of the dr@3.0 live-web DR arm: of the content-returning searches issued while the rule
-        had escalated to page 2, 206 replayed page-1 content against 83 real page-2 requests - 71.3%
-        of the paginated searches handed back exactly the page the rung existed to move past. The
-        second-order effect is worse than the waste: a replay is scored as a dry search
-        (``SearchSaturation.observe(())``), so every false page-turn pushed the turn one step closer to
-        ``stopped``, i.e. the broken rung fed the rung after it. The source comment guarding this key
-        already stated the rule - resolving a request dimension after the lookup lets the wider or
-        deeper request replay the narrower answer - and named two of the three dimensions.
+    (9) The replay cache is keyed on the page as well as the two widths. dr@3.0 made pagination
+    reachable and left ``page`` out of that key, so a page-2 request could be answered from the
+    page-1 entry the same query had cached earlier in the turn. Measured on the 302 per-question
+    ledgers of the dr@3.0 live-web DR arm: of the content-returning searches issued while the rule
+    had escalated to page 2, 206 replayed page-1 content against 83 real page-2 requests - 71.3%
+    of the paginated searches handed back exactly the page the rung existed to move past. The
+    second-order effect is worse than the waste: a replay is scored as a dry search
+    (``SearchSaturation.observe(())``), so every false page-turn pushed the turn one step closer to
+    ``stopped``, i.e. the broken rung fed the rung after it. The source comment guarding this key
+    already stated the rule - resolving a request dimension after the lookup lets the wider or
+    deeper request replay the narrower answer - and named two of the three dimensions.
 
-        Anchor: cannot move. ``page`` is 1 without a saturation rule and cannot rise when ``paginates``
-        is False, which the corpus path forces; a tuple element that is constant across every key moves
-        no key relative to any other. The flow-off arm additionally never reaches this code, because
-        ``repeat_notice`` is a ``DRFlowSearchConfig`` field and the tool's own default is False, so the
-        anchor has no replay cache at all (measured: 0 replay rows on both anchor arms of the dr@3.0
-        web batch, against 916 and 753 on the two DR arms). The label is bumped because the DR arm's
-        generated distribution changes, not because the reference frame does.
+    Anchor: cannot move. ``page`` is 1 without a saturation rule and cannot rise when ``paginates``
+    is False, which the corpus path forces; a tuple element that is constant across every key moves
+    no key relative to any other. The flow-off arm additionally never reaches this code, because
+    ``repeat_notice`` is a ``DRFlowSearchConfig`` field and the tool's own default is False, so the
+    anchor has no replay cache at all (measured: 0 replay rows on both anchor arms of the dr@3.0
+    web batch, against 916 and 753 on the two DR arms). The label is bumped because the DR arm's
+    generated distribution changes, not because the reference frame does.
 
-        (9b) The search ledger gains ``sat_event``, non-null only on the row whose ``observe`` actually
-        escalated a rung. ``sat_action`` is a sticky state label - once a turn latches ``stopped``,
-        every later row of that turn repeats it - and the first analysis of a batch carrying it counted
-        rows as firings, reporting stops as outnumbering page-turns by 67x where the events are 25
-        against 27 and the whole ladder moved on 40 of 292 questions. Deliberately the same string as
-        ``sat_action`` rather than a name of its own, because two fields able to disagree about which
-        rung fired would need a rule for which one wins and there is no honest rule. Written as null
-        rather than omitted on an arm without the rule, so "did not fire" and "was never installed"
-        stay different rows - the lesson ``dedup_skipped`` cost two versions to learn.
+    (9b) The search ledger gains ``sat_event``, non-null only on the row whose ``observe`` actually
+    escalated a rung. ``sat_action`` is a sticky state label - once a turn latches ``stopped``,
+    every later row of that turn repeats it - and the first analysis of a batch carrying it counted
+    rows as firings, reporting stops as outnumbering page-turns by 67x where the events are 25
+    against 27 and the whole ladder moved on 40 of 292 questions. Deliberately the same string as
+    ``sat_action`` rather than a name of its own, because two fields able to disagree about which
+    rung fired would need a rule for which one wins and there is no honest rule. Written as null
+    rather than omitted on an arm without the rule, so "did not fire" and "was never installed"
+    stay different rows - the lesson ``dedup_skipped`` cost two versions to learn.
 
-        What this does NOT claim: that pagination now pays. It claims only that the rung now does what
-        its own pricing assumed it did. The 27.0%-of-searches / 0.00pp-loss figure that justifies the
-        saturation rule was computed on a two-rung ladder, while both dr@3.0 arms ran ``onSaturate:
-        "widen"`` - a three-rung ladder whose realized suppression was 14.00%. That number still needs
-        its own replay, and this repair changes which searches reach the third rung, so it needs it
-        more than before.
+    What this does NOT claim: that pagination now pays. It claims only that the rung now does what
+    its own pricing assumed it did. The 27.0%-of-searches / 0.00pp-loss figure that justifies the
+    saturation rule was computed on a two-rung ladder, while both dr@3.0 arms ran ``onSaturate:
+    "widen"`` - a three-rung ladder whose realized suppression was 14.00%. That number still needs
+    its own replay, and this repair changes which searches reach the third rung, so it needs it
+    more than before.
 
-        (7) Multi-turn conversation support - a per-turn decision about whether the research machine
-        runs, a research memo carried across turns, and an optional conversation-scoped identity set
-        for the web tools. It does not bump the label because it cannot appear in a measurement, and
-        that is structural rather than a matter of defaults: the bench harness sends exactly one
-        message per question, every knob in ``DRFlowConversationConfig`` is read on turn two or later,
-        and the single field that reaches a measured code path (``identityScope``, which selects what
-        the web tool's per-turn reset clears) is forced back to the measured value by ``build_dr_flow``
-        whenever the surface is disabled. The whole block is also off by default, but the default is
-        the weaker of the two guarantees and is not the one this paragraph rests on.
+    (7) Multi-turn conversation support - a per-turn decision about whether the research machine
+    runs, a research memo carried across turns, and an optional conversation-scoped identity set
+    for the web tools. It does not bump the label because it cannot appear in a measurement, and
+    that is structural rather than a matter of defaults: the bench harness sends exactly one
+    message per question, every knob in ``DRFlowConversationConfig`` is read on turn two or later,
+    and the single field that reaches a measured code path (``identityScope``, which selects what
+    the web tool's per-turn reset clears) is forced back to the measured value by ``build_dr_flow``
+    whenever the surface is disabled. The whole block is also off by default, but the default is
+    the weaker of the two guarantees and is not the one this paragraph rests on.
 
-        (8) Three repairs to the process appendix and the turn invariant checker, all of them the same
-        defect: a criterion whose scope was "this turn" being fed conversation-scoped input once a
-        conversation could have more than one turn. None of them is gated on this config, and each is
-        listed here because that makes the anchor question theirs to answer rather than the label's.
+    (8) Three repairs to the process appendix and the turn invariant checker, all of them the same
+    defect: a criterion whose scope was "this turn" being fed conversation-scoped input once a
+    conversation could have more than one turn. None of them is gated on this config, and each is
+    listed here because that makes the anchor question theirs to answer rather than the label's.
 
-        (8a) The fabricated-citation check accepts pages an earlier turn of the same conversation
-        opened, reported as ``opened_earlier`` so the scope travels with the rate. Its accept-set is
-        bounded separately from the rendered source list (``memoMaxOpened`` vs ``memoMaxSources``),
-        because one number cannot be right for two pressures pointing opposite ways - short for
-        context, complete for the check - and it was wrong on the side that accuses the answer.
+    (8a) The fabricated-citation check accepts pages an earlier turn of the same conversation
+    opened, reported as ``opened_earlier`` so the scope travels with the rate. Its accept-set is
+    bounded separately from the rendered source list (``memoMaxOpened`` vs ``memoMaxSources``),
+    because one number cannot be right for two pressures pointing opposite ways - short for
+    context, complete for the check - and it was wrong on the side that accuses the answer.
 
-        (8b) The URL extractor's stop set was ASCII-only. On Chinese output nothing terminated the
-        match, so a cited URL swallowed the rest of its clause, matched no fetch record, and a page the
-        run really had opened was named as invented. Fixed direction, Chinese output only, present
-        since dr@2.8. Measured on one real conversation: 69 extracted citations became 62 and the
-        false accusations went 4 -> 0. ASCII extraction is unchanged, which is the property that
-        matters for the label - every published ``citation_grounding_rate`` was taken on that branch -
-        but a Chinese-language reading of that counter from any earlier build reads low.
+    (8b) The URL extractor's stop set was ASCII-only. On Chinese output nothing terminated the
+    match, so a cited URL swallowed the rest of its clause, matched no fetch record, and a page the
+    run really had opened was named as invented. Fixed direction, Chinese output only, present
+    since dr@2.8. Measured on one real conversation: 69 extracted citations became 62 and the
+    false accusations went 4 -> 0. ASCII extraction is unchanged, which is the property that
+    matters for the label - every published ``citation_grounding_rate`` was taken on that branch -
+    but a Chinese-language reading of that counter from any earlier build reads low.
 
-        (8c) ``turn_invariants`` is a per-turn checker and was handed the whole assembled message list.
-        On a bench run those are the same list, because the harness sends one message per question and
-        the history is empty, so no measured stamp moves; in a conversation, one failed fetch in turn
-        one made every later turn report ``tool_error_result``, including turns that called no tool.
-        Measured: one real error read as ten violations, now one. It is a structural equivalence rather
-        than a gate, and the difference matters - a gate would have kept the anchor still by
-        construction, whereas this rests on the bench's message-per-question shape staying true.
+    (8c) ``turn_invariants`` is a per-turn checker and was handed the whole assembled message list.
+    On a bench run those are the same list, because the harness sends one message per question and
+    the history is empty, so no measured stamp moves; in a conversation, one failed fetch in turn
+    one made every later turn report ``tool_error_result``, including turns that called no tool.
+    Measured: one real error read as ten violations, now one. It is a structural equivalence rather
+    than a gate, and the difference matters - a gate would have kept the anchor still by
+    construction, whereas this rests on the bench's message-per-question shape staying true.
 
-        (6) The two DR observers that divide by the context window now divide by the window the
-        turn actually runs on. ``BudgetNoteObserver`` writes that quotient into the model's own
-        history as ``[budget: ... context ~N%]`` and ``SpinEntryBreaker`` gates on it, while both
-        were handed the configured default (65,536) and the loop's own shrink path had been
-        resolving the real window per model since well before this. The divergence had no symptom
-        on the served student, whose model id resolves to nothing, so both branches fell back to
-        the same number and agreed by accident - the defect was latent for the entire dr@2.x
-        ladder and became visible only on the first batch run against a model the resolver knows,
-        where the note claimed 110% of context while ``elided_in_context`` was 0 of 128, i.e. not
-        one tool result had been dropped. Both consumers are built only inside the flow assembly,
-        which does not exist on the anchor, so this cannot move the anchor. ``_make_token_budget``
-        is deliberately left on the configured value: it sets ``available_history`` on BOTH arms,
-        which makes changing it an anchor-moving change owed its own labelled round.
+    (6) The two DR observers that divide by the context window now divide by the window the
+    turn actually runs on. ``BudgetNoteObserver`` writes that quotient into the model's own
+    history as ``[budget: ... context ~N%]`` and ``SpinEntryBreaker`` gates on it, while both
+    were handed the configured default (65,536) and the loop's own shrink path had been
+    resolving the real window per model since well before this. The divergence had no symptom
+    on the served student, whose model id resolves to nothing, so both branches fell back to
+    the same number and agreed by accident - the defect was latent for the entire dr@2.x
+    ladder and became visible only on the first batch run against a model the resolver knows,
+    where the note claimed 110% of context while ``elided_in_context`` was 0 of 128, i.e. not
+    one tool result had been dropped. Both consumers are built only inside the flow assembly,
+    which does not exist on the anchor, so this cannot move the anchor. ``_make_token_budget``
+    is deliberately left on the configured value: it sets ``available_history`` on BOTH arms,
+    which makes changing it an anchor-moving change owed its own labelled round.
 
-        What this bump does NOT claim: a score effect. The note is a channel that works only by
-        being obeyed, and obedience is a property of the model, not of the flow - the same
-        sentence was read as an instruction by one model (which converged early) and recited then
-        ignored by another (which recited "the budget is at 96% context. I need to stop" and went
-        on to search dozens more times). So the repair makes the sentence true; whether a true
-        sentence is worth more than a false one is a per-model question this build cannot settle.
+    What this bump does NOT claim: a score effect. The note is a channel that works only by
+    being obeyed, and obedience is a property of the model, not of the flow - the same
+    sentence was read as an instruction by one model (which converged early) and recited then
+    ignored by another (which recited "the budget is at 96% context. I need to stop" and went
+    on to search dozens more times). So the repair makes the sentence true; whether a true
+    sentence is worth more than a false one is a per-model question this build cannot settle.
 
-        A label marks a measured build, not an edit, and no batch has ever run under dr@2.8 - so
-        the usual reasoning would fold (4) into it rather than mint a label nobody can read. That
-        reasoning does not apply here, and the reason is the whole point of the bump: every dr@2.8
-        change is class-default-off and per-arm gated, so the flow-off anchor is untouched and the
-        label can honestly say so. (4) is deliberately NOT gated on DRFlowConfig - it repairs a
-        defect the ANCHOR arm suffers from most - so it moves both arms. Folding an anchor-moving
-        change under a label documented as anchor-preserving would make the label lie about the
-        one property anyone reads it for.
+    A label marks a measured build, not an edit, and no batch has ever run under dr@2.8 - so
+    the usual reasoning would fold (4) into it rather than mint a label nobody can read. That
+    reasoning does not apply here, and the reason is the whole point of the bump: every dr@2.8
+    change is class-default-off and per-arm gated, so the flow-off anchor is untouched and the
+    label can honestly say so. (4) is deliberately NOT gated on DRFlowConfig - it repairs a
+    defect the ANCHOR arm suffers from most - so it moves both arms. Folding an anchor-moving
+    change under a label documented as anchor-preserving would make the label lie about the
+    one property anyone reads it for.
 
-        (4) A wrap-up for turns killed by the completion budget rather than the tool-calling
-        budget. On the dr@2.7 web batch, 22 of 60 HLE anchor items ended with
-        ``finish_reason='length'`` on turn one - turns=1, n_search=0, elision 8.3%, so not a
-        context overflow, just one generation that never finished writing - and 21 of those 22
-        carried no visible answer, which the scorer marks wrong by rule. The treated arm showed
-        5.0%. Two nets already existed and neither could reach these turns:
-        ``_synthesize_final_on_exhaustion`` is arm-neutral but guarded on
-        ``iteration >= max_iterations``, unreachable on turn one; and ``terminal_answerless`` is a
-        flow hook, absent from the anchor entirely, behind a predicate keyed on
-        ``_think_closing_tag_required``, which is False whenever the flow is off, so an unclosed
-        think block reads there as an answer. Sampling showed the model had usually already
-        reached the answer and said so before talking itself out of it, so the wrap-up prompt
-        forbids re-derivation rather than inviting it. Priced at +2.32pp over the batch and
-        strongly per-source (HLE 22.7%, BrowseComp 4.9%, xbench 0%) - a retrieval/coverage proxy,
-        not a score forecast. Because it moves the anchor, published live-web deltas measured
-        against the un-repaired anchor cannot be reused as a baseline: a counterfactual backfill
-        put dr-base at +5.30pp -> +3.31pp, i.e. the one significant live-web cell stops being
-        significant. That is an argument for re-measuring, not for leaving the defect in.
+    (4) A wrap-up for turns killed by the completion budget rather than the tool-calling
+    budget. On the dr@2.7 web batch, 22 of 60 HLE anchor items ended with
+    ``finish_reason='length'`` on turn one - turns=1, n_search=0, elision 8.3%, so not a
+    context overflow, just one generation that never finished writing - and 21 of those 22
+    carried no visible answer, which the scorer marks wrong by rule. The treated arm showed
+    5.0%. Two nets already existed and neither could reach these turns:
+    ``_synthesize_final_on_exhaustion`` is arm-neutral but guarded on
+    ``iteration >= max_iterations``, unreachable on turn one; and ``terminal_answerless`` is a
+    flow hook, absent from the anchor entirely, behind a predicate keyed on
+    ``_think_closing_tag_required``, which is False whenever the flow is off, so an unclosed
+    think block reads there as an answer. Sampling showed the model had usually already
+    reached the answer and said so before talking itself out of it, so the wrap-up prompt
+    forbids re-derivation rather than inviting it. Priced at +2.32pp over the batch and
+    strongly per-source (HLE 22.7%, BrowseComp 4.9%, xbench 0%) - a retrieval/coverage proxy,
+    not a score forecast. Because it moves the anchor, published live-web deltas measured
+    against the un-repaired anchor cannot be reused as a baseline: a counterfactual backfill
+    put dr-base at +5.30pp -> +3.31pp, i.e. the one significant live-web cell stops being
+    significant. That is an argument for re-measuring, not for leaving the defect in.
 
-        (1) Cross-query dedup on the corpus path: ask the retrieval service for ``search_depth``,
-        render the same width as before, skip documents this turn already listed and backfill from
-        deeper. Three places capped the result list at ten while the service clamps to fifty, so
-        84.2% of searches (44,098 of 52,373 on the dr@2.7 corpus batch) only ever saw five
-        documents. The shape matters: returning ten lines instead of five measured +4.17~6.67pp
-        gold surfaced but doubles the result text, while deduplicating at unchanged width measured
-        +5.83~8.33pp at depth 50 (depth 20 carries about 90% of it) at no context cost. Nothing
-        re-ranks - four zero-model ranking signals were priced offline and all four lost to plain
-        BM25. The rendered width is preserved unconditionally, so the knob can only ever replace
-        result lines, never delete them; that is what makes it safe on the live-web path, which
-        has no deeper pool to backfill from (``num`` is inert on this endpoint) and where 52.89%
-        of the DR arm's slots were repeats, i.e. plain dedup would have deleted about half the
-        lines. Getting the corpus behaviour there needs pagination: separate change, separate
-        quota profile.
+    (1) Cross-query dedup on the corpus path: ask the retrieval service for ``search_depth``,
+    render the same width as before, skip documents this turn already listed and backfill from
+    deeper. Three places capped the result list at ten while the service clamps to fifty, so
+    84.2% of searches (44,098 of 52,373 on the dr@2.7 corpus batch) only ever saw five
+    documents. The shape matters: returning ten lines instead of five measured +4.17~6.67pp
+    gold surfaced but doubles the result text, while deduplicating at unchanged width measured
+    +5.83~8.33pp at depth 50 (depth 20 carries about 90% of it) at no context cost. Nothing
+    re-ranks - four zero-model ranking signals were priced offline and all four lost to plain
+    BM25. The rendered width is preserved unconditionally, so the knob can only ever replace
+    result lines, never delete them; that is what makes it safe on the live-web path, which
+    has no deeper pool to backfill from (``num`` is inert on this endpoint) and where 52.89%
+    of the DR arm's slots were repeats, i.e. plain dedup would have deleted about half the
+    lines. Getting the corpus behaviour there needs pagination: separate change, separate
+    quota profile.
 
-        (2) The result-list snippet is restored on the live-web DR arms, together with the
-        per-docid dedup that made restoring it cheap - only together, because the priced change is
-        the pair and dr@2.4 already taught that lesson on the corpus axis. The note two hundred
-        lines above ("a live-web snippet is answer-optimised
-        and unpriced") is what changed: it has now been priced. On the dr@2.7 web batch the anchor
-        received 6,897,883 characters of snippet and the DR arm zero; splitting by where the gold
-        answer string first appears, the anchor reached it through search on 99 questions and
-        through fetch on 40, with 67 reachable from search alone, while the DR arm was 76 / 106
-        with only 7 from search alone. The arm had moved roughly sixty questions off a channel it
-        had already paid for and bought them again through the reader, at 3.36x the fetches
-        (1,003 -> 3,373) for a paired gold-surfaced gain of +2.04pp (b=21 c=15, ruler +-4.00pp,
-        i.e. not resolvable), with conversion quality flat (82.2% against 84.1%). The marginal
-        cost is close to zero - the snippet arrives with a search already paid for and spends only
-        context, and context is the one resource this axis has to spare: elision fires on
-        27.15/25.17/26.82/30.13% of questions across the four arms, so overflow prevention barely
-        engages here, and the DR arm's total evidence intake was 7.28M characters against the
-        anchor's 18.76M.
+    (2) The result-list snippet is restored on the live-web DR arms, together with the
+    per-docid dedup that made restoring it cheap - only together, because the priced change is
+    the pair and dr@2.4 already taught that lesson on the corpus axis. The note two hundred
+    lines above ("a live-web snippet is answer-optimised
+    and unpriced") is what changed: it has now been priced. On the dr@2.7 web batch the anchor
+    received 6,897,883 characters of snippet and the DR arm zero; splitting by where the gold
+    answer string first appears, the anchor reached it through search on 99 questions and
+    through fetch on 40, with 67 reachable from search alone, while the DR arm was 76 / 106
+    with only 7 from search alone. The arm had moved roughly sixty questions off a channel it
+    had already paid for and bought them again through the reader, at 3.36x the fetches
+    (1,003 -> 3,373) for a paired gold-surfaced gain of +2.04pp (b=21 c=15, ruler +-4.00pp,
+    i.e. not resolvable), with conversion quality flat (82.2% against 84.1%). The marginal
+    cost is close to zero - the snippet arrives with a search already paid for and spends only
+    context, and context is the one resource this axis has to spare: elision fires on
+    27.15/25.17/26.82/30.13% of questions across the four arms, so overflow prevention barely
+    engages here, and the DR arm's total evidence intake was 7.28M characters against the
+    anchor's 18.76M.
 
-        (3) A verify rejection may buy retrieval
-        rather than only a rewrite, behind ``verify.evidence_round`` (class default off). The
-        rejection already names which claims lack support; until now the bounce answered that
-        with "reuse the evidence already gathered", which recovers nothing whenever the cause
-        is that the document was never retrieved. Inside a bounded round the search tool may
-        ask the corpus service for its full depth, and the spin breaker - whose forced-report
-        note carries the same prohibition - stands down once and records that it did. The
-        live-web path is deliberately not deepened: measured against the endpoint we use, the
-        ``num`` parameter changes nothing (10/20/50/100 all returned 7-8 organic results) and
-        depth there needs pagination, which is a separate change with a separate quota cost.
-        Deepening both from one switch would ship a silent no-op on one axis.
+    (3) A verify rejection may buy retrieval
+    rather than only a rewrite, behind ``verify.evidence_round`` (class default off). The
+    rejection already names which claims lack support; until now the bounce answered that
+    with "reuse the evidence already gathered", which recovers nothing whenever the cause
+    is that the document was never retrieved. Inside a bounded round the search tool may
+    ask the corpus service for its full depth, and the spin breaker - whose forced-report
+    note carries the same prohibition - stands down once and records that it did. The
+    live-web path is deliberately not deepened: measured against the endpoint we use, the
+    ``num`` parameter changes nothing (10/20/50/100 all returned 7-8 organic results) and
+    depth there needs pagination, which is a separate change with a separate quota cost.
+    Deepening both from one switch would ship a silent no-op on one axis.
 
-        (5) The research trail reaches the product surface at all. ``final_shape.process_appendix``
-        has defaulted on since dr@2.8, but the trail is computed from the client-side ledger and
-        the only writer of ``RAVEN_WEB_LEDGER`` in this tree is the batch launcher - so the one
-        configuration that asked for an appendix was the one configuration that could not get one,
-        and it degraded quietly: ``build_appendix`` returned ``ledger_not_configured``, the answer
-        came back intact, nothing logged. The nine bench profiles all pin the knob off, which is
-        why no arm ever exercised the path that needed it. A turn-scoped ledger is now opened when
-        the knob is on and no launcher named a file. This carries no measurement obligation and
-        does not touch this label's flow semantics: it is unreachable from any arm that pins the
-        knob off and from every flow-off anchor (no assembly exists there), and the ledger is
-        write-only during generation, so nothing the model reads changes in either state. It
-        landed after the first dr@2.9 batch began; that batch runs
-        ``student_sglang_web_dr.json``, which pins the knob off, so it cannot have been reached -
-        and its own source snapshot is frozen either way.
+    (5) The research trail reaches the product surface at all. ``final_shape.process_appendix``
+    has defaulted on since dr@2.8, but the trail is computed from the client-side ledger and
+    the only writer of ``RAVEN_WEB_LEDGER`` in this tree is the batch launcher - so the one
+    configuration that asked for an appendix was the one configuration that could not get one,
+    and it degraded quietly: ``build_appendix`` returned ``ledger_not_configured``, the answer
+    came back intact, nothing logged. The nine bench profiles all pin the knob off, which is
+    why no arm ever exercised the path that needed it. A turn-scoped ledger is now opened when
+    the knob is on and no launcher named a file. This carries no measurement obligation and
+    does not touch this label's flow semantics: it is unreachable from any arm that pins the
+    knob off and from every flow-off anchor (no assembly exists there), and the ledger is
+    write-only during generation, so nothing the model reads changes in either state. It
+    landed after the first dr@2.9 batch began; that batch runs
+    ``student_sglang_web_dr.json``, which pins the knob off, so it cannot have been reached -
+    and its own source snapshot is frozen either way.
 
-        dr@2.7 repairs the reader path: a resolver
-        failure stops being a refusal on the fetch that a reader service performs on our
-        behalf, and a transport failure that never produced a response is retried twice
-        before the page is abandoned. Both change what the model reads on a live-web arm,
-        which is what a label is for; the corpus path returns before either and is byte
-        identical. Neither is gated on the flow. Gating a reliability repair would leave the
-        flow-off anchor on the broken path, manufacturing the arm-correlated instrument
-        defect that the gate on tool-surface health exists to catch - the measured batch that
-        motivated this had its treated arm at a 1.5% fetch-failure rate against the anchor's
-        2.9%, so the repair does not flatter the treated side.
+    dr@2.7 repairs the reader path: a resolver
+    failure stops being a refusal on the fetch that a reader service performs on our
+    behalf, and a transport failure that never produced a response is retried twice
+    before the page is abandoned. Both change what the model reads on a live-web arm,
+    which is what a label is for; the corpus path returns before either and is byte
+    identical. Neither is gated on the flow. Gating a reliability repair would leave the
+    flow-off anchor on the broken path, manufacturing the arm-correlated instrument
+    defect that the gate on tool-surface health exists to catch - the measured batch that
+    motivated this had its treated arm at a 1.5% fetch-failure rate against the anchor's
+    2.9%, so the repair does not flatter the treated side.
 
-        dr@2.6 turns terminal-answer shaping on by
-        default and has every shipped config write both of its values out rather than inherit
-        them, because an inherited default does not appear in the file that describes a run and
-        so can change what a run does without leaving a trace where anyone looks. The default is
-        unreachable from a flow-off arm - the hop is assembled inside ``build_dr_flow``, which
-        returns None there - so the measurement anchor cannot move with it.
+    dr@2.6 turns terminal-answer shaping on by
+    default and has every shipped config write both of its values out rather than inherit
+    them, because an inherited default does not appear in the file that describes a run and
+    so can change what a run does without leaving a trace where anyone looks. The default is
+    unreachable from a flow-off arm - the hop is assembled inside ``build_dr_flow``, which
+    returns None there - so the measurement anchor cannot move with it.
 
-        dr@2.5 introduced that shaping in two independently gated pieces. ``final_shape.record``
-        is a read-only observer: it computes the shaped form of the terminal answer and records
-        it beside the raw one, touching neither the persisted message sequence nor anything the
-        model reads, so its score budget is 0 by construction rather than by promise.
-        ``final_shape.require_marker`` appends one clause to the DR contract asking for an
-        explicit ``<answer>`` marker - that one IS a distribution change and needs a fresh
-        anchor pair plus a ``scripts/stamp_dr_segment.py`` artifact, because the prompt never enters
-        the persisted trajectory and the stamp is the only place it is verifiable afterwards.
-        The motivation is not score: ``final_answer`` is the last assistant message verbatim,
-        only 15.6% of anchor answers carry any answer marker, and the turn's ending is a passive
-        truncation event rather than an action - a report axis run on that shape would measure
-        truncation rate instead of report quality, so the ordering is shaping first, report axis
-        second. Shaping is additive only ("may improve a record, never blank one"): the upstream
-        framework we benchmarked runs an extraction stage that carried gold on 71/120 into a
-        boxed field on 58/120, producing nothing new and dropping 10.83pp, and our own dr@1.6
-        salvage seam failed the same way.
+    dr@2.5 introduced that shaping in two independently gated pieces. ``final_shape.record``
+    is a read-only observer: it computes the shaped form of the terminal answer and records
+    it beside the raw one, touching neither the persisted message sequence nor anything the
+    model reads, so its score budget is 0 by construction rather than by promise.
+    ``final_shape.require_marker`` appends one clause to the DR contract asking for an
+    explicit ``<answer>`` marker - that one IS a distribution change and needs a fresh
+    anchor pair plus a ``scripts/stamp_dr_segment.py`` artifact, because the prompt never enters
+    the persisted trajectory and the stamp is the only place it is verifiable afterwards.
+    The motivation is not score: ``final_answer`` is the last assistant message verbatim,
+    only 15.6% of anchor answers carry any answer marker, and the turn's ending is a passive
+    truncation event rather than an action - a report axis run on that shape would measure
+    truncation rate instead of report quality, so the ordering is shaping first, report axis
+    second. Shaping is additive only ("may improve a record, never blank one"): the upstream
+    framework we benchmarked runs an extraction stage that carried gold on 71/120 into a
+    boxed field on 58/120, producing nothing new and dropping 10.83pp, and our own dr@1.6
+    salvage seam failed the same way.
 
-        dr@2.4 restores the corpus SERP snippet on
-        the arm that measures candidate selection: the shaping strips snippets by default
-        (see DRFlowSearchConfig), but the read-rate diagnosis found gold sitting at rank 1,
-        on-screen and never opened, so an arm probing that failure sets
-        ``search.includeSnippets=true`` per-config to hand the model a selection signal. The
-        class default stays false, so the live-web DR arms - where a search snippet is
-        answer-optimised, not a fixed 300-char corpus window - are unchanged, and the
-        flow-off anchor (which already renders snippets) does not move. dr@1.9 removed the two
-        restart idioms the identity segment itself taught the model, and raised the salvage
-        budget. dr@2.0
-        replaced the product identity segment with a DR one (eight of its instructions
-        named tools no DR arm has), carved elided evidence out of the reviewer's
-        unsupported-claim rule, de-hedged the salvage prompt, stopped a committed salvage
-        re-firing the terminal seam, and closed the subagent registry's unconditional
-        subprocess tool. dr@2.1 restores the dr@2.0 prompt bytes that a later refactor
-        moved, widens the elision trigger from the evidence pack to the whole context,
-        and adds arm-neutral counters.
+    dr@2.4 restores the corpus SERP snippet on
+    the arm that measures candidate selection: the shaping strips snippets by default
+    (see DRFlowSearchConfig), but the read-rate diagnosis found gold sitting at rank 1,
+    on-screen and never opened, so an arm probing that failure sets
+    ``search.includeSnippets=true`` per-config to hand the model a selection signal. The
+    class default stays false, so the live-web DR arms - where a search snippet is
+    answer-optimised, not a fixed 300-char corpus window - are unchanged, and the
+    flow-off anchor (which already renders snippets) does not move. dr@1.9 removed the two
+    restart idioms the identity segment itself taught the model, and raised the salvage
+    budget. dr@2.0
+    replaced the product identity segment with a DR one (eight of its instructions
+    named tools no DR arm has), carved elided evidence out of the reviewer's
+    unsupported-claim rule, de-hedged the salvage prompt, stopped a committed salvage
+    re-firing the terminal seam, and closed the subagent registry's unconditional
+    subprocess tool. dr@2.1 restores the dr@2.0 prompt bytes that a later refactor
+    moved, widens the elision trigger from the evidence pack to the whole context,
+    and adds arm-neutral counters.
 
-        dr@2.3 is a maturity release: make the instruments truthful, gate the readings, and
-        close the two remaining containment leaks. Score budget is 0 for everything except
-        the containment fixes, which touch only arms where sub-agents can spawn - and spawn
-        is disabled on every arm in the adjudication set, so the corpus axis distribution is
-        unchanged. Its headline instrument fix is ``status``: it read "ok" on 600/600 rows of
-        the block-1 five-arm batch, including 13 answerless runs, 3 that hit the context
-        window and 3 that hit the iteration cap. That is not a cosmetic gap - the pipeline's
-        own salvage path fires only on ``status == "no_answer"``, so a constant "ok" made
-        ``--finalizer`` dead code while the flag sat on the command line looking enabled.
-        dr@2.3 also names the cause of every answerless run instead of leaving 10 of 13
-        unattributed, and promotes answer_rate to a pre-registered secondary endpoint whose
-        non-empty SET is persisted, not just its rate, because a rate cannot be intersected.
+    dr@2.3 is a maturity release: make the instruments truthful, gate the readings, and
+    close the two remaining containment leaks. Score budget is 0 for everything except
+    the containment fixes, which touch only arms where sub-agents can spawn - and spawn
+    is disabled on every arm in the adjudication set, so the corpus axis distribution is
+    unchanged. Its headline instrument fix is ``status``: it read "ok" on 600/600 rows of
+    the block-1 five-arm batch, including 13 answerless runs, 3 that hit the context
+    window and 3 that hit the iteration cap. That is not a cosmetic gap - the pipeline's
+    own salvage path fires only on ``status == "no_answer"``, so a constant "ok" made
+    ``--finalizer`` dead code while the flag sat on the command line looking enabled.
+    dr@2.3 also names the cause of every answerless run instead of leaving 10 of 13
+    unattributed, and promotes answer_rate to a pre-registered secondary endpoint whose
+    non-empty SET is persisted, not just its rate, because a rate cannot be intersected.
 
-        dr@2.2 was a fix-and-instrument release with a score budget of 0, accepted by
-        fingerprint rather than by score: the answerless_shape counter stops miscounting a
-        committed salvage as shape-answerless (dr@2.1 introduced that, it fires only on
-        treated arms, and its direction understates the treated advantage), the corpus
-        endpoint token gains the batch component (without it every arm whose directory name
-        repeats across batches shared one token, so the anchors' per-question retrieval log
-        was a five-batch union while the treated arms' was single-batch), and the external
-        baseline arm's build is archived as a patch. None of the three changes what the
-        model reads, so the anchor pair carries over. Tool-layer benchmark containment
-        shipped in the same window but defaults to off, so it changes no existing arm's
-        distribution; enabling it is its own labelled version with a fresh anchor pair.
+    dr@2.2 was a fix-and-instrument release with a score budget of 0, accepted by
+    fingerprint rather than by score: the answerless_shape counter stops miscounting a
+    committed salvage as shape-answerless (dr@2.1 introduced that, it fires only on
+    treated arms, and its direction understates the treated advantage), the corpus
+    endpoint token gains the batch component (without it every arm whose directory name
+    repeats across batches shared one token, so the anchors' per-question retrieval log
+    was a five-batch union while the treated arms' was single-batch), and the external
+    baseline arm's build is archived as a patch. None of the three changes what the
+    model reads, so the anchor pair carries over. Tool-layer benchmark containment
+    shipped in the same window but defaults to off, so it changes no existing arm's
+    distribution; enabling it is its own labelled version with a fresh anchor pair.
 
-        The match is on the BASE label, so a profile suffix such as "-futurex" survives
-        while a superseded base label is still rejected. Exact membership let
-        "dr@1.9-futurex" through, which is the one outcome AGENTS.md 0.2 exists to stop.
-        """
+    The match is on the BASE label, so a profile suffix such as "-futurex" survives
+    while a superseded base label is still rejected. Exact membership let
+    "dr@1.9-futurex" through, which is the one outcome AGENTS.md 0.2 exists to stop.
+    """
         # Match the base label, not the whole string. A suffixed variant such as
         # "dr@1.9-futurex" is not a member of the tuple, so exact membership let a
         # superseded label through and the batch was silently mislabelled - the one

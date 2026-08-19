@@ -119,7 +119,9 @@ async def test_wrapup_call_elides_older_tool_bodies_to_make_room():
     """
     provider = _RecordingProvider(LLMResponse(content="done", finish_reason="stop"))
     synth = _bind_synth(provider)
-    history = [{"role": "user", "content": "q"}] + [{"role": "tool", "content": f"body-{i}" * 100} for i in range(10)]
+    history = [{"role": "user", "content": "q"}] + [
+        {"role": "tool", "content": f"body-{i}" * 100} for i in range(10)
+    ]
 
     await synth(history, "m", None, truncated=True)
 
@@ -195,8 +197,8 @@ def test_guard_ignores_a_committed_salvage():
     produced and under-counting its own LLM calls by ~38%.
     """
     salvaged_text = "<think>partial reasoning with no closing tag"
-    assert _fires(salvaged_text, "length", salvaged=False) is True  # premise
-    assert _fires(salvaged_text, "length", salvaged=True) is False  # exemption
+    assert _fires(salvaged_text, "length", salvaged=False) is True   # premise
+    assert _fires(salvaged_text, "length", salvaged=True) is False   # exemption
 
 
 def test_guard_uses_the_same_ruler_on_both_arms():
@@ -226,10 +228,13 @@ def test_guard_uses_the_same_ruler_on_both_arms():
 # --------------------------------------------------------------------------- #
 
 
-def _answerless(final_content, *, status="ok", salvage_committed=False, synthesized=False, closing_tag_required=False):
+def _answerless(final_content, *, status="ok", salvage_committed=False, synthesized=False,
+                closing_tag_required=False):
     """Mirrors the ``answerless`` expression in ``_run_agent_loop``."""
     return status == "error" or not (
-        salvage_committed or synthesized or visible_answer(final_content, closing_tag_required=closing_tag_required)
+        salvage_committed
+        or synthesized
+        or visible_answer(final_content, closing_tag_required=closing_tag_required)
     )
 
 

@@ -13,6 +13,7 @@
 #   1. uv            (Python toolchain + package manager)
 #   2. Node.js >= 22 (TUI runtime; installed privately if the system lacks it)
 #   3. raven         (installed as a global uv tool -> ~/.local/bin/raven)
+#   4. sub-agents    (local source only; the published artifacts carry no tree)
 #
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
@@ -21,6 +22,11 @@ set -eu
 MIN_NODE_MAJOR=22
 RAVEN_HOME="${RAVEN_HOME:-${HOME:?HOME is required, or set RAVEN_HOME explicitly}/.raven}"
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
+# Set by install_raven when it installed from a source checkout, and read by
+# install_subagents. Empty after a wheel install, which is the whole gate: the
+# wheel and the sdist ship `raven/` only, so there is no sub-agent tree to
+# install from unless this is a clone.
+RAVEN_SRC_DIR=""
 
 # --- pretty output ---------------------------------------------------------
 info()  { printf '\033[1;34m>\033[0m %s\n' "$1"; }
@@ -175,6 +181,7 @@ install_raven() {
     is_raven_source "$script_dir" || script_dir=""
   fi
   if [ -n "$script_dir" ]; then
+    RAVEN_SRC_DIR="$script_dir"
     info "Local raven source detected; editable install: $script_dir"
     # The TUI bundle must exist before first run. In a dev checkout it isn't
     # committed, so build it now if Node is available.
@@ -280,6 +287,43 @@ install_raven() {
   ok "raven installed"
 }
 
+# --- 4. install the sub-agents --------------------------------------------
+# Set by install_subagents so main's closing block can say what still needs a
+# key without re-deriving it.
+SUBAGENTS_RAN=0
+
+install_subagents() {
+  [ -n "$RAVEN_SRC_DIR" ] || return 0
+  installer="$RAVEN_SRC_DIR/subagents/install.sh"
+  [ -f "$installer" ] || return 0
+
+  # Warn and skip, never die: a machine that cannot build the sub-agents still
+  # gets a working raven, which is what this script is for.
+  if ! have bash; then
+    warn "No bash found; skipping the sub-agents (their installer needs it). Run subagents/install.sh later."
+    return 0
+  fi
+  if ! have python3; then
+    warn "No python3 found; skipping the sub-agents (their installer needs it). Run subagents/install.sh later."
+    return 0
+  fi
+
+  info "Installing the sub-agents (builds one venv each; first run takes a few minutes)..."
+  # ~/.local/bin first: the sub-installer resolves the interpreter that can
+  # import raven by reading the `raven` console script's shebang, and the raven
+  # just installed is not on the PATH this shell started with.
+  #
+  # A non-zero exit is the normal outcome of a fresh clone -- the installer
+  # reports "needs a key" for every folder whose .env is still a template -- so
+  # it is reported, not propagated.
+  if PATH="$HOME/.local/bin:$PATH" bash "$installer"; then
+    ok "sub-agents installed"
+  else
+    warn "Some sub-agents are not ready yet (see above); raven itself is installed."
+  fi
+  SUBAGENTS_RAN=1
+}
+
 # --- main ------------------------------------------------------------------
 main() {
   have curl || die "curl is required; please install it first"
@@ -294,6 +338,7 @@ main() {
   ensure_uv
   ensure_node
   install_raven
+  install_subagents
 
   printf '\n'
   if [ "$had_config" = 1 ]; then
@@ -303,6 +348,10 @@ main() {
   else
     ok "All set! Open a new terminal (or source your shell profile), then run:"
     printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
+  fi
+  if [ "$SUBAGENTS_RAN" = 1 ]; then
+    printf '  sub-agents: fill in any \033[1msubagents/<name>/.env\033[0m that still needs a key, re-run this\n'
+    printf '  script to finish it, and restart raven so it reads the new roster.\n\n'
   fi
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""

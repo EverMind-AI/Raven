@@ -148,7 +148,9 @@ def test_the_contract_is_expressible_as_an_instruction_for_the_prompt():
     assert "22:00" in text and "07:00" in text
     assert "360 minutes" in text
     assert "at most 3 times" in text
-    assert "cannot estimate" in text, "enforcement alone would let the loop burn turns on refused asks"
+    assert "cannot estimate" in text, (
+        "enforcement alone would let the loop burn turns on refused asks"
+    )
 
 
 def test_a_permissive_contract_says_so_rather_than_stating_a_bar():

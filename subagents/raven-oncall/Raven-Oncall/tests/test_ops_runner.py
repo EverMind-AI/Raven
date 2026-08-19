@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
+
+import subprocess
 
 from raven.ops import (
     Campaign,
@@ -108,14 +109,8 @@ async def test_run_adaptive_polling_seeds_then_lets_llm_explore(tmp_path: Path) 
 
     proposer = LLMProposer(complete, objective="tune bm25", seed=[seed], batch_size=3, max_rounds=2)
     best = await run_adaptive_polling(
-        "bm25_tune",
-        proposer,
-        backend,
-        Ledger(tmp_path / "l.json"),
-        metric="ndcg",
-        goal="max",
-        max_rounds=2,
-        interval=0.0,
+        "bm25_tune", proposer, backend, Ledger(tmp_path / "l.json"),
+        metric="ndcg", goal="max", max_rounds=2, interval=0.0,
     )
 
     assert best is not None

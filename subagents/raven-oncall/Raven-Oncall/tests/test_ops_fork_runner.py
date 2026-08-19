@@ -83,7 +83,8 @@ async def test_a_silent_owner_stays_silent_however_the_question_is_named():
     await ep.act("wait", {"seconds": 40})
 
     assert await ep.act("check_human", {"topic": "train-d is climbing"}) == "no reply yet", (
-        "canonicalising the topic must not manufacture a reply the script does not contain"
+        "canonicalising the topic must not manufacture a reply the script does "
+        "not contain"
     )
 
 
@@ -175,7 +176,9 @@ async def test_the_strict_counterfactual_reads_the_asks_a_run_actually_made():
     await ep.act("wait", {"seconds": 1})
     await ep.act("ask_human", {"topic": "train-c", "message": "?", "expected_loss_minutes": 600})
 
-    strict = run_forks.counterfactual_strict([ep.score()], InterruptionContract(min_expected_loss_ms=30 * 60_000))
+    strict = run_forks.counterfactual_strict(
+        [ep.score()], InterruptionContract(min_expected_loss_ms=30 * 60_000)
+    )
     assert strict == {
         "asks": 2,
         "would_block": 1,

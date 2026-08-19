@@ -166,27 +166,13 @@ async def test_escalation_not_refired_after_resume(tmp_path: Path) -> None:
     trials = [Trial("solo"), Trial("other")]
     backend._plans["other"] = JobPlan(succeed_after_polls=5, metrics={"ndcg": 0.5})
 
-    first = Campaign(
-        "bm25",
-        trials,
-        backend,
-        Ledger(path),
-        metric="ndcg",
-        retry_policy=RetryPolicy(max_retries=0),
-        escalation=on_escalate,
-    )
+    first = Campaign("bm25", trials, backend, Ledger(path), metric="ndcg",
+                     retry_policy=RetryPolicy(max_retries=0), escalation=on_escalate)
     await first.step()
     assert calls == ["solo"]
 
-    resumed = Campaign(
-        "bm25",
-        trials,
-        backend,
-        Ledger(path),
-        metric="ndcg",
-        retry_policy=RetryPolicy(max_retries=0),
-        escalation=on_escalate,
-    )
+    resumed = Campaign("bm25", trials, backend, Ledger(path), metric="ndcg",
+                       retry_policy=RetryPolicy(max_retries=0), escalation=on_escalate)
     await resumed.run()
 
     assert calls == ["solo"]

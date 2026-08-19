@@ -58,7 +58,9 @@ def test_a_number_that_was_never_read_is_refused() -> None:
 
 def test_prose_with_no_number_is_refused() -> None:
     facts = StateFacts(metric_readings={"ndcg": (0.2904,)}, probe_seq=2)
-    assert basis_problems("it looks like it is still converging", facts, last_seq=1) == ["basis cites no number"]
+    assert basis_problems("it looks like it is still converging", facts, last_seq=1) == [
+        "basis cites no number"
+    ]
 
 
 def test_an_empty_basis_is_refused() -> None:
@@ -137,9 +139,7 @@ async def test_check_later_refuses_without_a_fresh_reading(tmp_path: Path) -> No
     write_decision_seq(tmp_path, 1)
 
     out = await OpsCheckLaterTool().execute(
-        campaign="c",
-        ledger=str(tmp_path / "ledger.json"),
-        eta_seconds=1800,
+        campaign="c", ledger=str(tmp_path / "ledger.json"), eta_seconds=1800,
         basis="last time I read 0.2904",
     )
 

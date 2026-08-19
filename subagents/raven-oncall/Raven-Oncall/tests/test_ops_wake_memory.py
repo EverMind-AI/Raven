@@ -36,26 +36,14 @@ def _campaign(tmp_path: Path) -> Path:
     cdir = tmp_path / "camp"
     cdir.mkdir()
     (cdir / "meta.json").write_text(json.dumps({"backend": "process"}), encoding="utf-8")
-    (cdir / "ledger.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "run1": {
-                        "idem_key": "run1",
-                        "status": "running",
-                        "campaign": "c",
-                        "handle": {"backend": "process", "job_id": "j"},
-                        "result": None,
-                        "attempts": 0,
-                        "escalated": False,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    (cdir / "ledger.json").write_text(json.dumps({
+        "version": 1,
+        "records": {"run1": {"idem_key": "run1", "status": "running", "campaign": "c",
+                             "handle": {"backend": "process", "job_id": "j"},
+                             "result": None, "attempts": 0, "escalated": False}},
+    }), encoding="utf-8")
     return cdir
+
 
 
 def _seeded_campaign(tmp_path, monkeypatch):
@@ -94,8 +82,7 @@ async def test_the_basis_is_written_into_the_campaigns_events(tmp_path, monkeypa
     cdir = _seeded_campaign(tmp_path, monkeypatch)
 
     out = await OpsCheckLaterTool(cron_service=None).execute(
-        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis=BASIS
-    )
+        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis=BASIS)
     assert "REFUSED" not in out, out
 
     events = [json.loads(x) for x in (cdir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -113,8 +100,7 @@ async def test_a_missing_basis_is_refused_rather_than_recorded_empty(tmp_path, m
     cdir = _seeded_campaign(tmp_path, monkeypatch)
 
     out = await OpsCheckLaterTool(cron_service=None).execute(
-        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis=""
-    )
+        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis="")
 
     assert "REFUSED" in out
     events = [json.loads(x) for x in (cdir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -127,8 +113,7 @@ async def test_the_next_status_call_shows_it(tmp_path, monkeypatch):
     front of whoever handles the next wake."""
     cdir = _seeded_campaign(tmp_path, monkeypatch)
     await OpsCheckLaterTool(cron_service=None).execute(
-        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis=BASIS
-    )
+        campaign="c", ledger=str(cdir / "ledger.json"), eta_seconds=600, basis=BASIS)
 
     out = await OpsTuneStatusTool().execute(campaign="c", ledger=str(cdir / "ledger.json"))
 
@@ -140,12 +125,10 @@ def test_history_is_printed_verbatim_and_not_summarised(tmp_path):
     """Operands, not conclusions: no ranking, no counting, no 'you have waited
     three times'. Drawing the conclusion is the agent's job."""
     cdir = _campaign(tmp_path)
-    (cdir / "events.jsonl").write_text(
-        "\n".join(
-            json.dumps({"ts": f"t{i}", "kind": "check_later", "eta_seconds": 600, "basis": f"b{i}"}) for i in range(3)
-        ),
-        encoding="utf-8",
-    )
+    (cdir / "events.jsonl").write_text("\n".join(
+        json.dumps({"ts": f"t{i}", "kind": "check_later", "eta_seconds": 600, "basis": f"b{i}"})
+        for i in range(3)
+    ), encoding="utf-8")
 
     lines = _campaign_history(cdir)
 
@@ -158,9 +141,9 @@ def test_history_is_printed_verbatim_and_not_summarised(tmp_path):
 
 def test_history_is_bounded_so_it_cannot_crowd_out_the_status(tmp_path):
     cdir = _campaign(tmp_path)
-    (cdir / "events.jsonl").write_text(
-        "\n".join(json.dumps({"ts": f"t{i}", "kind": "check_later"}) for i in range(50)), encoding="utf-8"
-    )
+    (cdir / "events.jsonl").write_text("\n".join(
+        json.dumps({"ts": f"t{i}", "kind": "check_later"}) for i in range(50)
+    ), encoding="utf-8")
 
     lines = _campaign_history(cdir)
 

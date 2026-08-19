@@ -117,7 +117,9 @@ def test_a_corpus_contained_subagent_registry_has_no_subprocess_tool():
         async def chat_with_retry(self, **kwargs):  # pragma: no cover - not called
             raise AssertionError("provider must not be called")
 
-    contained = SubagentManager(provider=_P(), workspace=Path("/tmp/ws"), web_corpus_endpoint="http://127.0.0.1:8765")
+    contained = SubagentManager(
+        provider=_P(), workspace=Path("/tmp/ws"), web_corpus_endpoint="http://127.0.0.1:8765"
+    )
     assert sorted(contained._build_subagent_tools(None).names()) == ["web_fetch", "web_search"]
 
     # Uncontained and with no declared parent surface: the full set is registered.
@@ -139,6 +141,8 @@ def test_a_corpus_contained_subagent_registry_has_no_subprocess_tool():
 
     # An empty parent surface means "registry not populated yet", not "parent has nothing":
     # filtering on it would strip every tool and the fence would read as a broken sub-agent.
-    not_yet = SubagentManager(provider=_P(), workspace=Path("/tmp/ws"), parent_tool_names=lambda: [])
+    not_yet = SubagentManager(
+        provider=_P(), workspace=Path("/tmp/ws"), parent_tool_names=lambda: []
+    )
     assert "exec" in not_yet._build_subagent_tools(None).names()
     assert not_yet.last_surface_dropped == []

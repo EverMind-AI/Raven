@@ -42,11 +42,9 @@ _WS = re.compile(r"\s+")
 # conservative hop deliberately does NOT read these - it only shapes what is
 # already visible. Counting them here prices the ceiling of an aggressive
 # variant without building one.
-_ANY_MARKER = re.compile(
-    r"<answer>|\\boxed\s*\{|(?:\A|\n)[ \t>*_]*(?:\*\*)?\s*"
-    r"(?:final\s+answer|answer|最终答案|答案)\s*(?:\*\*)?\s*[:：]",
-    re.I,
-)
+_ANY_MARKER = re.compile(r"<answer>|\\boxed\s*\{|(?:\A|\n)[ \t>*_]*(?:\*\*)?\s*"
+                         r"(?:final\s+answer|answer|最终答案|答案)\s*(?:\*\*)?\s*[:：]",
+                         re.I)
 
 
 def _content(s: str | None) -> int:
@@ -99,18 +97,16 @@ def run(paths: list[Path], *, closing_tag_required: bool, only_answerless: bool)
             if _content(res.text) < _content(vis_before) or res.reason == "refused_shorter":
                 buckets["shorter_lossy"] += 1
                 if len(lossy_examples) < 5:
-                    lossy_examples.append(
-                        {
-                            "qid": r.get("qid"),
-                            "reason": res.reason,
-                            "visible_chars": _content(vis_before),
-                            "shaped_chars": _content(res.text),
-                        }
-                    )
+                    lossy_examples.append({
+                        "qid": r.get("qid"), "reason": res.reason,
+                        "visible_chars": _content(vis_before),
+                        "shaped_chars": _content(res.text),
+                    })
             if answerless and res.text.strip():
                 buckets["rescued"] += 1
                 if len(rescued_examples) < 5:
-                    rescued_examples.append({"qid": r.get("qid"), "form": res.form, "text_head": res.text[:160]})
+                    rescued_examples.append({"qid": r.get("qid"), "form": res.form,
+                                             "text_head": res.text[:160]})
             if res.marked:
                 buckets["marked"] += 1
             if res.shaped:
@@ -139,32 +135,27 @@ def main() -> None:
     ap.add_argument("--json", default="")
     a = ap.parse_args()
 
-    out = run(a.arms, closing_tag_required=a.closing_tag_required, only_answerless=a.only_answerless)
+    out = run(a.arms, closing_tag_required=a.closing_tag_required,
+              only_answerless=a.only_answerless)
     b = out["buckets"]
     n = out["n_rows"]
 
-    print(
-        f"=== back-feed dr@2.5 final-shape  rows={n} "
-        f"closing_tag_required={out['closing_tag_required']} "
-        f"only_answerless={out['only_answerless']} ==="
-    )
+    print(f"=== back-feed dr@2.5 final-shape  rows={n} "
+          f"closing_tag_required={out['closing_tag_required']} "
+          f"only_answerless={out['only_answerless']} ===")
     print(f"  still_empty    {b.get('still_empty', 0):5d}   shaping produced nothing (input had nothing)")
     print(f"  shorter_lossy  {b.get('shorter_lossy', 0):5d}   <-- MUST BE 0")
     print(f"  rescued        {b.get('rescued', 0):5d}   was answerless, now has text")
-    print(
-        f"  marked         {b.get('marked', 0):5d}   model emitted an explicit marker"
-        + (f"  ({100 * b.get('marked', 0) / n:.1f}%)" if n else "")
-    )
+    print(f"  marked         {b.get('marked', 0):5d}   model emitted an explicit marker"
+          + (f"  ({100*b.get('marked',0)/n:.1f}%)" if n else ""))
     print(f"  shaped         {b.get('shaped', 0):5d}   canonical answer line appended")
     print("  forms          " + "  ".join(f"{k}={v}" for k, v in sorted(out["forms"].items())))
     print("  reasons        " + "  ".join(f"{k}={v}" for k, v in sorted(out["reasons"].items())))
     if out["answerless_causes"]:
         print("  answerless     " + "  ".join(f"{k}={v}" for k, v in sorted(out["answerless_causes"].items())))
-        print(
-            f"  ceiling probe  raw text present on {out['answerless_raw_has_text']}, "
-            f"marker somewhere in raw on {out['answerless_raw_has_marker_somewhere']}"
-            "  (the conservative hop reads neither - this prices an aggressive variant)"
-        )
+        print(f"  ceiling probe  raw text present on {out['answerless_raw_has_text']}, "
+              f"marker somewhere in raw on {out['answerless_raw_has_marker_somewhere']}"
+              "  (the conservative hop reads neither - this prices an aggressive variant)")
     for e in out["lossy_examples"]:
         print(f"  !! LOSSY {e}")
 
@@ -173,7 +164,8 @@ def main() -> None:
         print(f"  wrote {a.json}")
 
     rc = 1 if b.get("shorter_lossy", 0) else 0
-    print(f"=== rc={rc} " + ("(shorter_lossy != 0 -> do not merge)" if rc else "(no information loss)") + " ===")
+    print(f"=== rc={rc} "
+          + ("(shorter_lossy != 0 -> do not merge)" if rc else "(no information loss)") + " ===")
     sys.exit(rc)
 
 

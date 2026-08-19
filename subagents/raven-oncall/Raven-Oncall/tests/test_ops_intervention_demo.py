@@ -80,12 +80,8 @@ FAST = {"poll_tries": 3, "poll_delay": 0.01, "settle": 0.01}
 @pytest.mark.asyncio
 async def test_healthy_backend_passes():
     verdict, _, checks = await demonstrate(
-        _meta(),
-        payload_a={"deltaT": 1},
-        payload_b={"deltaT": 2},
-        evidence_a="deltaT=1",
-        evidence_b="deltaT=2",
-        **FAST,
+        _meta(), payload_a={"deltaT": 1}, payload_b={"deltaT": 2},
+        evidence_a="deltaT=1", evidence_b="deltaT=2", **FAST,
     )
     assert verdict is True
     assert checks["change_reached_executor"] is True
@@ -94,10 +90,7 @@ async def test_healthy_backend_passes():
 @pytest.mark.asyncio
 async def test_cancelled_job_reported_as_succeeded_fails_the_gate():
     verdict, _, checks = await demonstrate(
-        _meta(cancel_reads_succeeded=True),
-        payload_a={"a": 1},
-        payload_b={"a": 2},
-        **FAST,
+        _meta(cancel_reads_succeeded=True), payload_a={"a": 1}, payload_b={"a": 2}, **FAST,
     )
     assert verdict is False
     assert checks["cancelled_is_not_success"] is False
@@ -106,10 +99,7 @@ async def test_cancelled_job_reported_as_succeeded_fails_the_gate():
 @pytest.mark.asyncio
 async def test_refunding_a_cancelled_job_fails_the_gate():
     verdict, _, checks = await demonstrate(
-        _meta(refunds_cancelled=True),
-        payload_a={"a": 1},
-        payload_b={"a": 2},
-        **FAST,
+        _meta(refunds_cancelled=True), payload_a={"a": 1}, payload_b={"a": 2}, **FAST,
     )
     assert verdict is False
     assert checks["cancelled_not_refunded"] is False
@@ -118,10 +108,7 @@ async def test_refunding_a_cancelled_job_fails_the_gate():
 @pytest.mark.asyncio
 async def test_spend_vanishing_without_being_named_fails_the_gate():
     verdict, _, checks = await demonstrate(
-        _meta(loses_spend=True),
-        payload_a={"a": 1},
-        payload_b={"a": 2},
-        **FAST,
+        _meta(loses_spend=True), payload_a={"a": 1}, payload_b={"a": 2}, **FAST,
     )
     assert verdict is False
 
@@ -131,12 +118,8 @@ async def test_config_written_but_ignored_fails_when_evidence_is_given():
     # The defect this catches is invisible without evidence markers: the ledger
     # shows two trials either way.
     verdict, _, checks = await demonstrate(
-        _meta(applies_payload=False),
-        payload_a={"deltaT": 1},
-        payload_b={"deltaT": 2},
-        evidence_a="deltaT=1",
-        evidence_b="deltaT=2",
-        **FAST,
+        _meta(applies_payload=False), payload_a={"deltaT": 1}, payload_b={"deltaT": 2},
+        evidence_a="deltaT=1", evidence_b="deltaT=2", **FAST,
     )
     assert verdict is False
     assert checks["change_reached_executor"] is False
@@ -145,10 +128,7 @@ async def test_config_written_but_ignored_fails_when_evidence_is_given():
 @pytest.mark.asyncio
 async def test_without_evidence_the_step_is_skipped_not_silently_passed():
     verdict, log, checks = await demonstrate(
-        _meta(applies_payload=False),
-        payload_a={"a": 1},
-        payload_b={"a": 2},
-        **FAST,
+        _meta(applies_payload=False), payload_a={"a": 1}, payload_b={"a": 2}, **FAST,
     )
     assert checks["change_reached_executor"] is SKIPPED
     assert verdict is True

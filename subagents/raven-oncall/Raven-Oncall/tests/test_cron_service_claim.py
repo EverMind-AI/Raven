@@ -76,14 +76,9 @@ async def test_on_job_scheduling_a_follow_up_does_not_kill_its_own_tick(tmp_path
         if job.name == "ops:c:r1":
             now = svc._now_ms()
             svc.add_job(
-                name="ops:c:r2",
-                schedule=CronSchedule(kind="at", at_ms=now + 150),
-                message="wake r2",
-                deliver=True,
-                channel="tui",
-                to="default",
-                delete_after_run=True,
-                dedup=False,
+                name="ops:c:r2", schedule=CronSchedule(kind="at", at_ms=now + 150),
+                message="wake r2", deliver=True, channel="tui", to="default",
+                delete_after_run=True, dedup=False,
             )
             # yield once: the old code's cancel lands here and kills us
             await asyncio.sleep(0)
@@ -94,14 +89,9 @@ async def test_on_job_scheduling_a_follow_up_does_not_kill_its_own_tick(tmp_path
     await svc.start()
     now = svc._now_ms()
     svc.add_job(
-        name="ops:c:r1",
-        schedule=CronSchedule(kind="at", at_ms=now + 50),
-        message="wake r1",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
-        dedup=False,
+        name="ops:c:r1", schedule=CronSchedule(kind="at", at_ms=now + 50),
+        message="wake r1", deliver=True, channel="tui", to="default",
+        delete_after_run=True, dedup=False,
     )
     await asyncio.sleep(1.0)
     svc.stop()
@@ -126,14 +116,8 @@ async def test_advance_job_to_now_fires_the_wake_early(tmp_path: Path) -> None:
     await svc.start()
     now = svc._now_ms()
     job = svc.add_job(
-        name="ops:c:r1",
-        schedule=CronSchedule(kind="at", at_ms=now + 3_600_000),  # an hour out
-        message="wake",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
-        dedup=False,
+        name="ops:c:r1", schedule=CronSchedule(kind="at", at_ms=now + 3_600_000),  # an hour out
+        message="wake", deliver=True, channel="tui", to="default", delete_after_run=True, dedup=False,
     )
     await asyncio.sleep(0.1)
     assert fired == []  # nowhere near due
@@ -151,20 +135,18 @@ def _past_due_claimed_job(store: Path, *, claim_age_ms: int | None) -> str:
     svc = CronService(store, allowed_channels={"tui"})
     now = svc._now_ms()
     job = svc.add_job(
-        name="ops:campaign:recheck",
-        schedule=CronSchedule(kind="at", at_ms=now + 60_000),
-        message="wake",
-        deliver=True,
-        channel="tui",
-        to="default",
-        delete_after_run=True,
-        dedup=False,
+        name="ops:campaign:recheck", schedule=CronSchedule(kind="at", at_ms=now + 60_000),
+        message="wake", deliver=True, channel="tui", to="default",
+        delete_after_run=True, dedup=False,
     )
     seeded = svc._store.jobs[0]
     seeded.schedule.at_ms = now - 9_000
     seeded.state.next_run_at_ms = now - 9_000
     if claim_age_ms is not None:
-        seeded.state.claimed_by_pid = os.getpid() + 1
+        # A pid that is genuinely running: the claim check asks liveness now, and
+        # os.getpid() + 1 is almost never a live process -- it stood for "some
+        # other pid" back when only the TTL was consulted.
+        seeded.state.claimed_by_pid = os.getppid()
         seeded.state.claimed_at_ms = now - claim_age_ms
     svc._save_store()
     return job.id

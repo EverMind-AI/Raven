@@ -35,10 +35,55 @@ def config_key(config: dict[str, Any]) -> str:
     Two empty configs still share this key on purpose. They ARE the same config,
     and re-submitting the same config must not start a second job.
     """
-    parts = [f"{k}{config[k]}" for k in sorted(config)]
-    if not parts:
+    if not config:
         # Not a key any config can also produce: a real entry always contributes
         # its name, and no name is empty.
+        return "noparams"
+    parts = [f"{k}{_short_value(config[k])}" for k in sorted(config)]
+    body = "_".join(parts).replace(".", "p").replace("-", "m")
+    if len(body) <= _KEY_CHARS:
+        return body
+    # Still too long even with every value folded. Keep the readable head and let
+    # a digest of the whole carry the identity.
+    return body[:_KEY_CHARS] + "__" + _digest(body)
+
+
+# Room for the readable part while leaving most of NAME_MAX (255) free -- an
+# apparatus digest is appended downstream, and a name with no headroom fails at
+# mkdir rather than anywhere a reader would look.
+_KEY_CHARS = 64
+_VALUE_CHARS = 12
+
+
+def _digest(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _short_value(value: Any) -> str:
+    """A value as it appears in a name: itself when short, a digest when not.
+
+    A path is the case that forced this. Spelled out, its separators turn one
+    trial name into seven nested directories -- which hid a running job from a
+    spend probe that globs one level -- and its length left the whole key at
+    exactly NAME_MAX, so any config written slightly longer would not start.
+    """
+    text = str(value)
+    if "/" in text or len(text) > _VALUE_CHARS:
+        return "h" + _digest(text)
+    return text
+
+
+def legacy_config_key(config: dict[str, Any]) -> str:
+    """The spelling used before values were folded.
+
+    Campaigns started under it hold their records under these names, and a resume
+    has to find them: a key that no longer matches reads as a trial that never
+    ran, and re-running it spends the compute again.
+    """
+    parts = [f"{k}{config[k]}" for k in sorted(config)]
+    if not parts:
         return "noparams"
     return "_".join(parts).replace(".", "p").replace("-", "m")
 

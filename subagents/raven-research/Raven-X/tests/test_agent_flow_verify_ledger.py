@@ -134,16 +134,9 @@ async def test_budget_spent_writes_null_not_zero(monkeypatch, tmp_path):
     gate = DraftReviewerGate(reviewer, max_revisions=1)
 
     # Budget already spent: the gate accepts without reviewing.
-    spent = {
-        "verify_gate": {
-            "revisions": 1,
-            "reviews": 1,
-            "fail_open": 0,
-            "passes": 0,
-            "rejects": 1,
-            "evidence_elided_in_context": 7,
-        }
-    }
+    spent = {"verify_gate": {"revisions": 1, "reviews": 1, "fail_open": 0,
+                             "passes": 0, "rejects": 1,
+                             "evidence_elided_in_context": 7}}
     await gate.after_iteration(_ctx(metadata=spent))
 
     rows = [r for r in _read(ledger) if r["op"] == "verify"]
@@ -220,16 +213,9 @@ async def test_the_shipping_draft_can_be_reviewed_for_the_record(monkeypatch, tm
     monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
     gate = DraftReviewerGate(_Rejecter(), max_revisions=1, review_final_draft=True)
 
-    spent = {
-        "verify_gate": {
-            "revisions": 1,
-            "reviews": 1,
-            "fail_open": 0,
-            "passes": 0,
-            "rejects": 1,
-            "evidence_elided_in_context": 7,
-        }
-    }
+    spent = {"verify_gate": {"revisions": 1, "reviews": 1, "fail_open": 0,
+                             "passes": 0, "rejects": 1,
+                             "evidence_elided_in_context": 7}}
     decision = await gate.after_iteration(_ctx(metadata=spent))
 
     rows = [r for r in _read(ledger) if r["op"] == "verify"]
@@ -255,7 +241,8 @@ async def test_reviewing_the_final_draft_never_sends_the_turn_back(monkeypatch, 
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
     gate = DraftReviewerGate(_Rejecter(), max_revisions=1, review_final_draft=True)
-    meta = {"verify_gate": {"revisions": 1, "reviews": 1, "fail_open": 0, "passes": 0, "rejects": 1}}
+    meta = {"verify_gate": {"revisions": 1, "reviews": 1, "fail_open": 0,
+                            "passes": 0, "rejects": 1}}
     decision = await gate.after_iteration(_ctx(metadata=meta))
 
     assert decision.rollback is False
@@ -269,9 +256,8 @@ async def test_the_knob_off_leaves_the_landed_behaviour_byte_identical(monkeypat
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setenv("RAVEN_WEB_LEDGER", str(ledger))
     gate = DraftReviewerGate(_Rejecter(), max_revisions=1)
-    await gate.after_iteration(
-        _ctx(metadata={"verify_gate": {"revisions": 1, "reviews": 1, "fail_open": 0, "passes": 0, "rejects": 1}})
-    )
+    await gate.after_iteration(_ctx(metadata={"verify_gate": {
+        "revisions": 1, "reviews": 1, "fail_open": 0, "passes": 0, "rejects": 1}}))
 
     rows = [r for r in _read(ledger) if r["op"] == "verify"]
     assert [r["outcome"] for r in rows] == ["budget_spent"]

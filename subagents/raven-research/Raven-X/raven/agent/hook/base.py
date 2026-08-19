@@ -82,6 +82,15 @@ class AgentHookContext:
     # ── before_user_inbound ──
     turn_request: "TurnRequest | None" = None
 
+    # ── set once at loop entry, for the whole turn ──
+    turn_question: str | None = None
+    """This turn's question, envelopes stripped — see ``flow/turn_task.py``.
+
+    Captured before the first iteration because hooks append their own
+    ``role="user"`` messages (the verify gate's revision prompt) during the
+    turn, so it cannot be recovered from ``messages`` once the loop is running.
+    """
+
     # ── before_iteration / before_execute_tools / after_iteration ──
     iteration: int | None = None
     messages: list[dict[str, Any]] | None = None
@@ -136,6 +145,24 @@ class HookDecision:
     rollback_overrides: dict[str, Any] | None = None
     rollback_inject: list[dict[str, Any]] | None = None
     notes: list[str] = field(default_factory=list)
+    modified_tools: list[dict[str, Any]] | None = None
+    """Replacement tool schemas for THIS iteration only, from
+    ``before_iteration``. ``None`` leaves the registry's list untouched.
+
+    Withholding a tool for one iteration is a control-flow decision, and it is
+    expressed here rather than by mutating ``ctx.tools`` in place, even though
+    in-place mutation happens to work today: ``AgentLoop`` assigns the same list
+    object it later sends, so a hook calling ``remove()`` would be observed. That
+    is an accident of two modules' current object lifetimes that neither one
+    declares - ``ToolRegistry.get_definitions`` builds a fresh list per call, and
+    the day it caches one, the hook would silently stop taking effect. The
+    failure mode is a rule that no longer fires, which is indistinguishable in
+    the output from a rule that fires and does not help.
+
+    Scoped to the iteration on purpose: the registry is never edited, so nothing
+    has to remember to put the tool back, and a rule that stops applying restores
+    the full tool set by doing nothing.
+    """
 
 
 # ---------------------------------------------------------------------------

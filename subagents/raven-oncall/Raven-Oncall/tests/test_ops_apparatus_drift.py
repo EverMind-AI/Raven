@@ -39,6 +39,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from raven.ops.apparatus import (
     baseline_of,
     compare,
@@ -50,13 +52,9 @@ from raven.ops.apparatus import (
 def _meta(tmp_path: Path, **over) -> Path:
     cdir = tmp_path / "c"
     cdir.mkdir(exist_ok=True)
-    meta = {
-        "backend": "process",
-        "host": "h",
-        "command": "run {config} {job_dir}",
-        "staged_case": "/remote/case",
-        "budget": {"unit": "core-minute", "total": 150},
-    }
+    meta = {"backend": "process", "host": "h", "command": "run {config} {job_dir}",
+            "staged_case": "/remote/case",
+            "budget": {"unit": "core-minute", "total": 150}}
     meta.update(over)
     (cdir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     return cdir
@@ -78,11 +76,13 @@ class _Runner:
 
 def test_a_baseline_names_the_meta_and_every_case_file(tmp_path):
     cdir = _meta(tmp_path)
-    runner = _Runner({"/remote/case/system/controlDict": "aaa", "/remote/case/constant/transportProperties": "bbb"})
+    runner = _Runner({"/remote/case/system/controlDict": "aaa",
+                      "/remote/case/constant/transportProperties": "bbb"})
     b = baseline_of(cdir, runner)
 
     assert b["meta_sha"], "the declaration itself must be fingerprinted"
-    assert b["case"] == {"/remote/case/system/controlDict": "aaa", "/remote/case/constant/transportProperties": "bbb"}
+    assert b["case"] == {"/remote/case/system/controlDict": "aaa",
+                         "/remote/case/constant/transportProperties": "bbb"}
 
 
 def test_an_unchanged_apparatus_compares_clean(tmp_path):
@@ -101,7 +101,7 @@ def test_an_edited_meta_is_reported_as_changed(tmp_path):
     save_baseline(cdir, baseline_of(cdir, runner))
 
     m = json.loads((cdir / "meta.json").read_text())
-    m["staged_case"] = "/remote/other"  # what the B2 arm did
+    m["staged_case"] = "/remote/other"           # what the B2 arm did
     (cdir / "meta.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
 
     d = compare(load_baseline(cdir), baseline_of(cdir, _Runner({"/remote/other/x": "ccc"})))
@@ -113,25 +113,13 @@ def test_an_edited_case_file_is_reported_but_kept_separate_from_meta(tmp_path):
     """Editing the case is the job. It is recorded, not refused -- and it must not
     be conflated with editing the declaration."""
     cdir = _meta(tmp_path)
-    save_baseline(
-        cdir,
-        baseline_of(
-            cdir, _Runner({"/remote/case/system/setFieldsDict": "aaa", "/remote/case/system/controlDict": "bbb"})
-        ),
-    )
+    save_baseline(cdir, baseline_of(cdir, _Runner({
+        "/remote/case/system/setFieldsDict": "aaa",
+        "/remote/case/system/controlDict": "bbb"})))
 
-    d = compare(
-        load_baseline(cdir),
-        baseline_of(
-            cdir,
-            _Runner(
-                {
-                    "/remote/case/system/setFieldsDict": "REWRITTEN",  # what the leg A arm did
-                    "/remote/case/system/controlDict": "bbb",
-                }
-            ),
-        ),
-    )
+    d = compare(load_baseline(cdir), baseline_of(cdir, _Runner({
+        "/remote/case/system/setFieldsDict": "REWRITTEN",   # what the leg A arm did
+        "/remote/case/system/controlDict": "bbb"})))
 
     assert d.meta_changed is False
     assert d.case_changed == ["/remote/case/system/setFieldsDict"]

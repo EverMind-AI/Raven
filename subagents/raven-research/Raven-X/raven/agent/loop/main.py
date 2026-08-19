@@ -18,6 +18,7 @@ from loguru import logger
 
 from raven.agent.context import TOOL_OUTPUT_ELIDED, ContextBuilder
 from raven.agent.flow.answer_text import visible_answer
+from raven.agent.flow.turn_task import turn_question
 from raven.agent.loop.journal import TurnJournal
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
@@ -179,7 +180,6 @@ _TRUNCATED_SYNTHESIS_PROMPT = (
     "language)."
 )
 
-
 def _is_truncated_answerless(
     final_content: str | None,
     finish_reason: str | None,
@@ -269,8 +269,7 @@ def _text_of(content: object) -> str:
         return content
     if isinstance(content, list):
         return "\n".join(
-            c["text"]
-            for c in content
+            c["text"] for c in content
             if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str)
         )
     return ""
@@ -490,7 +489,9 @@ class AgentLoop:
         # four times for the "N copies of one number" shape. So the attribute itself now
         # holds the resolved value, and ``_window_for(model)`` remains only for the
         # per-call model override.
-        self.context_window_tokens = resolve_context_window(self.model) or context_window_tokens
+        self.context_window_tokens = (
+            resolve_context_window(self.model) or context_window_tokens
+        )
 
         from raven.agent.flow import build_dr_flow
 
@@ -516,7 +517,9 @@ class AgentLoop:
         if self._dr_flow is not None and self._dr_flow.max_iterations:
             self.max_iterations = self._dr_flow.max_iterations
         # Off unless the flow is on, so chat behavior stays byte-identical.
-        self._think_closing_tag_required = self._dr_flow is not None and self._dr_flow.think_closing_tag_required
+        self._think_closing_tag_required = (
+            self._dr_flow is not None and self._dr_flow.think_closing_tag_required
+        )
         # Trajectory stamp: the flow identity prefixes the harness build so
         # data produced by different flow versions stays distinguishable.
         self._flow_version = (
@@ -717,7 +720,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             sessions=self.sessions,
-            context_window_tokens=self.context_window_tokens,  # dr@3.2: resolved
+            context_window_tokens=self.context_window_tokens,   # dr@3.2: resolved
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
@@ -812,10 +815,8 @@ class AgentLoop:
         refuse. Either fence being active is enough reason to run.
         """
         fence = (
-            "web corpus endpoint"
-            if self.web_corpus_endpoint
-            else "benchmark containment"
-            if self.benchmark_containment.enabled
+            "web corpus endpoint" if self.web_corpus_endpoint
+            else "benchmark containment" if self.benchmark_containment.enabled
             else None
         )
         if fence is None:
@@ -1794,7 +1795,9 @@ class AgentLoop:
             elided_total += elided
             used = estimate_prompt_tokens(list(messages), list(tools or []))
         if elided_total:
-            logger.warning("pre-call fit: elided {} old tool result(s) to stay inside the context window", elided_total)
+            logger.warning(
+                "pre-call fit: elided {} old tool result(s) to stay inside the context window", elided_total
+            )
         room = budget - used
         if room < self._MIN_CLAMPED_COMPLETION_TOKENS or room >= cap:
             return messages, current_cap, elided_total
@@ -2013,7 +2016,17 @@ class AgentLoop:
         # One context for the whole turn (not per iteration): hooks keep
         # cross-iteration state in ``ctx.metadata``, which must not live on
         # the AgentLoop singleton or it would leak across sessions.
-        hook_ctx = AgentHookContext(session_key=session_key) if len(self.hooks) > 0 else None
+        # ``turn_question`` is captured here and never recomputed: a rejected
+        # draft appends its own user-role revision prompt, so by the time a gate
+        # asks "what was the task" the list can no longer answer it.
+        hook_ctx = (
+            AgentHookContext(
+                session_key=session_key,
+                turn_question=turn_question(initial_messages),
+            )
+            if len(self.hooks) > 0
+            else None
+        )
         hook_rollbacks = 0
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
@@ -2112,7 +2125,9 @@ class AgentLoop:
                         prefix = inj_text + "\n" if inj_text else ""
                         inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
                     if inj_text:
-                        messages.append({"role": "user", "content": inj_text, "timestamp": self._now_fn().isoformat()})
+                        messages.append(
+                            {"role": "user", "content": inj_text, "timestamp": self._now_fn().isoformat()}
+                        )
                         logger.info("inject: merged a mid-turn user message")
 
             tool_defs = self.tools.get_definitions()
@@ -2127,6 +2142,15 @@ class AgentLoop:
                     final_content = str(decision.short_circuit_result)
                     messages = self.context.add_assistant_message(messages, final_content)
                     break
+                # A hook may withhold a tool for this iteration only. Taken from the
+                # decision rather than from ``hook_ctx.tools``: the two happen to be
+                # the same object today, so an in-place edit would also be observed,
+                # and relying on that would make the rule stop firing silently the
+                # day ``get_definitions`` returns a cached list. The registry itself
+                # is never touched, so the next iteration starts from the full set
+                # unless the hook decides again.
+                if decision.modified_tools is not None:
+                    tool_defs = decision.modified_tools
 
             # Fit the request before sending it. The recovery below only runs
             # after a 400 round-trip and each recovery buys exactly one
@@ -2136,7 +2160,9 @@ class AgentLoop:
             # recoveries — none took an uncovered path. Checking the fit here
             # removes both the wasted round-trips and the exhaustion; the
             # reactive path stays as the net for estimate error.
-            messages, fitted_cap, pre_elided = self._fit_request(messages, tool_defs, effective_model, completion_cap)
+            messages, fitted_cap, pre_elided = self._fit_request(
+                messages, tool_defs, effective_model, completion_cap
+            )
             preelisions += pre_elided
             if fitted_cap != completion_cap:
                 completion_cap = fitted_cap
@@ -2229,7 +2255,11 @@ class AgentLoop:
             cls_ = response.error_classification
             if response.finish_reason == "error" and cls_ is not None and cls_.should_compress:
                 overflows += 1
-                clamp = self._completion_clamp(completion_cap) if clamp_retries < self._MAX_CLAMP_RETRIES else None
+                clamp = (
+                    self._completion_clamp(completion_cap)
+                    if clamp_retries < self._MAX_CLAMP_RETRIES
+                    else None
+                )
                 if clamp is not None:
                     completion_cap = clamp
                     clamp_retries += 1
@@ -2464,7 +2494,9 @@ class AgentLoop:
         # says no - which is exactly how the terminal seam once ran 22 salvage calls
         # over 16 items. Consult the commit flag, never re-derive it.
         _salvaged_already = bool(
-            (hook_ctx.metadata.get("force_finalize") or {}).get("salvage_committed") if hook_ctx is not None else False
+            (hook_ctx.metadata.get("force_finalize") or {}).get("salvage_committed")
+            if hook_ctx is not None
+            else False
         )
         # Two ways a turn ends with nothing to show, and they are NOT the same failure:
         #   - budget_exhausted: ran out of tool-calling iterations, no final message.
@@ -2480,7 +2512,9 @@ class AgentLoop:
         # delta is measured against, for a repair that produced zero correct answers on
         # the treated arm over the batch that paid for it. Evaluated before the
         # predicate so a flow-off turn does not even compute it.
-        _truncated_answerless = bool(getattr(self._dr_flow, "truncation_wrapup", False)) and _is_truncated_answerless(
+        _truncated_answerless = bool(
+            getattr(self._dr_flow, "truncation_wrapup", False)
+        ) and _is_truncated_answerless(
             final_content, final_finish_reason, salvaged=_salvaged_already
         )
         if _truncated_answerless:
@@ -2570,7 +2604,9 @@ class AgentLoop:
         # its own LLM calls by ~38%. Consult the commit flag the way
         # pipeline/eval_clean_adapter.py already does.
         salvage_committed = bool(
-            (hook_ctx.metadata.get("force_finalize") or {}).get("salvage_committed") if hook_ctx is not None else False
+            (hook_ctx.metadata.get("force_finalize") or {}).get("salvage_committed")
+            if hook_ctx is not None
+            else False
         )
         answerless = status == "error" or not (
             salvage_committed
@@ -2614,7 +2650,8 @@ class AgentLoop:
                 # terminal-seam one commits AFTER this stamp and is only marked by
                 # "salvaged" below - which is why the value is refreshed there.
                 "answerless_shape_exempt": not (
-                    salvage_committed or visible_answer(final_content, closing_tag_required=True)
+                    salvage_committed
+                    or visible_answer(final_content, closing_tag_required=True)
                 ),
                 # dr@2.9: the wrap-up nets, counted so a repeat firing is VISIBLE.
                 # The 22-over-16 double-fire went unnoticed for a release precisely
@@ -2718,9 +2755,9 @@ class AgentLoop:
             # ``synthesized`` is kept beside it rather than replaced: "the call
             # produced a model-written wrap-up rather than the static fallback" is a
             # real and different fact, and collapsing the two is what hid this.
-            _wrapup_answer = (
-                bool(visible_answer(final_content, closing_tag_required=True)) if _truncated_answerless else False
-            )
+            _wrapup_answer = bool(
+                visible_answer(final_content, closing_tag_required=True)
+            ) if _truncated_answerless else False
             observers["truncation_wrapup"] = {
                 "fired": bool(_truncated_answerless),
                 "recovered": _wrapup_answer,
@@ -2800,7 +2837,9 @@ class AgentLoop:
                     # RAVEN_WEB_LEDGER is measurement data and is never touched.
                     close_product_ledger()
             if not observers["invariants"].get("ok"):
-                logger.error("turn invariants violated: {}", ", ".join(observers["invariants"]["violations"]))
+                logger.error(
+                    "turn invariants violated: {}", ", ".join(observers["invariants"]["violations"])
+                )
             for m in reversed(messages):
                 if m.get("role") == "assistant" and not m.get("content") and not m.get("tool_calls"):
                     continue
@@ -3105,7 +3144,9 @@ class AgentLoop:
         # topic re-finding the previous turn's pages is the loop, not a re-check.
         if search_tool := self.tools.get("web_search"):
             if isinstance(search_tool, WebSearchTool):
-                search_tool.start_turn(keep_identities=getattr(self._dr_flow, "identity_scope", "turn") == "topic")
+                search_tool.start_turn(
+                    keep_identities=getattr(self._dr_flow, "identity_scope", "turn") == "topic"
+                )
         # The fetch tool carries only the retry budget, and it needs the same scope:
         # a budget spent once would leave later turns of a long run unprotected.
         if fetch_tool := self.tools.get("web_fetch"):

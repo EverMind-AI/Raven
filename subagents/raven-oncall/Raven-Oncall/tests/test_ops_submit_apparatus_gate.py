@@ -27,38 +27,25 @@ from pathlib import Path
 import pytest
 
 from raven.agent.tools.ops import OpsSubmitTool
-from raven.ops.apparatus import BASELINE_FILE
+from raven.ops.apparatus import BASELINE_FILE, baseline_of, save_baseline
 
 
 class _Job:
-    def __init__(self, i):
-        self.id = str(i)
+    def __init__(self, i): self.id = str(i)
 
 
 class _FakeCron:
-    def __init__(self):
-        self.jobs = []
-
-    def add_job(self, **kw):
-        self.jobs.append(kw)
-        return _Job(len(self.jobs))
-
+    def __init__(self): self.jobs = []
+    def add_job(self, **kw): self.jobs.append(kw); return _Job(len(self.jobs))
     def list_jobs(self):
         from types import SimpleNamespace
-
         return [SimpleNamespace(id=str(i), name=j["name"]) for i, j in enumerate(self.jobs)]
-
-    def remove_job(self, job_id):
-        del self.jobs[int(job_id)]
-        return True
+    def remove_job(self, job_id): del self.jobs[int(job_id)]; return True
 
 
 class _Runner:
     """Remote shell stand-in serving one case file whose content we control."""
-
-    def __init__(self, sha="aaa"):
-        self.sha = sha
-
+    def __init__(self, sha="aaa"): self.sha = sha
     def __call__(self, cmd):
         return 0, f"{self.sha}  /remote/case/system/controlDict\n"
 
@@ -66,7 +53,6 @@ class _Runner:
 def _observed(cdir: Path) -> None:
     """A recorded probe, so round >= 1 can cite one -- exactly as a real turn does."""
     from raven.ops.state_claims import StateFacts, write_facts
-
     write_facts(cdir, StateFacts(metric_readings={"ndcg": (0.29,)}, probe_seq=1))
 
 
@@ -76,21 +62,11 @@ BASIS = "ndcg 0.29 on the latest sample; trying the next config"
 def _campaign(tmp_path: Path) -> Path:
     cdir = tmp_path / "c"
     cdir.mkdir(exist_ok=True)
-    (cdir / "meta.json").write_text(
-        json.dumps(
-            {
-                "backend": "process",
-                "host": "h",
-                "port": 22,
-                "key": "~/.ssh/id_rsa",
-                "command": "run {config} {job_dir}",
-                "staged_case": "/remote/case",
-                "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"},
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    (cdir / "meta.json").write_text(json.dumps({
+        "backend": "process", "host": "h", "port": 22, "key": "~/.ssh/id_rsa",
+        "command": "run {config} {job_dir}", "staged_case": "/remote/case",
+        "budget": {"unit": "core-minute", "total": 150, "overlap": "additive"},
+    }, ensure_ascii=False), encoding="utf-8")
     return cdir
 
 
@@ -102,22 +78,13 @@ def _install(monkeypatch, sha="aaa"):
 
     class _Backend:
         _run = staticmethod(runner)
-
-        async def spent_minutes(self):
-            return 0.0
-
-        async def remaining_minutes(self):
-            return 150.0
-
-        def unmeasured_spend(self):
-            return {}
-
+        async def spent_minutes(self): return 0.0
+        async def remaining_minutes(self): return 150.0
+        def unmeasured_spend(self): return {}
         async def submit(self, spec):
             return SimpleNamespace(backend="process", job_id=f"ops-{spec.idem_key}")
-
         async def poll(self, handle):
             from raven.ops import JobStatus
-
             return JobStatus.RUNNING
 
     monkeypatch.setattr("raven.ops.backends.backend_from_meta", lambda meta: _Backend())
@@ -129,17 +96,10 @@ def _install(monkeypatch, sha="aaa"):
 async def test_first_submit_records_the_baseline(tmp_path, monkeypatch):
     cdir = _campaign(tmp_path)
     _install(monkeypatch)
-    sub = OpsSubmitTool(cron_service=_FakeCron())
-    sub.set_context("cli", "direct")
-    out = await sub.execute(
-        host="h",
-        configs=[{"a": 1}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=0,
-        campaign="c",
-    )
+    sub = OpsSubmitTool(cron_service=_FakeCron()); sub.set_context("cli", "direct")
+    out = await sub.execute(host="h", configs=[{"a": 1}], objective="o",
+                            ledger=str(cdir / "ledger.json"), eta_seconds=60,
+                            round=0, campaign="c")
     assert "Submitted" in out
     assert (cdir / BASELINE_FILE).exists(), "the first submit is when the apparatus is known good"
 
@@ -148,33 +108,18 @@ async def test_first_submit_records_the_baseline(tmp_path, monkeypatch):
 async def test_an_edited_meta_refuses_the_next_submit(tmp_path, monkeypatch):
     cdir = _campaign(tmp_path)
     _install(monkeypatch)
-    sub = OpsSubmitTool(cron_service=_FakeCron())
-    sub.set_context("cli", "direct")
-    await sub.execute(
-        host="h",
-        configs=[{"a": 1}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=0,
-        campaign="c",
-    )
+    sub = OpsSubmitTool(cron_service=_FakeCron()); sub.set_context("cli", "direct")
+    await sub.execute(host="h", configs=[{"a": 1}], objective="o",
+                      ledger=str(cdir / "ledger.json"), eta_seconds=60, round=0, campaign="c")
 
     m = json.loads((cdir / "meta.json").read_text())
     m["staged_case"] = "/remote/somewhere-else"
     (cdir / "meta.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
 
     _observed(cdir)
-    out = await sub.execute(
-        host="h",
-        configs=[{"a": 2}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=1,
-        campaign="c",
-        basis=BASIS,
-    )
+    out = await sub.execute(host="h", configs=[{"a": 2}], objective="o",
+                            ledger=str(cdir / "ledger.json"), eta_seconds=60, round=1,
+                            campaign="c", basis=BASIS)
     assert "REFUSED" in out
     assert "meta.json" in out
     assert "ops_ask_owner" in out, "refusing without naming the way out just blocks it"
@@ -184,30 +129,15 @@ async def test_an_edited_meta_refuses_the_next_submit(tmp_path, monkeypatch):
 async def test_an_edited_case_is_reported_and_still_submits(tmp_path, monkeypatch):
     cdir = _campaign(tmp_path)
     _install(monkeypatch, sha="aaa")
-    sub = OpsSubmitTool(cron_service=_FakeCron())
-    sub.set_context("cli", "direct")
-    await sub.execute(
-        host="h",
-        configs=[{"a": 1}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=0,
-        campaign="c",
-    )
+    sub = OpsSubmitTool(cron_service=_FakeCron()); sub.set_context("cli", "direct")
+    await sub.execute(host="h", configs=[{"a": 1}], objective="o",
+                      ledger=str(cdir / "ledger.json"), eta_seconds=60, round=0, campaign="c")
 
-    _install(monkeypatch, sha="REWRITTEN")  # the case file changed underneath
+    _install(monkeypatch, sha="REWRITTEN")     # the case file changed underneath
     _observed(cdir)
-    out = await sub.execute(
-        host="h",
-        configs=[{"a": 2}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=1,
-        campaign="c",
-        basis=BASIS,
-    )
+    out = await sub.execute(host="h", configs=[{"a": 2}], objective="o",
+                            ledger=str(cdir / "ledger.json"), eta_seconds=60, round=1,
+                            campaign="c", basis=BASIS)
 
     assert "Submitted" in out, "editing the case is the job, not a violation"
     assert "controlDict" in out, "but it must be said out loud"
@@ -220,51 +150,27 @@ async def test_an_unreadable_case_does_not_block_the_submit(tmp_path, monkeypatc
     """A host that cannot answer must not read as a wiped apparatus."""
     cdir = _campaign(tmp_path)
     _install(monkeypatch)
-    sub = OpsSubmitTool(cron_service=_FakeCron())
-    sub.set_context("cli", "direct")
-    await sub.execute(
-        host="h",
-        configs=[{"a": 1}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=0,
-        campaign="c",
-    )
+    sub = OpsSubmitTool(cron_service=_FakeCron()); sub.set_context("cli", "direct")
+    await sub.execute(host="h", configs=[{"a": 1}], objective="o",
+                      ledger=str(cdir / "ledger.json"), eta_seconds=60, round=0, campaign="c")
 
     from types import SimpleNamespace
 
     class _Dead:
         _run = staticmethod(lambda cmd: (1, ""))
-
-        async def spent_minutes(self):
-            return 0.0
-
-        async def remaining_minutes(self):
-            return 150.0
-
-        def unmeasured_spend(self):
-            return {}
-
+        async def spent_minutes(self): return 0.0
+        async def remaining_minutes(self): return 150.0
+        def unmeasured_spend(self): return {}
         async def submit(self, spec):
             return SimpleNamespace(backend="process", job_id=f"ops-{spec.idem_key}")
-
         async def poll(self, handle):
             from raven.ops import JobStatus
-
             return JobStatus.RUNNING
 
     monkeypatch.setattr("raven.ops.backends.backend_from_meta", lambda meta: _Dead())
     _observed(cdir)
-    out = await sub.execute(
-        host="h",
-        configs=[{"a": 2}],
-        objective="o",
-        ledger=str(cdir / "ledger.json"),
-        eta_seconds=60,
-        round=1,
-        campaign="c",
-        basis=BASIS,
-    )
+    out = await sub.execute(host="h", configs=[{"a": 2}], objective="o",
+                            ledger=str(cdir / "ledger.json"), eta_seconds=60, round=1,
+                            campaign="c", basis=BASIS)
     assert "Submitted" in out
     assert "REFUSED" not in out

@@ -20,29 +20,8 @@ DATA = "/app/data/nfcorpus"
 K_CUTOFF = 10
 _TOKEN = re.compile(r"[a-z0-9]+")
 _STOP = {
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "of",
-    "to",
-    "in",
-    "on",
-    "for",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "with",
-    "as",
-    "by",
-    "at",
-    "that",
-    "this",
-    "it",
-    "from",
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are",
+    "was", "were", "be", "with", "as", "by", "at", "that", "this", "it", "from",
 }
 
 

@@ -59,7 +59,9 @@ def test_a_relative_condition_without_a_baseline_is_not_enough_to_act_on():
 
 def test_the_same_relative_report_with_a_baseline_is_accepted():
     orch = MockOrchestrator()
-    assert orch.receive(_report(condition_type=RELATIVE, observed={"position": 14}, baseline={"position": 4})).accepted
+    assert orch.receive(
+        _report(condition_type=RELATIVE, observed={"position": 14}, baseline={"position": 4})
+    ).accepted
 
 
 def test_an_absolute_condition_needs_no_baseline():
@@ -77,7 +79,8 @@ def test_asking_for_a_decision_without_options_or_a_suggestion_is_rejected():
     orch = MockOrchestrator()
     receipt = orch.receive(_report(kind=NEEDS_DECISION))
     assert receipt.missing == ["options"], (
-        "handing back a decision with nothing to decide between makes the orchestrator redo the analysis"
+        "handing back a decision with nothing to decide between makes the "
+        "orchestrator redo the analysis"
     )
 
 
@@ -103,7 +106,9 @@ def test_the_second_report_for_the_same_signal_is_rejected():
 def test_a_different_signal_on_the_same_subject_still_gets_through():
     orch = MockOrchestrator()
     assert orch.receive(_report()).accepted
-    assert orch.receive(_report(dedupe_key="ranking:acme-landing:recovered", observed={"position": 3})).accepted
+    assert orch.receive(
+        _report(dedupe_key="ranking:acme-landing:recovered", observed={"position": 3})
+    ).accepted
 
 
 def test_a_report_that_claims_to_have_dispatched_is_rejected():

@@ -129,6 +129,54 @@ async def test_fetch_result_returns_raw_evidence_and_no_metric():
 
 
 @pytest.mark.asyncio
+async def test_a_failure_reason_carries_the_job_s_last_words():
+    """"solver did not print End" restates how the failure was detected, and says
+    nothing about what happened. It is the only text that reaches the status
+    output's ``why:`` line, so a crash arrived there as a tautology.
+
+    Measured 2026-08-13 on the CFD divergence leg: the solver took a SIGFPE with
+    alpha.water at -9.8e+88 and an eight-frame stack trace sitting in the log the
+    backend had already fetched, while ``why:`` read "solver did not print End".
+    The arm recovered by reading job.log itself -- which is the tool面 doing the
+    reader's work for it.
+
+    The last lines are appended verbatim, not summarised: which line matters is
+    domain knowledge, and the caller truncates.
+    """
+    crash = (
+        "Time = 0.4885\n"
+        "Phase-1 volume fraction = 6.22e+68  Min(alpha.water) = -9.82e+88\n"
+        "[stack trace]\n"
+        "#1  Foam::sigFpe::sigHandler(int) in libOpenFOAM.so\n"
+    )
+    ex, _ = _executor([(0, "gone"), (0, crash), (0, "0 0.05 0.1")])
+    result = await ex.fetch_result(JobHandle("openfoam", "ops-caseA"))
+
+    assert result.status is JobStatus.FAILED
+    assert "solver did not print End" in (result.error or ""), (
+        "how it was detected is still worth saying"
+    )
+    assert "sigFpe" in (result.error or ""), "and what the job said on the way out"
+    assert "-9.82e+88" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_failure_with_no_log_says_so_rather_than_going_quiet():
+    ex, _ = _executor([(0, "gone"), (1, ""), (0, "")])
+    result = await ex.fetch_result(JobHandle("openfoam", "ops-caseA"))
+    assert result.status is JobStatus.FAILED
+    assert "solver did not print End" in (result.error or "")
+    assert "no log" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_a_succeeded_job_still_has_no_error():
+    ex, _ = _executor([(0, "ended"), (0, "Time = 1\nEnd"), (0, "0 1")])
+    result = await ex.fetch_result(JobHandle("openfoam", "ops-caseA"))
+    assert result.error is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_progress_returns_verbatim_lines():
     ex, _ = _executor([(0, "GAMG:  Solving for p, Initial residual = 0.0008\nEnd")])
     rows = await ex.fetch_progress(JobHandle("openfoam", "ops-caseA"), tail=2)
@@ -164,13 +212,11 @@ async def test_two_solvers_running_at_once_are_billed_for_both():
     The two rules are one function apart, and the unit tests for it prove the
     function; this proves this backend asks it for the right one.
     """
-    out = "\n".join(
-        [
-            _row("caseA", 8, 0, 1000, 600, 1600, 1),
-            _row("caseB", 4, 0, 1000, 600, 1600, 1),
-            "NOW|2000",
-        ]
-    )
+    out = "\n".join([
+        _row("caseA", 8, 0, 1000, 600, 1600, 1),
+        _row("caseB", 4, 0, 1000, 600, 1600, 1),
+        "NOW|2000",
+    ])
     ex, _ = _executor([(0, out)])
 
     # 10 wall minutes each: 80 core-minutes on eight cores plus 40 on four.
@@ -184,13 +230,11 @@ async def test_a_campaign_may_declare_that_its_spend_is_occupancy():
     jobs then cost what the wider one cost."""
     from raven.ops.budget import SHARED, Budget
 
-    out = "\n".join(
-        [
-            _row("caseA", 8, 0, 1000, 600, 1600, 1),
-            _row("caseB", 4, 0, 1000, 600, 1600, 1),
-            "NOW|2000",
-        ]
-    )
+    out = "\n".join([
+        _row("caseA", 8, 0, 1000, 600, 1600, 1),
+        _row("caseB", 4, 0, 1000, 600, 1600, 1),
+        "NOW|2000",
+    ])
     ex, _ = _executor([(0, out)], budget=Budget(unit="node-minute", total=500, overlap=SHARED))
 
     assert await ex.spent_minutes() == pytest.approx(80.0)

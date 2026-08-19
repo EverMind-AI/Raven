@@ -43,23 +43,23 @@ uv run raven tui
 > 换成别的模型完全能跑,但**值守行为跟模型强相关** ——
 > 下面 §5 那些"粗糙处"有一部分是这个模型的表现,换模型不一定一样。
 
-### ⚠️ 坑 2:要同时开多个实例,必须加两样
+### ⚠️ 坑 2:同时开多个实例时,`workspace` 还要手改一次
 
-不加会**共用 `~/.raven`**(同一份提醒任务、同一份台账),**而且不报错,只是悄悄共用**:
+不改会**共用同一个工作区**(同一份会话、同一份记忆,内存索引还会争锁),
+**而且不报错,只是悄悄共用**。2026-08-13 实测发作过一次:两份配置是从第三份抄来的,
+别的路径都跟着新位置走了,就这一行留在原地。
 
 ```bash
-RAVEN_TRACING_DIR=~/.raven-mine/traces \
-  uv run raven tui --config ~/.raven-mine/config.json
+uv run raven tui --config ~/.raven-mine/config.json
 ```
-
-配置文件里 `agents.defaults.workspace` 也要改成不同目录(内存索引会争锁):
 
 ```json
 "agents": { "defaults": { "workspace": "~/.raven-mine/workspace" } }
 ```
 
-`--config` 会自动带走 cron store、日志、campaign 台账(含报告和唤醒记账);
-**traces 和 workspace 不跟着走**,所以要手动设这两样。
+`--config` 会带走 cron store、日志、campaign 台账(含报告和唤醒记账),
+**以及 traces**(2026-08-13 起:没设 `RAVEN_TRACING_DIR` 时按配置文件所在目录推,
+不传 `--config` 的默认位置逐字节不变)。**只剩 `workspace` 要手改。**
 
 > campaign 台账原先**也不跟**:三个模块各有一份导入期硬编码的 `~/.raven/ops`。
 > 后果不是文件放错位置 —— 报告落进一个没有 `meta.json` 的新目录,
@@ -91,11 +91,25 @@ campaign="试试看",ledger="~/.raven/ops/试试看/ledger.json",host <主机IP>
 **贴完就可以关掉注意力了。** 它会:提交作业 → 自己排一个唤醒 → 到点自己醒来看进度 →
 决定继续等 / 改配置重投 / 掐掉 → 最后交一份报告。
 
-### ⚠️ 坑 3:`campaign` 和 `ledger` 现在必须你告诉它
+### ⚠️ 坑 3:campaign 名不用写进你的话里,但第一次要指名一次
 
-**产品目前没有任何办法让它自己发现"我在守什么"** ——
-`campaign` / `ledger` / `host` 是每个 ops 工具的必填参数,而没有工具能列出现有 campaign。
-这是已知缺口,记在待办里。所以那两行标识**要写进你的话里**。
+标识**不需要**出现在你交办的那段话里。窗口第一次调 ops 工具时,如果这个实例下
+有多个还没结题的 campaign,它会拿到一份候选清单(带各自的主机、算例路径、预算),
+**指名一次之后这个窗口就一直是它了**,后面所有调用都不用再提。
+
+```
+2 live campaigns here; this window has not said which one it is watching:
+  dambreak-legA    host 14.103.100.27   staged case /home/cfd/work/case_legA    150 core-minute
+  dambreak-legB2   host 14.103.100.27   staged case /home/cfd/work/case_legB2   150 core-minute
+Call any ops tool once with campaign='<name>'; this window then stays on it.
+```
+
+清单里带算例路径,是为了让它能和你交办的那段话对上(你那段话里通常写着算例在哪)。
+
+**窗口关掉再开一个**:把同一段话再贴一次就会自动接手那个 campaign,不用指名 ——
+每个 campaign 记着自己是为哪段话开的。已经有活窗口守着的那个不会被接手。
+
+**仍然缺的**:没有任何工具能主动列出现有 campaign,候选名只在上面那种场合才出现。
 
 ### ⚠️ 坑 4:远端连接信息要预先放好,不能等它问
 
@@ -130,6 +144,45 @@ EOF
 
 ---
 
+### 作业脚本该多做的一件事:报一份"我实际用了什么"
+
+写作业脚本的时候,在真正开跑之前,把**实际生效的设置**读回来,写成
+`config.effective.json` 放在作业目录里(和 `config.json` 并排)。
+
+```json
+{
+  "deltaT": "0.0001", "adjustTimeStep": "no", "maxCo": "0.5",
+  "ignored": ["maxCo", "maxAlphaCo"],
+  "ignored_reason": "adjustTimeStep=no under a fixed deltaT; the Courant ceilings take no part"
+}
+```
+
+有了它,`ops_tune_status` 会在每个试验下面印出三种差异,而 harness **不解释任何键的含义**:
+
+| 情形 | 会印什么 |
+|---|---|
+| 提交了某个键,实际值不同 | `max_len: submitted 256, the run used 512` |
+| 提交了某个键,实际根本没有它 | `epochs=4 was submitted but the run does not have it` |
+| **没提交,而实际值和 campaign 声明的起点不同** | `eval_data was not submitted; this campaign declares '…/nfcorpus_dev', the run used '…/nfcorpus'` |
+| 作业自报某些键失效 | `the job reports these took no part: maxCo, maxAlphaCo (…)` |
+
+**为什么值得写这十行**,三次实测:
+
+- 一个提交漏了 `eval_data`,脚本用自己的默认填上 → **在另一个数据集上打分**,
+  再拿去和原数据集的基线比。同一次漏写还关掉了梯度检查点(**一个作业吃 78 GiB 直接 OOM**)
+- CFD 一次提交同时给了 `deltaT` 和 `maxCo=0.5`,而固定步长会让 Courant 上限**完全失效**。
+  agent 以为自己把 Courant 压在 0.5,报了结论;实测全程最大 2.81,716/10000 步越限
+- 这两种都**不会让作业报错**,产物看上去正常,数字看上去正常
+
+`ignored` 那一项只有作业自己知道("固定步长下 maxCo 是死的"是求解器语义),
+所以由它说,harness 原样转述。**不写这个文件不会报错,只是少一层保护** ——
+而这两次事故,少的正是这一层。
+
+配置不是扁平键值的(比如整棵算例目录),走另一条通道:`meta.staged_case` 指向它,
+harness 对整棵树取指纹,变了会在提交回执里逐文件列出来。粒度粗一些,但不会漏。
+
+---
+
 ## 3. 它有哪些工具(你会在 TUI 里看到它调这些)
 
 | 工具 | 干什么 |
@@ -142,7 +195,7 @@ EOF
 | `ops_ask_owner` | 找人。**这是唯一合法的找人途径**,走 campaign 的打扰契约 |
 | `ops_note` | 你中途给它留话 |
 
-### 三道会拒收的闸门(这条分支的重点)
+### 会拒收的闸门(这条分支的重点)
 
 **都是"保证放在机制里,而不是写在提示词里"**:
 
@@ -151,6 +204,9 @@ EOF
 | **起始值必须是真的** | 报告里的起始值填 `0` 或空 → 拒;和 campaign 记录的值不一致 → 拒。**填一个字段但不核真伪,比不要求更糟** —— 我们实测过它被逼着改了两次才交出正确的数 |
 | **决定必须有依据** | `ops_check_later` / `ops_kill` / round≥1 的 `ops_submit` 都必填 `basis`,而且**必须引一个本回合刚观察到的数**。引半小时前那个数 → 拒 |
 | **状态声明要对得上** | 报告里说"只保留了 3 个 checkpoint"而实际 5 个 → 拒 |
+| **round 0 跑声明的起点** | campaign 声明了 `seed_config`,round 0 提交的配置就必须逐键等于它 —— 少一个键、改一个值、多一个键都拒,并逐条说差在哪。**从 round 1 起不再管**(那时已经有读数了,配置归 agent)。交班场景(账本里已有记录)也不管 |
+| **`meta.json` 动过就拒** | 它是 campaign 自己的声明(目标、预算、哪台主机、哪个算例)。改它在任何域都是越界,而且伤害不止于判分:改了 `remote_dir`,作业就跑在没人看的地方。算例改动**不拒**,只逐文件报出来 —— 改算例是干活 |
+| **名字被占就拒** | 新任务撞上一个已结题 campaign 的名字 → 拒,并点明是**名字**被占、什么时候结的、哪两个文件不许动。旧措辞说的是"被用户终结了",读起来像权限问题,而那正是它去删 `concluded.json` 的诱因 |
 
 ⚠️ 被拒收的报告**不会写盘、不消耗 dedupe key**,所以它可以改完重发。
 **看最终报告会以为它一次就报对了 —— 真相在退稿次数里。**
@@ -189,9 +245,9 @@ grep "Tool call:" ~/.raven/logs/tui.log | tail -40
 | | |
 |---|---|
 | 它常常先自己 `ssh` 而不是用工具 | `ExecTool` 没有目录/主机限制,所以"自己上手"是一条随时可走的路。工具描述第一句就写着"不要这么做",它照样会走 |
-| 没有 campaign 发现入口 | 见坑 3 |
+| 没有工具能主动列出现有 campaign | 见坑 3。指名一次即可长期归本窗口,但「有哪些」只在候选清单里露面 |
 | SSH 端口靠 `meta.json` | 见坑 4 |
-| `traces` / `workspace` 不跟 `--config` 走 | 见坑 2 |
+| `workspace` 不跟 `--config` 走 | 见坑 2。`traces` 2026-08-13 起跟了 |
 | **loss 序列印出来了,但读不出趋势** | 逐批 loss 的点噪声跨约 550 倍,而整段均值只漂移约 6 倍 —— **噪声把漂移埋住**。要看出来得做窗口平滑,而平滑是一次归约,属于单独的设计决定。主指标那条序列不受影响(评测点稀疏,趋势可读) |
 | 掐掉作业会让已记账算力**少一点** | 上界是一个日志间隔。已披露,暂不修 |
 | 它读得到自己的评测装置 | `ReadFileTool` 没有目录限制。**如果你在同一个 `~/.raven/ops/` 下放过历史轮次,它会去读** —— 我们实测发生过。做对照实验请用独立的 `--config` |

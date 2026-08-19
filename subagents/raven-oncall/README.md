@@ -4,8 +4,8 @@ The on-call (值守) line of Raven, installed as a third-party subagent of the h
 Raven on this box.
 
 - **Source:** `gitlab.com/npc-work/aic/ai/raven`, branch `feat/ops_round3_device`
-- **Pinned at:** `cb433e11` (2026-08-13, *feat(ops): deliver the finishing report, best-effort and after the close*)
-- **Installed:** 2026-08-13
+- **Pinned at:** `438ac51` (2026-08-18, *feat(ops): let an agent set up the experiment it was asked to run*)
+- **Installed:** 2026-08-13, updated 2026-08-19
 - **Model:** `anthropic/claude-opus-5` via OpenRouter (`providers.custom`)
 
 It is the same Raven codebase as this repo's `main`, plus `raven/ops/` — the
@@ -92,38 +92,45 @@ see the limits below.
 Spawn `Raven-Oncall` with the job in prose. Two things must be in the prompt,
 because the product cannot discover either:
 
-- **the campaign's identity** — a campaign name, its ledger path, and the host.
-  No tool lists existing campaigns, so an omitted name silently starts a new one.
+- **the campaign's identity** — a campaign name, and the machine to run on named
+  the way the owner named it. No tool lists existing campaigns, so an omitted
+  name silently starts a new one.
 - **the terms** — the compute budget, the value that counts as beating the
   baseline, and how much authority it has (may it kill a bad run, may it change
   the config).
 
-And **the campaign's `meta.json` must already exist**, because every field
-missing from it is a silent default rather than an error (no `backend` → docker;
-no `budget_minutes_total` → the compute budget is not enforced at all; no
-`interruption_contract` → interruptions are never refused), while the job still
-runs to the end of its allowance:
+**`438ac51` moved the setup out of the prompt-writer's hands and into the
+agent's.** `ops_declare` is the front door now: the agent writes the campaign's
+`meta.json` itself, once, before anything runs, and refuses a second declaration
+over the same campaign because that would move the target under results already
+recorded. A hand-written meta is no longer a precondition, and a task statement
+no longer carries a host, a port or a key path.
+
+What the owner sets up instead, once per machine, is a **connection**:
 
 ```bash
-OPS=~/.raven/workspace/subagent_sessions/raven-oncall/ops   # $ONCALL_STATE_ROOT/ops
-mkdir -p "$OPS"/<campaign>
-cat > "$OPS"/<campaign>/meta.json <<'EOF'
+STATE=~/.raven/workspace/subagent_sessions/raven-oncall   # $ONCALL_STATE_ROOT
+cat > "$STATE"/connections.json <<'EOF'
 {
-  "backend": "process",
-  "host": "<ip>",
-  "port": 58717,
-  "key": "~/.ssh/id_rsa",
-  "remote_dir": "/remote/workdir",
-  "command": "python3 /remote/train.py --config {config} --run-dir {job_dir}",
-  "budget_minutes_total": 90,
-  "interruption_contract": { "min_expected_loss_ms": 1800000 },
-  "reference_values": { "ndcg": 0.3674 },
-  "expected_baseline": { "ndcg": 0.3674 }
+  "my-cpu-box": {
+    "backend": "process",
+    "host": "<ip>",
+    "port": 58717,
+    "key": "~/.ssh/id_rsa",
+    "remote_dir": "/remote/workdir",
+    "budget_unit": "minutes",
+    "max_concurrent": 2
+  }
 }
 EOF
 ```
 
-`{config}` and `{job_dir}` are placeholders the harness substitutes per trial.
+The agent sees the name and what the machine is — never the key path — and a
+task then reads "run it on my-cpu-box". Until this file exists there is nothing
+to run on, and `ops_connections` says so instead of letting the agent hunt for a
+way in: upstream measured a loop trying ports 22, 2222, 8022, 10022 and 443, then
+reading `~/.ssh/config` and `known_hosts`, for a dozen rounds without submitting
+a single job.
 
 By hand, without the gateway:
 
@@ -202,13 +209,13 @@ Added by *this* hosting:
 | `memory.backend` | `null` | Cross-round contamination is a measured hazard on this line; a memory that carries yesterday's campaign into today's would be another. Set it to `everos` with an isolated `userId`/`agentId` if you want recall. |
 | `agents.defaults.llmCallTimeout` / `tools.exec.maxTimeout` | 1800s / 1200s | Bound a *stalled* backend or command. There is deliberately no wall-clock cap on a turn. |
 
-## Verified on 2026-08-13
+## Verified on 2026-08-13, re-checked at `438ac51` on 2026-08-19
 
 | Check | Result |
 |---|---|
 | `uv sync` in the checkout | own `.venv`, Python 3.13.13, `raven` v0.1.6; the repo's own `.venv` untouched |
 | config loads, paths resolve | data dir, cron store, ops home and sessions all under `subagents/raven-oncall/` |
-| one turn end to end | 11 `ops_*` tools visible to the agent; reply extracted from the transcript |
+| one turn end to end | 11 `ops_*` tools visible to the agent; reply extracted from the transcript. **14 at `438ac51`**, the new ones being `ops_declare`, `ops_connections` and `ops_exec` |
 | resume | second spawn on the same session read as `turn=resume` and returned only the new answer |
 | **wake fires** | a one-shot job injected 45s out fired ~60s later; `cron/wake_shell.jsonl` shows the child argv as `Raven-Oncall/.venv/bin/raven`, i.e. the PATH fix holds and a wake does not silently run the host build |
 | traces stay local | `traces/` created here; nothing new under `~/.raven/traces` |
@@ -218,18 +225,62 @@ Not verified: a real campaign against a real remote host. Nothing here exercises
 `ops_submit` end to end — the budget gate, the report gates and the interruption
 contract are all untested on this install.
 
+## The LLM it runs on
+
+`config.json` pins the model this agent is tuned for, and `subagent.json` records
+the same choice as `recommendedLlm` so a reader does not have to infer it. Two
+files naming one model can drift, so `install.sh` compares them and reports a
+mismatch rather than preferring one.
+
+Set this folder's api key and that pinned model is what runs. **Leave the key
+blank and the agent inherits the host raven's LLM instead** - its `providers`
+block, its `agents.defaults.provider` and `model`, and its `routing`. The rest of
+`agents.defaults` stays this folder's: the token ceiling, the tool-iteration cap
+and the timeouts are operating limits tuned for this agent's job, and they have
+nothing to do with whose key is paying. The optional Serper and Jina keys fall
+back the same way, each on its own.
+
+The host's provider block is copied wholesale rather than matched by name. A
+provider called `custom` here and one called `custom` there can be two different
+endpoints, so picking by name would point this agent at a gateway its model is
+not served on - which reads as a bad answer, not as an error.
+
+Inheriting is a fallback, not an equivalence: a measurement taken on the pinned
+model does not carry over to whatever the host happens to run. `launcher.log`
+records which one was used on every turn, in the form
+`llm: inherited from <path> (provider=... model=...); tuned for <recommended>`.
+
+With no key here and no provider key in the host config either, the launcher
+refuses rather than starting something that cannot answer.
+
 ## Updating from upstream
 
 ```bash
 cd subagents/raven-oncall/Raven-Oncall
 git pull --ff-only origin feat/ops_round3_device
 uv sync
+pkill -f 'raven.ops.wake_shell'          # see below
 ```
 
 Then re-run the checks above. `run.py` is host-side and not part of the
 checkout, so a pull cannot conflict with it — but a pull *can* move
 `SessionManager._get_session_path` or the `wake_shell` CLI, which are the two
-things `run.py` reaches into.
+things `run.py` reaches into. Both were checked by hand after the `438ac51`
+pull: the method still takes `(self, key)`, and the CLI still accepts the
+`--store` / `--config` / `--fire-missed` that `run.py` passes.
+
+**The wake shell has to be restarted, and nothing does it for you.** It is a
+resident process, so it holds the modules it imported at start and keeps running
+the *old* code after a pull; `ensure_wake_shell` finds the pid alive and reuses
+it, so a spawn will not refresh it either. Found by measurement on 2026-08-19,
+where the shell had been up two days across an update. Kill it while no campaign
+has a wake pending (`cron/jobs.json` is `[]`); the next spawn starts a fresh one.
+
+A tree that was updated by unpacking an archive over this checkout, rather than
+by pulling, leaves the changes uncommitted and unattributable. That happened on
+2026-08-17: 60 files showed as modified, and separating them cost an afternoon.
+Of the 60, 59 were `ruff format` and import churn and one was a real local patch.
+Pull; do not unpack.
 
 ## Secrets
 

@@ -1,7 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -339,6 +339,25 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
+    routing: dict[str, Any] | None = None
+    """OpenRouter upstream routing, forwarded verbatim as the request's ``provider``.
+
+    ``{"order": ["deepinfra/fp8"], "allow_fallbacks": False}`` pins one upstream.
+    Needed because a single OpenRouter model id can be served by many upstreams at
+    once - ``deepseek/deepseek-v4-flash`` had 17+ on 2026-08-17 - and the default
+    ``auto`` policy may switch mid-conversation. Each upstream holds its own prompt
+    cache, so a switch presents as a cache_read collapse with no local cause: on one
+    159-call trajectory, 10 collapses that were not idle-timeout (intervals matched
+    the run median) and not our own trimming (zero elisions). A controlled A/B over
+    a prefix grown to 88K reproduced it - ``auto`` switched StreamLake -> AtlasCloud
+    and collapsed once, while a pinned upstream ran 14 turns with none and climbed
+    smoothly to 92.8% hit rate.
+
+    The transport accepted this all along (``litellm_provider`` takes ``extra_body``
+    and its comment names this exact use), but no config field reached it, so the
+    capability existed only in a comment. Deliberately not defaulted to any upstream:
+    a default would silently change routing for every OpenRouter arm already running.
+    Ignored with a warning by non-OpenRouter providers."""
 
 
 class GeminiProviderConfig(ProviderConfig):

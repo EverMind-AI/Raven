@@ -103,7 +103,7 @@ def _norm(url: str) -> str:
     u = _clean(url).strip()
     for prefix in ("https://", "http://"):
         if u.lower().startswith(prefix):
-            u = u[len(prefix) :]
+            u = u[len(prefix):]
             break
     host, _, rest = u.partition("/")
     return f"{host.lower().removeprefix('www.')}/{rest}".rstrip("/")
@@ -162,7 +162,10 @@ class ResearchTrail:
 
     def render(self) -> str:
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
-        head = f"{self.searches} searches ({len(self.distinct_queries)} distinct), {opened_ok} pages read"
+        head = (
+            f"{self.searches} searches ({len(self.distinct_queries)} distinct), "
+            f"{opened_ok} pages read"
+        )
         if self.verify_outcome:
             head += f", reviewer: {self.verify_outcome}"
             if self.unsupported:
@@ -170,12 +173,47 @@ class ResearchTrail:
                 head += "s)" if len(self.unsupported) > 1 else ")"
         lines = ["", "---", "", f"**Research trail** — {head}", ""]
 
-        if self.cited_not_opened:
+        # The grounding line, stated in both directions. Until dr@3.3 only the
+        # failing direction was rendered, so a reader saw a warning when something
+        # was wrong and *nothing at all* when everything checked out - which reads
+        # as "this was not checked", not as "this passed". A check whose success is
+        # invisible teaches its audience to treat its silence as absence.
+        #
+        # Always as a fraction, never as a percentage, because the module rule is
+        # that this number may not appear without ``urls_cited`` beside it: the
+        # denominator is chosen by the answer, so "100%" over one citation and over
+        # forty are different claims wearing the same digits.
+        if not self.cited:
+            # Explicitly not 1.0. An answer that cites nothing has an undefined
+            # grounding rate, and the sentence has to say the check did not apply
+            # rather than let a missing warning imply it passed.
+            lines.append("> No links were cited above, so there was nothing to check.")
+            lines.append("")
+        elif self.cited_not_opened:
             # Stated first and in plain words: it is the one line here that says
             # something is wrong with the answer above.
             lines.append(
-                f"> ⚠️ {len(self.cited_not_opened)} link(s) cited above were never opened "
-                f"during this research: " + ", ".join(self.cited_not_opened[:5])
+                f"> ⚠️ {len(self.cited_not_opened)} of {len(self.cited)} link(s) cited "
+                "above were never opened during this research: "
+                + ", ".join(self.cited_not_opened[:5])
+            )
+            lines.append("")
+        else:
+            n = len(self.cited)
+            lines.append(
+                f"> ✓ All {n} cited link{'s' if n > 1 else ''} "
+                f"{'were' if n > 1 else 'was'} opened during this research."
+            )
+            lines.append("")
+
+        if self.cited and self.opened_earlier:
+            # The scope travels with the number, for the same reason ``counters()``
+            # emits it: a rate computed over the conversation and one computed over
+            # the turn are not the same measurement, and a reader comparing two
+            # answers has no way to tell them apart from the fraction alone.
+            lines.append(
+                f"> ({self.opened_earlier} of those were opened on an earlier turn "
+                "of this conversation.)"
             )
             lines.append("")
 

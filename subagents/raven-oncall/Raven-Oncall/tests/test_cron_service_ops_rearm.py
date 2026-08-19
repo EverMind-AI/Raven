@@ -221,7 +221,9 @@ async def test_rearmed_wake_repeats_the_original_message(tmp_path: Path, monkeyp
     assert rearmed[0].payload.channel == "tui" and rearmed[0].payload.to == "default"
 
 
-async def test_a_next_look_scheduled_through_the_generic_tool_stops_the_rearm(tmp_path: Path, monkeypatch) -> None:
+async def test_a_next_look_scheduled_through_the_generic_tool_stops_the_rearm(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The producer the two keyed checks cannot see.
 
     A turn that schedules through the generic cron tool tags no campaign and
@@ -257,7 +259,9 @@ async def test_a_next_look_scheduled_through_the_generic_tool_stops_the_rearm(tm
     assert "wake_rearmed" not in [e.get("kind") for e in _events(cdir)]
 
 
-async def test_a_job_scheduled_before_the_turn_does_not_stop_the_rearm(tmp_path: Path, monkeypatch) -> None:
+async def test_a_job_scheduled_before_the_turn_does_not_stop_the_rearm(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The creation-time check must not read somebody else's older reminder as
     this turn's next look, or an inattentive turn goes unwatched whenever any
     unrelated job happens to be pending."""

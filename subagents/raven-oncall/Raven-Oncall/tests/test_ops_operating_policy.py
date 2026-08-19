@@ -26,25 +26,13 @@ RULE = "If the fluid property you were handed is not physical, say so before sub
 
 def _campaign(tmp_path: Path, meta: dict | None) -> Path:
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "records": {
-                    "t1": {
-                        "idem_key": "t1",
-                        "status": "running",
-                        "campaign": "cfd",
-                        "handle": None,
-                        "result": None,
-                        "attempts": 1,
-                        "escalated": False,
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    ledger.write_text(json.dumps({
+        "version": 1,
+        "records": {
+            "t1": {"idem_key": "t1", "status": "running", "campaign": "cfd",
+                   "handle": None, "result": None, "attempts": 1, "escalated": False},
+        },
+    }), encoding="utf-8")
     if meta is not None:
         (tmp_path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     return ledger
@@ -113,7 +101,8 @@ async def test_the_rules_are_there_before_anything_has_run(tmp_path: Path) -> No
 
 
 async def test_the_rules_are_there_before_a_ledger_exists(tmp_path: Path) -> None:
-    (tmp_path / "meta.json").write_text(json.dumps({"host": "1.2.3.4", "operating_policy": RULE}), encoding="utf-8")
+    (tmp_path / "meta.json").write_text(json.dumps({"host": "1.2.3.4", "operating_policy": RULE}),
+                                        encoding="utf-8")
 
     out = await OpsTuneStatusTool().execute(ledger=str(tmp_path / "ledger.json"), metric="ndcg")
 

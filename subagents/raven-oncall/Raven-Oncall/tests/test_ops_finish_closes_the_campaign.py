@@ -52,13 +52,8 @@ async def test_one_call_files_the_report_and_closes_the_campaign(tmp_path):
     cron = _Cron(["ops:c:r3", "ops:other:r1"])
 
     out = await OpsFinishTool(cron_service=cron).execute(
-        campaign="c",
-        subject="bm25 sweep",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="bm25 sweep", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="absolute", ledger=_ledger(cdir),
     )
 
     assert "Accepted" in out
@@ -77,13 +72,8 @@ async def test_a_refused_report_leaves_the_campaign_open(tmp_path):
     cron = _Cron(["ops:c:r3"])
 
     out = await OpsFinishTool(cron_service=cron).execute(
-        campaign="c",
-        subject="bm25 sweep",
-        outcome="done",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3606},
-        condition_type="relative",
-        ledger=_ledger(cdir),
+        campaign="c", subject="bm25 sweep", outcome="done", dedupe_key="k1",
+        observed={"ndcg": 0.3606}, condition_type="relative", ledger=_ledger(cdir),
     )
 
     assert "REFUSED" in out
@@ -99,23 +89,15 @@ async def test_a_failure_with_nothing_measured_must_say_why_there_is_none(tmp_pa
     cdir = _campaign(tmp_path)
 
     refused = await OpsFinishTool().execute(
-        campaign="c",
-        subject="training",
-        outcome="failed",
-        dedupe_key="k1",
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="training", outcome="failed", dedupe_key="k1",
+        condition_type="absolute", ledger=_ledger(cdir),
     )
     assert "REFUSED" in refused and "no_data_reason" in refused
     assert not (cdir / "concluded.json").exists()
 
     accepted = await OpsFinishTool().execute(
-        campaign="c",
-        subject="training",
-        outcome="failed",
-        dedupe_key="k1",
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="training", outcome="failed", dedupe_key="k1",
+        condition_type="absolute", ledger=_ledger(cdir),
         no_data_reason="every round OOMed at step 0; the 80GB card is shared and never had room",
     )
     assert "Accepted" in accepted
@@ -128,13 +110,8 @@ async def test_a_failure_with_nothing_measured_must_say_why_there_is_none(tmp_pa
 async def test_a_failure_that_did_measure_something_reports_it(tmp_path):
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool().execute(
-        campaign="c",
-        subject="training",
-        outcome="failed",
-        dedupe_key="k1",
-        observed={"ndcg": 0.3047},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="training", outcome="failed", dedupe_key="k1",
+        observed={"ndcg": 0.3047}, condition_type="absolute", ledger=_ledger(cdir),
     )
     assert "Accepted" in out
     row = json.loads((cdir / "reports.jsonl").read_text().splitlines()[0])
@@ -147,13 +124,8 @@ async def test_closing_without_a_cron_service_still_marks_the_campaign(tmp_path)
     from some other scheduler has nothing telling it to stand down."""
     cdir = _campaign(tmp_path)
     out = await OpsFinishTool(cron_service=None).execute(
-        campaign="c",
-        subject="s",
-        outcome="stopped",
-        dedupe_key="k1",
-        observed={"ndcg": 0.36},
-        condition_type="absolute",
-        ledger=_ledger(cdir),
+        campaign="c", subject="s", outcome="stopped", dedupe_key="k1",
+        observed={"ndcg": 0.36}, condition_type="absolute", ledger=_ledger(cdir),
     )
     assert "Accepted" in out
     assert (cdir / "concluded.json").exists()

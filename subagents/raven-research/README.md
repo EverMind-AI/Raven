@@ -15,7 +15,7 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 |---|---|
 | Source | https://github.com/ZuyiZhou/Raven-X (private; obtained as a zip) |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.5, flow `dr@3.2` (updated 2026-08-16 from `Raven-X-main.zip`; the `dr@2.8` and `dr@2.9` steps came from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Package / version | `raven` 0.1.5, flow `dr@3.3` (updated 2026-08-18 from `Raven-X-main (1).zip`, upstream `e3edf28`; `dr@3.2` came from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -55,6 +55,34 @@ was relocated here: the shebang still pointed at the old path and
 resolves the checkout relative to itself, so it survives a move of the whole
 folder; only the venv needs the reinstall.
 
+## The LLM it runs on
+
+`config.json` pins the model this agent is tuned for, and `subagent.json` records
+the same choice as `recommendedLlm` so a reader does not have to infer it. Two
+files naming one model can drift, so `install.sh` compares them and reports a
+mismatch rather than preferring one.
+
+Set this folder's api key and that pinned model is what runs. **Leave the key
+blank and the agent inherits the host raven's LLM instead** - its `providers`
+block, its `agents.defaults.provider` and `model`, and its `routing`. The rest of
+`agents.defaults` stays this folder's: the token ceiling, the tool-iteration cap
+and the timeouts are operating limits tuned for this agent's job, and they have
+nothing to do with whose key is paying. The optional Serper and Jina keys fall
+back the same way, each on its own.
+
+The host's provider block is copied wholesale rather than matched by name. A
+provider called `custom` here and one called `custom` there can be two different
+endpoints, so picking by name would point this agent at a gateway its model is
+not served on - which reads as a bad answer, not as an error.
+
+Inheriting is a fallback, not an equivalence: a measurement taken on the pinned
+model does not carry over to whatever the host happens to run. `launcher.log`
+records which one was used on every turn, in the form
+`llm: inherited from <path> (provider=... model=...); tuned for <recommended>`.
+
+With no key here and no provider key in the host config either, the launcher
+refuses rather than starting something that cannot answer.
+
 ## Updating to a newer zip
 
 The checkout carries **no local patches** - every adaptation lives beside it
@@ -79,8 +107,30 @@ it kills it: the config fails to load, `raven` exits 1, and `run.py` reports a
 credential-or-config error for what is really a stale label.
 
 The previous build and its config are kept beside the checkout as
-`Raven-X-dr29-rollback.tar.gz` (tree only, no `.venv`) and `config.json.bak-dr29`,
-because the source zip is not archived anywhere and a swap has no other way back.
+`Raven-X-dr32-rollback.tar.gz` (tree only, no `.venv`) and `config.json.bak-dr32`
+- one pair per swap, `dr29` from the step before - because the source zip is not
+archived anywhere and a swap has no other way back.
+
+### What `dr@3.3` changed for us
+
+`pyproject.toml` and `uv.lock` are byte-identical to `dr@3.2`, so the editable
+venv carried straight across with no `uv sync`. Upstream added three modules
+(`agent/flow/turn_task.py`, `agent/fetch_gate.py`, `agent/flow/fetch_gate.py`)
+and no file exists only on our side.
+
+| Change | Effect here |
+|---|---|
+| **The task a draft is judged against is now this turn's question**, not the conversation's first user message (`flow/turn_task.py`) | Directly ours, and the reason to take this build. The draft reviewer and the salvage both used to walk `ctx.messages` for the first `role == "user"` row, which in a conversation is turn one's question. Upstream measured it on 2026-08-17: turn two asked a follow-up about a different product, the model researched it correctly, and the reviewer rejected the draft with `0 unsupported claim(s)` because it did not answer the question it was shown - and the rewrite then answered turn one again. Multi-turn is on here, so this surface is ours; we were shielded only by `verify.strictRejectOnly`, which degrades a claimless reject to a pass |
+| `fetchGate`, a search-without-fetch guard at the action-space layer | New, default off, **left off**. It withholds `web_search` from the iteration after `k` (15) searches with no fetch, where `fetchFloor` - which we do have on - only appends an advisory sentence. Upstream's own note is that the advisory measured real but an order of magnitude too small |
+| The everos memory backend dropped its timestamp coercion | Upstream removed `_timestamp_ms`; the message entry is now `m.get("timestamp") or now_ms` again. Latent rather than live: the store payloads built here carry no `timestamp` key, so `or now_ms` always fires. It would matter the day a message arrives carrying Raven's own ISO-8601 string, which `MessageItemDTO.timestamp` (an `int`) rejects with `422 INVALID_INPUT` for the whole write |
+
+Verified on this build 2026-08-18: `raven` 0.1.5 imports from the swapped tree,
+the config loads with `drFlow.version = dr@3.3-filetools`, upstream's own
+`test_agent_fetch_gate` / `test_agent_turn_task` / `test_provider_routing` /
+`test_config_raven_loader` / `test_agent_flow_conversation` pass (87), and one
+real two-part run (local file + web) returned `exit=0` in 98s with
+`flow_version: dr@3.3-filetools/raven-0.1.5`, `read_file` ok 1, `web_search` ok 2,
+`web_fetch` ok 3, `citation_grounding_rate: 1.0`, `cited_not_opened: 0`.
 
 ### What `dr@3.0` .. `dr@3.2` changed for us
 
@@ -363,19 +413,15 @@ Raven-X inherits `http_proxy` / `https_proxy` (its fetch client keeps
 A hand-written third-party subagent named `Raven-Research` (no `preset` field).
 
 ```bash
-python3 install.py --dry-run   # print the resolved entry and the interpreter
+python3 install.py --dry-run   # print the resolved entry, change nothing
 python3 install.py             # back up the current list, then register
 ```
 
-`install.py` writes the host raven's config through
-`raven.config.update_subagents`, the only supported write path - it validates the
-entry, replaces the one sharing its name, refuses a list that would hold duplicates
-and replaces the file atomically. That module is
-importable only from the host raven's environment, so the installer reaches it in
-a subprocess and stays runnable under a bare `python3`. Nothing has to be running
-for this, and nothing running picks it up either: **restart raven (or the
-gateway) afterwards**, since a live one holds the roster it read at startup. The
-previous list is written to a timestamped backup beside this file first.
+`install.py` goes through `PUT /raven/subagents`, not the file-level helper -
+see the note in `../raven-ppt/README.md`, which is where that lesson was
+learned. The endpoint takes **every** entry, not just this one, so the script
+reads the live list first, merges this entry into it by name, and writes a
+timestamped backup beside itself before the PUT.
 
 `subagent.json` ships with `{SUBAGENT_DIR}` and `{PYTHON}` unresolved so the
 published file carries no path from the machine that built it. They are resolved
@@ -413,8 +459,7 @@ still said `researcher_x` while the live entry had been renamed `Raven-Research`
 in the web UI, so installing from it would have added a *second* entry rather
 than updating one, and its description still promised an agent that "cannot read
 local files" long after the `-filetools` profile gave it six file tools. Read the
-live entry before assuming they agree - it is `subagents.thirdParty` in
-`~/.raven/config.json`, or, while the service is up:
+live entry before assuming they agree:
 
 ```bash
 curl --noproxy '*' -s http://127.0.0.1:8000/raven/subagents
@@ -438,7 +483,7 @@ different agent with a different mechanism, hence a distinct name.
 | File | | Published |
 |---|---|---|
 | `run.py` | Host-side launcher (own workspace, session-log extraction, answer-based verdict) | yes |
-| `install.py` | Resolves the `subagent.json` placeholders and writes the entry into the host raven's config | yes |
+| `install.py` | Resolves the `subagent.json` placeholders and registers the entry over the RPC | yes |
 | `config.json` | Raven-X run config. Holds **no** secrets | yes |
 | `subagent.json` | The third-party subagent entry, with install-time placeholders | yes |
 | `.env.example` | Template for the secrets and the two path knobs | yes |
@@ -446,8 +491,8 @@ different agent with a different mechanism, hence a distinct name.
 | `.env` | The real secrets, mode 600 | **no** |
 | `.config.rendered.*.json` | Transient merge of the two, mode 600, deleted after each run | **no** |
 | `Raven-X/` | The agent itself. Ships as source; its `.venv` does not | yes |
-| `Raven-X-dr29-rollback.tar.gz` `config.json.bak-*` | The build this one replaced, and the configs that preceded it | **no** |
-| `subagents-backup-*.json` | What `install.py` saved before the write - carries every other entry on this host | **no** |
+| `Raven-X-dr*-rollback.tar.gz` `config.json.bak-*` | The builds this one replaced, and the configs that preceded it | **no** |
+| `subagents-backup-*.json` | What `install.py` saved before a PUT - carries every other entry on this host | **no** |
 | `runs/` `cache/` `cron/` `ledger/` | Runtime dirs the build derives from the config file's parent. `ledger/` is empty at rest (see above) | **no** |
 
 ## Publishing

@@ -21,7 +21,9 @@ from raven.agent.evidence_round import EvidenceRound
 from raven.agent.flow.answer_text import visible_answer
 from raven.agent.flow.budget_note import BudgetNoteObserver
 from raven.agent.flow.conversation import ConversationGate, GatedHook, is_research_turn
+from raven.agent.fetch_gate import FetchGate
 from raven.agent.flow.fetch_floor import FetchFloorObserver
+from raven.agent.flow.fetch_gate import FetchGateObserver
 from raven.agent.flow.finalize import ForcedFinalizeGate
 from raven.agent.flow.spin_breaker import SpinEntryBreaker
 from raven.agent.flow.verify import DraftReviewerGate
@@ -223,14 +225,8 @@ class DRModeSegmentBuilder:
         # the shipped state through dr@2.7 - still renders "6.", so that segment's
         # sha is unchanged and the published stamp still describes it.
         if text is None:
-            optional = [
-                c
-                for c, on in (
-                    (_DR_ANSWER_MARKER_CLAUSE, require_answer_marker),
-                    (_DR_REPORT_STRUCTURE_CLAUSE, report_structure),
-                )
-                if on
-            ]
+            optional = [c for c, on in ((_DR_ANSWER_MARKER_CLAUSE, require_answer_marker),
+                                        (_DR_REPORT_STRUCTURE_CLAUSE, report_structure)) if on]
             for i, clause in enumerate(optional, start=_DR_CONTRACT_RULES + 1):
                 self._contract = self._contract.rstrip() + "\n" + clause.format(n=i)
         self._identity = identity or _DR_IDENTITY
@@ -247,7 +243,9 @@ class DRModeSegmentBuilder:
         # arm_env.json.system_prompt_stamp.dr_segment_sha is the acceptance artifact.
         identity = self._identity
         if self._measured_guidance:
-            identity = identity.replace(_GUIDANCE_ANCHOR, _DR_MEASURED_GUIDANCE + "\n\n" + _GUIDANCE_ANCHOR, 1)
+            identity = identity.replace(
+                _GUIDANCE_ANCHOR, _DR_MEASURED_GUIDANCE + "\n\n" + _GUIDANCE_ANCHOR, 1
+            )
         parts = [identity]
         lang = _language_directive()
         if lang:
@@ -431,6 +429,17 @@ def build_dr_flow(
             FetchFloorObserver(
                 min_searches=config.fetch_floor.min_searches,
                 max_notes=config.fetch_floor.max_notes,
+            )
+        )
+    if config.fetch_gate.enabled:
+        observers.append(
+            FetchGateObserver(
+                FetchGate(
+                    k=config.fetch_gate.k,
+                    release_after_failed_fetches=(
+                        config.fetch_gate.release_after_failed_fetches
+                    ),
+                )
             )
         )
     if config.spin_breaker.enabled:

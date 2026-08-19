@@ -19,6 +19,8 @@ This carrier makes three things measurable that a form cannot:
 
 from __future__ import annotations
 
+import pytest
+
 from raven.ops.scripted_human import HumanReply, ScriptedHuman
 from raven.ops.simclock import SimClock
 
@@ -108,7 +110,8 @@ def test_asking_again_after_a_reply_is_a_new_question_not_a_duplicate():
     clock = _clock()
     human = ScriptedHuman(
         clock,
-        replies={"q": HumanReply(after_ms=1_000, answer="go"), "q2": HumanReply(after_ms=1_000, answer="stop")},
+        replies={"q": HumanReply(after_ms=1_000, answer="go"),
+                 "q2": HumanReply(after_ms=1_000, answer="stop")},
     )
     human.ask("q", "first")
     clock.advance_ms(2_000)

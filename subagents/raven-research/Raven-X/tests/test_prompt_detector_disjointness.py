@@ -79,12 +79,9 @@ def _prompt_texts() -> list[tuple[str, str]]:
     # not to assume (see ``test_the_two_identity_paths_agree`` below).
     from raven.agent.context.builder import ContextBuilder
 
-    out.append(
-        (
-            "agent.context.ContextBuilder._get_identity",
-            ContextBuilder(workspace=pathlib.Path("/tmp/ws"), start_watcher=False)._get_identity(),
-        )
-    )
+    out.append(("agent.context.ContextBuilder._get_identity",
+                ContextBuilder(workspace=pathlib.Path("/tmp/ws"),
+                               start_watcher=False)._get_identity()))
     return out
 
 
@@ -119,7 +116,7 @@ def test_the_guideline_block_exists_exactly_once_in_the_tree() -> None:
     """
     import pathlib as _p
 
-    root = _p.Path(render.__file__).resolve().parents[2]  # …/raven
+    root = _p.Path(render.__file__).resolve().parents[2]        # …/raven
     needle = "- State intent before tool calls, but NEVER predict or claim results"
     carriers = sorted(
         str(f.relative_to(root))
@@ -149,7 +146,8 @@ def test_the_two_identity_paths_agree() -> None:
     from raven.agent.context.builder import ContextBuilder
 
     ws = _p.Path("/tmp/ws")
-    assert ContextBuilder(workspace=ws, start_watcher=False)._get_identity() == render.identity_text(ws)
+    assert (ContextBuilder(workspace=ws, start_watcher=False)._get_identity()
+            == render.identity_text(ws))
 
 
 def test_the_dr_prompt_replaces_the_instructions_it_drops() -> None:
@@ -224,12 +222,16 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     # describing a prompt no batch has ever run. The rule the failure teaches: an
     # artifact that reproduces a published reading must state the whole switch state,
     # because "the rest are off" is a fact about today's defaults, not about the batch.
-    measured = asyncio.run(DRModeSegmentBuilder(require_answer_marker=False, report_structure=False).build(None))
+    measured = asyncio.run(
+        DRModeSegmentBuilder(require_answer_marker=False, report_structure=False).build(None)
+    )
     assert sha(measured.text) == "593c46c416c3f4cf"
     assert len(measured.text) == 3485
 
     # The dr@2.6 product surface: the same bytes plus one appended clause.
-    marker_only = asyncio.run(DRModeSegmentBuilder(require_answer_marker=True, report_structure=False).build(None))
+    marker_only = asyncio.run(
+        DRModeSegmentBuilder(require_answer_marker=True, report_structure=False).build(None)
+    )
     assert sha(marker_only.text) == "7ad4b42cc78aec62"
     assert marker_only.text.startswith(measured.text.rstrip())
 
@@ -242,7 +244,9 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     # a length that moved because an unrelated default flipped would read as the
     # ablation having changed size.
     off = asyncio.run(
-        DRModeSegmentBuilder(measured_guidance=False, require_answer_marker=False, report_structure=False).build(None)
+        DRModeSegmentBuilder(
+            measured_guidance=False, require_answer_marker=False, report_structure=False
+        ).build(None)
     )
     assert len(off.text) == 2622
     assert off.meta["dr_measured_guidance"] is False

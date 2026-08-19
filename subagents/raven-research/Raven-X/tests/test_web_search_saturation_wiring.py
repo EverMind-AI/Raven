@@ -92,7 +92,8 @@ async def test_page_one_still_omits_the_page_key_entirely():
     the safe shape is the one three batches already ran.
     """
     rec = _Recorder()
-    tool = WebSearchTool(api_key="k", max_results=5, saturation=SearchSaturation(k=2, on_saturate="paginate"))
+    tool = WebSearchTool(api_key="k", max_results=5,
+                         saturation=SearchSaturation(k=2, on_saturate="paginate"))
     with _patched(rec):
         await tool.execute(query="q")
     assert rec.bodies == [{"q": "q", "num": 5}]
@@ -142,8 +143,8 @@ async def test_a_stopped_turn_does_not_serve_the_replay_cache_either():
     sat = SearchSaturation(k=1, on_saturate="stop")
     tool = WebSearchTool(api_key="k", max_results=5, repeat_notice=True, saturation=sat)
     with _patched(rec):
-        await tool.execute(query="q")  # populates the replay cache
-        await tool.execute(query="q")  # replay: dry, trips the rule
+        await tool.execute(query="q")   # populates the replay cache
+        await tool.execute(query="q")   # replay: dry, trips the rule
         assert sat.stopped
         out = await tool.execute(query="q")
     assert "Search is closed" in out
@@ -168,12 +169,12 @@ async def test_a_page_two_request_is_not_answered_from_the_page_one_cache():
     sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
     tool = WebSearchTool(api_key="k", max_results=5, repeat_notice=True, saturation=sat)
     with _patched(rec):
-        await tool.execute(query="q")  # real call, caches page 1
-        await tool.execute(query="q")  # byte-identical repeat: replay, dry
-        await tool.execute(query="q")  # second dry search trips the rule
+        await tool.execute(query="q")          # real call, caches page 1
+        await tool.execute(query="q")          # byte-identical repeat: replay, dry
+        await tool.execute(query="q")          # second dry search trips the rule
         assert sat.page == 2
         sent_before = len(rec.bodies)
-        await tool.execute(query="q")  # same terms, different page
+        await tool.execute(query="q")          # same terms, different page
     assert len(rec.bodies) == sent_before + 1, "page 2 was served from the page-1 cache"
     assert rec.bodies[-1] == {"q": "q", "num": 5, "page": 2}
 
@@ -210,8 +211,8 @@ async def test_sat_event_marks_only_the_row_that_fired(tmp_path, monkeypatch):
     sat = SearchSaturation(k=1, on_saturate="stop")
     tool = WebSearchTool(api_key="k", max_results=5, saturation=sat)
     with _patched(rec):
-        await tool.execute(query="a")  # zero-hit -> dry -> fires 'stopped'
-        await tool.execute(query="b")  # suppressed: no observe, must not re-fire
+        await tool.execute(query="a")   # zero-hit -> dry -> fires 'stopped'
+        await tool.execute(query="b")   # suppressed: no observe, must not re-fire
 
     rows = [json.loads(x) for x in (tmp_path / "led.jsonl").read_text().splitlines() if x]
     searches = [r for r in rows if r.get("op") == "search"]
@@ -275,7 +276,6 @@ async def test_a_transport_failure_does_not_count_as_exhaustion():
     early answer, on the arm that searches most. Asserted rather than commented,
     because a distinction nothing tests is a distinction the next edit removes.
     """
-
     class _Boom:
         def client(self, **_kw):
             class _C:
@@ -287,7 +287,6 @@ async def test_a_transport_failure_does_not_count_as_exhaustion():
 
                 async def post(self, *a, **kw):
                     raise RuntimeError("connection reset")
-
             return _C()
 
     sat = SearchSaturation(k=1, on_saturate="stop")

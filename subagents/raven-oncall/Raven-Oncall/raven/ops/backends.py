@@ -45,6 +45,13 @@ def backend_name(meta: dict[str, Any]) -> str:
 
 
 def backend_from_meta(meta: dict[str, Any]) -> JobBackend:
+    # A campaign that names a connection gets its address from there rather than
+    # repeating it. Resolved at this one seam so every backend keeps reading the
+    # same meta keys it always did, and a campaign with no connection is handed
+    # its meta untouched.
+    from raven.ops.connections import resolve_into
+
+    meta = resolve_into(meta)
     name = backend_name(meta)
     try:
         factory = _FACTORIES[name]
@@ -59,7 +66,12 @@ def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
     if backend_name(meta) != DEFAULT_BACKEND:
         return
     from raven.ops import make_ssh_runner, make_ssh_sync, prepare_remote
+    from raven.ops.connections import resolve_into
 
+    # Same seam as backend_from_meta: a campaign that names a connection has no
+    # address of its own, and reading meta["host"] here raised KeyError on the
+    # first campaign an agent created for itself (2026-08-18).
+    meta = resolve_into(meta)
     key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
     host, port = meta["host"], int(meta.get("port", 22))
     remote_dir = meta.get("remote_dir", "/root/raven-ops")
@@ -90,7 +102,8 @@ def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
     from raven.ops import DockerExecutor, make_ssh_runner
 
     run = make_ssh_runner(
-        meta["host"], int(meta.get("port", 22)), os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
+        meta["host"], int(meta.get("port", 22)), os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
+        user=str(meta.get("user") or "root"),
     )
     return DockerExecutor(
         run,

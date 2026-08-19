@@ -92,19 +92,11 @@ def tune(
             batch_size=batch_size,
             max_rounds=max_rounds,
         )
-        console.print(
-            f"Adaptive tuning on {host}: seed {len(grid)} configs, LLM={llm_model}, <= {max_rounds} rounds ..."
-        )
+        console.print(f"Adaptive tuning on {host}: seed {len(grid)} configs, LLM={llm_model}, <= {max_rounds} rounds ...")
         best = asyncio.run(
             run_adaptive_polling(
-                "bm25_tune",
-                proposer,
-                backend,
-                ledger_obj,
-                metric=metric,
-                goal=goal,
-                max_rounds=max_rounds,
-                interval=interval,
+                "bm25_tune", proposer, backend, ledger_obj,
+                metric=metric, goal=goal, max_rounds=max_rounds, interval=interval,
             )
         )
         campaign = Campaign("bm25_tune", [], backend, ledger_obj, metric=metric, goal=goal)
@@ -119,9 +111,7 @@ def tune(
         table.add_row(str(h["config"]), f"{h['score']}")
     console.print(table)
     if best is not None:
-        console.print(
-            f"[green]BEST[/green]: {best.result.output.get('config')}  {metric}={best.result.metrics[metric]}"
-        )
+        console.print(f"[green]BEST[/green]: {best.result.output.get('config')}  {metric}={best.result.metrics[metric]}")
     else:
         console.print("[red]no successful trial[/red]")
 

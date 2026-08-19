@@ -33,9 +33,18 @@ def _ctx(text, iteration=8, has_tool_calls=False):
 # segment instructs the model to use that exact phrase every turn, so it appeared
 # on 75 of 120 anchor questions and carried no restart signal. Testing against it
 # would test a marker the detector no longer watches.
-_SAME_GROUND_1 = "I keep confusing Murmansk and Arkhangelsk near Severodvinsk. Let me start over on this."
-_SAME_GROUND_2 = "This is going in circles - Murmansk, Arkhangelsk, Severodvinsk again. I will start from scratch."
-_NEW_GROUND = "Starting over: instead of ports, check the Kandalaksha, Onega and Belomorsk shipyard records."
+_SAME_GROUND_1 = (
+    "I keep confusing Murmansk and Arkhangelsk near Severodvinsk. "
+    "Let me start over on this."
+)
+_SAME_GROUND_2 = (
+    "This is going in circles - Murmansk, Arkhangelsk, Severodvinsk again. "
+    "I will start from scratch."
+)
+_NEW_GROUND = (
+    "Starting over: instead of ports, check the Kandalaksha, Onega and "
+    "Belomorsk shipyard records."
+)
 
 
 @pytest.mark.asyncio

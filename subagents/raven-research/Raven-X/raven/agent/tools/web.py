@@ -46,40 +46,35 @@ _RETRY_ON_STATUS = frozenset({429, 502, 503, 504})
 # ledger can answer "how much did the flow-off anchor get from a channel the DR arm
 # turned off". Always present and always an int, so a reader can sum without branching;
 # which renderer produced the row is already in ``source``.
-_NO_SHAPING = {
-    "answer_box_chars": 0,
-    "knowledge_chars": 0,
-    "snippet_chars": 0,
-    "snippet_lines": 0,
-    "dedup_skipped": 0,
-    # dr@3.2. How many results the endpoint actually handed back, before
-    # any width slice or dedup. Ledger-only, no behaviour change.
-    #
-    # Why it has to exist: ``n`` on the row is the RENDERED count, written
-    # after the slice, so no landed row can express "the call returned 9
-    # and we showed 5". That question decided a whole line of work and
-    # could only be answered from two standalone side probes -- the run
-    # data was structurally silent, so it was never checkable per arm or
-    # per question. Measured there: 62.45% of the DR arm's non-suppressed
-    # searches render exactly 5 while the same call is served 8-10.
-    #
-    # ``None`` - not 0 - wherever the call never reached an endpoint
-    # (replay, suppression, transport error). "We never asked" and "we
-    # asked and got nothing" have different fixes, and a ledger writing 0
-    # for both makes the zero-hit rate unreadable. That is the lesson
-    # ``dedup_skipped`` two lines up cost, and it is not repeated here.
-    "n_served": None,
-    # dr@3.0. ``dedup_skipped`` belongs to ``cross_query_dedup`` and reads 0
-    # on every landed batch for two independent reasons, neither visible in a
-    # 0: no published arm enabled that knob, AND on the live-web path the
-    # counting branch is unreachable anyway because the pool is never deeper
-    # than the rendered width. Meanwhile ``snippet_dedup_by_docid`` - the
-    # knob that IS on in every published DR web arm - had no counter at all,
-    # so the only evidence it did anything was an inter-arm difference in
-    # snippet characters, i.e. an effect inferred from an aggregate rather
-    # than an event recorded when it happened. This counts the marks.
-    "snippet_repeat_marks": 0,
-}
+_NO_SHAPING = {"answer_box_chars": 0, "knowledge_chars": 0,
+               "snippet_chars": 0, "snippet_lines": 0, "dedup_skipped": 0,
+               # dr@3.2. How many results the endpoint actually handed back, before
+               # any width slice or dedup. Ledger-only, no behaviour change.
+               #
+               # Why it has to exist: ``n`` on the row is the RENDERED count, written
+               # after the slice, so no landed row can express "the call returned 9
+               # and we showed 5". That question decided a whole line of work and
+               # could only be answered from two standalone side probes -- the run
+               # data was structurally silent, so it was never checkable per arm or
+               # per question. Measured there: 62.45% of the DR arm's non-suppressed
+               # searches render exactly 5 while the same call is served 8-10.
+               #
+               # ``None`` - not 0 - wherever the call never reached an endpoint
+               # (replay, suppression, transport error). "We never asked" and "we
+               # asked and got nothing" have different fixes, and a ledger writing 0
+               # for both makes the zero-hit rate unreadable. That is the lesson
+               # ``dedup_skipped`` two lines up cost, and it is not repeated here.
+               "n_served": None,
+               # dr@3.0. ``dedup_skipped`` belongs to ``cross_query_dedup`` and reads 0
+               # on every landed batch for two independent reasons, neither visible in a
+               # 0: no published arm enabled that knob, AND on the live-web path the
+               # counting branch is unreachable anyway because the pool is never deeper
+               # than the rendered width. Meanwhile ``snippet_dedup_by_docid`` - the
+               # knob that IS on in every published DR web arm - had no counter at all,
+               # so the only evidence it did anything was an inter-arm difference in
+               # snippet characters, i.e. an effect inferred from an aggregate rather
+               # than an event recorded when it happened. This counts the marks.
+               "snippet_repeat_marks": 0}
 # The corpus retrieval service clamps to this of its own accord
 # (``bcplus_serve.py``), so asking for more would silently return the same rows.
 _MAX_SEARCH_DEPTH = 50
@@ -167,16 +162,14 @@ async def _send_with_retry(
             last = e
         if backoff is None or (budget is not None and not budget.take()):
             raise last
-        _ledger_append(
-            {
-                "ts": time.time(),
-                "op": op,
-                "key": key,
-                "attempt": attempt + 1,
-                "status": status,
-                "error": str(last),
-            }
-        )
+        _ledger_append({
+            "ts": time.time(),
+            "op": op,
+            "key": key,
+            "attempt": attempt + 1,
+            "status": status,
+            "error": str(last),
+        })
         await asyncio.sleep(_retry_delay(backoff, status, retry_after, key))
     raise AssertionError("unreachable: the final backoff slot re-raises")
 
@@ -356,11 +349,12 @@ class WebSearchTool(Tool):
             # its symptom is this sentence becoming eligible as evidence again --
             # which is how it once shipped as a run's final answer (hle-256).
             refusal = search_closed_notice(self._saturation.k)
-            self._log_search(query, n_requested, [], refusal, dict(_NO_SHAPING), replay=False, k=None, suppressed=True)
+            self._log_search(query, n_requested, [], refusal, dict(_NO_SHAPING),
+                             replay=False, k=None, suppressed=True)
             return refusal
-        deep = (
-            self._evidence_round.depth if (self._evidence_round is not None and self._evidence_round.active) else None
-        )
+        deep = self._evidence_round.depth if (
+            self._evidence_round is not None and self._evidence_round.active
+        ) else None
         k = self._request_width(n_requested, deep)
         # Read once, before either branch. The replay key below and the request itself
         # must be built from the same value; see ``_search``.
@@ -403,7 +397,9 @@ class WebSearchTool(Tool):
             # both namespaces without having to pick one.
             if self._saturation is not None:
                 self._saturation.observe(())
-            self._log_search(query, n_requested, prior[2], replayed, prior[3], replay=True, k=k)
+            self._log_search(
+                query, n_requested, prior[2], replayed, prior[3], replay=True, k=k
+            )
             return replayed
         self._searches += 1
         if deep is not None:
@@ -449,15 +445,8 @@ class WebSearchTool(Tool):
         return result.startswith(("Error:", "Proxy error:"))
 
     def _log_search(
-        self,
-        query: str,
-        n: int,
-        urls: list[str],
-        rendered: str,
-        shaping: dict[str, int],
-        *,
-        replay: bool,
-        k: int | None = None,
+        self, query: str, n: int, urls: list[str], rendered: str,
+        shaping: dict[str, int], *, replay: bool, k: int | None = None,
         suppressed: bool = False,
     ) -> None:
         """Record one search call.
@@ -472,48 +461,45 @@ class WebSearchTool(Tool):
         which a DR arm turns off - is the one part of that difference with no measured
         magnitude anywhere on disk.
         """
-        _ledger_append(
-            {
-                "ts": time.time(),
-                "op": "search",
-                "query": query,
-                # Unchanged meaning: how many results the call asked to be shown. dr@2.8
-                # split the request into shown-width and looked-at-depth; the second one
-                # is the new ``k_requested`` below, because landed batches are read
-                # against this key's old definition.
-                "k": n,
-                "urls": urls,
-                "n": len(urls),
-                "replay": replay,
-                "source": "corpus" if self.corpus_endpoint else "web",
-                # Kept, unchanged, and meaning what it always meant: "this result was not
-                # cached for replay". Renaming it would break readers of landed batches.
-                "failed": self._failed(rendered) if not replay else False,
-                "zero_hit": self._zero_hit(rendered) if not replay else False,
-                "transport_err": self._transport_err(rendered) if not replay else False,
-                # ``k`` is what the service was asked for and ``k`` differing from the
-                # rendered width is the only on-disk proof that dr@2.8 did anything.
-                # Null rather than 0 on an arm without the mechanism, so "this arm never
-                # went deep" stays a different row from "this call did not".
-                "k_requested": k if self.cross_query_dedup else None,
-                "evidence_round_open": (self._evidence_round.active if self._evidence_round is not None else None),
-                # dr@3.0. ``suppressed`` marks a row where no request was issued at all, so
-                # a reader can subtract the rule's refusals from an arm's call total instead
-                # of finding a search that mysteriously returned nothing.
-                "suppressed": suppressed,
-                # Written on EVERY search row, including the ones where nothing fired, and
-                # null-valued when the arm has no rule at all. That distinction is the whole
-                # lesson of ``dedup_skipped``, which reads 0 on every row of every landed
-                # batch: "the mechanism did not fire" and "the mechanism was never built"
-                # were the same row, so no batch can say whether dr@2.8's dedup ever ran.
-                **(
-                    self._saturation.counters()
-                    if self._saturation is not None
-                    else {"sat_action": None, "sat_event": None}
-                ),
-                **shaping,
-            }
-        )
+        _ledger_append({
+            "ts": time.time(),
+            "op": "search",
+            "query": query,
+            # Unchanged meaning: how many results the call asked to be shown. dr@2.8
+            # split the request into shown-width and looked-at-depth; the second one
+            # is the new ``k_requested`` below, because landed batches are read
+            # against this key's old definition.
+            "k": n,
+            "urls": urls,
+            "n": len(urls),
+            "replay": replay,
+            "source": "corpus" if self.corpus_endpoint else "web",
+            # Kept, unchanged, and meaning what it always meant: "this result was not
+            # cached for replay". Renaming it would break readers of landed batches.
+            "failed": self._failed(rendered) if not replay else False,
+            "zero_hit": self._zero_hit(rendered) if not replay else False,
+            "transport_err": self._transport_err(rendered) if not replay else False,
+            # ``k`` is what the service was asked for and ``k`` differing from the
+            # rendered width is the only on-disk proof that dr@2.8 did anything.
+            # Null rather than 0 on an arm without the mechanism, so "this arm never
+            # went deep" stays a different row from "this call did not".
+            "k_requested": k if self.cross_query_dedup else None,
+            "evidence_round_open": (
+                self._evidence_round.active if self._evidence_round is not None else None
+            ),
+            # dr@3.0. ``suppressed`` marks a row where no request was issued at all, so
+            # a reader can subtract the rule's refusals from an arm's call total instead
+            # of finding a search that mysteriously returned nothing.
+            "suppressed": suppressed,
+            # Written on EVERY search row, including the ones where nothing fired, and
+            # null-valued when the arm has no rule at all. That distinction is the whole
+            # lesson of ``dedup_skipped``, which reads 0 on every row of every landed
+            # batch: "the mechanism did not fire" and "the mechanism was never built"
+            # were the same row, so no batch can say whether dr@2.8's dedup ever ran.
+            **(self._saturation.counters() if self._saturation is not None
+               else {"sat_action": None, "sat_event": None}),
+            **shaping,
+        })
         # The row is over. Done here rather than at the escalation sites because this
         # is the one place that defines a row, and every logged search reaches it -
         # including a suppressed row (no ``observe``) and a transport error (returns
@@ -661,7 +647,8 @@ class WebSearchTool(Tool):
                 async with httpx.AsyncClient(proxy=self.proxy) as client:
                     return await client.post(
                         "https://google.serper.dev/search",
-                        json=({"q": query, "num": n} if page <= 1 else {"q": query, "num": n, "page": page}),
+                        json=({"q": query, "num": n} if page <= 1
+                              else {"q": query, "num": n, "page": page}),
                         headers={
                             "Accept": "application/json",
                             "Content-Type": "application/json",
@@ -670,7 +657,9 @@ class WebSearchTool(Tool):
                         timeout=10.0,
                     )
 
-            r = await _send_with_retry(_send, op="search_retry", key=query, budget=self._retry_budget)
+            r = await _send_with_retry(
+                _send, op="search_retry", key=query, budget=self._retry_budget
+            )
             data = r.json()
             # Filtered before the slice, not after: dropping a row post-slice
             # would hand back a shorter list than asked for, and how often that
@@ -695,7 +684,8 @@ class WebSearchTool(Tool):
                 # with a replay/suppression, which is the distinction the field exists
                 # for -- and zero-hit is the single most load-bearing row type in the
                 # saturation analysis.
-                return (f"No results for: {query}", [], {**_NO_SHAPING, "n_served": len(organic)})
+                return (f"No results for: {query}", [],
+                        {**_NO_SHAPING, "n_served": len(organic)})
 
             shaping = dict(_NO_SHAPING)
             shaping["n_served"] = len(organic)
@@ -724,7 +714,7 @@ class WebSearchTool(Tool):
                 link = str(item.get("link") or "")
                 urls.append(link)
                 lines.append(f"{i}. {item.get('title', '')}\n   {link}")
-                if line := self._snippet_line(item, link):
+                if (line := self._snippet_line(item, link)):
                     lines.append(line)
                     shaping["snippet_lines"] += 1
                     shaping["snippet_chars"] += len(line)
@@ -742,6 +732,7 @@ class WebSearchTool(Tool):
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}", [], dict(_NO_SHAPING)
+
 
     async def _search_corpus(
         self, query: str, count: int | None, k: int | None = None
@@ -767,7 +758,9 @@ class WebSearchTool(Tool):
         depth = min(max(k or n, n), _MAX_SEARCH_DEPTH)
         try:
             async with httpx.AsyncClient(trust_env=False, timeout=30.0) as client:
-                r = await client.get(f"{self.corpus_endpoint.rstrip('/')}/search", params={"q": query, "k": depth})
+                r = await client.get(
+                    f"{self.corpus_endpoint.rstrip('/')}/search", params={"q": query, "k": depth}
+                )
                 r.raise_for_status()
             served = (r.json() or {}).get("results", [])
         except Exception as e:
@@ -779,7 +772,8 @@ class WebSearchTool(Tool):
             # a transport error is not.
             if self._saturation is not None:
                 self._saturation.observe(())
-            return (f"No results for: {query}", [], {**_NO_SHAPING, "n_served": len(served)})
+            return (f"No results for: {query}", [],
+                    {**_NO_SHAPING, "n_served": len(served)})
         shaping = dict(_NO_SHAPING)
         shaping["n_served"] = len(served)
         shaping["dedup_skipped"] = n_skipped
@@ -793,7 +787,7 @@ class WebSearchTool(Tool):
             lines.append(f"{i}. {item.get('title', '')}\n   {url}")
             identity = str(item.get("docid") or url)
             identities.append(identity)
-            if line := self._snippet_line(item, identity):
+            if (line := self._snippet_line(item, identity)):
                 lines.append(line)
                 shaping["snippet_lines"] += 1
                 shaping["snippet_chars"] += len(line)
@@ -801,6 +795,31 @@ class WebSearchTool(Tool):
             self._saturation.observe(identities)
         shaping["snippet_repeat_marks"] = self._snippet_repeat_marks
         return "\n".join(lines), urls, shaping
+
+
+def fetch_result_ok(out: object) -> bool:
+    """True when a ``web_fetch`` return value carries a page rather than an error.
+
+    One implementation, two callers: the client-side ledger's ``ok`` column and
+    the fetch gate's release condition. They must agree, because the gate's whole
+    contract is "search returns once a page is opened" and the ledger is what an
+    acceptance check reads to decide whether that ever happened. Two spellings of
+    "did the fetch work" drifting apart would show up as a gate that looks stuck
+    in a ledger that says it should have opened - a disagreement with no runtime
+    symptom, diagnosable only by reading both.
+
+    A body that is not a JSON object counts as a failure. That is the same
+    caliber the ledger already used, and it is the safe direction here: an
+    unparseable body cannot be shown to be a page, and a gate that released on
+    one would release on every malformed response.
+    """
+    try:
+        payload = json.loads(out)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return "error" not in payload
 
 
 class WebFetchTool(Tool):
@@ -897,9 +916,9 @@ class WebFetchTool(Tool):
             # own outcome rather than skipping the line, so "cancelled" and "never issued"
             # stay distinguishable in the ledger.
             _ledger_append(
-                self._fetch_record(url, out)
-                if out is not None
-                else {"ts": time.time(), "op": "fetch", "url": url, "ok": False, "outcome": "aborted", "chars": 0}
+                self._fetch_record(url, out) if out is not None
+                else {"ts": time.time(), "op": "fetch", "url": url, "ok": False,
+                      "outcome": "aborted", "chars": 0}
             )
 
     def _fetch_record(self, url: str, out: str) -> dict[str, Any]:
@@ -910,23 +929,16 @@ class WebFetchTool(Tool):
             "url": url,
             "source": "corpus" if self.corpus_endpoint else "web",
         }
+        record["ok"] = fetch_result_ok(out)
         try:
             payload = json.loads(out)
         except (TypeError, ValueError):
-            record["ok"] = False
             return record
         if not isinstance(payload, dict):
-            record["ok"] = False
             return record
-        record["ok"] = "error" not in payload
-        for key, out_key in (
-            ("length", "chars"),
-            ("source_chars", "source_chars"),
-            ("digested", "digested"),
-            ("docid", "docid"),
-            ("truncated", "truncated"),
-            ("error", "error"),
-        ):
+        for key, out_key in (("length", "chars"), ("source_chars", "source_chars"),
+                             ("digested", "digested"), ("docid", "docid"),
+                             ("truncated", "truncated"), ("error", "error")):
             if key in payload:
                 record[out_key] = payload[key]
         return record
@@ -945,7 +957,9 @@ class WebFetchTool(Tool):
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
                 return await client.get(f"https://r.jina.ai/{url}", headers=headers)
 
-        return await _send_with_retry(_send, op="fetch_retry", key=url, budget=self._retry_budget)
+        return await _send_with_retry(
+            _send, op="fetch_retry", key=url, budget=self._retry_budget
+        )
 
     async def _fetch(
         self,
@@ -1025,7 +1039,9 @@ class WebFetchTool(Tool):
             logger.error("WebFetch error for {}: {}", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
 
-    async def _fetch_corpus(self, url: str, extract_mode: str, max_chars: int, info_to_extract: str | None) -> str:
+    async def _fetch_corpus(
+        self, url: str, extract_mode: str, max_chars: int, info_to_extract: str | None
+    ) -> str:
         """Serve the page from the fixed corpus, in the live-web response shape.
 
         A URL the corpus does not contain is reported as such, not as a fetch

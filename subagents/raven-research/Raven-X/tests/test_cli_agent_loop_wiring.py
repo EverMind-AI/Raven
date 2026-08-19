@@ -63,7 +63,9 @@ def _agent_loop_sites() -> list[tuple[str, int, set[str]]]:
             name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
             if name != "AgentLoop":
                 continue
-            sites.append((path.name, node.lineno, {kw.arg for kw in node.keywords if kw.arg}))
+            sites.append(
+                (path.name, node.lineno, {kw.arg for kw in node.keywords if kw.arg})
+            )
     return sites
 
 

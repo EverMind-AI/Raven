@@ -42,23 +42,10 @@ def _job(job_id: str, *, channel: str | None, due_ms: int, message: str = "go", 
         "name": name or f"ops:{job_id}:recheck",
         "enabled": True,
         "schedule": {"kind": "at", "atMs": due_ms, "everyMs": None, "expr": None, "tz": None},
-        "payload": {
-            "kind": "agent_turn",
-            "message": message,
-            "deliver": True,
-            "channel": channel,
-            "to": "default",
-            "topicTag": None,
-        },
-        "state": {
-            "nextRunAtMs": due_ms,
-            "lastRunAtMs": None,
-            "lastStatus": None,
-            "lastError": None,
-            "claimedByPid": None,
-            "claimedAtMs": None,
-            "silentFireCount": 0,
-        },
+        "payload": {"kind": "agent_turn", "message": message, "deliver": True,
+                    "channel": channel, "to": "default", "topicTag": None},
+        "state": {"nextRunAtMs": due_ms, "lastRunAtMs": None, "lastStatus": None, "lastError": None,
+                  "claimedByPid": None, "claimedAtMs": None, "silentFireCount": 0},
         "createdAtMs": due_ms - 1000,
         "updatedAtMs": due_ms - 1000,
         "deleteAfterRun": True,
@@ -77,13 +64,9 @@ class _RecordingSpawner:
     async def __call__(self, job) -> Spawn:
         self.jobs.append(job)
         return Spawn(
-            job_id=job.id,
-            job_name=job.name,
-            at_ms=int(time.time() * 1000),
+            job_id=job.id, job_name=job.name, at_ms=int(time.time() * 1000),
             argv=["fake", "agent", "-m", job.payload.message],
-            returncode=self._rc,
-            duration_ms=7,
-            error=self._error,
+            returncode=self._rc, duration_ms=7, error=self._error,
         )
 
 

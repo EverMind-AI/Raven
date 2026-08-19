@@ -64,16 +64,10 @@ def render(cfg: DRFlowConfig) -> str:
     if asm is None:
         return ""
     builder = asm.segment_builder
-    budget = TokenBudget(context_length=0, reserved_output=0, reserved_tools=0, reserved_system=0, available_history=0)
-    ctx = AssemblyContext(
-        session_key="stamp",
-        current_message="",
-        media=None,
-        channel=None,
-        chat_id=None,
-        session_messages=[],
-        budget=budget,
-    )
+    budget = TokenBudget(context_length=0, reserved_output=0, reserved_tools=0,
+                         reserved_system=0, available_history=0)
+    ctx = AssemblyContext(session_key="stamp", current_message="", media=None,
+                          channel=None, chat_id=None, session_messages=[], budget=budget)
     seg = asyncio.run(builder.build(ctx))
     return (seg.text if seg else "") or ""
 
@@ -83,13 +77,8 @@ def stamp(path: Path) -> dict:
     flow = raw.get("drFlow") or {}
     cfg = DRFlowConfig(**flow)
     if not cfg.enabled:
-        return {
-            "config": path.name,
-            "enabled": False,
-            "sha": "",
-            "chars": 0,
-            "note": "flow off - no DR segment; this is the anchor's state",
-        }
+        return {"config": path.name, "enabled": False, "sha": "", "chars": 0,
+                "note": "flow off - no DR segment; this is the anchor's state"}
     text = render(cfg)
     return {
         "config": path.name,
@@ -120,11 +109,9 @@ def main() -> None:
             print(f"  {s['config']:24s} flow=off   sha=(none)          {s['note']}")
             continue
         i = s["inputs"]
-        print(
-            f"  {s['config']:24s} {s['version']:8s} sha={s['sha']}  {s['chars']:6d} chars"
-            f"   guidance={i['measured_guidance']!s:5s} marker={i['require_answer_marker']!s:5s}"
-            f" record={i['final_shape_record']!s:5s}"
-        )
+        print(f"  {s['config']:24s} {s['version']:8s} sha={s['sha']}  {s['chars']:6d} chars"
+              f"   guidance={i['measured_guidance']!s:5s} marker={i['require_answer_marker']!s:5s}"
+              f" record={i['final_shape_record']!s:5s}")
 
     on = [s for s in out if s["enabled"]]
     if len(on) >= 2:
@@ -132,23 +119,25 @@ def main() -> None:
         for i in range(len(on) - 1):
             x, y = on[i], on[i + 1]
             same = "IDENTICAL" if x["sha"] == y["sha"] else "differ"
-            print(f"    {x['config']} vs {y['config']}: {same}  {y['chars'] - x['chars']:+d} chars")
+            print(f"    {x['config']} vs {y['config']}: {same}"
+                  f"  {y['chars'] - x['chars']:+d} chars")
             if same == "differ":
                 # Report the added tail, which is the whole point of an appended
                 # clause: everything before it must be at its measured offset.
                 a_t, b_t = x["_text"], y["_text"]
                 pre = len(a_t) if b_t.startswith(a_t.rstrip()) else -1
                 if pre >= 0:
-                    print("      appended only (prefix byte-identical); added tail:")
-                    for line in b_t[len(a_t.rstrip()) :].strip().splitlines()[:6]:
+                    print(f"      appended only (prefix byte-identical); added tail:")
+                    for line in b_t[len(a_t.rstrip()):].strip().splitlines()[:6]:
                         print(f"        | {line}")
                 else:
-                    print("      !! not a pure append - earlier bytes moved. dr@2.0 lost a headline to exactly this.")
+                    print("      !! not a pure append - earlier bytes moved."
+                          " dr@2.0 lost a headline to exactly this.")
 
     if a.json:
-        Path(a.json).write_text(
-            json.dumps([{k: v for k, v in s.items() if k != "_text"} for s in out], ensure_ascii=False, indent=2)
-        )
+        Path(a.json).write_text(json.dumps(
+            [{k: v for k, v in s.items() if k != "_text"} for s in out],
+            ensure_ascii=False, indent=2))
         print(f"\n  wrote {a.json}")
 
 

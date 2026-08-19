@@ -67,6 +67,49 @@ prefix_of() {
     printf '%s' "${1#raven-}" | tr '[:lower:]-' '[:upper:]_'
 }
 
+# The LLM a folder is tuned for, plus a cross-check. `subagent.json` records it
+# for a reader; `config.json` is what actually runs. Two files naming one model
+# can drift, so they are compared here rather than trusted: a mismatch is
+# reported, not silently preferred one way or the other.
+recommendation_of() {
+    python3 - "$1" <<'PYEOF'
+import json, sys
+from pathlib import Path
+folder = Path(sys.argv[1])
+try:
+    rec = json.loads((folder / "subagent.json").read_text(encoding="utf-8")).get("recommendedLlm") or {}
+    cfg = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+except (OSError, ValueError) as exc:
+    print(f"unreadable ({exc.__class__.__name__})")
+    sys.exit(0)
+defaults = (cfg.get("agents") or {}).get("defaults") or {}
+provider = defaults.get("provider")
+runs = defaults.get("model")
+base = ((cfg.get("providers") or {}).get(provider) or {}).get("apiBase") or ""
+print(f"{rec.get('model', 'unrecorded')} via {rec.get('apiBase') or rec.get('provider') or '?'}")
+if rec.get("model") and rec["model"] != runs:
+    print(f"MISMATCH subagent.json recommends {rec['model']} but config.json runs {runs}")
+elif rec.get("apiBase") and base and rec["apiBase"] != base:
+    print(f"MISMATCH subagent.json recommends {rec['apiBase']} but config.json uses {base}")
+PYEOF
+}
+
+# True when the host raven has a provider key a keyless sub-agent can inherit.
+# Mirrors `inherit_llm` in each run.py: any provider with an apiKey will do.
+host_has_llm() {
+    python3 - <<'PYEOF'
+import json, os, sys
+from pathlib import Path
+home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
+try:
+    cfg = json.loads((Path(home) / "config.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    sys.exit(1)
+providers = cfg.get("providers") or {}
+sys.exit(0 if any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()) else 1)
+PYEOF
+}
+
 if [ "$SYNC" = 1 ] && [ "$DRY_RUN" = 0 ] && ! command -v uv > /dev/null; then
     echo "error: no \`uv\` on PATH; it builds the checkouts' venvs (or pass --no-sync)" >&2
     exit 1
@@ -121,12 +164,24 @@ for folder in "${FOLDERS[@]}"; do
         # last-match read disagrees with them on a file that sets the key twice.
         key="$(sed -n "s/^[[:space:]]*${var}=//p" "$dir/.env" | grep -m1 '[^[:space:]]' | tr -d '[:space:]' || true)"
     fi
-    if [ -z "$key" ]; then
-        echo "   $var is empty - fill in $folder/.env, then re-run"
-        needs_key+=("$folder")
-        continue
+    rec="$(recommendation_of "$dir")"
+    echo "   recommended LLM: $(printf '%s' "$rec" | head -n1)"
+    if mismatch="$(printf '%s' "$rec" | sed -n 's/^MISMATCH //p')" && [ -n "$mismatch" ]; then
+        echo "   ! $mismatch - fix one of them"
     fi
-    echo "   $var: set"
+    if [ -z "$key" ]; then
+        if host_has_llm; then
+            echo "   $var is empty - this agent will inherit the host raven's LLM instead"
+            echo "   set it in $folder/.env and re-run to use the recommended one"
+        else
+            echo "   $var is empty and the host raven has no provider key to inherit"
+            echo "   fill in $folder/.env, or configure a provider in the host raven, then re-run"
+            needs_key+=("$folder")
+            continue
+        fi
+    else
+        echo "   $var: set - running the recommended LLM"
+    fi
 
     args=()
     [ "$DRY_RUN" = 1 ] && args+=(--dry-run)

@@ -49,20 +49,13 @@ def _tool(svc):
 def test_a_campaign_wake_is_not_returned_as_a_users_duplicate(tmp_path):
     svc = _svc(tmp_path)
     wake = svc.add_job(
-        name="ops:cfd-transient:r1",
-        schedule=_at(120),
-        message="campaign wake",
-        channel="tui",
-        to="chat",
-        dedup=False,
+        name="ops:cfd-transient:r1", schedule=_at(120), message="campaign wake",
+        channel="tui", to="chat", dedup=False,
     )
 
     reminder = svc.add_job(
-        name="reminder",
-        schedule=_at(120),
-        message="check the dambreak run",
-        channel="tui",
-        to="chat",
+        name="reminder", schedule=_at(120), message="check the dambreak run",
+        channel="tui", to="chat",
     )
 
     assert reminder.id != wake.id, "a wake and a reminder are different things"
@@ -72,9 +65,11 @@ def test_a_campaign_wake_is_not_returned_as_a_users_duplicate(tmp_path):
 def test_two_ordinary_reminders_still_dedup(tmp_path):
     """The other direction: the fix must not switch dedup off for real reminders."""
     svc = _svc(tmp_path)
-    first = svc.add_job(name="r1", schedule=_at(60), message="take meds", channel="tui", to="chat")
+    first = svc.add_job(name="r1", schedule=_at(60), message="take meds",
+                        channel="tui", to="chat")
 
-    second = svc.add_job(name="r2", schedule=_at(60.2), message="take meds now", channel="tui", to="chat")
+    second = svc.add_job(name="r2", schedule=_at(60.2), message="take meds now",
+                         channel="tui", to="chat")
 
     assert second.id == first.id, "near-simultaneous reminders to one chat still merge"
 
@@ -85,7 +80,8 @@ def test_two_ordinary_reminders_still_dedup(tmp_path):
 @pytest.mark.asyncio
 async def test_reuse_says_reuse_and_warns_against_deleting_it(tmp_path):
     svc = _svc(tmp_path)
-    existing = svc.add_job(name="r1", schedule=_at(45), message="take meds", channel="tui", to="chat")
+    existing = svc.add_job(name="r1", schedule=_at(45), message="take meds",
+                           channel="tui", to="chat")
 
     out = await _tool(svc).execute(action="add", at=_iso(45.1), message="take meds again")
 
@@ -121,19 +117,12 @@ def test_the_invariant_holds_for_a_producer_that_ignores_the_naming_rule(tmp_pat
     ops:<campaign>: convention at all.
     """
     svc = _svc(tmp_path)
-    svc.add_job(
-        name="ops:c1:r0", schedule=_at(90), message="wake", channel="tui", to="chat", dedup=False, campaign="c1"
-    )
+    svc.add_job(name="ops:c1:r0", schedule=_at(90), message="wake",
+                channel="tui", to="chat", dedup=False, campaign="c1")
 
-    later = svc.add_job(
-        name="something-else-entirely",
-        schedule=_at(30),
-        message="wake again",
-        channel="tui",
-        to="chat",
-        dedup=False,
-        campaign="c1",
-    )
+    later = svc.add_job(name="something-else-entirely", schedule=_at(30),
+                        message="wake again", channel="tui", to="chat",
+                        dedup=False, campaign="c1")
 
     pending = svc.list_jobs()
     assert len(pending) == 1, "one campaign, one pending wake"
@@ -143,19 +132,21 @@ def test_the_invariant_holds_for_a_producer_that_ignores_the_naming_rule(tmp_pat
 def test_an_untagged_job_is_untouched_by_a_campaign_add(tmp_path):
     """The invariant must not sweep up jobs that have nothing to do with it."""
     svc = _svc(tmp_path)
-    reminder = svc.add_job(name="dentist", schedule=_at(200), message="dentist at 5", channel="tui", to="chat")
+    reminder = svc.add_job(name="dentist", schedule=_at(200), message="dentist at 5",
+                           channel="tui", to="chat")
 
-    svc.add_job(
-        name="ops:c1:r0", schedule=_at(90), message="wake", channel="tui", to="chat", dedup=False, campaign="c1"
-    )
+    svc.add_job(name="ops:c1:r0", schedule=_at(90), message="wake",
+                channel="tui", to="chat", dedup=False, campaign="c1")
 
     assert reminder.id in {j.id for j in svc.list_jobs()}
 
 
 def test_two_campaigns_keep_one_wake_each(tmp_path):
     svc = _svc(tmp_path)
-    a = svc.add_job(name="ops:a:r0", schedule=_at(60), message="a", channel="tui", to="chat", dedup=False, campaign="a")
-    b = svc.add_job(name="ops:b:r0", schedule=_at(61), message="b", channel="tui", to="chat", dedup=False, campaign="b")
+    a = svc.add_job(name="ops:a:r0", schedule=_at(60), message="a", channel="tui",
+                    to="chat", dedup=False, campaign="a")
+    b = svc.add_job(name="ops:b:r0", schedule=_at(61), message="b", channel="tui",
+                    to="chat", dedup=False, campaign="b")
 
     ids = {j.id for j in svc.list_jobs()}
     assert ids == {a.id, b.id}, "one campaign replacing another's wake would be worse"
@@ -171,9 +162,8 @@ async def test_deleting_a_campaigns_last_wake_says_what_it_costs(tmp_path):
     leave it believing the job was gone and reasoning from there.
     """
     svc = _svc(tmp_path)
-    wake = svc.add_job(
-        name="ops:c1:r1", schedule=_at(120), message="wake", channel="tui", to="chat", dedup=False, campaign="c1"
-    )
+    wake = svc.add_job(name="ops:c1:r1", schedule=_at(120), message="wake",
+                       channel="tui", to="chat", dedup=False, campaign="c1")
 
     out = await _tool(svc).execute(action="remove", job_id=wake.id)
 
@@ -188,8 +178,10 @@ async def test_deleting_one_of_two_wakes_says_nothing_extra(tmp_path):
     """The campaign is still watched, so there is nothing to warn about; a notice
     on every delete would be noise and would stop being read."""
     svc = _svc(tmp_path)
-    first = svc.add_job(name="ops:c1:r1", schedule=_at(120), message="wake", channel="tui", to="chat", dedup=False)
-    svc.add_job(name="ops:c1:recheck", schedule=_at(200), message="later look", channel="tui", to="chat", dedup=False)
+    first = svc.add_job(name="ops:c1:r1", schedule=_at(120), message="wake",
+                        channel="tui", to="chat", dedup=False)
+    svc.add_job(name="ops:c1:recheck", schedule=_at(200), message="later look",
+                channel="tui", to="chat", dedup=False)
 
     out = await _tool(svc).execute(action="remove", job_id=first.id)
 
@@ -199,7 +191,8 @@ async def test_deleting_one_of_two_wakes_says_nothing_extra(tmp_path):
 @pytest.mark.asyncio
 async def test_deleting_an_ordinary_reminder_says_nothing_extra(tmp_path):
     svc = _svc(tmp_path)
-    job = svc.add_job(name="dentist", schedule=_at(200), message="dentist at 5", channel="tui", to="chat")
+    job = svc.add_job(name="dentist", schedule=_at(200), message="dentist at 5",
+                      channel="tui", to="chat")
 
     out = await _tool(svc).execute(action="remove", job_id=job.id)
 
@@ -209,8 +202,7 @@ async def test_deleting_an_ordinary_reminder_says_nothing_extra(tmp_path):
 def test_the_campaign_is_stored_rather_than_parsed_back_out_of_the_name(tmp_path):
     svc = _svc(tmp_path)
 
-    job = svc.add_job(
-        name="whatever", schedule=_at(45), message="w", channel="tui", to="chat", dedup=False, campaign="c9"
-    )
+    job = svc.add_job(name="whatever", schedule=_at(45), message="w", channel="tui",
+                      to="chat", dedup=False, campaign="c9")
 
     assert job.payload.campaign == "c9"
