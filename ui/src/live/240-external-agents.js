@@ -491,7 +491,7 @@ delegOpenSpawn = (agent, label) => {
     const it = match();
     if (it) { agentOpenRow(it); return; }
     if (n >= 4) return;
-    agentsAt = 0; agentsLoad();
+    agentsRefresh(true);
     setTimeout(() => attempt(n + 1), 700);
   };
   attempt(0);

@@ -452,40 +452,24 @@ document.addEventListener('click', (e) => {
 /* ── subagents: what this conversation handed off ──────────────────────
    Scoped to the open session on every call, so background work from another
    conversation can never surface here. */
-let agentsBusy = false;
-let agentsAt = 0;
-/* One fingerprint per drawn list, for the same reason the detail keeps one: the
-   poll answers every few seconds whether or not anything moved, and drawWs()
-   wipes the panel body to rebuild it. Redrawing an unchanged list is a list that
-   flickers on a timer and loses the reader's scroll every time. */
-let agentsDrawn = '';
-agentsLoad = () => {
-  /* The panel asks on each redraw and a fresh answer causes one; the floor
-     keeps that from spinning, and doubles as the poll's rate limit. */
-  if (!cur || agentsBusy || Date.now() - agentsAt < 2500) return;
-  /* A server without the surface answers -32601 every five seconds forever
-     otherwise, and the panel sits empty with no way to tell an empty list from
-     a missing feature. */
-  if (!rpcHas('subagent')) return;
-  agentsBusy = true;
-  const asked = cur;
-  rpc.call('subagent.list', { session_id: asked })
-    .then((r) => {
-      /* Answer for a conversation the reader already left: dropping it is the
-         difference between a stale list and somebody else's list. */
-      if (asked !== cur) return;
-      AGENTS = (r && r.items) || [];
-      const dot = $('#wsAgentRun');
-      if (dot) dot.hidden = !AGENTS.some((a) => a.status === 'run');
-      /* Keyed by conversation as well as content, so switching between two
-         sessions that have listed the same thing still repaints. */
-      const drawn = `${asked}|${JSON.stringify(AGENTS)}`;
-      if (drawn === agentsDrawn) return;
-      agentsDrawn = drawn;
-      if (wsOpen && wsTab === 'agents' && !agentOpen && !dagNode) drawWs();
-    })
-    .catch((e) => { rpcGone('subagent', e); /* an empty list is not a broken one */ })
-    .then(() => { agentsBusy = false; agentsAt = Date.now(); });
+/* The rows, and only the rows: which of them is on screen, when to ask again
+   and whether the answer is worth a repaint are all about what is drawn, and
+   they live with the renderer in demo/110-subagents.js.
+
+   A server without the surface answers -32601 forever otherwise, and the panel
+   would sit empty with no way to tell an empty list from a missing feature --
+   so an absent surface answers with no rows rather than an error, and
+   `rpcAbsent` is what the empty state reads to tell the two apart. */
+DS.agents = {
+  list: (sessionId) => {
+    if (!rpcHas('subagent')) return Promise.resolve([]);
+    return rpc.call('subagent.list', { session_id: sessionId })
+      .then((r) => (r && r.items) || [])
+      /* Absent surface -> no rows (the shell words that empty state); a call
+         that merely failed rethrows, so the page keeps what it last drew --
+         a dropped socket must not repaint a live run as "no delegated work". */
+      .catch((e) => { if (rpcGone('subagent', e)) return []; throw e; });
+  },
 };
 
 /* One fingerprint per drawn detail: the poll repaints only when the answer
@@ -610,9 +594,8 @@ agentRender = (box, id) => {
    over a run the list already knows failed is the panel lying. */
 setInterval(() => {
   if (!wsOpen || wsTab !== 'agents') return;
-  if (!agentOpen && !dagNode) { agentsLoad(); return; }
-  agentsAt = 0;
-  agentsLoad();
+  if (!agentOpen && !dagNode) { agentsRefresh(); return; }
+  agentsRefresh(true);
   /* A graph node is a row like any other now, so the same rule applies. It is
      found by (run, node) rather than by id because that is how the list
      addresses it. */

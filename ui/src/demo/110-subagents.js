@@ -17,9 +17,50 @@ let dagNode = null;      // {run_id, node, agent, label} while a graph node is o
    replay never says that, so on its own it reports every surface present --
    which is what the demo is for. */
 let rpcAbsent = () => false;
-let agentsLoad = null;   // () => void        -- refresh AGENTS from the server
 let agentRender = null;  // (box, id) => void -- draw one run into a box
 let dagNodeRender = null; // (box, {run_id, node}) => void -- draw one dag node
+
+/* The fixture source. A conversation replayed with no server behind it has
+   whatever runs the fixtures gave it, and they never change -- which is also
+   why the watch that keeps this fresh lives in the live layer and not here. */
+DS.agents ??= { list: async () => AGENTS };
+
+/* Refreshing the list is three separate judgements, and all three are about
+   what is on screen rather than about the transport, so they live here:
+   whether to ask at all, whether the answer still belongs to the conversation
+   the reader is in, and whether anything changed enough to repaint. */
+let agentsBusy = false;
+let agentsAt = 0;
+/* One fingerprint per drawn list. The watch answers every couple of seconds
+   whether or not anything moved, and drawWs() wipes the panel body to rebuild
+   it -- so redrawing an unchanged list is a list that flickers on a timer and
+   loses the reader's scroll every time. Keyed by conversation as well as
+   content, so switching between two sessions that listed the same thing still
+   repaints. */
+let agentsDrawn = '';
+
+function agentsRefresh(force) {
+  /* The panel asks on each redraw and a fresh answer causes one; the floor
+     keeps that from spinning, and doubles as the watch's rate limit. */
+  if (!cur || agentsBusy || (!force && Date.now() - agentsAt < 2500)) return;
+  agentsBusy = true;
+  const asked = cur;
+  DS.agents.list(asked)
+    .then((rows) => {
+      /* An answer for a conversation the reader already left: dropping it is
+         the difference between a stale list and somebody else's list. */
+      if (asked !== cur) return;
+      AGENTS = rows || [];
+      const dot = $('#wsAgentRun');
+      if (dot) dot.hidden = !AGENTS.some((a) => a.status === 'run');
+      const drawn = `${asked}|${JSON.stringify(AGENTS)}`;
+      if (drawn === agentsDrawn) return;
+      agentsDrawn = drawn;
+      if (wsOpen && wsTab === 'agents' && !agentOpen && !dagNode) drawWs();
+    })
+    .catch(() => { /* an empty list is not a broken one */ })
+    .then(() => { agentsBusy = false; agentsAt = Date.now(); });
+}
 
 function agentSpan(it) {
   const t0 = it.started_at ? new Date(it.started_at).getTime() : 0;
@@ -130,7 +171,7 @@ function agentMark(status) {
 function drawWsAgents(box) {
   if (dagNode) return drawWsDagNode(box);
   if (agentOpen) return drawWsAgentCtx(box);
-  if (agentsLoad) agentsLoad();
+  agentsRefresh();
   /* A queued node has not run, has no transcript, and opening it shows an empty
      panel -- it is a row that can only disappoint. The graph is where waiting
      work belongs, and the sheet already draws it there, in the shape that says
