@@ -15,15 +15,9 @@
       "import": "./index.js",
       "default": "./index.js"
     },
-    "./text-input": {
-      "types": "./text-input.d.ts",
-      "import": "./text-input.js",
-      "default": "./text-input.js"
-    },
     "./package.json": "./package.json"
   },
   "peerDependencies": {
-    "ink-text-input": ">=6.0.0",
     "react": ">=19.0.0"
   },
   "dependencies": {

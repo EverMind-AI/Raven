@@ -3,22 +3,26 @@
 // See NOTICES.md.
 //
 // GatewayClientCompat — EventEmitter-shaped adapter wrapping the typed
-// production RpcClient. Provides the legacy GatewayClient API surface
+// production RpcClient. Provides the GatewayClient API surface
 // (`request<T>(method, params)`, `start()`, `kill()`, `getLogTail()`,
 // `drain()`, `.on('event'/'exit', handler)`) so the hermes-fork-imported
-// ui-tui can use the typed RpcClient backend without rewriting all
-// 169 components.
+// ui-tui consumes the typed RpcClient backend through one seam.
 //
-// Lifetime: temporary glue. Retire when Phase 4 turn-streaming lands and
-// useMainApp.ts is rewired to typed `rpcClient.subscribe(...)` calls
-// (per proposal §4.2 follow-up `tui-chat-streaming`).
+// Lifetime: permanent. This adapter IS the boundary between the typed RPC
+// layer and the component tree; a future move to typed
+// `rpcClient.subscribe(...)` calls would happen at this seam, file by file,
+// with the adapter shrinking as consumers migrate. Until such a migration
+// is actually scheduled, treat this as the production wiring, not glue.
+// (Its header used to promise retirement "when Phase 4 lands"; Phase 4
+// landed, the rewrite did not happen, and pretending otherwise misled
+// every reader of this file.)
 //
 // Adapter responsibilities:
 //   1. EventEmitter for 'event' (GatewayEvent) and 'exit' (number) channels.
-//   2. Synthesize `gateway.ready` event with `STUB_SKIN` (re-exported from
-//      `lib/stubGatewayFixtures.ts`) on next-tick after `start()` resolves
-//      the RpcClient's `system.hello` handshake — same shape as
-//      `GatewayClientStub.start()` so 169 .tsx consumers boot identically.
+//   2. Synthesize `gateway.ready` with an empty skin on next-tick after
+//      `start()` resolves the RpcClient's `system.hello` handshake — same
+//      shape as `GatewayClientStub.start()` so consumers boot identically;
+//      the real skin arrives via config sync.
 //   3. `request<T>(m, p)` delegates to `rpc<T>(m, p)`.
 //   4. `kill()` → `RpcClient.close()` + emit 'exit'.
 //   5. `getLogTail()` → placeholder string (no buffered stdout in real path).
@@ -36,7 +40,6 @@ import { EventEmitter } from 'node:events'
 
 import type { GatewayEvent } from './gatewayTypes.js'
 
-import { STUB_SKIN } from './lib/stubGatewayFixtures.js'
 import { RpcClient } from './rpc/index.js'
 
 const CLIENT_VERSION = '0.0.2'
@@ -93,7 +96,7 @@ export class GatewayClientCompat extends EventEmitter {
   /**
    * Boot sequence:
    *   1. await `system.hello` (5s server-side timeout per Phase 2 RpcServer).
-   *   2. synthesize `gateway.ready` event with `STUB_SKIN`.
+   *   2. synthesize `gateway.ready` event with an empty skin.
    *   3. buffer (or emit, if `drain()` already called) the event.
    *
    * Idempotent — repeated `start()` returns the same promise, matching
@@ -119,7 +122,7 @@ export class GatewayClientCompat extends EventEmitter {
           return
         }
 
-        const ready: GatewayEvent = { payload: { skin: STUB_SKIN }, type: 'gateway.ready' }
+        const ready: GatewayEvent = { payload: { skin: {} }, type: 'gateway.ready' }
         this.publish(ready)
       }, 0)
     })()
