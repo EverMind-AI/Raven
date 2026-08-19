@@ -34,11 +34,8 @@ retained in `LICENSES/`.
   Triple attribution chain (ink contributors → Nous Research hermes-ink
   → EverMind modifications) is encoded in the 5-line SPDX header of
   every substantial file under `ui-tui/packages/hermes-ink/src/`.
-  Re-evaluation triggers (Nous halts maintenance / severe CVE / community
-  ink converges / patch debt > 500 LOC) are recorded in
-  `docs/RepoMem/temp/tui-fork-hermes-import/02-hermes-ink-vendor-vs-community.md`
-  (to be promoted to `docs/RepoMem/persist/architecture/hermes-fork-strategy.md`
-  at L2 archive time).
+  The fork policy (hard fork, no upstream sync, fixes land in-tree) lives
+  in `ui-tui/packages/hermes-ink/README.md`.
 
 ## agentscope (web-service framework)
 - Upstream source: https://github.com/agentscope-ai/agentscope

@@ -28,4 +28,3 @@ export { createRoot, forceRedraw, default as render, renderSync } from './ink/ro
 export { stringWidth } from './ink/stringWidth.js'
 export { isXtermJs } from './ink/terminal.js'
 export { oscColor } from './ink/terminal-querier.js'
-export { default as TextInput, UncontrolledTextInput } from 'ink-text-input'
