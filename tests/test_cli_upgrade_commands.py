@@ -695,7 +695,7 @@ def test_upgrade_helper_stops_after_channel_install_succeeds(
 
     assert status == 0
     run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],
+        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
         check=False,
     )
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in capsys.readouterr().out
@@ -705,16 +705,26 @@ def test_upgrade_helper_warns_when_base_fallback_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=0)])
+    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
+    # Both shapes are tried for the channel requirement before the base wheel is
+    # reached: a cheap install that failed says nothing about whether the
+    # environment can be rebuilt whole.
     assert run.call_args_list == [
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
+            {"check": False},
+        ),
         ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
-        ((["/usr/bin/uv", "tool", "install", "--force", WHEEL_URL],), {"check": False}),
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", WHEEL_URL],),
+            {"check": False},
+        ),
     ]
     captured = capsys.readouterr()
     assert "Channel dependencies failed to install" in captured.err
@@ -726,7 +736,7 @@ def test_upgrade_helper_returns_final_uv_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=23)])
+    run = Mock(side_effect=[Mock(returncode=9)] * 3 + [Mock(returncode=23)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
@@ -776,7 +786,8 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
             "/usr/bin/uv",
             "tool",
             "install",
-            "--force",
+            "--reinstall-package",
+            "raven",
             "-c",
             constraints_path,
             f"raven[channels] @ {WHEEL_URL}",
@@ -799,7 +810,7 @@ def test_upgrade_helper_skips_constraints_when_download_fails(
 
     assert status == 0
     run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],
+        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
         check=False,
     )
     assert "upgrading without version pinning" in capsys.readouterr().err
@@ -1564,3 +1575,43 @@ class TestSpawningLeavesTheMarker:
             upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
 
         assert not (isolated_raven_home / "upgrade.json").exists()
+
+
+def test_upgrade_helper_rebuilds_the_environment_when_the_cheap_shape_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--reinstall-package raven` replaces raven's wheel and leaves the ~150
+    dependencies alone, which is both faster and what keeps their bytecode. The
+    failure it reports and `--force` rescues is a stale entry on the executable
+    name -- "Executable already exists: raven (use `--force` to overwrite)" --
+    which is what a helper killed part way through leaves behind. A cheap
+    install that failed says nothing about whether the environment can still be
+    rebuilt whole, so the whole shape is always tried second."""
+    run = Mock(side_effect=[Mock(returncode=2), Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert run.call_args_list == [
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
+            {"check": False},
+        ),
+        ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
+    ]
+
+
+def test_upgrade_helper_does_not_rebuild_when_the_cheap_shape_worked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: a successful cheap install must not be followed by the
+    teardown it exists to avoid."""
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert not any("--force" in call.args[0] for call in run.call_args_list)
