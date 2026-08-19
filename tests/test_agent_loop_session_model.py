@@ -583,9 +583,19 @@ def test_the_stored_model_is_read_once_per_session(tmp_path) -> None:
     assert reads == ["tui:a", "tui:never-switched"]
 
 
-def test_clearing_an_override_is_not_undone_by_the_stored_model(tmp_path) -> None:
-    """Dropping a session back to the default has to stick. Re-reading the
-    record on the next ask would restore the very choice just cleared.
+def test_a_restored_session_stays_on_the_default_once_cleared(tmp_path) -> None:
+    """What makes clearing stick is that the read happens once per key.
+
+    End to end, not a guard on one line: the key is marked both where the record
+    is read and where a caller supplies the pair, so removing either alone still
+    leaves this green. ``test_the_stored_model_is_read_once_per_session`` is what
+    pins the marking itself.
+
+    Named for what it does show, and not for a guarantee
+    ``clear_session_binding`` does not give: it deliberately does not mark, so a
+    session cleared without ever having been read would be read afterwards. No
+    caller creates one -- ``session.delete`` unlinks the record first -- which is
+    why the marking lives in the read rather than in the clear.
     """
     loop = _restorable_loop(tmp_path, {"tui:a": {"model": "claude-sonnet-4-5", "provider": "anthropic"}})
 

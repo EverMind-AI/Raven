@@ -766,11 +766,13 @@ class AgentLoop:
     def clear_session_binding(self, session_key: str) -> None:
         """Drop a session's override so it follows the default again.
 
-        Counts as having consulted the record: without that, the next ask would
-        read the stored model straight back in and undo this.
+        Deliberately does not mark the key as consulted. The one caller is
+        ``session.delete``, which unlinks the record before this runs, so there
+        is nothing left for a later ask to read back in -- and a session that
+        somehow kept its record is better served by re-reading it than by a
+        marking that claims we looked when we did not.
         """
         self._session_bindings.pop(session_key, None)
-        self._restore_attempted.add(session_key)
 
     def _forget_transport_verdicts(self) -> None:
         """Drop the capability verdicts a new provider may answer differently.
