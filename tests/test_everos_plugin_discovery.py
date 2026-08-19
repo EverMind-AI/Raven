@@ -107,9 +107,9 @@ class TestBundledDiscovery:
         d = PluginDiscovery(bundled_dir=_BUNDLED, user_dir=user_dir)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        # Bundled (version 1.1.0) wins; user-dir version (9.9.9) is shadowed.
+        # Bundled (version 1.2.0) wins; user-dir version (9.9.9) is shadowed.
         assert record.source == Source.BUNDLED
-        assert record.manifest.version == "1.1.0"
+        assert record.manifest.version == "1.2.0"
 
 
 # ---------------------------------------------------------------------------
