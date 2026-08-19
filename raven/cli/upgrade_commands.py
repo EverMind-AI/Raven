@@ -251,12 +251,37 @@ def run(argv=None):
         )
         constraints_path = None
 
-    def install(requirement):
-        command = [uv_path, "tool", "install", "--force"]
+    def run_uv(requirement, mode):
+        command = [uv_path, "tool", "install"] + mode
         if constraints_path:
             command += ["-c", constraints_path]
         command.append(requirement)
         return subprocess.run(command, check=False).returncode
+
+    def install(requirement):
+        # Cheap shape first. `--force` tears the whole environment down and
+        # writes 150-odd packages back even when the only thing that moved is
+        # raven's own wheel; `--reinstall-package raven` replaces that wheel and
+        # leaves the dependencies -- and their bytecode -- where they are. It
+        # still resolves and syncs the rest, so a dependency the constraints
+        # moved is moved here too; it is not a shortcut past correctness.
+        #
+        # `--force` stays as the fallback for the failures the cheap shape
+        # reports. The reachable one is a stale entry on the executable name --
+        # which is what a helper killed between writing the launcher and
+        # finishing leaves: uv refuses with "Executable already exists: raven
+        # (use `--force` to overwrite)" and only `--force` gets past it.
+        #
+        # What the fallback does NOT cover, said out loud because the shape of
+        # the code invites the opposite assumption: a dependency whose files are
+        # gone while its metadata survives. uv cannot see that, so the cheap
+        # shape reports success, the fallback never runs, and the environment
+        # stays broken. `--force` used to repair it by accident on every
+        # upgrade. Nothing repairs it now short of rerunning the installer.
+        status = run_uv(requirement, ["--reinstall-package", "raven"])
+        if status == 0:
+            return 0
+        return run_uv(requirement, ["--force"])
 
     def restart():
         # Called on every path out of the install, not just the successful one.
