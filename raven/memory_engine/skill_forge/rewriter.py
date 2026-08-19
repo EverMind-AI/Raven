@@ -21,6 +21,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from raven.providers.binding import active_binding
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
@@ -67,25 +68,32 @@ class QueryRewriter:
         self,
         provider: "LLMProvider",
         *,
-        model: str | None = None,
         max_tokens: int = 8192,
         temperature: float = 0.3,
     ) -> None:
-        self._provider = provider
-        self._model = model
+        self._fallback_provider = provider
         self._max_tokens = max_tokens
         self._temperature = temperature
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
-        Held rather than looked up per call, so without this the rewriter
-        keeps calling the provider captured at construction after the loop
-        has moved on -- a switch away from an unusable credential fixes the
-        main path and leaves this one failing.
+        Only the out-of-turn fallback moves. Inside a turn the rewriter reads
+        that turn's binding, so a session switching models is already covered.
+        The rewriter has no model of its own, so it follows the conversation.
         """
-        del model  # the rewriter runs on the provider's default model
-        self._provider = provider
+        self._fallback_provider = provider
+
+    def _call_provider(self) -> "LLMProvider":
+        """The turn's provider inside a turn; the built-in one outside one.
+
+        The rewriter has no model of its own, so it follows the conversation
+        by taking its provider and passing no model at all -- which lands on
+        that provider's default. For a pooled binding those coincide, because
+        the pool builds each provider with the bound model as its default.
+        """
+        turn = active_binding()
+        return turn.provider if turn is not None else self._fallback_provider
 
     @trace.instrument("skill.rewrite", kind="skill", extract=semconv.skill_rewrite)
     async def analyze(self, query: str) -> RewriteResult:
@@ -96,9 +104,8 @@ class QueryRewriter:
         prompt = _REWRITE_PROMPT.format(query=truncated)
         try:
             resp = await asyncio.wait_for(
-                self._provider.chat_with_retry(
+                self._call_provider().chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
-                    model=self._model or None,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 ),

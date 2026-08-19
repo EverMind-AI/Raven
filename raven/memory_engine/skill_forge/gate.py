@@ -24,6 +24,7 @@ import time
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
+from raven.providers.binding import ModelBinding, active_binding
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
@@ -53,28 +54,58 @@ class LLMGateFilter:
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 8192,
+        pin: "ModelBinding | None" = None,
     ) -> None:
-        self._provider = provider
+        self._fallback_provider = provider
         self._max_select = max_select
         self._legacy_top_k = legacy_top_k
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        # A pinned model paired with its own credential. Built by the caller
+        # from ``skill_forge.llm_gate_model``; None when unset or when that
+        # vendor has no credentials, in which case the gate follows the turn.
+        self._pin = pin
+        self._pin_warned = False
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
-        """Adopt the provider a live ``/model`` switch just built.
+        """Move the out-of-turn fallback.
 
-        Unset, ``_model`` follows whatever the new provider defaults to.
-
-        Set, it is a pin, and this leaves it pinned -- which is what a
-        restart on the new model would produce, since the gate is built
-        with the agent's provider and the pin regardless of which vendor
-        the pin names. Note that a pin is only a model id: the credential
-        comes from the provider, so a pin naming a vendor the provider does
-        not serve was already broken at boot, and stays broken here.
+        Which model the gate runs on inside a turn is decided per call by
+        ``_binding``, so a session switching models needs nothing here. This
+        is only for the paths that filter skills outside a turn.
         """
-        del model
-        self._provider = provider
+        self._fallback_provider = provider
+
+    def _binding(self) -> tuple["LLMProvider", str | None]:
+        """Its own pinned pair if it has one, else the turn's model.
+
+        Unpinned is the common case and the configured intent: the gate reads
+        the same model the conversation is on, whichever session that is. A
+        pin that named a vendor with no credentials never became a pair, so
+        it is reported once and then ignored rather than sent on the turn's
+        key -- that combination 401s every call and is swallowed by the top-N
+        fallback below, which is how it stayed invisible.
+        """
+        if self._model and self._pin is None and not self._pin_warned:
+            self._pin_warned = True
+            log.warning(
+                "skill_forge.llm_gate_model=%r has no usable credentials of its own; "
+                "the gate follows the conversation's model instead",
+                self._model,
+            )
+        if self._pin is not None:
+            return self._pin.provider, self._pin.model
+        turn = active_binding()
+        if turn is not None:
+            return turn.provider, turn.model
+        # Outside a turn: the provider it was built with, and no model at all,
+        # which is what tells that provider to use its own default.
+        # Never ``self._model``: an unpaired pin sent on this provider's key
+        # is the mis-pairing the pool exists to prevent. No model at all tells
+        # the provider to use its own default, which is what an unpinned gate
+        # gets anyway.
+        return self._fallback_provider, None
 
     @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
@@ -87,12 +118,13 @@ class LLMGateFilter:
             return []
         catalog, by_id = self._build_catalog(candidates)
         prompt = self._build_prompt(task, catalog, available_tools)
+        gate_provider, gate_model = self._binding()
 
         try:
             resp = await asyncio.wait_for(
-                self._provider.chat_with_retry(
+                gate_provider.chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
-                    model=self._model or None,
+                    model=gate_model,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 ),

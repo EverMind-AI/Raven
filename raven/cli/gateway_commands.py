@@ -247,7 +247,10 @@ def register(app: typer.Typer) -> None:
         backend = maybe_build_memory_backend(config.workspace_path, ec_config)
 
         # Create agent with cron service
+        from raven.providers.pool import ProviderPool
+
         agent = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,

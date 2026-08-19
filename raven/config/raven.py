@@ -74,8 +74,30 @@ class ContextConfig(_Base):
     fast_path_threshold: float = 0.60
     """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
 
-    curator_model: str = "gemini-2.5-flash"
-    """Model used by the Curator agent loop (Slow Path). Kept small & fast."""
+    curator_model: str | None = None
+    """Model for the Curator agent loop (Slow Path). Unset means the Curator
+    runs on the model of the conversation it is curating.
+
+    Worth setting, and worth setting to something small: one slow-path pass is
+    a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
+    housekeeping rather than an answer, and unset means a long conversation
+    pays conversation-model prices for it. Pair it with ``curator_provider``:
+    a model id alone does not say which credential serves it, and a model id
+    without a key of its own is not a configured subsystem -- the Curator
+    falls back to the conversation rather than send that id on the
+    conversation's key."""
+
+    curator_provider: str | None = None
+    """Which configured provider serves ``curator_model``.
+
+    Set this whenever the id alone is ambiguous, which is most of the time
+    once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
+    and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
+    credentials and different bills, and only you know which was meant.
+
+    Unset, the pin goes to your configured gateway if you have one -- it serves
+    whatever id it is handed -- and only without a gateway is the vendor derived
+    from the id. Neither is a guess you should rely on."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -668,13 +690,12 @@ class SmartRoutingConfig(_Base):
     """SmartRouter configuration."""
 
     enabled: bool = False
-    tiers: dict[str, list[str]] = Field(
-        default_factory=lambda: {
-            "light": ["gemini-2.5-flash", "claude-haiku-4-5"],
-            "medium": ["claude-sonnet-4-6", "gpt-4.1-mini"],
-            "heavy": ["claude-opus-4-6", "gpt-4.1"],
-        }
-    )
+    tiers: dict[str, list[str]] = Field(default_factory=dict)
+    """Which models each tier may route to. Empty out of the box: the table
+    this replaced named six models across three vendors, for users who may
+    hold no key for any of them, and routing has no meaning without models to
+    choose between -- so enabling this means listing your own."""
+
     default_tier: Literal["light", "medium", "heavy"] = "heavy"
     """Fallback tier when routing is uncertain — conservative default."""
 
@@ -686,7 +707,8 @@ class ToolResultLifecycleConfig(_Base):
     full_retention_turns: int = 3
     summary_retention_turns: int = 10
     placeholder_text: str = "[Tool result archived — retrievable via Curator]"
-    summary_model: str = "gemini-2.5-flash"
+    summary_model: str | None = None
+    """Unset means the conversation's own model. See ``curator_model``."""
 
 
 class TokenWiseConfig(_Base):
@@ -980,7 +1002,18 @@ class SkillForgeConfig(_Base):
 
     llm_gate_model: str | None = None
     """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model)."""
+    provider's default chat model (typically the agent's main model).
+
+    Pair it with ``llm_gate_provider``: an id alone does not say which
+    credential serves it."""
+
+    llm_gate_provider: str | None = None
+    """Which configured provider serves ``llm_gate_model``.
+
+    Same rule as ``context.curator_provider``: set it when the id alone is
+    ambiguous (a gateway serving another vendor's model). Unset, a configured
+    gateway takes the pin and only without one is the vendor derived from the
+    id."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic
@@ -1018,7 +1051,7 @@ class SkillForgeConfig(_Base):
     rewrites — e.g. ``"claude-opus-4-6"``."""
 
     # --- Detect / extraction gating (wired into everos) ---
-    detect_model: str = "gemini-2.5-flash"
+    detect_model: str | None = None
     """LLM used for the cheap per-turn classification work — today that's
     the everos boundary detector (multi-turn task split). A
     smaller / faster model than ``evolve_model`` is intentional: boundary

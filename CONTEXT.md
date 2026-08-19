@@ -24,6 +24,51 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Model binding**:
+A model id together with the provider whose credential serves it, as one value
+(`raven/providers/binding.py`). The pairing is the point: a model id alone does
+not say which key reaches it, and updating one half is how one vendor's key ends
+up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
+entry and holds it in a context var for the whole turn tree, so everything under
+that turn -- the loop, the context engine's LLM-backed segments, the skill gate
+and rewriter, the consolidator, and any task the turn detaches -- reads the same
+pair. _Avoid_: "the current model" / "the active provider" for this; both name
+one half.
+
+**Session binding**:
+The model binding one conversation runs on. Sessions that never switched have no
+entry and resolve to the **default binding**; a switch writes only that
+session's entry, so it moves no other conversation and does not change what a
+new one starts on. Stored on the session record so it survives a restart.
+
+**Default binding**:
+What a session with no binding of its own runs on: `agents.defaults` from config,
+verbatim. Changed by a `scope="default"` switch, which leaves sessions that
+already chose their own model where they are.
+
+**Provider pool**:
+The one place a model id is resolved to the credential that serves it
+(`raven/providers/pool.py`), caching a provider per (vendor, model) and dropping
+the cache when the credentials behind it change. Also what turns a **subsystem
+pin** into a pair. Constructing a `ModelBinding` from an already-resolved pair
+happens in several places; deciding *which* provider a model id pairs with
+happens only here.
+
+**Subsystem pin**:
+A model configured for one subsystem rather than for the conversation, as a
+model and the provider serving it (`context.curator_model` +
+`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+halves because an id alone is ambiguous the moment a gateway is configured:
+`openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
+`claude-haiku-4-5` are both valid and name different credentials. With the
+provider set nothing is derived, and a named vendor without usable credentials
+is reported and dropped -- the subsystem then follows the conversation's model,
+because a bare pinned id sent on the conversation's key is exactly the
+mis-pairing above. With the provider unset the pin still binds: a configured
+gateway takes it (it serves whatever id it is handed, under its own
+credential), and only without one is the vendor guessed from the id. Unset out
+of the box -- no subsystem ships a vendor default.
+
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the
 agent's final response, including every LLM call and tool execution in between.
@@ -299,13 +344,16 @@ that is nobody's.
 _Avoid_: "pricing" for the resolution -- that names the arithmetic on top
 (`token_wise/pricing.py`), which is a different module for a reason.
 
-**Provider Pin**:
-`agents.defaults.provider`: an explicit override of the Provider a Model Ref names.
-Every surface that changes the model rewrites it by one rule
-(`providers/pin.py::resolve`), because a pin left behind routes the new model to the old
-vendor with the old vendor's key.
-_Avoid_: reading it as a provider *signal* -- a pinned name says which section to ask
-about, never that the section holds credentials.
+**Configured provider**:
+`agents.defaults.provider`: which vendor's credential serves `agents.defaults.model`.
+Said by the user, derived by nothing -- every surface that changes the model writes the
+pair, and `config.set model` refuses a model without one. A config predating that rule
+carries the empty string until the loader resolves it once and writes the answer down
+(`config/loader.py::_migrate_auto_provider`); until then the vendor is derived from the
+id, which is the guess the field exists to end.
+_Avoid_: "pin" for this -- **Subsystem pin** above is a different thing (a model for one
+subsystem, not for the conversation). Also avoid reading it as a provider *signal*: a
+name says which section to ask about, never that the section holds credentials.
 
 **Provider Endpoint**:
 One url/key/headers group a provider section offers, of possibly several

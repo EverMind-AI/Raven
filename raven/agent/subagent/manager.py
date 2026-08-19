@@ -16,6 +16,7 @@ from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.tracing import semconv, trace
@@ -50,7 +51,6 @@ class SubagentManager:
     ):
         from raven.config.schema import ExecToolConfig
 
-        self.provider = provider
         self.workspace = workspace
         # Spine submit, late-bound (the scheduler pins its home loop at
         # construction and is built inside each entry point's run loop; this
@@ -58,7 +58,7 @@ class SubagentManager:
         # set_submit before any announce; the result re-injection submits a
         # SUBAGENT-origin turn.
         self._submit = None
-        self.model = model or provider.get_default_model()
+        self._fallback = ModelBinding(provider, model or provider.get_default_model())
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -78,15 +78,19 @@ class SubagentManager:
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
-        Subagents run on the parent's provider, so a switch that is not
-        propagated here leaves every spawn calling the credential the loop
-        has already abandoned. Only spawns requested after this call are
-        affected: a subagent is a detached task that outlives the turn that
-        spawned it, so the loop's park cannot cover it and ``spawn``
-        snapshots the pair it was asked for.
+        Only the out-of-turn fallback moves. A spawn requested during a turn
+        takes that turn's binding, so a subagent follows the conversation
+        that asked for it rather than whatever this manager was built with.
         """
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
+
+    @property
+    def provider(self) -> LLMProvider:
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        return resolve(None, self._fallback).model
 
     async def spawn(
         self,
@@ -120,12 +124,14 @@ class SubagentManager:
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
 
-        # Snapshot here rather than where the task starts running: it queues
-        # behind the concurrency gate and a sandbox boot first, and a switch
-        # landing in that window would hand this task an endpoint the user
-        # chose after asking for it.
+        # The binding of the turn that asked for this spawn, snapshotted here
+        # rather than where the task starts running: it queues behind the
+        # concurrency gate and a sandbox boot first, and a switch landing in
+        # that window would hand it an endpoint chosen after it was asked for.
+        # A subagent has no model of its own, so it follows its conversation.
+        binding = resolve(None, self._fallback)
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
+            self._run_subagent(task_id, task, display_label, origin, binding.provider, binding.model)
         )
         self._running_tasks[task_id] = bg_task
         if session_key:

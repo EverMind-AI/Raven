@@ -714,7 +714,7 @@ def test_use_sets_the_default_model_in_the_shared_spelling(tmp_config: Path) -> 
 
 
 def test_use_infers_the_provider_from_a_qualified_id(tmp_config: Path) -> None:
-    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat"])
+    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat", "--provider", "deepseek"])
     assert r.exit_code == 0, r.output
     data = json.loads(tmp_config.read_text(encoding="utf-8"))
     assert data["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
@@ -726,26 +726,22 @@ def test_use_warns_but_does_not_refuse_when_the_provider_has_no_credentials(tmp_
     Refusing would force the two steps into one sequence; the startup gate says
     the same thing again if the key is still missing by the time it matters.
     """
-    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat"])
+    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat", "--provider", "deepseek"])
     assert r.exit_code == 0, r.output
     assert "API key" in r.output
 
 
-def test_use_accepts_a_bare_id_when_nothing_is_pinned(tmp_config: Path) -> None:
-    """With no pin there is no key to mis-route, so auto-detection is the answer.
-
-    This is where the CLI and the picker used to disagree: the CLI refused any id
-    that named nobody, the picker stored it against ``auto``. Refusing is for the
-    case where a pin exists and does *not* serve the model -- there, keeping it
-    would send one vendor's key to another and dropping it silently would discard
-    something the user set on purpose, so the only honest move is to ask.
-    """
+def test_use_refuses_an_id_that_names_no_provider(tmp_config: Path) -> None:
+    """There is no honest guess to make. A bare id names nobody, and a prefixed
+    one names a routing path rather than a credential -- both used to be filled
+    in by detection, which decided whose key paid for the call. The refusal
+    names the flag and points at the configured list."""
     r = runner.invoke(app, ["provider", "use", "some-unqualified-model"])
 
-    assert r.exit_code == 0, r.output
-    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
-    assert defaults["provider"] == "auto"
-    assert defaults["model"] == "some-unqualified-model"
+    assert r.exit_code == 1
+    assert "--provider is required" in r.output
+    assert "provider list" in r.output
+    assert not tmp_config.exists(), "a refused switch must not write a config"
 
 
 def test_use_moves_the_pin_instead_of_reporting_that_it_is_stuck(tmp_config: Path) -> None:
@@ -762,7 +758,7 @@ def test_use_moves_the_pin_instead_of_reporting_that_it_is_stuck(tmp_config: Pat
     # so a gateway can serve it -- see test_use_does_not_pin_a_vendor_that_has_no_configuration.
     runner.invoke(app, ["provider", "set", "anthropic", "--api-key", "sk-ant"])
 
-    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-5"])
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-5", "--provider", "anthropic"])
 
     assert r.exit_code == 0, r.output
     defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
@@ -771,15 +767,17 @@ def test_use_moves_the_pin_instead_of_reporting_that_it_is_stuck(tmp_config: Pat
     assert "pinned" not in r.output, "the note is about a state that can no longer happen"
 
 
-def test_use_hands_routing_back_to_auto_for_a_vendor_with_no_spec(tmp_config: Path) -> None:
-    """Keeping the old pin would send its key to a vendor it does not belong to."""
+def test_use_moves_the_pin_to_a_vendor_raven_has_no_spec_for(tmp_config: Path) -> None:
+    """A passthrough vendor is named like any other. What used to happen here --
+    handing routing back to `auto` because no spec claimed the id -- was the
+    detection deciding for the user; naming it is the whole point."""
     tmp_config.write_text(json.dumps({"agents": {"defaults": {"provider": "openai"}}}), encoding="utf-8")
 
-    r = runner.invoke(app, ["provider", "use", "mistral/mistral-large"])
+    r = runner.invoke(app, ["provider", "use", "mistral/mistral-large", "--provider", "mistral"])
 
     assert r.exit_code == 0, r.output
     defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
-    assert defaults["provider"] == "auto"
+    assert defaults["provider"] == "mistral"
     assert defaults["model"] == "mistral/mistral-large"
 
 
@@ -789,7 +787,7 @@ def test_use_keeps_a_pin_that_serves_the_bare_id(tmp_config: Path) -> None:
     tmp_config.write_text(json.dumps({"agents": {"defaults": {"provider": "deepseek"}}}), encoding="utf-8")
     runner.invoke(app, ["provider", "set", "deepseek", "--api-key", "sk-ds"])
 
-    r = runner.invoke(app, ["provider", "use", "deepseek-chat"])
+    r = runner.invoke(app, ["provider", "use", "deepseek-chat", "--provider", "deepseek"])
 
     assert r.exit_code == 0, r.output
     defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
@@ -814,35 +812,35 @@ def test_use_says_so_when_an_azure_deployment_overrides_the_model_id(tmp_config:
     runner.invoke(app, ["provider", "set", "azure-openai", "--api-key", "k", "--api-base", "https://x/"])
     runner.invoke(app, ["provider", "set", "azure-openai", "--deployment", "prod-gpt4"])
 
-    r = runner.invoke(app, ["provider", "use", "azure-openai/some-model"])
+    r = runner.invoke(app, ["provider", "use", "azure-openai/some-model", "--provider", "azure_openai"])
     assert r.exit_code == 0, r.output
     assert "deployment" in r.output and "prod-gpt4" in r.output
 
 
-def test_use_does_not_pin_a_vendor_that_has_no_configuration(tmp_config: Path) -> None:
-    """Pinning an unconfigured vendor makes the install unroutable.
+def test_use_pins_the_named_vendor_and_says_it_has_no_credentials(tmp_config: Path) -> None:
+    """Naming a vendor you have not configured yet is a normal order to do
+    things in, so it is written and reported rather than quietly redirected.
 
-    A pin is consulted before anything else and is answered with that vendor's
-    section whether or not it holds credentials, so pinning an unconfigured one
-    fails every request on a missing key -- never reaching the fallback written
-    for exactly this shape, a gateway serving a model whose id names the vendor
-    behind it. An OpenRouter-only install that ran `provider use anthropic/...`
-    could then reach nothing at all.
+    What it must not do is what detection used to: an OpenRouter-only install
+    running `provider use anthropic/...` had the pin silently handed elsewhere,
+    which is convenient right up until the bill arrives from the wrong vendor.
+    The startup gate says the same thing again if the key is still missing.
     """
     from raven.config.loader import load_config
 
     runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-or"])
 
-    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5"])
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5", "--provider", "anthropic"])
     assert r.exit_code == 0, r.output
 
     defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
-    assert defaults["provider"] == "auto", "an unconfigured vendor must not be pinned"
+    assert defaults["provider"] == "anthropic", "the named vendor is written down, configured or not"
+    assert "no api key" in r.output.lower() or "api key" in r.output.lower()
 
-    section, name = load_config()._match_provider(defaults["model"])
-    assert (section, name) != (None, None), "the config was left unable to route"
-    assert name == "openrouter"
-    assert "<gateway>/" in r.output, "the advice must not be 'buy a key from that vendor'"
+    # And the pin is what routing answers with -- no silent redirection to the
+    # provider that happens to hold a key.
+    _, name = load_config()._match_provider(defaults["model"])
+    assert name == "anthropic"
 
 
 def test_use_still_pins_a_vendor_that_is_configured(tmp_config: Path) -> None:
@@ -850,7 +848,7 @@ def test_use_still_pins_a_vendor_that_is_configured(tmp_config: Path) -> None:
     set up is still named outright, so its own key is the one used."""
     runner.invoke(app, ["provider", "set", "anthropic", "--api-key", "sk-ant"])
 
-    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5"])
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5", "--provider", "anthropic"])
     assert r.exit_code == 0, r.output
     assert json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "anthropic"
 
