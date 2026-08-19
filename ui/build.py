@@ -6,6 +6,8 @@ Sources under ``src/``:
                      ``/*__STYLE__*/`` inside its ``<style>`` tag and
                      ``/*__DEMO__*/`` inside its ``<script>`` tag.
 - ``styles/page.css`` -- the stylesheet, injected at the style marker.
+- ``seam/*.js``   -- the DataSource seam, concatenated ahead of the demo
+                     shell so both layers can register into it.
 - ``demo/*.js``   -- the demo shell (fixture data + renderers), concatenated
                      in filename order and injected at the demo marker.
                      Serves the design-review canvas on ``file://`` /
@@ -43,6 +45,9 @@ DEMO_MARK = "/*__DEMO__*/"
 # No static check can validate semantic order, so the order is pinned the
 # only way it can be: explicitly. Renaming, adding, or removing a part must
 # update the matching manifest here, where review can see the order change.
+_SEAM_PARTS = [
+    "000-datasource.js",
+]
 _DEMO_PARTS = [
     "010-kernel.js",
     "020-prose.js",
@@ -116,7 +121,7 @@ def main() -> None:
     page = (ROOT / "src" / "page.html").read_text(encoding="utf-8")
     style = (ROOT / "src" / "styles" / "page.css").read_text(encoding="utf-8")
     style = style[:-1] if style.endswith("\n") else style
-    for mark, text in ((STYLE_MARK, style), (DEMO_MARK, _concat("demo", _DEMO_PARTS))):
+    for mark, text in ((STYLE_MARK, style), (DEMO_MARK, _concat("seam", _SEAM_PARTS) + "\n" + _concat("demo", _DEMO_PARTS))):
         if page.count(mark) != 1:
             raise SystemExit(f"page.html: expected exactly one {mark} marker")
         page = page.replace(mark, text, 1)

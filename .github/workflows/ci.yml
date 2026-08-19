@@ -222,6 +222,7 @@ jobs:
         run: |
           python3 ui/build.py
           node ui/scripts/check-page.mjs
+          node ui/scripts/count-shared-globals.mjs
 
   bridge:
     name: bridge checks

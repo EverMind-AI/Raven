@@ -391,15 +391,16 @@ function closeDetail() { $('#detail').dataset.open = 'false'; dCur = null; xaShe
    entrance) and the two point in opposite directions.              */
 /* ══ module 2b: external agents ════════════════════════════════════
    Connect the agents already installed on this machine, so Raven can hand work
-   to them. One row per agent; the rows come from `subagents.list` over RPC in
-   the live layer, and from XAGENTS below in the standalone demo.
+   to them. One row per agent; the rows are whatever `DS.xa` answers -- the
+   fixture source below with no gateway behind the page, the `subagents.*`
+   source in the live layer.
 
    A row is (name, kind, configured, enabled, probe_status, last test). Three
    facts, deliberately kept apart: `configured` is "Raven knows about it",
    `enabled` is "Raven may dispatch to it", and `probe_status` is "the machine
    can actually run it". Collapsing them is how a disabled agent reads as
    broken, or a missing binary reads as switched off. */
-const XAGENTS = [
+const XA_FIXTURE = [
   { name: 'claude_code', preset: 'claude_code', kind: 'cli', configured: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: true, last_test_at_ms: Date.now() - 3600e3, last_test_detail: '',
@@ -418,28 +419,35 @@ const XAGENTS = [
     description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
 ];
 
+/* The rows on screen, and the two flags only the page can answer: which sheet
+   is unfolded, and whether a probe is in flight. Both are about what is drawn,
+   so neither belongs to whichever source is answering. */
+let XAGENTS = [];
 let xaSheet = null;  /* name whose detail sheet is open */
 let xaProbing = false;
 
-/* Replaced wholesale by live.js. Demo: mutate the row in place so the page is
-   still explorable with no gateway behind it. */
-let xaLoad = async () => XAGENTS;
-
-let xaAct = async (op, row, args) => {
-  if (op === 'probe') return;
-  if (op === 'connect') { row.configured = true; row.enabled = row.kind !== 'openai'; }
-  if (op === 'remove') { row.configured = false; row.enabled = false; }
-  if (op === 'upgrade') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = null; }
-  if (op === 'toggle') row.enabled = !!args.enabled;
-  if (op === 'update') {
-    if (args.new_name) row.name = args.new_name;
-    if (args.description != null) row.description = args.description || row.description;
-    if (args.api_key) { row.has_api_key = true; row.enabled = true; }
-  }
-  if (op === 'test') {
-    row.last_test_ok = row.probe_status === 'ready';
-    row.last_test_at_ms = Date.now();
-  }
+/* The fixture source: mutate the row in place so the page is still explorable
+   with no gateway behind it, and answer with the same array every time, which
+   is what makes those edits stick across a redraw. */
+DS.xa ??= {
+  load: async () => XA_FIXTURE,
+  act: async (op, row, args) => {
+    const a = args || {};
+    if (op === 'connect') { row.configured = true; row.enabled = row.kind !== 'openai'; }
+    if (op === 'remove') { row.configured = false; row.enabled = false; }
+    if (op === 'upgrade') { row.kind = row.upgrade_to || row.kind; row.upgrade_to = null; }
+    if (op === 'toggle') row.enabled = !!a.enabled;
+    if (op === 'update') {
+      if (a.new_name) row.name = a.new_name;
+      if (a.description != null) row.description = a.description || row.description;
+      if (a.api_key) { row.has_api_key = true; row.enabled = true; }
+    }
+    if (op === 'test') {
+      row.last_test_ok = row.probe_status === 'ready';
+      row.last_test_at_ms = Date.now();
+    }
+    return XA_FIXTURE;
+  },
 };
 
 function xaKind(row) {
@@ -476,9 +484,25 @@ function xaTestLine(row) {
   return T(row.last_test_ok ? 'gui.agent.test_ok' : 'gui.agent.test_bad', { ago });
 }
 
+/* Every mutation goes through here, and the two long-running ones say so on
+   screen before they hand over: a probe re-measures every entry and a test runs
+   the agent for real, either of which can outlast a model turn, and a button
+   that neither moves nor disables reads as a dead button. The flags are the
+   page's, so they are set here rather than inside whichever source answers. */
 async function xaRun(op, row, args) {
   try {
-    await xaAct(op, row, args || {});
+    if (op === 'probe') {
+      xaProbing = true;
+      drawXa();
+      try { XAGENTS = await DS.xa.load(true); } finally { xaProbing = false; }
+    } else {
+      if (op === 'test') { row.test_running = true; drawXa(); }
+      try {
+        XAGENTS = await DS.xa.act(op, row, args || {});
+      } finally {
+        if (op === 'test') row.test_running = false;
+      }
+    }
   } catch (e) {
     toast(T('gui.agent.failed', { detail: (e && (e.message || e.detail)) || String(e) }));
   }
@@ -743,7 +767,7 @@ function drawXaBadge() {}
 async function openXa() {
   showPage('xaPage');
   drawXa();
-  try { await xaLoad(); } catch (e) { toast(T('gui.agent.failed', { detail: String(e) })); }
+  try { XAGENTS = await DS.xa.load(true); } catch (e) { toast(T('gui.agent.failed', { detail: String(e) })); }
   drawXa();
   drawXaBadge();
 }
