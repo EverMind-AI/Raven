@@ -25,6 +25,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 console = Console()
@@ -50,7 +51,7 @@ def _require_known(store, name: str) -> str:
     origin = store.origin_of(name)
     if origin is None:
         known = ", ".join(store.list_ids()) or "(none)"
-        err_console.print(f"[red]No playbook named {name!r}. Known: {known}[/red]")
+        err_console.print(f"[red]No playbook named {escape(repr(name))}. Known: {escape(known)}[/red]")
         raise typer.Exit(code=1)
     return origin
 
@@ -72,14 +73,14 @@ def playbook_list():
     table.add_column("Description", overflow="fold")
     for name in names:
         try:
-            description = store.load(name).description
+            description = escape(store.load(name).description)
         except Exception as exc:  # noqa: BLE001 - a broken file is a row, not a crash
-            description = f"[red]unreadable: {exc}[/red]"
+            description = f"[red]unreadable: {escape(str(exc))}[/red]"
         origin = store.origin_of(name) or "?"
         if store.is_shadowing(name):
             origin = "user (shadows builtin)"
         state = "[yellow]disabled[/yellow]" if name in disabled else "enabled"
-        table.add_row(name, origin, state, description)
+        table.add_row(escape(name), origin, state, description)
     console.print(table)
 
 
@@ -90,7 +91,7 @@ def playbook_get(name: str = typer.Argument(..., help="Playbook name, as listed"
     store = _store(config)
     origin = _require_known(store, name)
     path = store.path_for(name)
-    err_console.print(f"[dim]{origin}: {path}[/dim]")
+    err_console.print(f"[dim]{origin}: {escape(str(path))}[/dim]")
     typer.echo(path.read_text(encoding="utf-8"), nl=False)
 
 
@@ -110,7 +111,7 @@ def playbook_validate(
     if as_path.suffix == ".md" or as_path.exists():
         path = as_path if as_path.is_file() else as_path / "playbook.md"
         if not path.is_file():
-            err_console.print(f"[red]{target}: no playbook.md here[/red]")
+            err_console.print(f"[red]{escape(target)}: no playbook.md here[/red]")
             raise typer.Exit(code=1)
         # Loading through a store keeps this the same parser the runtime
         # uses; the directory name is the name under validation.
@@ -138,9 +139,9 @@ def playbook_validate(
             # soft_wrap: an error line anchors on a file path, and a wrap in
             # the middle of the path breaks copy-paste and any caller that
             # greps the output (a long tmp path did exactly that in CI).
-            console.print(f"[red]{_located(path, text, error)}[/red]", soft_wrap=True)
+            console.print(f"[red]{escape(_located(path, text, error))}[/red]", soft_wrap=True)
         raise typer.Exit(code=1)
-    console.print(f"[green]OK[/green] {path}", soft_wrap=True)
+    console.print(f"[green]OK[/green] {escape(str(path))}", soft_wrap=True)
 
 
 def _located(path: Path, text: str, error: str) -> str:
@@ -176,12 +177,12 @@ def playbook_create(
     from raven.playbook.types import NAME_RE
 
     if not re.fullmatch(NAME_RE, name):
-        err_console.print(f"[red]Playbook names are kebab-case ({NAME_RE}); got {name!r}.[/red]")
+        err_console.print(f"[red]Playbook names are kebab-case ({escape(NAME_RE)}); got {escape(repr(name))}.[/red]")
         raise typer.Exit(code=1)
     config = _load_config()
     store = _store(config)
     if store.origin_of(name) is not None:
-        err_console.print(f"[red]Playbook {name!r} already exists ({store.origin_of(name)}).[/red]")
+        err_console.print(f"[red]Playbook {escape(repr(name))} already exists ({store.origin_of(name)}).[/red]")
         raise typer.Exit(code=1)
 
     from raven.cli._helpers import make_provider
@@ -199,11 +200,11 @@ def playbook_create(
     spec = generated.spec.model_copy(update={"name": name})
     path = store.save(spec, notes=generated.notes)
     set_playbook_disabled(name, True)
-    console.print(f"[green]Created[/green] {path} (disabled until you review it)")
+    console.print(f"[green]Created[/green] {escape(str(path))} (disabled until you review it)")
     if generated.notes:
         console.print("Open questions for your review:")
         for note in generated.notes:
-            console.print(f"  - {note}")
+            console.print(f"  - {escape(note)}")
     console.print(f"Review the file, then: raven playbook enable {name}")
 
 
@@ -215,7 +216,7 @@ def playbook_enable(name: str = typer.Argument(..., help="Playbook name, as list
     config = _load_config()
     _require_known(_store(config), name)
     changed = set_playbook_disabled(name, False)
-    console.print(f"{name}: {'enabled' if changed else 'already enabled'}")
+    console.print(f"{escape(name)}: {'enabled' if changed else 'already enabled'}")
 
 
 @playbook_app.command("disable")
@@ -226,7 +227,7 @@ def playbook_disable(name: str = typer.Argument(..., help="Playbook name, as lis
     config = _load_config()
     _require_known(_store(config), name)
     changed = set_playbook_disabled(name, True)
-    console.print(f"{name}: {'disabled' if changed else 'already disabled'}")
+    console.print(f"{escape(name)}: {'disabled' if changed else 'already disabled'}")
 
 
 @playbook_app.command("run")
@@ -244,7 +245,7 @@ def playbook_run(
     for pair in params or []:
         key, eq, value = pair.partition("=")
         if not eq or not key:
-            err_console.print(f"[red]Parameters are K=V pairs, got {pair!r}.[/red]")
+            err_console.print(f"[red]Parameters are K=V pairs, got {escape(repr(pair))}.[/red]")
             raise typer.Exit(code=1)
         values[key] = value
 
@@ -282,9 +283,10 @@ def playbook_run(
     )
     plan = asyncio.run(runtime.run_named(name, values))
     if plan is None:
-        err_console.print(f"[red]Playbook {name!r} did not load; see the log for the parse error.[/red]")
+        err_console.print(f"[red]Playbook {escape(repr(name))} did not load; see the log for the parse error.[/red]")
         raise typer.Exit(code=1)
-    console.print(plan.reply)
+    # Payload, not styling: a graph result legitimately contains brackets.
+    console.print(plan.reply, markup=False, soft_wrap=True)
     if plan.kind != "dag":
         raise typer.Exit(code=1)
 
@@ -301,7 +303,10 @@ def playbook_delete(
     store = _store(config)
     origin = _require_known(store, name)
     if origin == "builtin":
-        err_console.print(f"[red]{name!r} is a builtin and cannot be deleted. Use: raven playbook disable {name}[/red]")
+        err_console.print(
+            f"[red]{escape(repr(name))} is a builtin and cannot be deleted. "
+            f"Use: raven playbook disable {escape(name)}[/red]"
+        )
         raise typer.Exit(code=1)
     directory = store.path_for(name).parent
     if not yes and not typer.confirm(f"Delete {directory}?"):
@@ -311,6 +316,6 @@ def playbook_delete(
     # future playbook reusing the name starts enabled, like any new one.
     set_playbook_disabled(name, False)
     if store.origin_of(name) == "builtin":
-        console.print(f"Deleted the user playbook {name!r}; the builtin of the same name is visible again.")
+        console.print(f"Deleted the user playbook {escape(repr(name))}; the builtin of the same name is visible again.")
     else:
-        console.print(f"Deleted {name!r}.")
+        console.print(f"Deleted {escape(repr(name))}.")

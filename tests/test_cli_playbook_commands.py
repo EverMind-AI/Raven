@@ -132,7 +132,7 @@ class _FakeGenerator:
             nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="scan ${params.target}")],
             params={"target": ParamSpec(required=True, description="what to scan?")},
         )
-        return GeneratedPlaybook(spec=spec, notes=["Assumption: weekly cadence"])
+        return GeneratedPlaybook(spec=spec, notes=["Assumption: weekly cadence", "Missing capability: mcp[fs]"])
 
 
 def test_create_lands_in_the_user_layer_disabled(library, monkeypatch):
@@ -147,6 +147,8 @@ def test_create_lands_in_the_user_layer_disabled(library, monkeypatch):
     assert "name: weekly-scan" in text
     assert "Assumption: weekly cadence" in text
     assert "enable weekly-scan" in r.stdout
+    # The bracketed capability name is the diagnostic: Rich must not eat it.
+    assert "mcp[fs]" in r.output
 
 
 def test_create_refuses_an_existing_name(library, monkeypatch):
@@ -248,3 +250,39 @@ def test_create_refuses_a_non_kebab_name(library, monkeypatch):
     r = runner.invoke(app, ["playbook", "create", "../escape", "--input", "whatever"])
     assert r.exit_code == 1
     assert not (library["user"].parent / "escape").exists()
+    # The refusal must show the actual pattern: NAME_RE contains square
+    # brackets, which Rich reads as markup and swallows unless escaped --
+    # live regression saw the message render as "kebab-case (^*$)".
+    assert "[a-z0-9]" in r.output
+
+
+def test_list_keeps_brackets_in_hand_placed_names_and_diagnostics(library):
+    """Names on the read side are whatever directory holds a playbook.md --
+    not NAME_RE-filtered -- and a broken row's cell carries a pydantic
+    message whose brackets are the diagnostic. Rich table cells parse
+    markup, so both must be escaped or they render silently truncated.
+
+    The bracket content must open with [a-z#/@] or Rich's tag regex never
+    fires: "weird[fs]" pins the escape, "weird[1]" would pin nothing."""
+    target = library["user"] / "weird[fs]"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        '---\nname: "weird[fs]"\ndescription: hand placed\n---\n\nbody\n\n'
+        "```yaml playbook-spec\nversion: 1\nmode: prompt\nconfirm: true\n"
+        "triggers:\n  keywords: [weird]\nprompts: x\n```\n",
+        encoding="utf-8",
+    )
+    # A wide console keeps every cell on one physical line, so the counts
+    # below cannot be split by wrapping.
+    # A readable playbook whose description carries brackets: the loadable
+    # path escapes the description cell, and nothing else pins that escape.
+    _write_md(library["user"], "bracket-desc", "mounts [fs] volumes safely")
+    r = runner.invoke(app, ["playbook", "list"], env={"COLUMNS": "300"})
+    assert r.exit_code == 0
+    assert "[fs] volumes" in r.output
+    # The diagnostic cell: unescaped, the pattern renders as '^*$'.
+    assert "[a-z0-9]" in r.output
+    # The name cell: the diagnostic also carries the name (input_value=...),
+    # so presence alone cannot pin add_row's escape -- the count can. Escaped
+    # it appears twice (name cell + diagnostic); with add_row unescaped, once.
+    assert r.output.count("weird[fs]") == 2
