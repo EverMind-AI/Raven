@@ -48,6 +48,21 @@ MALFORMED_DIRECT_URL_METADATA = [
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the upgrade marker out of the developer's own agent home.
+
+    Both handoff paths write one before spawning, and their failure paths
+    delete one. Unisolated, running this file writes a marker into the real
+    ~/.raven that makes a genuine `raven serve` refuse to start for the next
+    two minutes -- and, worse, deletes the marker of an upgrade that is
+    actually in flight, disarming the guard it exists to arm.
+    """
+    home = tmp_path / "agent-home"
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    return home
+
+
 def _release_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "tag_name": "v0.1.4",
@@ -1426,3 +1441,126 @@ def test_upgrade_reports_malformed_installation_metadata(
     assert "Unable to upgrade Raven" in result.stdout
     assert "official installer" in output
     assert "Traceback" not in result.stdout
+
+
+class TestTheUpgradeMarker:
+    """The window between "the old environment is gone" and "the new one is
+    written" is invisible from outside, and a supervisor respawning the process
+    the upgrade just stopped lands inside it. The marker is what makes that
+    window something a starting process can see."""
+
+    @pytest.fixture
+    def marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        path = tmp_path / "upgrade.json"
+        monkeypatch.setenv("RAVEN_UPGRADE_MARKER", str(path))
+        return path
+
+    def _helper(self) -> object:
+        return _load_upgrade_helper()
+
+    def test_the_helper_claims_the_marker_with_its_own_pid(self, marker: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a pid, a reader cannot tell an install that is running from
+        one whose helper was killed -- and those need opposite answers."""
+        seen: list[dict[str, object]] = []
+
+        def run(_command, **_kwargs):
+            seen.append(json.loads(marker.read_text(encoding="utf-8")))
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        marker.write_text(json.dumps({"started_at": 1.0, "to_version": "0.1.4"}), encoding="utf-8")
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+        assert seen[0]["pid"] == os.getpid()
+        assert seen[0]["to_version"] == "0.1.4"
+
+    def test_the_helper_releases_the_marker_when_it_is_done(
+        self, marker: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+
+        self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+        assert not marker.exists()
+
+    def test_a_failed_install_releases_it_too(self, marker: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A marker left behind by a failed upgrade would lock every later start
+        out of an installation that is merely old, not broken."""
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=3)))
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 3
+        assert not marker.exists()
+
+    def test_it_is_released_before_the_surface_is_relaunched(
+        self, marker: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ordering, not tidiness: the relaunched process reads this file, and
+        would sit out an upgrade that had already finished."""
+        marker_at_relaunch: list[bool] = []
+
+        def popen(_argv, **_kwargs):
+            marker_at_relaunch.append(marker.exists())
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+        helper_main = self._helper()
+        helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+        helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+        assert marker_at_relaunch == [False]
+
+    def test_a_helper_with_no_marker_handed_to_it_still_installs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The CLI path predates the marker and may run without one."""
+        monkeypatch.delenv("RAVEN_UPGRADE_MARKER", raising=False)
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+
+
+class TestSpawningLeavesTheMarker:
+    @pytest.fixture
+    def plan(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
+        uv = tmp_path / "uv"
+        uv.write_text("", encoding="utf-8")
+        uv.chmod(0o755)
+        monkeypatch.setattr(upgrade_commands.shutil, "which", lambda _name: str(uv))
+        monkeypatch.setattr(upgrade_commands, "_external_executable", lambda value, *, label: Path(str(value)))
+        return upgrade_commands.UpgradePlan(
+            current_version="0.1.3",
+            release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL),
+            target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=tmp_path / "bin"),
+        )
+
+    def test_the_marker_exists_before_the_helper_is_started(
+        self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It has to: the caller lets go of its port before the helper runs its
+        first instruction, and that gap is when the respawn happens."""
+        at_spawn: list[bool] = []
+        handed: list[str] = []
+
+        def popen(_argv, env=None, **_kwargs):
+            at_spawn.append((isolated_raven_home / "upgrade.json").exists())
+            handed.append(env["RAVEN_UPGRADE_MARKER"])
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert at_spawn == [True]
+        assert handed == [str(isolated_raven_home / "upgrade.json")]
+
+    def test_a_helper_that_never_started_leaves_no_marker(
+        self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+
+        with pytest.raises(upgrade_commands.UpgradeError):
+            upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert not (isolated_raven_home / "upgrade.json").exists()

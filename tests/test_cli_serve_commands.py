@@ -1011,3 +1011,88 @@ class TestServeAgainstAHostedPage:
         result = self._invoke()
         assert result.exit_code == 0
         assert started == [18792]
+
+
+class TestRefusingAnIncompleteInstall:
+    """`system.upgrade` makes serve exit on purpose, so a supervisor respawns it
+    straight into the window where uv has deleted the old environment and not
+    yet written the new one. A serve that starts there binds the port and
+    answers `/` with the placeholder for the rest of its life, because
+    `build_app` picks the page route once."""
+
+    def test_a_sound_install_is_let_through(self, monkeypatch) -> None:
+        from raven.cli import _install_guard
+
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: None)
+        serve_commands._refuse_incomplete_install()
+
+    def test_a_half_written_install_refuses_before_the_port_is_bound(self, monkeypatch) -> None:
+        from raven.cli import _install_guard
+
+        def unreachable(*_args, **_kwargs):
+            raise AssertionError("the gateway must not start on a half-written installation")
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+        monkeypatch.setattr(serve_commands, "_serve_main", unreachable)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            serve_commands._run(18999, False)
+
+        assert excinfo.value.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
+
+    def test_it_names_the_repair_a_reader_can_run(self, monkeypatch, capsys) -> None:
+        from raven.cli import _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+        with pytest.raises(typer.Exit):
+            serve_commands._refuse_incomplete_install()
+
+        assert "install.sh" in capsys.readouterr().err
+
+    def test_a_running_upgrade_is_waited_out_rather_than_failed_fast(self, monkeypatch) -> None:
+        """`_supervise` gives up after `_CRASH_LOOP_GIVE_UP` failures faster than
+        `_HEALTHY_RUN_S`, and an install window is short enough to burn through
+        all five. Spending the window asleep in one process is what keeps the
+        supervisor trying."""
+        from raven.cli import _install_guard
+
+        running = _install_guard.InstallFault("upgrading", "an upgrade to 9.9.9 is replacing this installation")
+        verdicts = [running, running, None]
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: verdicts.pop(0))
+        monkeypatch.setattr(serve_commands, "_UPGRADE_POLL_S", 0.0)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            serve_commands._refuse_incomplete_install()
+
+        assert verdicts == []
+        # Even a finished upgrade ends in a refusal: this process already holds
+        # half of the build that was replaced, and the rest would load off disk
+        # from the new one.
+        assert excinfo.value.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
+
+    def test_it_gives_up_on_an_upgrade_that_never_ends(self, monkeypatch) -> None:
+        from raven.cli import _install_guard
+
+        fault = _install_guard.InstallFault("upgrading", "an upgrade is replacing this installation")
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: fault)
+        monkeypatch.setattr(serve_commands, "_UPGRADE_POLL_S", 0.0)
+        monkeypatch.setattr(serve_commands, "_UPGRADE_WAIT_S", 0.05)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            serve_commands._refuse_incomplete_install()
+
+        assert excinfo.value.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
+
+    def test_the_refusal_does_not_read_as_a_clean_stop(self) -> None:
+        """`_supervise` stops supervising on a zero exit, because that is how
+        `system.upgrade` asks it to stand down. A refusal must not be mistaken
+        for that, or the environment never gets started again once it is whole."""
+        assert serve_commands.INCOMPLETE_INSTALL_EXIT != 0
