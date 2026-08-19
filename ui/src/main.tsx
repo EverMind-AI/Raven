@@ -7,6 +7,8 @@ import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
+import { SkillsApp } from './features/skills/SkillsPage'
+import * as skills from './features/skills/store'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -26,6 +28,11 @@ declare global {
 window.cronExprHuman = cronExprHuman
 window.cronWhen = cronWhen
 
+/* The skills island renders into a host node the legacy shim re-attaches
+   under #capsBody on every skill-tab draw: the plugin tab clears that box
+   with innerHTML, which must never tear down nodes React owns. */
+const skillsHost = document.createElement('div')
+
 window.RavenIslands = {
   ...(window.RavenIslands || {}),
   cron: {
@@ -39,6 +46,18 @@ window.RavenIslands = {
     open: memory.open,
     close: memory.close,
     redraw: memory.redraw,
+  },
+  skills: {
+    attach: (box: Element) => box.appendChild(skillsHost),
+    redraw: skills.redraw,
+    reset: skills.reset,
+    dropDrawer: skills.dropDrawer,
+    view: skills.view,
+    toggleView: skills.toggleView,
+    ensureSearch: skills.ensureSearch,
+    setQuery: skills.setQuery,
+    searchNow: skills.searchNow,
+    subscribe: skills.subscribe,
   },
   connections: {
     open: connections.open,
@@ -55,3 +74,4 @@ const memHost = document.getElementById('memBody')
 if (memHost) createRoot(memHost).render(<MemoryApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
+createRoot(skillsHost).render(<SkillsApp />)

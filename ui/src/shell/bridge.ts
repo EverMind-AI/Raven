@@ -32,6 +32,10 @@ export interface Shell {
   showPage(id: string | null): void
   /* Optional so fakes written before it keep type-checking; the page
      bridge always publishes it. */
+  /* Grown by the skills island. Optional, so fakes that predate a helper
+     stay valid: each one is only reached from the island that asked. */
+  useInTask?(promptKey: string, name: string): void
+  reachText?(reach: string): string
   closeDetail?(): void
 }
 

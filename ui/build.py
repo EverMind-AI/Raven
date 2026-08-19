@@ -66,6 +66,7 @@ _DEMO_PARTS = [
     "140-schedule.js",
     "145-connections.js",
     "150-chrome.js",
+    "152-skills.js",
     "155-bridge.js",
     "160-boot.js",
 ]
