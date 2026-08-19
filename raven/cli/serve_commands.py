@@ -395,7 +395,78 @@ async def _serve_main(port: int, open_browser: bool) -> None:
             await runner.cleanup()
 
 
+INCOMPLETE_INSTALL_EXIT = 75
+"""Exit status for "this environment is not one to serve from" (EX_TEMPFAIL).
+
+For an *external* supervisor -- the GUI shell, which respawns unconditionally
+and is the thing that loses this race. `_supervise` below deliberately does not
+read it: a permanently incomplete installation should exhaust its crash-loop
+counter and stop, and the transient case never reaches the counter because
+`_refuse_incomplete_install` sleeps through the window first."""
+
+_UPGRADE_WAIT_S = 300.0
+"""How long a start that landed inside an upgrade waits it out.
+
+Not an immediate exit. ``_supervise`` gives up after ``_CRASH_LOOP_GIVE_UP``
+failures faster than ``_HEALTHY_RUN_S``, and an install window is comfortably
+short enough to burn through all five -- so a process that refuses instantly
+would turn a ten-second upgrade into a supervisor that has stopped trying.
+Sitting out the window in one process costs nothing and ends in one refusal.
+Sized like ``PARENT_EXIT_TIMEOUT_S``: the same install is at the other end."""
+
+_UPGRADE_POLL_S = 1.0
+
+
+def _refuse_incomplete_install() -> None:
+    """Stop before binding a port if this environment is not whole.
+
+    ``build_app`` chooses the page route once, so a serve that starts while uv
+    is still writing the environment does not merely start slowly -- it answers
+    ``/`` with the placeholder until it is restarted, on an installation that
+    finished correctly seconds later. The process cannot fix that by waiting and
+    carrying on either: it has already imported half of the old build, and the
+    rest would come off disk from the new one. Refusing is the only answer that
+    stays correct, and it gives a supervisor something honest to retry.
+    """
+    import time
+
+    from raven.cli._install_guard import inspect_install
+
+    fault = inspect_install()
+    if fault is None:
+        return
+
+    if fault.reason == "upgrading":
+        typer.echo(f"raven serve: {fault.detail}; waiting for it to finish", err=True)
+        deadline = time.monotonic() + _UPGRADE_WAIT_S
+        while time.monotonic() < deadline:
+            time.sleep(_UPGRADE_POLL_S)
+            fault = inspect_install()
+            if fault is None or fault.reason != "upgrading":
+                break
+
+    if fault is None:
+        # The upgrade landed while this process waited, and the installation is
+        # sound -- but not for this process to run. It already holds half of the
+        # build that was replaced, and every import still to come would load off
+        # disk from the other one.
+        typer.echo("raven serve: the upgrade finished; start Raven again to run it.", err=True)
+    elif fault.reason == "upgrading":
+        typer.echo(
+            "raven serve: the upgrade has not finished; not starting on a half-written installation.",
+            err=True,
+        )
+    else:
+        typer.echo(f"raven serve: {fault.detail}; not starting.", err=True)
+        typer.echo(
+            "Repair it by rerunning the installer: curl -fsSL https://raven.evermind.ai/install.sh | sh",
+            err=True,
+        )
+    raise typer.Exit(INCOMPLETE_INSTALL_EXIT)
+
+
 def _run(port: int, open_browser: bool) -> None:
+    _refuse_incomplete_install()
     try:
         asyncio.run(_serve_main(port, open_browser))
     except KeyboardInterrupt:

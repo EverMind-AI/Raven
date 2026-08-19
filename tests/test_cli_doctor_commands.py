@@ -23,6 +23,15 @@ from raven.config.schema import Config
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`doctor` now inspects the installation on every run, which reads -- and
+    can clear -- the upgrade marker in the agent home. Left unisolated, this
+    file would report on, and tidy up after, a real upgrade in flight."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "agent-home"))
+    return tmp_path / "agent-home"
+
+
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     """Point the loader at a tmp config file; tests opt-in via save_config."""
@@ -422,7 +431,11 @@ def _run_doctor_subprocess(home: Path) -> tuple[str, int]:
     import subprocess
     import sys
 
-    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    # RAVEN_HOME is dropped rather than passed through: the point of this helper
+    # is a sandbox HOME, and an inherited RAVEN_HOME (the isolation fixture sets
+    # one) would out-rank it and send the subprocess to a different config.
+    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
+    env.update({"HOME": str(home), "COLUMNS": "250"})
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor"],
         stdin=subprocess.DEVNULL,
@@ -522,7 +535,10 @@ def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
     import subprocess
     import sys
 
-    env = {**os.environ, "HOME": str(home), "COLUMNS": "250"}
+    # Same reason as _run_doctor_subprocess: a sandbox HOME only decides where
+    # the config is read from while no RAVEN_HOME out-ranks it.
+    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
+    env.update({"HOME": str(home), "COLUMNS": "250"})
     r = subprocess.run(
         [sys.executable, "-m", "raven", "doctor", "--json"],
         stdin=subprocess.DEVNULL,
@@ -664,3 +680,67 @@ class TestASelfManagedServerCanStillBeBroken:
 
         assert "rerank" not in info.configured
         assert "rerank" not in info.unbuilt
+
+
+class TestTheInstallationSection:
+    """An upgrade killed part way through leaves an installation that answers
+    some questions and not others. Every later verdict in this report is then a
+    verdict about the wrong thing, so this one is checked first and, when it
+    fails, it is the only one printed."""
+
+    def _fault(self, monkeypatch: pytest.MonkeyPatch, reason: str, detail: str, missing: list[str]) -> None:
+        from raven.cli import _install_guard
+
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: _install_guard.InstallFault(reason, detail))
+        monkeypatch.setattr(_install_guard, "missing_pieces", lambda: missing)
+
+    def test_a_sound_installation_is_not_mentioned(self, healthy_config: Path) -> None:
+        r = runner.invoke(app, ["doctor"])
+        assert r.exit_code == 0, r.stdout
+        assert "Installation" not in r.stdout
+
+    def test_a_half_written_installation_fails_the_check(
+        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._fault(
+            monkeypatch,
+            "incomplete",
+            "this installation is missing the packaged page (raven/ui/dist)",
+            ["the packaged page (raven/ui/dist)"],
+        )
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 1, r.stdout
+        assert "incomplete" in r.stdout
+        assert "install.sh" in r.stdout
+
+    def test_it_outranks_a_config_that_also_looks_wrong(
+        self, tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With no config at all, the report would normally stop at "not
+        configured" -- which is the wrong thing to send a reader to fix."""
+        self._fault(monkeypatch, "incomplete", "this installation is missing its own package metadata", ["x"])
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 1, r.stdout
+        assert "incomplete" in r.stdout
+        assert "raven onboard" not in r.stdout
+
+    def test_a_running_upgrade_is_a_note_not_a_failure(
+        self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing is broken yet; the rest of the report is still worth reading."""
+        self._fault(monkeypatch, "upgrading", "an upgrade to 9.9.9 is replacing this installation", [])
+        r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 0, r.stdout
+        assert "9.9.9" in r.stdout
+        assert "anthropic" in r.stdout.lower()
+
+    def test_the_verdict_reaches_the_json_output(self, healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._fault(monkeypatch, "incomplete", "this installation is missing the packaged page", ["the page"])
+        r = runner.invoke(app, ["doctor", "--json"])
+
+        payload = json.loads(r.stdout[r.stdout.index("{") :])
+        assert payload["install"]["complete"] is False
+        assert payload["install"]["missing"] == ["the page"]

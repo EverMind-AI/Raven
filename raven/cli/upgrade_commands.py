@@ -19,6 +19,8 @@ import httpx
 import typer
 from rich.console import Console
 
+from raven.cli import _install_guard
+
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
 LATEST_RELEASE_WEB = "https://github.com/EverMind-AI/Raven/releases/latest"
 RELEASE_TAG_PREFIX = "https://github.com/EverMind-AI/Raven/releases/tag/"
@@ -67,6 +69,42 @@ import time
 # never comes back. Waiting too long costs one sleeping helper; waiting too
 # little costs the user a Raven they have to restart by hand.
 PARENT_EXIT_TIMEOUT_S = 300
+
+# Where the spawning side recorded that this environment is being replaced. The
+# helper runs under `python -I` outside the environment it is rewriting, so it
+# cannot import raven to ask; the path is handed over instead.
+MARKER_PATH = os.environ.get("RAVEN_UPGRADE_MARKER") or None
+
+
+def stamp_marker():
+    # Claim the marker for this helper. The pid is the only thing that tells an
+    # install still running from one whose helper was killed, and those two need
+    # opposite answers from whoever is starting up.
+    if not MARKER_PATH:
+        return
+    try:
+        with open(MARKER_PATH, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            payload = {}
+    except (OSError, ValueError):
+        payload = {}
+    payload.setdefault("started_at", time.time())
+    payload["pid"] = os.getpid()
+    try:
+        with open(MARKER_PATH, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+    except OSError:
+        pass
+
+
+def clear_marker():
+    if not MARKER_PATH:
+        return
+    try:
+        os.unlink(MARKER_PATH)
+    except OSError:
+        pass
 
 
 def wait_for_parent(parent_pid):
@@ -145,6 +183,17 @@ def wait_for_parent_windows(parent_pid):
 
 
 def main(argv=None):
+    # Claimed before the argument check, and released however this ends: a
+    # helper that exits without clearing the marker leaves every later start
+    # waiting on an install that is not running.
+    stamp_marker()
+    try:
+        return run(argv)
+    finally:
+        clear_marker()
+
+
+def run(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) not in (4, 5, 6):
         print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
@@ -216,6 +265,10 @@ def main(argv=None):
         # it back. Leaving nothing running is strictly worse than not upgrading:
         # the page the upgrade was clicked from cannot even reconnect to say
         # what went wrong, and the user is left with a dead window.
+        #
+        # The marker goes first, before anything is launched: the process being
+        # started here reads it, and would wait out an upgrade that is over.
+        clear_marker()
         if relaunch is None:
             return True
         try:
@@ -599,6 +652,7 @@ def _handoff_upgrade(
     env = os.environ.copy()
     env["UV_TOOL_DIR"] = str(target.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
+    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
     argv = [
         str(base_python),
         "-I",
@@ -619,6 +673,7 @@ def _handoff_upgrade(
             return
         os.execve(str(base_python), argv, env)
     except OSError as exc:
+        _install_guard.clear_marker()
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
 
@@ -686,6 +741,10 @@ def spawn_detached_upgrade(
     env = os.environ.copy()
     env["UV_TOOL_DIR"] = str(plan.target.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(plan.target.bin_dir)
+    # Written here rather than by the helper: the window this marker exists for
+    # opens the moment the caller lets go of the port, which is before the
+    # helper has run its first instruction.
+    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version))
     if extra_env:
         env.update(extra_env)
 
@@ -707,6 +766,7 @@ def spawn_detached_upgrade(
     try:
         subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
     except OSError as exc:
+        _install_guard.clear_marker()
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
 
 
