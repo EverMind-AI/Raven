@@ -603,7 +603,7 @@ def _register_config_commands(app: typer.Typer) -> None:
             ensure_routable_provider(name)
         except KeyError as exc:
             detail = exc.args[0] if exc.args else str(exc)
-            console.print(f"[red]x[/red] {detail}")
+            console.print(f"[red]✗[/red] {detail}")
             console.print("  [dim]raven provider list  # the ones you have configured[/dim]")
             raise typer.Exit(1) from exc
 
