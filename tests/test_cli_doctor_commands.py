@@ -814,6 +814,37 @@ def test_doctor_reports_a_config_that_names_no_provider(tmp_path) -> None:
     assert not health.fixes
 
 
+def test_doctor_reads_a_leftover_auto_as_unset_not_as_a_typo(tmp_path) -> None:
+    """`auto` is the state this check exists for, and it is reachable.
+
+    `_migrate_auto_provider` leaves the literal in place when it cannot resolve a
+    vendor, so a config can still say `auto` after `load_config` -- and
+    `Config._match_provider` already treats it as unset (`forced != "auto"`).
+    Read as a name instead, it is unroutable, and the user is told to fix a typo
+    they did not make while the advice that would help goes unsaid.
+
+    Neither of the checks around this one used a literal `auto`, which is how
+    the gap survived to review.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": "auto"}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    assert any("retired spelling of unset" in f for f in health.findings)
+    assert not any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
 def test_doctor_reports_a_provider_nothing_routes_to(tmp_path) -> None:
     """A typo written before `provider use` started checking the name. Every
     call then resolves against a vendor that does not exist.

@@ -174,7 +174,11 @@ def _routes_anywhere(provider: str) -> bool:
 
     try:
         ensure_routable_provider(provider)
-    except Exception:
+    except KeyError:
+        # Only the answer this asks for. A broader catch would file a genuine
+        # fault in the lookup as an ordinary "unroutable" finding, which reads
+        # as the user's problem instead of ours -- and `provider use` catches
+        # exactly this one for the same reason.
         return False
     return True
 
@@ -213,13 +217,22 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
             health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
 
     provider = (getattr(defaults, "provider", "") or "").strip()
-    if not provider:
+    # ``auto`` counts as unset, the way ``Config._match_provider`` counts it. The
+    # migration leaves the literal in place when it cannot resolve a vendor, so
+    # this is a reachable state and precisely the legacy case this check is for.
+    # Read as a name instead, it is unroutable, and the user is told to fix a
+    # typo they did not make while the real advice goes unsaid.
+    if not provider or provider == "auto":
         health.findings.append(
             "agents.defaults.provider is not set, so the vendor serving "
             f"{model or 'your model'} is derived from its id. A model id does not name whose "
             "credential answers for it, and the derivation walks a list -- with two vendors "
             "configured, which one pays can come down to their order in it."
         )
+        if provider == "auto":
+            health.findings.append(
+                "  (your config says `auto`, which is the retired spelling of unset -- it never detected anything)"
+            )
         health.findings.append(f"  raven provider use {model or '<model>'} --provider <name>")
     elif not _routes_anywhere(provider):
         health.findings.append(
