@@ -570,6 +570,7 @@ def _register_config_commands(app: typer.Typer) -> None:
         provider -- so the three cannot disagree about what was chosen.
         """
         from raven.config.update import set_default_model
+        from raven.config.update_providers import ensure_routable_provider
         from raven.providers.auth import credential_status
         from raven.providers.catalog import describe
         from raven.providers.wire import stored_model_id
@@ -586,6 +587,25 @@ def _register_config_commands(app: typer.Typer) -> None:
             raise typer.Exit(1)
 
         name = provider
+
+        # Before the write, not after. A typo used to exit 0 with the config
+        # already changed, and the credential warning that followed suggested
+        # `raven provider set <typo> --api-key ...` -- advice that would have
+        # created an orphan section for a vendor nothing routes to. The TUI's
+        # `/model` builds the provider first and raises before it saves; this is
+        # the same order, with the same test `provider set` already applies.
+        #
+        # Only an unroutable *name* is refused. A known provider with no
+        # credentials yet is still reported and written: picking a model before
+        # configuring its key is a normal order to do things in, and that is the
+        # one place these two commands deliberately differ.
+        try:
+            ensure_routable_provider(name)
+        except KeyError as exc:
+            detail = exc.args[0] if exc.args else str(exc)
+            console.print(f"[red]✗[/red] {detail}")
+            console.print("  [dim]raven provider list  # the ones you have configured[/dim]")
+            raise typer.Exit(1) from exc
 
         stored = stored_model_id(name, model) if name else model
         previous = set_default_model(stored, provider=name)

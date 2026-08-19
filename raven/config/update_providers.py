@@ -187,6 +187,19 @@ def _provider_schema_cls(name: str, *, authoritative: bool = True) -> type[BaseM
     return ann
 
 
+def ensure_routable_provider(name: str) -> None:
+    """Raise ``KeyError`` unless something routes to ``name``.
+
+    The test ``provider set`` already applies before writing a section, exposed
+    so a command that writes ``agents.defaults.provider`` can refuse a typo
+    *before* touching the file. Accepts a vendor we carry no spec for as long as
+    LiteLLM knows the name -- mistral and xai are supported that way -- and
+    accepts a name it could not verify, since refusing on a failed check would
+    block a working provider.
+    """
+    _provider_schema_cls(name)
+
+
 def _provider_spec(name: str) -> ProviderSpec | None:
     """Look up ``ProviderSpec``, or None for a vendor we carry no spec for."""
     return find_by_name(name)

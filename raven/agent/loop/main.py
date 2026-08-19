@@ -356,6 +356,9 @@ class AgentLoop:
         self._configured_window = context_window_tokens or None
         self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
         self._session_bindings: dict[str, ModelBinding] = {}
+        # Keys whose session record has been consulted for a stored model, hit
+        # or miss. See ``_restore_once``.
+        self._restore_attempted: set[str] = set()
         # Resolved lazily on the first tool result that carries an image. Keyed
         # by model, not a single flag: the loop is a long-lived singleton and
         # takes a per-call model (strategies rewrite it, and the model chain
@@ -666,8 +669,42 @@ class AgentLoop:
 
         A new session has no entry, so it starts on the configured default
         rather than on whatever the last session switched to.
+
+        A session whose choice is on disk but not yet in memory is restored here,
+        on first ask. That is what makes the choice outlive a restart on *every*
+        surface: the overrides live in this process, the session record is the
+        only place they survive, and hanging the read off a TUI-only resume call
+        meant a conversation on a channel came back on the default with its
+        choice sitting unread in its own record.
         """
+        binding = self._session_bindings.get(session_key)
+        if binding is not None:
+            return binding
+        self._restore_once(session_key)
         return self._session_bindings.get(session_key, self._default_binding)
+
+    def _restore_once(self, session_key: str) -> None:
+        """Read this session's stored model, at most once per key per process.
+
+        The negative answer is remembered too. Most sessions never switched, and
+        without that this would re-read a record on every turn to learn the same
+        nothing.
+        """
+        if session_key in self._restore_attempted:
+            return
+        self._restore_attempted.add(session_key)
+        sessions = getattr(self, "sessions", None)
+        if sessions is None or self._provider_pool is None:
+            return
+        try:
+            record = sessions.peek(session_key)
+        except Exception as exc:
+            logger.debug("cannot read session {!r} to restore its model: {}", session_key, exc)
+            return
+        metadata = getattr(record, "metadata", None) or {}
+        model = metadata.get("model")
+        if model:
+            self.restore_session_model(session_key, model, metadata.get("provider"))
 
     def session_model(self, session_key: str) -> str:
         """What to show this session's user, which is not the global default."""
@@ -679,19 +716,27 @@ class AgentLoop:
         ``session_model`` cannot answer that -- it falls back to the default,
         so it never returns None. Callers that must distinguish "chose this"
         from "inherited this" ask here.
+
+        Restores first, so a session that switched before a restart answers yes
+        rather than being reported as having inherited the default.
         """
+        if session_key not in self._session_bindings:
+            self._restore_once(session_key)
         return session_key in self._session_bindings
 
     def restore_session_model(self, session_key: str, model: str, provider_name: str | None = None) -> None:
-        """Put a resumed session back on the model it was last switched to.
+        """Put a session back on the model it was last switched to.
 
         Session overrides live in memory, so without this a restart moves every
-        switched session back to the default and the user's choice lasts
-        exactly as long as the process. The model comes from the session
-        record. A model that can no longer be built (a credential since
-        removed) leaves the session on the default rather than failing the
-        resume.
+        switched session back to the default and the user's choice lasts exactly
+        as long as the process. A model that can no longer be built (a credential
+        since removed) leaves the session on the default rather than failing the
+        turn that asked.
+
+        Normally reached through ``_restore_once``, which supplies the stored
+        pair; kept public for a caller that has the pair already.
         """
+        self._restore_attempted.add(session_key)
         pool = self._provider_pool
         if pool is None or not model:
             return
@@ -719,7 +764,14 @@ class AgentLoop:
         self._forget_transport_verdicts()
 
     def clear_session_binding(self, session_key: str) -> None:
-        """Drop a session's override so it follows the default again."""
+        """Drop a session's override so it follows the default again.
+
+        Deliberately does not mark the key as consulted. The one caller is
+        ``session.delete``, which unlinks the record before this runs, so there
+        is nothing left for a later ask to read back in -- and a session that
+        somehow kept its record is better served by re-reading it than by a
+        marking that claims we looked when we did not.
+        """
         self._session_bindings.pop(session_key, None)
 
     def _forget_transport_verdicts(self) -> None:

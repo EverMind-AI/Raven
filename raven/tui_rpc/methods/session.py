@@ -142,27 +142,6 @@ async def _baseline_usage(
     }
 
 
-def _restore_session_model(agent_loop: "AgentLoop", session_key: str) -> None:
-    """Re-apply the model this session was last switched to.
-
-    Overrides live in the loop's memory, so a restart would otherwise move
-    every switched session back to the default. The session record is the only
-    place that choice survives, and this is the only reader of it.
-    """
-    restore = getattr(agent_loop, "restore_session_model", None)
-    sessions = getattr(agent_loop, "sessions", None)
-    if not callable(restore) or sessions is None:
-        return
-    try:
-        record = sessions.peek(session_key)
-    except Exception:
-        return
-    metadata = getattr(record, "metadata", None) or {}
-    model = metadata.get("model")
-    if model:
-        restore(session_key, model, metadata.get("provider"))
-
-
 async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
@@ -340,8 +319,10 @@ async def session_resume(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     session_key = params.get("session_id")
-    if isinstance(session_key, str) and session_key and agent_loop is not None:
-        _restore_session_model(agent_loop, session_key)
+    # No restore call here: ``_default_session_info`` asks the loop for this
+    # session's model, and the loop reads the stored one on first ask. Restoring
+    # from this handler covered only the surface that calls it -- a conversation
+    # arriving on a channel came back on the default with its choice unread.
     info = await _default_session_info(agent_loop, config, session_key if isinstance(session_key, str) else None)
 
     if session_key:
