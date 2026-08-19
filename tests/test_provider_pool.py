@@ -305,6 +305,35 @@ def test_a_re_reading_supplier_still_reuses_bindings() -> None:
     assert pool.bind("claude-opus-4-5") is first
 
 
+def test_an_edited_window_drops_the_binding_that_carried_the_old_one() -> None:
+    """The cache key has to cover the whole cached value, not just the credential.
+
+    ``bind`` copies ``contextWindowTokens`` onto the binding, so a key made only
+    of credentials leaves a stale binding answering with the old number until a
+    restart -- the "I changed it and nothing happened" shape the window ladder
+    exists to prevent, arriving through the cache instead.
+    """
+    from raven.providers.pool import ProviderPool
+
+    state = {"window": None}
+
+    def _fresh():
+        cfg = _config(anthropic="sk-ant")
+        cfg.agents.defaults.context_window_tokens = state["window"]
+        return cfg
+
+    pool = ProviderPool(_fresh)
+    first = pool.bind("claude-opus-4-5")
+    assert first.configured_window is None
+
+    state["window"] = 32768
+    second = pool.bind("claude-opus-4-5")
+
+    assert second is not first, "the stale binding was reused"
+    assert second.configured_window == 32768
+    assert second.context_window == 32768
+
+
 def test_a_gateway_pin_that_cannot_be_built_is_reported_not_raised(monkeypatch) -> None:
     """The gateway branch is reached from the factory at construction too, so
     it needs the same guard as the direct-vendor branch -- otherwise a missing

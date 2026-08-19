@@ -744,6 +744,32 @@ def test_use_refuses_an_id_that_names_no_provider(tmp_config: Path) -> None:
     assert not tmp_config.exists(), "a refused switch must not write a config"
 
 
+def test_use_refuses_a_misspelled_provider_before_it_writes(tmp_config: Path) -> None:
+    """A typo used to exit 0 with the config already changed, and the credential
+    warning that followed told the user to run
+    `raven provider set antropic --api-key ...` -- which would have created a
+    section for a vendor nothing routes to. The name is checked before the write,
+    the same test `provider set` already applies.
+    """
+    r = runner.invoke(app, ["provider", "use", "claude-opus-4-5", "--provider", "antropic"])
+
+    assert r.exit_code == 1, r.output
+    assert "antropic" in r.output
+    assert not tmp_config.exists(), "a refused switch must not write a config"
+
+
+def test_use_still_accepts_a_vendor_only_litellm_knows(tmp_config: Path) -> None:
+    """The counterweight to the check above. Raven carries no spec for mistral,
+    so "no spec" cannot be the typo test -- refusing on it would block every
+    passthrough vendor the config documents as supported.
+    """
+    r = runner.invoke(app, ["provider", "use", "mistral-large-latest", "--provider", "mistral"])
+
+    assert r.exit_code == 0, r.output
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "mistral"
+
+
 def test_use_moves_the_pin_instead_of_reporting_that_it_is_stuck(tmp_config: Path) -> None:
     """A write that changes nothing must not report success and stop there.
 
