@@ -444,16 +444,10 @@
 
 <!-- One entry's credentials. Its own veil rather than the confirm dialog's:
      disconnecting from inside it raises that one, and a dialog cannot be both
-     the thing asking and the thing asked. -->
-<div class="veil" id="connVeil" data-open="false">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="connDlgTitle">
-    <header id="connDlgTitle"></header>
-    <div class="dsub" id="connDlgSub"></div>
-    <!-- No footer: the form carries its own save and cancel, and a second
-         dismiss beside them is one control too many for one decision. -->
-    <div class="body" id="connDlgBody"></div>
-  </div>
-</div>
+     the thing asking and the thing asked. The sheet renders here from the
+     connections island (ui/src/features/connections/ConnPage.tsx); only the
+     veil is static markup. -->
+<div class="veil" id="connVeil" data-open="false"></div>
 
 <!-- The 更多 flyout: a slim second column that grows out of the rail, drawn by
      drawMoreFly(). It holds the set-up-once modules (连接 / 入口 / 定时). -->
