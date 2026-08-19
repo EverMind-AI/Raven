@@ -38,14 +38,19 @@ install: install-deps
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install --hook-type commit-msg
 	npm ci
+	npm ci --prefix ui
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
-lint: lint-python lint-tui lint-bridge
+lint: lint-python lint-ui lint-tui lint-bridge
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff format --check $(PYTHON_LINT_TARGETS)
+
+lint-ui:
+	npm run gen:check --prefix ui
+	npm run type-check --prefix ui
 
 lint-tui:
 	npm run lint --prefix ui-tui
@@ -56,7 +61,10 @@ lint-tui:
 lint-bridge:
 	npm run build --prefix bridge
 
-test: test-python test-tui
+test: test-python test-ui test-tui
+
+test-ui:
+	npm test --prefix ui
 
 test-python:
 	uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q

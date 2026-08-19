@@ -1,0 +1,16 @@
+{
+  "name": "raven-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen": "node scripts/gen-rpc-client.mjs",
+    "gen:check": "node scripts/gen-rpc-client.mjs --check",
+    "type-check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.3"
+  }
+}
