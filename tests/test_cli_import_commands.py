@@ -998,6 +998,24 @@ class TestImportRefusesToRunWithoutMemory:
         with pytest.raises(typer.Exit):
             _require_memory_service_ready(_NotReady())
 
+    def test_a_bad_identity_does_not_send_the_user_to_the_server_log(self, capsys: pytest.CaptureFixture) -> None:
+        """The service is fine; the config is not. Its log holds nothing about
+        this, and start() already printed the key to edit."""
+        import typer
+
+        from raven.cli.import_commands import _require_memory_service_ready
+        from raven.plugin.memory.everos.backend import ServiceState
+
+        class _BadIdentity:
+            _state = ServiceState.BAD_IDENTITY
+
+        with pytest.raises(typer.Exit):
+            _require_memory_service_ready(_BadIdentity())
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "server log" not in out
+        assert "memory.userId" in out
+
     def test_a_ready_backend_passes(self) -> None:
         from raven.cli.import_commands import _require_memory_service_ready
         from raven.plugin.memory.everos.backend import ServiceState
