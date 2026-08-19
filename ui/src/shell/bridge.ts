@@ -23,7 +23,9 @@ export interface MenuItem {
 }
 
 export interface Shell {
-  T(key: string, vars?: Record<string, string | number>): string
+  /* `fallback` mirrors the legacy T(): what to show when the catalogue has no
+     entry for the key (the connections form labels schema-declared fields). */
+  T(key: string, vars?: Record<string, string | number>, fallback?: string): string
   toast(text: string, action?: ToastAction): void
   menuAt(x: number, y: number, items: Array<MenuItem | '-'>): void
   confirmAsk(title: string, body: string, label: string, fn: () => void): void
@@ -47,8 +49,8 @@ export function shell(): Shell {
   return s
 }
 
-export function t(key: string, vars?: Record<string, string | number>): string {
-  return shell().T(key, vars)
+export function t(key: string, vars?: Record<string, string | number>, fallback?: string): string {
+  return shell().T(key, vars, fallback)
 }
 
 export function ds<S>(domain: string): S {

@@ -1,5 +1,7 @@
 import { createRoot } from 'react-dom/client'
 
+import { ConnApp } from './features/connections/ConnPage'
+import * as connections from './features/connections/store'
 import { CronApp } from './features/cron/CronPage'
 import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
@@ -38,6 +40,12 @@ window.RavenIslands = {
     close: memory.close,
     redraw: memory.redraw,
   },
+  connections: {
+    open: connections.open,
+    close: connections.close,
+    redraw: connections.redraw,
+    closeDialog: connections.closeDialog,
+  },
 }
 
 const host = document.getElementById('cronBody')
@@ -45,3 +53,5 @@ if (host) createRoot(host).render(<CronApp />)
 
 const memHost = document.getElementById('memBody')
 if (memHost) createRoot(memHost).render(<MemoryApp />)
+const connHost = document.getElementById('connBody')
+if (connHost) createRoot(connHost).render(<ConnApp />)
