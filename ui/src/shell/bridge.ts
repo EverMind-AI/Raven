@@ -28,6 +28,9 @@ export interface Shell {
   menuAt(x: number, y: number, items: Array<MenuItem | '-'>): void
   confirmAsk(title: string, body: string, label: string, fn: () => void): void
   showPage(id: string | null): void
+  /* Optional so fakes written before it keep type-checking; the page
+     bridge always publishes it. */
+  closeDetail?(): void
 }
 
 declare global {

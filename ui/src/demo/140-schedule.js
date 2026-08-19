@@ -1,13 +1,24 @@
-/* ══ module 3b: data & memory — live.js supplies the real loader ══ */
-function openMem() { showPage('memPage'); drawMem(); }
-function closeMem() { showPage(null); }
+/* ══ module 3b: data & memory ═════════════════════════════════════
+   The renderer is the memory island (ui/src/features/memory/); what
+   remains here is its shell face -- the names the nav button, the Esc
+   handler and the live layer's redrawAll still call -- and the fixture
+   source. */
+function openMem() { RavenIslands.memory.open(); }
+function closeMem() { RavenIslands.memory.close(); }
 function drawMem() {
-  const box = $('#memBody'); box.innerHTML = '';
-  const hero = mk('div', 'pmhero');
-  hero.appendChild(mk('h3', null, T('gui.mem.hero')));
-  box.appendChild(hero);
-  box.appendChild(mk('div', 'empty-note', T('gui.mem.down')));
+  /* A language flip re-renders #memBody with the new catalogue. */
+  RavenIslands.memory.redraw();
 }
+
+/* The fixture source: the demo has no memory engine behind it, so it
+   answers list with the down marker and the island shows the page's down
+   note. Registered, not declared-for-override -- live mode installs its
+   own DS.memory and this object is never consulted. */
+DS.memory ??= {
+  stats: async () => null,
+  list: async () => { throw { down: true }; },
+  remove: async () => {},
+};
 
 /* ══ module 4: scheduled work ═════════════════════════════════════
    The renderer is the cron island (ui/src/features/cron/); what remains

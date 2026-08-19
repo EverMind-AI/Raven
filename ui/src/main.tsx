@@ -3,6 +3,8 @@ import { createRoot } from 'react-dom/client'
 import { CronApp } from './features/cron/CronPage'
 import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
+import { MemoryApp } from './features/memory/MemoryPage'
+import * as memory from './features/memory/store'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -31,7 +33,15 @@ window.RavenIslands = {
     warm: cron.warm,
     redraw: cron.langRedraw,
   },
+  memory: {
+    open: memory.open,
+    close: memory.close,
+    redraw: memory.redraw,
+  },
 }
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)
+
+const memHost = document.getElementById('memBody')
+if (memHost) createRoot(memHost).render(<MemoryApp />)
