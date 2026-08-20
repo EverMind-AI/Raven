@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # One command to build the sub-agents in this directory.
 #
-# Per folder: build the checkout's venv and scaffold `.env` from its template.
-# Both steps are idempotent, so re-running is cheap.
+# Per folder: build the checkout's venv, scaffold `.env` from its template, and
+# report the LLM it is tuned for and the EverOS identity it remembers under.
+# Both writes are idempotent, so re-running is cheap.
 #
 # It does not register anything. Registration needs a configured host raven, and
 # on a first install this script runs before one exists - so `raven` asks about
@@ -25,7 +26,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --no-sync) SYNC=0 ;;
-        -h | --help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h | --help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
         *) FOLDERS+=("${1%/}") ;;
     esac
@@ -75,6 +76,48 @@ if rec.get("model") and rec["model"] != runs:
     print(f"MISMATCH subagent.json recommends {rec['model']} but config.json runs {runs}")
 elif rec.get("apiBase") and base and rec["apiBase"] != base:
     print(f"MISMATCH subagent.json recommends {rec['apiBase']} but config.json uses {base}")
+PYEOF
+}
+
+# The identity a folder's memories are filed under, read from `memory` because that is
+# the block every checkout agrees on. `plugins.config.everos-memory` may name it a
+# second time, and what that copy does depends on the folder's vendored raven: some
+# stamp stored messages from the slice and fall back to a shared `default` without it,
+# newer ones ignore it entirely. Its presence is therefore not a defect and is not
+# reported. A disagreement between the two is, because on the forks that stamp from the
+# slice the agent stores under one id and recalls under the other -- silently, which is
+# what makes every written memory unrecallable. A folder declaring no everos backend is
+# reported and not failed: EverOS is optional, and a machine without one still installs.
+everos_of() {
+    python3 - "$1" <<'PYEOF'
+import json, sys
+from pathlib import Path
+folder = Path(sys.argv[1])
+try:
+    cfg = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+except (OSError, ValueError) as exc:
+    print(f"unreadable ({exc.__class__.__name__})")
+    sys.exit(0)
+memory = cfg.get("memory") or {}
+plugin = ((cfg.get("plugins") or {}).get("config") or {}).get("everos-memory") or {}
+# Every key here is optional and the schema fills all three: backend defaults to
+# everos and both ids to "default". Saying nothing therefore does not mean "no
+# memory", it means the host assistant's track -- so absent and null have to be
+# told apart, and it is the resolved value, never the written one, that is
+# reported. Only an explicit null (or another backend) switches everos off.
+backend = memory.get("backend", "everos")
+if backend != "everos":
+    print(f"none - backend is {backend or 'null'}, so this folder keeps no everos memory")
+    sys.exit(0)
+user = memory.get("userId") or "default"
+agent = memory.get("agentId") or "default"
+print(f"{user}/{agent} via {plugin.get('base_url') or 'unrecorded'}")
+shared = [label for label, value in (("userId", user), ("agentId", agent)) if value == "default"]
+if shared:
+    print(f"WARN memory names no {', '.join(shared)}, so this folder files under the shared 'default' track alongside the host assistant")
+for label, resolved, slice_key in (("userId", user, "user_id"), ("agentId", agent, "agent_id")):
+    if slice_key in plugin and plugin[slice_key] != resolved:
+        print(f"WARN memory.{label} resolves to {resolved!r} but everos-memory.{slice_key} is {plugin[slice_key]!r}; stores and recalls would split")
 PYEOF
 }
 
@@ -154,6 +197,10 @@ for folder in "${FOLDERS[@]}"; do
     if mismatch="$(printf '%s' "$rec" | sed -n 's/^MISMATCH //p')" && [ -n "$mismatch" ]; then
         echo "   ! $mismatch - fix one of them"
     fi
+
+    everos="$(everos_of "$dir")"
+    echo "   everos memory: $(printf '%s' "$everos" | head -n1)"
+    printf '%s\n' "$everos" | sed -n 's/^WARN /   ! /p'
     # A built venv is what makes the folder offerable: onboarding declines to
     # register one that cannot start.
     if [ -x "$checkout/.venv/bin/raven" ]; then
