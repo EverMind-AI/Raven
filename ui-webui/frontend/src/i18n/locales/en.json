@@ -758,6 +758,25 @@
 		"deleteFailed": "Delete failed: {{error}}"
 	},
 	"ravenChannels": {
+		"rebindEntry": "Pair a different account",
+		"rebindConfirm": "Pair {{name}} to a different account?",
+		"rebindSafety": "The account signed in now stays signed in until the new one is confirmed by a scan \u2014 closing this, or never scanning, costs nothing, and no gateway restart is needed.",
+		"rebindStart": "Start",
+		"rebindScan": "Scan with the account you want to pair",
+		"rebindAging": "This code is about to expire; a fresh one will be issued automatically",
+		"rebindReissued": "The code expired and was reissued ({{n}} of {{max}})",
+		"rebindScanned": "Scanned \u2014 confirm it on your phone",
+		"rebindDone": "{{name}} is paired to the new account, effective now, no restart needed",
+		"rebindGaveUp": "The code expired too many times, so the flow stopped. The current account is unchanged; you can retry.",
+		"rebindError": "The rebind failed ({{detail}}). The current account is unchanged.",
+		"rebindRetry": "New code",
+		"rebindKeepCurrent": "Cancel, keep the current account",
+		"rebindFailed": "The rebind request failed: {{error}}",
+		"rebindRefused": {
+			"not_running": "The channel is not running; turn it on before rebinding.",
+			"already_rebinding": "A rebind is already in progress.",
+			"unsupported": "This channel does not pair by QR code."
+		},
 		"kicker": "Config · Channels",
 		"title": "Channels",
 		"subtitle": "IM channels. Changes are saved to config and take effect after a gateway restart.",

@@ -722,11 +722,132 @@
             },
             "running": {
               "type": "boolean"
+            },
+            "rebind": {
+              "description": "Null for a channel that does not offer rebinding.",
+              "type": "object",
+              "properties": {
+                "phase": {
+                  "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+                  "type": "string"
+                },
+                "refreshes": {
+                  "description": "Codes reissued so far, against max_refreshes.",
+                  "type": "integer"
+                },
+                "max_refreshes": {
+                  "type": "integer"
+                },
+                "code_age_s": {
+                  "description": "Seconds since the current code was issued; null when none is up.",
+                  "type": "number"
+                },
+                "detail": {
+                  "description": "Why it failed, when it did: expired | no_token | error.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "phase",
+                "refreshes",
+                "max_refreshes",
+                "detail"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
             "connected",
             "running"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.rebind",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.rebind.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "started": {
+              "type": "boolean"
+            },
+            "reason": {
+              "description": "'' when started; else not_running | already_rebinding | unsupported.",
+              "type": "string"
+            },
+            "phase": {
+              "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+              "type": "string"
+            },
+            "refreshes": {
+              "type": "integer"
+            },
+            "max_refreshes": {
+              "type": "integer"
+            },
+            "code_age_s": {
+              "type": "number"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "started",
+            "reason",
+            "phase"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "name": "raven.channels.rebind.cancel",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "raven.channels.rebind.cancel.result",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "description": "idle | waiting | scanned | confirmed | failed | cancelled.",
+              "type": "string"
+            },
+            "refreshes": {
+              "type": "integer"
+            },
+            "max_refreshes": {
+              "type": "integer"
+            },
+            "code_age_s": {
+              "type": "number"
+            },
+            "detail": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "phase"
           ],
           "additionalProperties": false
         }

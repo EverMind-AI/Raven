@@ -257,11 +257,66 @@ class RavenChannelsQrParams(_Strict):
     name: str | None = None
 
 
+class WebRebindState(_Strict):
+    """How a QR channel's rebind is going, carried on the QR poll the client
+    already makes.
+
+    ``code_age_s`` is an age rather than a deadline because the two sides do not
+    share a clock; the client compares it against ``max_refreshes`` behaviour it
+    can see, not against a timestamp it has to trust.
+    """
+
+    phase: str = Field(
+        ...,
+        description="idle | waiting | scanned | confirmed | failed | cancelled.",
+    )
+    refreshes: int = Field(..., description="Codes reissued so far, against max_refreshes.")
+    max_refreshes: int
+    code_age_s: float | None = Field(
+        ..., description="Seconds since the current code was issued; null when none is up."
+    )
+    detail: str = Field(..., description="Why it failed, when it did: expired | no_token | error.")
+
+
 class RavenChannelsQrResult(_Strict):
     qr: str | None = Field(..., description="Login QR as a PNG data URI, or null when none is pending.")
     qr_text: str | None = Field(..., description="Raw scan payload when the gateway cannot rasterise a PNG.")
     connected: bool
     running: bool
+    rebind: WebRebindState | None = Field(None, description="Null for a channel that does not offer rebinding.")
+
+
+class RavenChannelsRebindParams(_Strict):
+    name: str | None = None
+
+
+class RavenChannelsRebindResult(_Strict):
+    """``started: False`` with a reason is a state the page draws, not an error.
+
+    A rebind keeps the paired account until a new scan is confirmed, so refusing
+    ("not running", "already rebinding", "unsupported") costs the caller nothing
+    and needs no error path.
+    """
+
+    started: bool
+    reason: str = Field(..., description="'' when started; else not_running | already_rebinding | unsupported.")
+    phase: str
+    refreshes: int | None = None
+    max_refreshes: int | None = None
+    code_age_s: float | None = None
+    detail: str | None = None
+
+
+class RavenChannelsRebindCancelParams(_Strict):
+    name: str | None = None
+
+
+class RavenChannelsRebindCancelResult(_Strict):
+    phase: str
+    refreshes: int | None = None
+    max_refreshes: int | None = None
+    code_age_s: float | None = None
+    detail: str | None = None
 
 
 class WebChannelLive(_Strict):
@@ -651,6 +706,11 @@ WEB_METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "raven.channels.list": (RavenChannelsListParams, RavenChannelsListResult),
     "raven.channels.set": (RavenChannelsSetParams, RavenChannelsSetResult),
     "raven.channels.qr": (RavenChannelsQrParams, RavenChannelsQrResult),
+    "raven.channels.rebind": (RavenChannelsRebindParams, RavenChannelsRebindResult),
+    "raven.channels.rebind.cancel": (
+        RavenChannelsRebindCancelParams,
+        RavenChannelsRebindCancelResult,
+    ),
     "raven.channels.live": (RavenChannelsLiveParams, RavenChannelsLiveResult),
     "raven.gateway.restart": (RavenGatewayRestartParams, RavenGatewayRestartResult),
     # raven.skills.*

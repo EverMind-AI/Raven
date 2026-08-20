@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { ravenConfigApi } from '@/api';
-import type { RavenChannel } from '@/api';
+import type { RavenChannel, RavenRebindState } from '@/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -132,6 +132,19 @@ function ChannelQrDialog({
 	const [qrText, setQrText] = useState<string | null>(null);
 	const [connected, setConnected] = useState(false);
 	const [running, setRunning] = useState(true);
+	const [rebind, setRebind] = useState<RavenRebindState | null>(null);
+	// Three steps, because dropping an account is not something to do on one
+	// click: the tick, the warning, then the code.
+	const [step, setStep] = useState<'status' | 'confirm' | 'scanning'>('status');
+	const [busy, setBusy] = useState(false);
+	// Bumped on every start, including a retry out of `failed`. `step` cannot
+	// carry that: a retry sets it to the value it already holds, so the effect
+	// below would keep its old deps and never restart the poll it correctly
+	// stopped -- leaving a code live on the gateway that the dialog never draws.
+	const [attempt, setAttempt] = useState(0);
+
+	const phase = rebind?.phase ?? 'idle';
+	const live = phase === 'waiting' || phase === 'scanned';
 
 	useEffect(() => {
 		let cancelled = false;
@@ -144,7 +157,12 @@ function ChannelQrDialog({
 				setQrText(r.qr_text ?? null);
 				setConnected(r.connected);
 				setRunning(r.running);
-				if (r.connected) return;
+				setRebind(r.rebind ?? null);
+				// `connected` is no longer the terminal condition: a rebind keeps
+				// the current account paired the whole time it waits, so stopping
+				// on it would freeze the dialog on the first poll of a rebind.
+				const rebinding = r.rebind?.phase === 'waiting' || r.rebind?.phase === 'scanned';
+				if (r.connected && !rebinding) return;
 			} catch {
 				// transient (e.g. gateway mid-restart) — keep polling
 			}
@@ -155,7 +173,62 @@ function ChannelQrDialog({
 			cancelled = true;
 			clearTimeout(timer);
 		};
-	}, [channel]);
+	}, [channel, step, attempt]);
+
+	const startRebind = async () => {
+		setBusy(true);
+		try {
+			const r = await ravenConfigApi.rebindChannel(channel);
+			if (r.started) {
+				// Cleared before the first render of the new attempt: `live` is
+				// computed from `phase`, so a stale `failed` would draw the previous
+				// code at full opacity as though it were scannable.
+				setQr(null);
+				setQrText(null);
+				setRebind(null);
+				setStep('scanning');
+				setAttempt((n) => n + 1);
+			} else {
+				toast.error(t(`ravenChannels.rebindRefused.${r.reason}`, { defaultValue: r.reason }));
+			}
+		} catch (e) {
+			toast.error(
+				t('ravenChannels.rebindFailed', { error: e instanceof Error ? e.message : String(e) }),
+			);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const stopRebind = async () => {
+		setBusy(true);
+		try {
+			await ravenConfigApi.cancelChannelRebind(channel);
+		} catch {
+			// The account stays paired either way; nothing to report.
+		} finally {
+			setBusy(false);
+			setStep('status');
+		}
+	};
+
+	/* What the caption says while a code is up. Reissue and give-up used to be
+	   log-only, which is why a reader watching a dead code had nothing to go on. */
+	const scanCaption = () => {
+		if (phase === 'scanned') return t('ravenChannels.rebindScanned');
+		if (phase === 'confirmed') return t('ravenChannels.rebindDone', { name: label });
+		if (phase === 'failed')
+			return rebind?.detail === 'expired'
+				? t('ravenChannels.rebindGaveUp')
+				: t('ravenChannels.rebindError', { detail: rebind?.detail ?? '' });
+		if ((rebind?.refreshes ?? 0) > 0)
+			return t('ravenChannels.rebindReissued', {
+				n: rebind?.refreshes ?? 0,
+				max: rebind?.max_refreshes ?? 0,
+			});
+		if ((rebind?.code_age_s ?? 0) > 50) return t('ravenChannels.rebindAging');
+		return t('ravenChannels.rebindScan');
+	};
 
 	return (
 		<div
@@ -178,10 +251,74 @@ function ChannelQrDialog({
 					</button>
 				</div>
 				<div className="mt-4 flex flex-col items-center gap-3">
-					{connected ? (
-						<div className="flex flex-col items-center gap-2 py-8 text-center">
+					{step === 'confirm' ? (
+						<div className="flex flex-col gap-3 py-2">
+							<p className="text-sm">{t('ravenChannels.rebindConfirm', { name: label })}</p>
+							{/* The one thing worth promising explicitly: nothing is lost
+							    by starting, because the swap happens on confirmation. */}
+							<p className="text-xs text-muted-foreground">
+								{t('ravenChannels.rebindSafety')}
+							</p>
+							<div className="flex justify-end gap-2">
+								<Button size="sm" variant="ghost" onClick={() => setStep('status')}>
+									{t('common.cancel')}
+								</Button>
+								<Button size="sm" disabled={busy} onClick={startRebind}>
+									{busy && <Loader2 className="size-4 animate-spin" />}{' '}
+									{t('ravenChannels.rebindStart')}
+								</Button>
+							</div>
+						</div>
+					) : step === 'scanning' ? (
+						<>
+							{qr ? (
+								<img
+									src={qr}
+									alt="login QR"
+									className={cn('size-56 rounded-lg bg-white p-2', !live && 'opacity-40')}
+								/>
+							) : (
+								<div className="flex size-56 items-center justify-center">
+									<Loader2 className="size-6 animate-spin text-muted-foreground" />
+								</div>
+							)}
+							<p
+								className={cn(
+									'text-center text-xs',
+									phase === 'failed'
+										? 'text-amber-600 dark:text-amber-400'
+										: phase === 'confirmed'
+											? 'text-green-600 dark:text-green-400'
+											: 'text-muted-foreground',
+								)}
+							>
+								{scanCaption()}
+							</p>
+							<div className="flex gap-2">
+								{phase === 'failed' ? (
+									<Button size="sm" disabled={busy} onClick={startRebind}>
+										{t('ravenChannels.rebindRetry')}
+									</Button>
+								) : phase === 'confirmed' ? (
+									<Button size="sm" onClick={onClose}>
+										{t('common.close')}
+									</Button>
+								) : (
+									<Button size="sm" variant="ghost" disabled={busy} onClick={stopRebind}>
+										{t('ravenChannels.rebindKeepCurrent')}
+									</Button>
+								)}
+							</div>
+						</>
+					) : connected ? (
+						<div className="flex flex-col items-center gap-3 py-6 text-center">
 							<IconCheck className="size-12 text-green-500" />
 							<p className="text-sm">{t('ravenChannels.qrConnected', { name: label })}</p>
+							{/* The dead end this dialog used to be: a green tick and no way
+							    to pair a different account without deleting a state file. */}
+							<Button size="sm" variant="outline" onClick={() => setStep('confirm')}>
+								{t('ravenChannels.rebindEntry')}
+							</Button>
 						</div>
 					) : qr ? (
 						<>
