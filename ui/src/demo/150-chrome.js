@@ -122,8 +122,11 @@ tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) se
    here, because the dialog behind it is. */
 
 /* The one door to settings. live.js reassigns it to refresh the server's
-   config before drawing -- same pattern as applyLang. */
-let openSettings = async () => { drawSettings(); openSet(); };
+   config before drawing -- same pattern as applyLang. Both go through the
+   island's open(), which draws, lifts the veil and reads the counters in that
+   order; drawing and revealing by hand here would skip the read, and the
+   usage card would sit on "loading" until the poll happened to tick. */
+let openSettings = async () => { await RavenIslands.settings.open(); };
 
 $('#meBtn').onclick = () => openSettings();
 

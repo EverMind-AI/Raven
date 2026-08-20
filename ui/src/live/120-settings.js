@@ -1,30 +1,32 @@
-/* -- settings --------------------------------------------------------- */
+/* -- settings: the rpc source ------------------------------------------
+   The island (ui/src/features/settings/) owns the dialog's drawing; this
+   file speaks settings.* / model.* over /rpc and installs the source onto
+   the seam. What stays beside it is shell plumbing that is not the page:
+   the banner override, the language flip (redrawAll), and the composer's
+   model chip with its picker popover. */
+
 /* No standing notice banners: a config gap belongs in the settings page, not
    as a strip above every conversation. */
 drawBanner = function () {
   $('#bannerHost').innerHTML = '';
 };
 
-/* The config settings.get returned, kept so the pages can display real values.
-   Keys arrive camelCased (agents.defaults.reasoningEffort), one level per dot. */
+/* The config settings.get returned. Keys arrive camelCased
+   (agents.defaults.reasoningEffort), one level per dot. V serves the legacy
+   rows that still read config through it (the capabilities tool rows); the
+   island gets the same object inside its snapshot. */
 let RAW = {};
 V = (path, fallback) => {
   const v = String(path).split('.').reduce((o, k) => (o == null ? o : o[k]), RAW);
   return v == null || v === '' ? fallback : v;
 };
-/* Like V but null is a value: memory.backend stores null for "plugin memory
-   off", and painting the schema default over it would misreport the choice. */
-Vnull = (path, fallback) => {
-  let node = RAW;
-  for (const k of String(path).split('.')) {
-    if (node == null || typeof node !== 'object' || !(k in node)) return fallback;
-    node = node[k];
-  }
-  return node;
-};
 
-/* The write half of the settings dialog: one whitelisted dotted key per
-   control. Reload-then-redraw keeps every V() read honest after a write. */
+let configPathLive = '~/.raven/config.json';
+let everosLive = null;
+
+/* The write half the legacy capabilities rows still use: one whitelisted
+   dotted key per control. Reload-then-redraw keeps every V() read honest
+   after a write. */
 settingsWrite = (key, value, el) => rpc.call('settings.set', { key, value })
   .then(() => loadSettings())
   .then(() => { if (setIsOpen()) drawSettings(); toast(T('gui.set.saved')); })
@@ -33,88 +35,22 @@ settingsWrite = (key, value, el) => rpc.call('settings.set', { key, value })
     if (setIsOpen()) drawSettings();
   });
 
-/* EverOS model roles: read on settings open, written per section. A null
-   fields object means "clear the section" (optional roles only). */
-everosWrite = (section, fields, el) => {
-  const p = fields ? { section, fields } : { section, clear: true };
-  return rpc.call('settings.everosSet', p)
-    .then(() => loadEveros())
-    .then(() => {
-      memEdit = null;
-      if (setIsOpen()) drawSettings();
-      toast(T('gui.set.mem.saved'));
-    })
-    .catch((e) => {
-      toast(T('gui.plug.op_failed', { err: (e.data && e.data.detail) || e.message || e }));
-      if (setIsOpen()) drawSettings();
-    });
-};
-
-let usageBusy = false;
-let usageAt = 0;
-usageLoad = () => {
-  /* The page asks on every redraw and a fresh reply causes one, so without the
-     floor the two would spin. It also bounds how often the tab polls itself. */
-  if (usageBusy || Date.now() - usageAt < 3000) return;
-  usageBusy = true;
-  rpc.call('settings.usage', {})
-    .then((r) => { USAGE = r; })
-    /* A failed refresh keeps the numbers it already has: zeroing them would
-       report "no usage" for what is really a dropped call. */
-    .catch(() => {
-      if (!USAGE) USAGE = { days: 30, llm: { total: { calls: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0 }, models: [] }, tools: { total: 0, counts: [] } };
-    })
-    .then(() => {
-      usageBusy = false; usageAt = Date.now();
-      if (setIsOpen() && sTab === 'usage') drawSettings();
-    });
-};
-/* Counters that only move when the dialog is reopened read as broken. The page
-   keeps itself current for as long as it is the one on screen. */
-setInterval(() => { if (setIsOpen() && sTab === 'usage') usageLoad(); }, 15000);
-
 async function loadEveros() {
   try {
-    EVEROS = await rpc.call('settings.everos', {});
+    everosLive = await rpc.call('settings.everos', {});
   } catch { /* section rows render as unset; writes still surface their error */ }
 }
 
-/* config.set's whitelisted keys are readable only through config.get;
-   settings.get reports the effective agent defaults instead, which are a
-   different number (agents.defaults.temperature 0.1 vs agent.temperature 1).
-   These three are display-only -- see the note on `wire` below. */
-const HOT_KEYS = ['agent.temperature', 'agent.thinking_budget', 'tui.show_token_usage'];
-
 async function loadSettings() {
   const r = await rpc.call('settings.get', {});
-  const raw = r.settings || {};
-  RAW = raw;
-  CONFIG_PATH = r.config_path || CONFIG_PATH;
+  RAW = r.settings || {};
+  configPathLive = r.config_path || configPathLive;
   drawBanner();
-  const defaults = (raw.agents && raw.agents.defaults) || {};
-  if (!CFG._live) {
-    CFG._live = true;
-    let tempVal = CFG.temp, budgetVal = CFG.budget;
-    /* Read-only on purpose. config.set takes both keys and then writes a
-       top-level `agent` section that the config schema forbids, so the next
-       load of config.json fails and every config-reading RPC goes down with
-       it. Until the writer maps them onto agents.defaults, the settings page
-       shows the value and refuses the write. */
-    const wire = (prop, get, set) => Object.defineProperty(CFG, prop, { get, set });
-    wire('temp', () => tempVal, (v) => { tempVal = v; });
-    wire('budget', () => budgetVal, (v) => { budgetVal = v; });
-    CFG._setRaw = (t, b) => { if (typeof t === 'number') tempVal = t; if (typeof b === 'number') budgetVal = b; };
-  }
+  const defaults = (RAW.agents && RAW.agents.defaults) || {};
   if (defaults.workspace) CFG.cwd = defaults.workspace;
   CFG.endpoint = r.config_path;
-  try {
-    const w = await rpc.call('config.get', { keys: HOT_KEYS });
-    const c = (w && w.config) || {};
-    CFG._setRaw(c['agent.temperature'], c['agent.thinking_budget']);
-    if (typeof c['tui.show_token_usage'] === 'boolean') SHOW_TOKENS = c['tui.show_token_usage'];
-  } catch { /* leave the sliders where they are rather than show a guess */ }
   if (defaults.model) { model = defaults.model; setModelLabel(); }
-  try { await loadProviders(); } catch { /* model options unavailable — keep demo providers */ }
+  try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
 let curProvider = '';
@@ -132,11 +68,62 @@ async function loadProviders() {
   if (mo.model) { model = mo.model; setModelLabel(); }
 }
 
+const settingsSnapshot = () => ({
+  raw: RAW, configPath: configPathLive, everos: everosLive,
+  providers: PROVIDERS, curProvider, model,
+});
+
+const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;
+
+DS.settings = {
+  load: async () => {
+    await loadSettings();
+    await loadEveros();
+    return settingsSnapshot();
+  },
+  /* Toasts are spoken here, where the legacy wording lived; the thrown
+     handled tag tells the island to only redraw. */
+  set: async (key, value) => {
+    try {
+      await rpc.call('settings.set', { key, value });
+      await loadSettings();
+      toast(T('gui.set.saved'));
+    } catch (e) {
+      toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
+      throw { handled: true };
+    }
+    return settingsSnapshot();
+  },
+  /* A null fields object means "clear the section" (optional roles only). */
+  everosSet: async (section, fields) => {
+    const p = fields ? { section, fields } : { section, clear: true };
+    try {
+      await rpc.call('settings.everosSet', p);
+      await loadEveros();
+      toast(T('gui.set.mem.saved'));
+    } catch (e) {
+      toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
+      throw { handled: true };
+    }
+    return settingsSnapshot();
+  },
+  usage: () => rpc.call('settings.usage', {}),
+  provider: async (op, params) => {
+    await rpc.call('model.' + op, params);
+    await loadProviders();
+    return settingsSnapshot();
+  },
+  model: () => model,
+  /* The composer's picker popover, offered to the island's default-model
+     button so both places pick a model the same way. */
+  pickModel: (anchor, after) => openModelPicker(anchor, after),
+};
+
 openSettings = async function () {
-  /* loadExt too: the agent's tool inventory is a settings page now, and a
-     panel drawn from the demo list would flip switches that do not exist. */
-  try { await Promise.all([loadSettings(), loadExt(), loadEveros()]); } catch (e) { toast(`加载失败：${e.message || e}`); }
-  drawSettings(); openSet();
+  /* loadExt too: the agent's tool inventory is a settings page, and a panel
+     drawn from the demo list would flip switches that do not exist. */
+  try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
+  await RavenIslands.settings.open();
 };
 
 /* -- language ---------------------------------------------------------
@@ -209,8 +196,8 @@ async function loadLang() {
 const shortModel = (m) => String(m || '').split('/').pop();
 const setModelLabel = () => { $('#modelName').textContent = shortModel(model); $('#modelChip').title = model; };
 
-/* Anchored to the composer chip by default; the settings panel passes its own
-   button and a callback so both places pick a model the same way. */
+/* Anchored to the composer chip by default; the settings island passes its
+   own button and a callback so both places pick a model the same way. */
 function openModelPicker(anchor, after) {
   document.querySelectorAll('.mpick').forEach((n) => n.remove());
   const host = anchor || $('#modelChip');
@@ -330,210 +317,3 @@ function openModelPicker(anchor, after) {
 }
 
 $('#modelChip').onclick = () => openModelPicker();
-
-/* -- settings page: model & accounts ---------------------------------
-   Replaces the demo panel wholesale. Every control here writes through a
-   model.* method, so what the page shows is what is on disk. */
-const kindLabel = (kind) => T('gui.model.kind.' + (kind || 'key'), null, T('gui.model.kind.key'));
-const loginCmd = (slug) => `raven provider login ${String(slug).replace(/_/g, '-')}`;
-const OFF_HEAD = 5;
-
-let provOpen = null;
-let provAll = false;
-let provErr = '';
-let provBusy = false;
-let provFocus = false;
-
-async function provWrite(fn) {
-  if (provBusy) return;
-  provBusy = true; provErr = '';
-  try {
-    await fn();
-    await loadProviders();
-  } catch (e) {
-    provErr = (e.data && e.data.detail) || e.message || String(e);
-  }
-  provBusy = false;
-  drawSettings();
-}
-
-function modelChips(pv) {
-  const box = mk('div');
-  const head = mk('div', 'pnote', T('gui.model.count_pick', { n: pv.models.length }));
-  box.appendChild(head);
-  if (!pv.models.length) return box;
-  const chips = mk('div', 'chips');
-  pv.models.slice(0, 10).forEach((m) => {
-    const c = mk('span', 'chipm');
-    c.appendChild(mk('span', null, shortModel(m)));
-    const x = mk('button', null, '✕');
-    x.title = T('gui.model.remove');
-    x.setAttribute('aria-label', `${T('gui.model.remove')} ${m}`);
-    x.onclick = () => provWrite(() => rpc.call('model.remove_model', { slug: pv.id, model: m }));
-    c.appendChild(x);
-    chips.appendChild(c);
-  });
-  if (pv.models.length > 10) chips.appendChild(mk('span', 'pnote', T('gui.model.count_more', { n: pv.models.length - 10 })));
-  box.appendChild(chips);
-  return box;
-}
-
-function provForm(pv) {
-  const f = mk('div', 'pform');
-
-  if (pv.kind === 'oauth') {
-    f.appendChild(mk('div', 'pnote', T('gui.model.oauth_hint', { name: pv.name })));
-    const cmd = mk('div', 'cmd');
-    cmd.appendChild(mk('code', null, loginCmd(pv.id)));
-    const cp = mk('button', 'mini ghost', T('gui.model.copy'));
-    cp.onclick = () => {
-      navigator.clipboard && navigator.clipboard.writeText(loginCmd(pv.id));
-      cp.textContent = T('gui.model.copied');
-      setTimeout(() => { cp.textContent = T('gui.model.copy'); }, 1200);
-    };
-    cmd.appendChild(cp);
-    f.appendChild(cmd);
-  } else {
-    const base = mk('input');
-    base.type = 'text';
-    base.placeholder = pv.kind === 'local' ? T('gui.model.base_ph_local') : T('gui.model.base_ph');
-    const key = mk('input');
-    key.type = 'password';
-    key.placeholder = pv.on ? T('gui.model.key_ph_update') : T('gui.model.key_ph', { name: pv.name });
-    key.setAttribute('aria-label', `${pv.name} API Key`);
-
-    const save = mk('button', 'mini', pv.on ? T('gui.model.update') : T('gui.model.connect'));
-    save.onclick = () => {
-      const params = { slug: pv.id };
-      if (pv.kind !== 'local') params.api_key = key.value.trim();
-      if (base.value.trim()) params.api_base = base.value.trim();
-      if (pv.kind === 'local' && !params.api_base) { provErr = T('gui.model.need_base'); drawSettings(); return; }
-      if (pv.kind !== 'local' && !params.api_key) { provErr = T('gui.model.need_key'); drawSettings(); return; }
-      provWrite(() => rpc.call('model.save_key', params));
-    };
-
-    if (pv.needsBase || pv.kind === 'endpoint') {
-      const r0 = mk('div', 'keyrow'); r0.appendChild(base); f.appendChild(r0);
-    }
-    const r1 = mk('div', 'keyrow');
-    if (pv.kind !== 'local') r1.appendChild(key);
-    r1.appendChild(save);
-    f.appendChild(r1);
-    if (pv.env) f.appendChild(mk('div', 'pnote', T('gui.model.env_hint', { env: pv.env })));
-  }
-
-  const add = mk('div', 'keyrow');
-  const ai = mk('input');
-  ai.type = 'text';
-  ai.placeholder = T('gui.model.add_ph');
-  const ab = mk('button', 'mini ghost', T('gui.add'));
-  ab.onclick = () => {
-    const v = ai.value.trim();
-    if (!v) return;
-    provWrite(() => rpc.call('model.add_model', { slug: pv.id, model: v }));
-  };
-  add.append(ai, ab);
-  f.appendChild(add);
-  f.appendChild(modelChips(pv));
-
-  if (pv.on) {
-    const cut = mk('button', 'mini ghost danger', T('gui.model.disconnect'));
-    cut.style.justifySelf = 'start';
-    cut.onclick = () => confirmAsk(T('gui.model.disconnect_title'),
-      T('gui.model.disconnect_body', { name: pv.name }), T('gui.model.disconnect_title'),
-      () => provWrite(() => rpc.call('model.disconnect', { slug: pv.id })));
-    f.appendChild(cut);
-  }
-  if (provErr) f.appendChild(mk('div', 'perr', provErr));
-  return f;
-}
-
-function provCard(pv) {
-  const open = provOpen === pv.id;
-  const c = mk('div', 'pcard' + (open ? ' open' : ''));
-  const nm = mk('div', 'nm');
-  nm.append(mk('span', 'led' + (pv.on ? '' : ' warn')), mk('span', null, pv.name));
-  if (pv.id === curProvider) nm.appendChild(mk('span', 'tagm', T('gui.model.is_default')));
-  c.appendChild(nm);
-  const bits = [pv.on ? T('gui.model.state.connected') : kindLabel(pv.kind)];
-  if (pv.models.length) bits.push(T('gui.model.count', { n: pv.models.length }));
-  if (!pv.on && pv.kind === 'oauth') bits.push(T('gui.model.needs_login'));
-  c.appendChild(mk('div', 'mo', bits.join(' · ')));
-  const ctl = mk('div', 'ctl');
-  const go = mk('button', 'mini' + (pv.on || open ? ' ghost' : ''),
-    open ? T('gui.model.collapse') : (pv.on ? T('gui.model.manage') : T('gui.model.connect')));
-  go.setAttribute('aria-expanded', String(open));
-  go.onclick = () => { provOpen = open ? null : pv.id; provErr = ''; provFocus = !open; drawSettings(); };
-  ctl.appendChild(go);
-  c.appendChild(ctl);
-  if (open) c.appendChild(provForm(pv));
-  return c;
-}
-
-function drawModelPanel() {
-  const host = $('#spanels');
-  // Expanding a card redraws the panel; keeping the scroll offset and skipping
-  // the panel's entry animation makes that read as an expand, not a reload.
-  const keep = host.scrollTop;
-  host.innerHTML = '';
-  const p = mk('div', 'panel'); p.dataset.on = 'true';
-  p.style.animation = 'none';
-
-  const home = PROVIDERS.find((x) => x.id === curProvider);
-  const d = scard(p, T('gui.model.default'));
-  const pick = mk('button', 'mini ghost pickm');
-  pick.append(mk('span', 'mono', shortModel(model) || T('gui.model.unset')), mk('span', 'car', '⌄'));
-  pick.onclick = () => openModelPicker(pick, drawSettings);
-  d.appendChild(pick);
-
-  const on = PROVIDERS.filter((x) => x.on);
-  const off = PROVIDERS.filter((x) => !x.on);
-
-  /* Connected first and in its own card: which providers are live is the one
-     thing this panel is asked, and the long tail of unconnected ones must not
-     be the first thing the eye lands on. */
-  const cOn = scard(p, T('gui.model.connected', { n: on.length }));
-  if (!on.length) {
-    cOn.appendChild(mk('div', 'pnote', T('gui.model.none_connected')));
-  } else {
-    const s = mk('div', 'fset');
-    on.forEach((pv) => s.appendChild(provCard(pv)));
-    cOn.appendChild(s);
-  }
-
-  const cOff = scard(p, T('gui.model.others', { n: off.length }));
-  const s2 = mk('div', 'fset');
-  (provAll ? off : off.slice(0, OFF_HEAD)).forEach((pv) => s2.appendChild(provCard(pv)));
-  cOff.appendChild(s2);
-  if (off.length > OFF_HEAD) {
-    const more = mk('button', 'mini ghost',
-      provAll ? T('gui.model.collapse') : T('gui.model.expand_rest', { n: off.length - OFF_HEAD }));
-    more.setAttribute('aria-expanded', String(provAll));
-    more.onclick = () => { provAll = !provAll; drawSettings(); };
-    cOff.appendChild(more);
-  }
-
-  host.appendChild(p);
-  host.scrollTop = keep;
-  if (provFocus) {
-    provFocus = false;
-    const card = p.querySelector('.pcard.open');
-    if (card) {
-      const field = card.querySelector('.pform input');
-      if (field) field.focus();
-      card.scrollIntoView({ block: 'nearest' });
-    }
-  }
-}
-
-{
-  const origDrawSettings = drawSettings;
-  drawSettings = function () {
-    origDrawSettings();
-    if (sTab !== 'model') return;
-    drawModelPanel();
-    const p = $('#spanels').querySelector('.panel');
-    if (p) modelTuning(p);
-  };
-}
-

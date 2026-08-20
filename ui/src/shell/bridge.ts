@@ -30,6 +30,15 @@ export interface WsPanelView {
   picked: boolean
 }
 
+/* What the appearance page reads and writes: per-front-end look plus the
+   shared config.language. */
+export interface LookState {
+  theme: string
+  codeFont: string
+  motion: string
+  lang: string
+}
+
 export interface Shell {
   /* `fallback` mirrors the legacy T(): what to show when the catalogue has no
      entry for the key (the connections form labels schema-declared fields). */
@@ -124,6 +133,22 @@ export interface Shell {
      the column the composer lives in. */
   dockLift?(): void
   plugRedraw?(): void
+  /* Settings-island verbs. Each optional for the same reason, and each
+     published by one guarded line in ui/src/demo/155-bridge.js. */
+  openSet?(): void
+  closeSet?(): void
+  /* Whether the dialog is up. Closing it is legacy chrome flipping the veil,
+     which unmounts nothing, so the island cannot answer this from its own
+     state. */
+  setIsOpen?(): boolean
+  sessionCount?(): number
+  deleteAllSessions?(): void
+  checkUpdate?(btn: HTMLElement): void
+  openUrl?(url: string): void
+  setLang?(lang: string): void
+  look?: { get(): LookState; set(patch: Partial<LookState>): void }
+  ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
+  renderToolset?(host: HTMLElement): void
 }
 
 declare global {

@@ -25,6 +25,8 @@ import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
 import { XaApp } from './features/xa/XaPage'
 import * as xa from './features/xa/store'
+import { SettingsApp } from './features/settings/SettingsPage'
+import * as settings from './features/settings/store'
 import * as foot from './shell/foot'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
@@ -170,6 +172,10 @@ window.RavenIslands = {
     close: xa.close,
     redraw: xa.redraw,
   },
+  settings: {
+    open: settings.open,
+    redraw: settings.redraw,
+  },
 }
 
 /* The transcript's link handler lives with the island now; it arms itself
@@ -263,3 +269,5 @@ if (listHost) createRoot(listHost).render(<RailApp />)
 createRoot(plugHost).render(<PlugApp />)
 const xaHost = document.getElementById('xaBody')
 if (xaHost) createRoot(xaHost).render(<XaApp />)
+const setHost = document.getElementById('spanels')
+if (setHost) createRoot(setHost).render(<SettingsApp />)
