@@ -47,10 +47,7 @@ window.RavenShell = {
   drawList: () => drawList(),
   setCur: (id) => { cur = id; },
   openSession: (s) => openSession(s),
-  removeSession: (s) => removeSession(s),
-  renameTitle: () => renameTitle(),
   dropDraft: (id) => dropDraft(id),
-  pinPersist: (id, pinned) => { if (pinPersist) pinPersist(id, pinned); },
   openCron: () => openCron(),
   navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]) }),
   openWebsearch: () => { openPlugins(); openDetail('websearch'); },
@@ -74,7 +71,6 @@ if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOp
 if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();
 if (typeof APP_VERSION !== 'undefined') window.RavenShell.appVersion = () => APP_VERSION || null;
 if (typeof SESS !== 'undefined') window.RavenShell.sessionCount = () => SESS.length;
-if (typeof deleteAllSessions !== 'undefined') window.RavenShell.deleteAllSessions = () => deleteAllSessions();
 if (typeof checkUpdate !== 'undefined') window.RavenShell.checkUpdate = (btn) => checkUpdate(btn);
 if (typeof wsOpenUrl !== 'undefined') window.RavenShell.openUrl = (u) => wsOpenUrl(u);
 if (typeof setLangShim === 'function') window.RavenShell.setLang = (v) => setLangShim(v);

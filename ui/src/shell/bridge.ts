@@ -99,16 +99,14 @@ export interface Shell {
   slashName?(id: string): string
   slashHelp?(id: string): string
   /* Rail island verbs, all optional for the same reason. They are late-bound
-     closures over legacy names the live layer rebinds (openSession,
-     removeSession, renameTitle) or wraps (drawList during the live boot),
-     which is why the island calls back out instead of acting locally. */
+     closures over legacy names the live layer rebinds (openSession) or wraps
+     (drawList during the live boot), which is why the island calls back out
+     instead of acting locally. What is done TO a session -- delete, rename,
+     pin, delete-everything -- left this bridge for DS.sessions. */
   drawList?(): void
   setCur?(id: string | null): void
   openSession?(s: unknown): void
-  removeSession?(s: unknown): void
-  renameTitle?(): void
   dropDraft?(id: string): void
-  pinPersist?(id: string, pinned: boolean): void
   openCron?(): void
   /* What markNew needs of the chrome's page registry: the NAV_OF keys and the
      button a page lights up. The More rows are not in here -- the nav flyout
@@ -144,7 +142,6 @@ export interface Shell {
      state. */
   setIsOpen?(): boolean
   sessionCount?(): number
-  deleteAllSessions?(): void
   checkUpdate?(btn: HTMLElement): void
   openUrl?(url: string): void
   setLang?(lang: string): void

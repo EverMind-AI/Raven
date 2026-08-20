@@ -65,14 +65,19 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     closeSet: () => shellCalls.push(['closeSet', null]),
     openConn: () => shellCalls.push(['openConn', null]),
     sessionCount: () => 3,
-    deleteAllSessions: () => shellCalls.push(['deleteAllSessions', null]),
   }
   window.RavenShell = fakeShell
-  window.DS = { settings: source }
+  /* The danger card's button is a SESSION operation offered from this page, so
+     it goes out through DS.sessions rather than this page's own source. */
+  const wiped: Array<null> = []
+  window.DS = {
+    settings: source,
+    sessions: { snapshot: () => ({ rows: [], cur: null, busy: false }), deleteAll: () => wiped.push(null) },
+  }
   document.body.innerHTML =
     '<div class="snavlist" id="snavList"></div><h3 id="setTitle"></h3><p class="sub" id="setSub"></p>' +
     '<div class="spanels" id="spanels"></div>'
-  return { source, calls, shellCalls }
+  return { source, calls, shellCalls, wiped }
 }
 
 async function mount() {
@@ -108,6 +113,23 @@ describe('settings island', () => {
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.usage')
     /* The fixture's null usage answer is the demo's no-data note. */
     expect(await screen.findByText('gui.set.nodata')).toBeTruthy()
+  })
+
+  /* The one destructive button on the page, and it had no coverage: it used to
+     leave through a shell verb, and now it leaves through DS.sessions. Either
+     way what matters is that it goes out at all, and only after the confirm. */
+  it('wipes every session through the session source, from the data page', async () => {
+    const h = install()
+    await mount()
+    act(() => {
+      store.setTab('data')
+    })
+    expect(h.wiped).toEqual([])
+    const btn = screen.getByText('gui.set.delete_all')
+    await act(async () => {
+      btn.click()
+    })
+    expect(h.wiped).toHaveLength(1)
   })
 
   it('reads the counters when the dialog opens, never when it is shut', async () => {

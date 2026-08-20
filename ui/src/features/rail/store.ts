@@ -142,14 +142,45 @@ export function markNew(): void {
   }
 }
 
-/* The demo-mode delete, reached through the legacy removeSession shim (live
-   mode rebinds that name to its RPC version, so this never runs there).
-   Splices the shared rows in place rather than rebinding SESS -- an island
-   cannot reassign a page-script binding -- which every reader observes the
-   same way. */
+/* Every session at once, from the settings page's data section. Same guard as
+   the pin: no source installed means there is nothing to delete from. */
+export function deleteAll(): void {
+  try {
+    source().deleteAll?.()
+  } catch {
+    /* no source, nothing to delete */
+  }
+}
+
+/* Persisting a pin, when there is anywhere to persist it. Wrapped rather than
+   read at the call site because source() throws with nothing installed, and an
+   optimistic move must not be undone by the attempt to record it. */
+export function pin(id: string, pinned: boolean): void {
+  try {
+    source().pin?.(id, pinned)
+  } catch {
+    /* no source, nowhere to put it */
+  }
+}
+
+/* Deleting a session. A source that can delete one does it -- the live page
+   has a confirmation to ask and a pile of per-session state to forget, none of
+   which belongs to the rail. Without one, this is the whole behaviour: splice
+   the shared rows in place rather than rebinding SESS (an island cannot
+   reassign a page-script binding), and offer it back. */
 let undoBin: { s: SessRow; at: number } | null = null
 
 export function remove(s: SessRow): void {
+  let via: RailSource['remove']
+  try {
+    via = source().remove
+  } catch {
+    /* nothing installed: the local behaviour below is the whole of it */
+  }
+  if (via) {
+    via(s)
+    return
+  }
   const sh = shell()
   const rows = source().snapshot().rows
   const at = rows.indexOf(s)
@@ -177,10 +208,11 @@ export function remove(s: SessRow): void {
   })
 }
 
-/* Inline rename in the top bar; the list follows. The live layer wraps the
-   legacy renameTitle name around this to persist the result, so the DOM
-   dance (swap #title for an input, put an h1#title back) stays exactly the
-   legacy one. */
+/* Inline rename in the top bar; the list follows. The DOM dance -- swap
+   #title for an input, put an h1#title back -- is the legacy one, kept
+   byte-for-byte. What changed is who persists it: the source is TOLD the new
+   title (see renamed in types.ts), where the live layer used to wrap this
+   function and hang its own blur listener off the input created here. */
 export function rename(): void {
   const h = document.getElementById('title')
   if (!h) return
@@ -200,10 +232,16 @@ export function rename(): void {
   if (rb) rb.hidden = true
   inp.focus()
   inp.select()
+  const was = s.title
   const finish = (commit: boolean): void => {
     const v = inp.value.trim()
     const next = commit && v ? v : s.title
     s.title = next
+    /* Only on a real change, and from inside finish rather than off a blur:
+       committing with Enter replaces the input while it still has focus, and
+       whether that fires a blur at all is the browser's business -- which is
+       why the wrapper this replaces could miss an Enter entirely. */
+    if (next !== was) source().renamed?.(s.id, next)
     const nh = document.createElement('h1')
     nh.textContent = plainTitle(next)
     nh.id = 'title'

@@ -30,11 +30,16 @@ let V = (path, fallback) => fallback;
 
 /* Real writes that only the live layer can perform. The demo keeps a local
    effect so the shell stays explorable; live.js swaps in the RPC. */
-let deleteAllSessions = () => {
+let checkUpdate = () => notLive();
+
+/* Wiping the list is a session operation, so it goes on the session source
+   rather than staying a name the live layer overwrites. It has to live in this
+   layer either way: the list and the current session are page bindings, and an
+   island cannot reassign one. */
+DS.sessions.deleteAll = () => {
   SESS = []; cur = null; drawList(); $('#stage').innerHTML = '';
   $('#title').textContent = T('gui.new_task'); pitch();
 };
-let checkUpdate = () => notLive();
 
 /* A tagged control never renders the new value; the refusal is spoken in the
    row, not in a toast. Kept for the legacy rows (capabilities tool

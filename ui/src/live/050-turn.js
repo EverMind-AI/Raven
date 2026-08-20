@@ -240,7 +240,7 @@ function titleFromFirstMessage(text) {
    is reloaded and the group is simply gone -- which is exactly how an older
    resident gateway, with no session.pin to call at all, presents itself. Put
    the row back and say so. */
-pinPersist = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
+DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
   .catch((e) => {
     const s = sess(id);
     if (s) { s.pin = !pinned; drawList(); }
