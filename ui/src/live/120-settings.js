@@ -196,124 +196,17 @@ async function loadLang() {
 const shortModel = (m) => String(m || '').split('/').pop();
 const setModelLabel = () => { $('#modelName').textContent = shortModel(model); $('#modelChip').title = model; };
 
-/* Anchored to the composer chip by default; the settings island passes its
-   own button and a callback so both places pick a model the same way. */
-function openModelPicker(anchor, after) {
-  document.querySelectorAll('.mpick').forEach((n) => n.remove());
-  const host = anchor || $('#modelChip');
-  const authed = PROVIDERS.filter((p) => p.on && p.models.length);
-  if (!authed.length) { toast(T('gui.picker.no_account')); return; }
-
-  const pick = mk('div', 'mpick');
-  pick.setAttribute('role', 'dialog');
-  let provIdx = Math.max(0, authed.findIndex((p) => p.models.includes(model)));
-  let query = '';
-
-  const find = mk('div', 'find');
-  find.appendChild(mk('span', null, '⌕')).style.cssText = 'color:var(--faint)';
-  const q = mk('input');
-  q.placeholder = T('gui.picker.search_ph');
-  find.appendChild(q);
-  pick.appendChild(find);
-
-  const cols = mk('div', 'cols');
-  const provs = mk('div', 'provs');
-  const models = mk('div', 'models');
-  cols.append(provs, models);
-  pick.appendChild(cols);
-
-  if (!anchor) {
-    const foot = mk('div', 'foot');
-    const manage = mk('button', null, T('gui.picker.manage'));
-    manage.onclick = () => { close(); openSettings(); };
-    foot.appendChild(manage);
-    pick.appendChild(foot);
-  }
-
-  const choose = (m) => {
-    close();
-    const prev = model;
-    model = m; setModelLabel();
-    if (after) after();
-    rpc.call('config.set', { key: 'model', value: m })
-      .then(() => toast(`已切换到 ${shortModel(m)}`))
-      .catch((e) => {
-        model = prev; setModelLabel();
-        if (after) after();
-        toast(`切换失败：${(e.data && e.data.detail) || e.message || e}`);
-      });
-  };
-
-  const modelRow = (m, subtitle) => {
-    const b = mk('button', 'row');
-    const nm = mk('span', 'nm', shortModel(m));
-    b.appendChild(nm);
-    if (subtitle) b.appendChild(mk('span', 'sub', subtitle));
-    if (m === model) b.appendChild(mk('span', 'tick', '✓'));
-    b.onclick = () => choose(m);
-    return b;
-  };
-
-  function render() {
-    provs.innerHTML = '';
-    models.innerHTML = '';
-    // Search narrows each provider's list in place: the provider column stays,
-    // its count turns into a hit count, and empty providers dim out.
-    const hits = authed.map((p) => (query
-      ? p.models.filter((m) => shortModel(m).toLowerCase().includes(query))
-      : p.models));
-    if (query && !hits[provIdx].length) {
-      const first = hits.findIndex((h) => h.length);
-      if (first >= 0) provIdx = first;
-    }
-    authed.forEach((p, i) => {
-      const b = mk('button', 'row' + (hits[i].length ? '' : ' dim'));
-      b.setAttribute('aria-selected', String(i === provIdx && hits[i].length > 0));
-      b.append(mk('span', 'nm', p.name), mk('span', 'ct', String(hits[i].length)));
-      if (hits[i].includes(model)) b.appendChild(mk('span', 'tick', '•'));
-      b.onclick = () => { if (!hits[i].length) return; provIdx = i; render(); };
-      provs.appendChild(b);
-    });
-    const list = hits[provIdx] || [];
-    if (!list.length) {
-      models.appendChild(mk('div', 'empty', query ? T('gui.picker.no_match') : T('gui.picker.empty_provider')));
-      return;
-    }
-    list.forEach((m) => models.appendChild(modelRow(m)));
-    const active = models.querySelector('.tick');
-    if (active) active.parentElement.scrollIntoView({ block: 'nearest' });
-  }
-
-  q.oninput = () => { query = q.value.trim().toLowerCase(); render(); };
-  q.onkeydown = (e) => {
-    e.stopPropagation();
-    if (composing(e)) return;
-    if (e.key === 'Escape') { e.preventDefault(); close(); }
-    if (e.key === 'Enter') {
-      const first = models.querySelector('.row');
-      if (first) first.click();
-    }
-  };
-
-  const onDown = (e) => { if (!e.target.closest('.mpick') && !host.contains(e.target)) close(); };
-  function close() {
-    document.removeEventListener('pointerdown', onDown, true);
-    pick.remove();
-  }
-
-  render();
-  document.body.appendChild(pick);
-  // documentElement metrics, not window.innerWidth: the latter reads 0 inside
-  // some embedded webviews and would push the popover into the corner.
-  const vw = document.documentElement.clientWidth;
-  const vh = document.documentElement.clientHeight;
-  const r = host.getBoundingClientRect();
-  const box = pick.getBoundingClientRect();
-  const above = r.top - box.height - 8;
-  pick.style.left = `${Math.max(12, Math.min(r.left, vw - box.width - 12))}px`;
-  pick.style.top = `${above >= 12 ? above : Math.min(r.bottom + 8, Math.max(12, vh - box.height - 12))}px`;
-  document.addEventListener('pointerdown', onDown, true);
-  q.focus();
-}
+/* The picker itself is an island (ui/src/features/model/). What stays here is
+   the source it reads: the provider list this transport fetched, the page's
+   current pick, and the two halves of writing one -- the local set the chip
+   repaints from, and the rpc call that can reject. Splitting those two is what
+   lets the picker be optimistic and still roll back. */
+DS.model = {
+  providers: () => PROVIDERS,
+  current: () => model,
+  setLocal: (m) => { model = m; setModelLabel(); },
+  persist: (m) => rpc.call('config.set', { key: 'model', value: m }),
+  openSettings: () => openSettings(),
+};
 
 $('#modelChip').onclick = () => openModelPicker();

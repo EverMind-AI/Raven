@@ -10,6 +10,8 @@ import { installLinkTrap } from './features/browser/store'
 import { CronApp } from './features/cron/CronPage'
 import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
+import { ModelPickerApp } from './features/model/ModelPicker'
+import * as modelPicker from './features/model/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
 import { PlugApp } from './features/plugins/PluginsPage'
@@ -57,6 +59,7 @@ declare global {
     setMemFault?: typeof banner.setFault
     openImage?: typeof lightbox.open
     closeImage?: typeof lightbox.close
+    openModelPicker?: typeof modelPicker.open
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
   }
@@ -92,6 +95,11 @@ window.drawBanner = banner.draw
 window.setMemFault = banner.setFault
 window.openImage = lightbox.open
 window.closeImage = lightbox.close
+/* The model picker's opener. Two callers, both still legacy: the composer's
+   model chip, and the settings source's pickModel door (which the settings
+   island asks for, since the picker is one popover over the whole page rather
+   than a page's own control). */
+window.openModelPicker = modelPicker.open
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -234,6 +242,14 @@ scrollbars.install()
 panes.install()
 navfly.install()
 find.install()
+
+/* The model picker renders nothing until asked. One root at the body rather
+   than a host inside a page: the popover is anchored to whatever button opened
+   it -- the composer chip or a settings row -- and belongs to neither. The
+   wrapper is inert for layout; .mpick is position: fixed. */
+const pickHost = document.createElement('div')
+document.body.appendChild(pickHost)
+createRoot(pickHost).render(<ModelPickerApp />)
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)
