@@ -78,7 +78,6 @@ rpc.notify['system.update_available'] = (p) => {
    conversation's turn. */
 rpc.notify['memory.health'] = (p) => {
   setMemFault(p && p.ok === false ? (p.error || T('gui.mem.down')) : null);
-  drawBanner();
 };
 
 let pmExtSoon = null;

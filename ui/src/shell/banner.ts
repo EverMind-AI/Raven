@@ -25,14 +25,15 @@ export interface BannerSource {
    consecutive failed writes mean the backend is not coming back on its own. */
 let fault: string | null = null
 
-/* Stores, and does NOT redraw. That looks like a missing convenience and is
-   not: the live layer replaces the published drawBanner with a no-op (see
-   live/120-settings.js -- a config gap belongs in the settings page, not as a
-   strip over every conversation), so the redraw has to go out through that name
-   for the override to still apply. Drawing from in here would put the strip
-   back in live mode, which is a behaviour change nobody asked for. */
+/* Stores AND draws. It used to only store, so that the redraw would go out
+   through the published drawBanner name and pick up the live layer's override
+   of it -- and that override cleared the host, so storing a fault put nothing
+   on screen. The override is gone (live/120-settings.js says its no to the one
+   notice it means, through the source), and with it the reason for a setter
+   whose effect depends on the caller remembering a second call. */
 export function setFault(detail: string | null): void {
   fault = detail
+  draw()
 }
 
 export function draw(): void {

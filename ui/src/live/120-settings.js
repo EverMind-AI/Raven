@@ -5,10 +5,15 @@
    the banner override, the language flip (redrawAll), and the composer's
    model chip with its picker popover. */
 
-/* No standing notice banners: a config gap belongs in the settings page, not
-   as a strip above every conversation. */
-drawBanner = function () {
-  $('#bannerHost').innerHTML = '';
+/* No websearch notice in live mode: a config gap belongs in the settings page,
+   not as a strip above every conversation. Said through the source rather than
+   by replacing drawBanner, which is what it used to do -- and replacing the
+   drawing suppressed the OTHER notice too. A memory fault is not a config gap:
+   it means the backend has stopped storing and has been handing back
+   normal-looking replies the whole time, and live mode is the only mode where
+   it can happen at all. Refusing one notice is a decision about that notice. */
+DS.banner = {
+  websearchNeeds: () => false,
 };
 
 /* The config settings.get returned. Keys arrive camelCased
