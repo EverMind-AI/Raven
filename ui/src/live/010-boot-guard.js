@@ -52,11 +52,4 @@ let listReady = false;
   drawList();
 }
 
-/* No toasts: every state change the user triggers is already visible where
-   they made it (the list redraws, the switch moves, the transcript shows the
-   error), so a floating strip only repeats it. Failures still reach the
-   console for diagnosis. */
-toast = function (text) {
-  if (window.console) console.info('[raven]', text);
-};
 
