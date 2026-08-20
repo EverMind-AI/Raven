@@ -572,6 +572,28 @@ The three-state outcome an EvalJudge returns: `completed` (goal addressed), `fai
 (visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
 writes completed/failed (never unknown) into `HISTORY.md`.
 
+### Trajectory
+
+**Attempt**:
+One task try, possibly spanning several turns — the stable address of a trajectory.
+Every span carries `attempt.id` (`raven/tracing/spans.py`); without an explicitly
+opened attempt (`trace.begin_attempt(session_key)`) each turn is its own single-turn
+attempt whose id equals the trace id, so every trace is addressable as an attempt.
+_Avoid_: "run id" / "task id" — neither is bound to span records.
+
+**Trajectory Verdict** (`raven/trajectory/verdict.py`):
+The task-outcome label for one Attempt: `pass` / `fail` (agent failure) / `infra`
+(environment or harness crash, excluded from diagnosis), plus the judging `source`.
+Appended to `verdicts.jsonl` beside the trace logs by whoever can judge; deliberately
+outside tracing — `status.code` says whether code crashed, a verdict says whether the
+task succeeded.
+_Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown).
+
+**Trajectory Pin** (`raven/trajectory/store.py`):
+The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
+state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
+their spans or the artifacts those spans reference.
+
 ### Workspace & Onboarding
 
 **Workspace**:

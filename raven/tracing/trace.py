@@ -50,6 +50,7 @@ class Span:
         "kind",
         "trace_id",
         "span_id",
+        "attempt_id",
         "_parent",
         "_start",
         "_attrs",
@@ -64,11 +65,14 @@ class Span:
         "_source",
     )
 
-    def __init__(self, name, kind, *, trace_id, span_id, parent, session_key, channel, chat_id, start, source=None):
+    def __init__(
+        self, name, kind, *, trace_id, span_id, parent, session_key, channel, chat_id, start, source=None, attempt_id=None
+    ):
         self.name = name
         self.kind = kind
         self.trace_id = trace_id
         self.span_id = span_id
+        self.attempt_id = attempt_id
         self._parent = parent
         self._session_key = session_key
         self._channel = channel
@@ -161,6 +165,7 @@ class Span:
                     session_key=self._session_key,
                     channel=self._channel,
                     chat_id=self._chat_id,
+                    attempt_id=self.attempt_id,
                     start_time=self._start,
                     end_time=_spans.now_iso(),
                     status_code=self._status_code,
@@ -180,6 +185,7 @@ class _NoopSpan:
     trace_id = ""
     span_id = ""
     name = ""
+    attempt_id = ""
     invocation_source = None
 
     def set(self, *_a, **_k):
@@ -239,6 +245,9 @@ def span(
         session_key = session_key if session_key is not None else (cur.session_key if cur else None)
         channel = channel if channel is not None else (cur.channel if cur else None)
         chat_id = chat_id if chat_id is not None else (cur.chat_id if cur else None)
+        # Children inherit the tree's attempt id; a root span resolves it from
+        # the session's open attempt, else this trace is a single-turn attempt.
+        attempt_id = (cur.attempt_id if cur else None) or _ctx.current_attempt(session_key) or trace_id
         span_id = _ctx.new_span_id()
         handle = Span(
             name,
@@ -251,6 +260,7 @@ def span(
             chat_id=chat_id,
             start=_spans.now_iso(),
             source=cur.source if cur else None,
+            attempt_id=attempt_id,
         )
         handle.set(attributes, **kw)
         # A detached span is a leaf marker: it does NOT become the active parent,
@@ -268,6 +278,7 @@ def span(
                 session_key=session_key,
                 channel=channel,
                 chat_id=chat_id,
+                attempt_id=attempt_id,
             )
         )
     except Exception:  # noqa: BLE001 — open must never break the host
@@ -295,6 +306,7 @@ def span(
                         session_key=handle._session_key,
                         channel=handle._channel,
                         chat_id=handle._chat_id,
+                        attempt_id=handle.attempt_id,
                         start_time=handle._start,
                         end_time=_spans.now_iso(),
                         status_code=handle._status_code,
@@ -408,6 +420,38 @@ def instrument(name: str, *, kind: str | None = None, detached: bool = False, se
 def current() -> Any | None:
     """The active trace context (or None). Exposed for adopters that need it."""
     return _ctx.current()
+
+
+def begin_attempt(session_key: str, attempt_id: str | None = None) -> str:
+    """Open a multi-turn attempt for ``session_key``.
+
+    Every span of every turn opened while the attempt is active carries its id
+    as ``attempt.id`` — the stable trajectory address a task spanning several
+    turns groups under. Without an open attempt each turn is its own
+    single-turn attempt (``attempt.id`` = trace id). No-throw; returns the id.
+    """
+    try:
+        return _ctx.begin_attempt(session_key, attempt_id)
+    except Exception:  # noqa: BLE001 — tracing must never break the host
+        _log.debug("tracing: begin_attempt failed", exc_info=True)
+        return attempt_id or ""
+
+
+def end_attempt(session_key: str) -> str | None:
+    """Close the open attempt for ``session_key`` (no-op if none). No-throw."""
+    try:
+        return _ctx.end_attempt(session_key)
+    except Exception:  # noqa: BLE001
+        _log.debug("tracing: end_attempt failed", exc_info=True)
+        return None
+
+
+def current_attempt(session_key: str | None) -> str | None:
+    """The open attempt id for ``session_key``, or None. No-throw."""
+    try:
+        return _ctx.current_attempt(session_key)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def enabled() -> bool:
