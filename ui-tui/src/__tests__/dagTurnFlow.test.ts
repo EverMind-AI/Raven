@@ -151,6 +151,99 @@ const makeFakeRpc = (): FakeRpc => {
 }
 
 describe('chatStream DAG dispatch', () => {
+  it("carries the call's own prompts onto the graph the run_started frame builds", async () => {
+    // The read-back that matters: no dag.* frame carries a prompt template, so
+    // the panel can only name a node if tool.start's arguments were kept and
+    // matched to the run by tool_call_id. Asserting the extraction alone would
+    // pass with the two halves never wired together.
+    turnController.reset()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: {
+        tool_call_id: 'call-a',
+        name: 'run_subagent_dag',
+        arguments: {
+          nodes: [
+            { id: 'a', agent: 'echo', prompt_template: 'read the file' },
+            { id: 'b', agent: 'echo', prompt_template: 'summarise {{ a.output }}' }
+          ]
+        }
+      }
+    } as TurnEvent)
+    fake.__pushEvent(runStarted('dag-1', 'call-a'))
+
+    expect(getTurnState().dagRuns[0]!.nodes.map(n => n.promptTemplate)).toEqual([
+      'read the file',
+      'summarise {{ a.output }}'
+    ])
+
+    await stream.detach()
+  })
+
+  it('bounds the stored prompt sets, so a rejected graph cannot pin them for the session', async () => {
+    // A graph rejected by validation returns before any dag.* frame, so its
+    // entry is never consumed. Eviction is keyed on nothing but insertion order
+    // -- deleting on the call's completion instead would race the background
+    // path, where the tool returns before the runner has emitted run_started.
+    turnController.reset()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    const call = (id: string) =>
+      fake.__pushEvent({
+        type: 'tool.start',
+        payload: {
+          tool_call_id: id,
+          name: 'run_subagent_dag',
+          arguments: { nodes: [{ id: 'a', agent: 'echo', prompt_template: `prompt for ${id}` }] }
+        }
+      } as TurnEvent)
+
+    // The first call is rejected (no dag.* frame ever follows it), then enough
+    // later calls arrive to push it out.
+    call('call-rejected')
+    for (let i = 0; i < 8; i++) {
+      call(`call-${i}`)
+    }
+
+    fake.__pushEvent(runStarted('dag-old', 'call-rejected'))
+    expect(getTurnState().dagRuns.find(r => r.runId === 'dag-old')?.nodes[0]!.promptTemplate).toBeUndefined()
+
+    fake.__pushEvent(runStarted('dag-new', 'call-7'))
+    expect(getTurnState().dagRuns.find(r => r.runId === 'dag-new')?.nodes[0]!.promptTemplate).toBe('prompt for call-7')
+
+    await stream.detach()
+  })
+
+  it('leaves the graph unnamed when the frame names no tool call', async () => {
+    // Without a tool_call_id there is nothing to match the stored prompts to,
+    // so the rows fall back to their node ids rather than borrowing another
+    // call's prompts.
+    turnController.reset()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: {
+        tool_call_id: 'call-a',
+        name: 'run_subagent_dag',
+        arguments: { nodes: [{ id: 'a', agent: 'echo', prompt_template: 'read the file' }] }
+      }
+    } as TurnEvent)
+    fake.__pushEvent(runStarted('dag-1'))
+
+    expect(getTurnState().dagRuns[0]!.nodes.every(n => n.promptTemplate === undefined)).toBe(true)
+
+    await stream.detach()
+  })
+
   it('routes DAG progress frames off the subscription into the turn graphs', async () => {
     turnController.reset()
     const fake = makeFakeRpc()

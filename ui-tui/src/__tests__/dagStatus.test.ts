@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { DagNodeDetail } from '../rpc/index.js'
 
-import { DAG_STATUS_GLYPH, dagRunHeadline, formatDagNodeDetail } from '../lib/dagStatus.js'
+import { DAG_STATUS_GLYPH, dagNodeSummary, dagRunHeadline, formatDagNodeDetail } from '../lib/dagStatus.js'
 
 // Derived from DAG_STATUS_GLYPH's own keys, not hand-copied: its `Record<DagRunNodeStatus, …>`
 // type already forces that object to have exactly one entry per status, so this can never
@@ -128,5 +128,72 @@ describe('formatDagNodeDetail', () => {
     const text = formatDagNodeDetail(detail({ prompt: undefined }))
 
     expect(text).toContain('no prompt')
+  })
+})
+
+describe('dagNodeSummary', () => {
+  it('reads a node as the first line of what it was asked', () => {
+    // A DAG prompt opens with its instruction and elaborates below, so the
+    // opening line is the query and everything under it is detail.
+    const summary = dagNodeSummary('Inspect the i18n messages for dag.* keys\n\nCheck both locales.', 80)
+
+    expect(summary).toBe('Inspect the i18n messages for dag.* keys')
+  })
+
+  it('skips blank lines before the instruction', () => {
+    expect(dagNodeSummary('\n\n  Summarise the bridge files\n', 80)).toBe('Summarise the bridge files')
+  })
+
+  it('drops markdown furniture the row has no room to spend on', () => {
+    expect(dagNodeSummary('## Task: audit the skills\nbody', 80)).toBe('Task: audit the skills')
+    expect(dagNodeSummary('- inspect the panel\nbody', 80)).toBe('inspect the panel')
+    expect(dagNodeSummary('1. inspect the panel', 80)).toBe('inspect the panel')
+    expect(dagNodeSummary('> inspect the panel', 80)).toBe('inspect the panel')
+  })
+
+  it('looks past a line that is furniture and nothing else', () => {
+    // A template opening with a bare `#` heading marker would otherwise summarise
+    // to the empty string and leave the row anonymous.
+    expect(dagNodeSummary('##\nthe real instruction', 80)).toBe('the real instruction')
+  })
+
+  it('looks past a bare section label to the request under it', () => {
+    // `## Task` names where the request is, never what it is. A row showing it
+    // says nothing about the node at all.
+    expect(dagNodeSummary('## Task\nList the bridge files this change touches', 80)).toBe(
+      'List the bridge files this change touches'
+    )
+    expect(dagNodeSummary('Context:\nread the panel', 80)).toBe('read the panel')
+  })
+
+  it('keeps a heading that states the request rather than naming a section', () => {
+    expect(dagNodeSummary('## Task: audit the skills\nbody', 80)).toBe('Task: audit the skills')
+  })
+
+  it("collapses a placeholder, which would spend the row on a dependency's name", () => {
+    // The row already spells its dependencies out at the end, so the node name
+    // inside the placeholder is redundant -- and 40 cells of it crowds out the
+    // words that say what the node actually does.
+    expect(dagNodeSummary('Summarise {{ fetch_the_upstream_thing.output }} into a review note', 80)).toBe(
+      'Summarise \u2026 into a review note'
+    )
+    expect(dagNodeSummary('Read {{ ref:docs/spec.md }} closely', 80)).toBe('Read \u2026 closely')
+  })
+
+  it('looks past a line that is only a placeholder', () => {
+    expect(dagNodeSummary('{{ fetch.output }}\nnow rank them', 80)).toBe('now rank them')
+  })
+
+  it('clips to the room the row has left', () => {
+    const summary = dagNodeSummary('inspect every single one of the i18n message keys', 20)
+
+    expect(summary).toHaveLength(20)
+    expect(summary.endsWith('…')).toBe(true)
+  })
+
+  it('is empty when the template never reached the client', () => {
+    // The row then falls back to the node id rather than rendering "agent: ".
+    expect(dagNodeSummary(undefined, 80)).toBe('')
+    expect(dagNodeSummary('   \n\n  ', 80)).toBe('')
   })
 })

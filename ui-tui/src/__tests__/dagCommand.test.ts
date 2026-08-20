@@ -99,6 +99,26 @@ describe('/dag (no argument)', () => {
     })
   })
 
+  it('lists every node id, which is the only keyboard route to one', () => {
+    // `/dag <node>` takes an id and nothing else, and the tool row's own label
+    // elides past the third id ("N nodes: a, b, c (+K more)"). Expanding a row
+    // shows its id but needs a mouse, so without this the ids past the third
+    // are reachable from nowhere.
+    const sys = vi.fn()
+    const rpc = vi.fn(() => Promise.resolve({ run: SNAPSHOT }))
+    turnController.reset()
+    openRun()
+
+    dagCmd.run('', buildCtx(rpc, sys), 'dag')
+
+    return vi.waitFor(() => {
+      const out = sys.mock.calls.flat().join('\n')
+      expect(out).toContain('a')
+      expect(out).toContain('b')
+      expect(out).toMatch(/nodes:/i)
+    })
+  })
+
   it('says so when the turn has no DAG run', () => {
     const sys = vi.fn()
     const rpc = vi.fn(() => Promise.resolve({}))

@@ -267,7 +267,7 @@ const WorkSegment = memo(function WorkSegment({
   const dagFor = (tool: EpisodeTool, depth: number) =>
     tool.dag ? (
       <Box key={`g:${tool.id}`} paddingLeft={depth}>
-        <DagPanel run={tool.dag} t={t} />
+        <DagPanel run={tool.dag} t={t} width={Math.max(24, width - depth)} />
       </Box>
     ) : null
 

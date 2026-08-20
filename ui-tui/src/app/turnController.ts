@@ -140,6 +140,7 @@ const clear = (t: Timer): null => {
 
 class TurnController {
   bufRef = ''
+  private dagPromptsByCall = new Map<string, Record<string, string>>()
   episodes: Episode[] = []
   private lastEpisodeStartMs = 0
   interrupted = false
@@ -948,6 +949,7 @@ class TurnController {
     this.clearStatusTimer()
     this.idle()
     this.bufRef = ''
+    this.dagPromptsByCall.clear()
     this.interrupted = false
     this.lastStatusNote = ''
     this.activeReasoningText = ''
@@ -1022,9 +1024,12 @@ class TurnController {
    * frame and the tool result arrive out of order.
    */
   recordDagEvent(event: DagEvent) {
+    const callId = event.payload.tool_call_id
+    const templates = callId ? this.dagPromptsByCall.get(callId) : undefined
+
     patchTurnState(state => {
       const at = state.dagRuns.findIndex(run => run.runId === event.payload.run_id)
-      const folded = foldDagEvent(at === -1 ? null : state.dagRuns[at]!, event)
+      const folded = foldDagEvent(at === -1 ? null : state.dagRuns[at]!, event, templates)
 
       // A frame for a run we never saw start: nothing to draw (see foldDagEvent).
       if (folded === null) {
@@ -1036,7 +1041,53 @@ class TurnController {
         dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
       }
     })
+
+    // Spent: the templates now live on the nodes, which is what the transcript
+    // keeps. Holding the call's whole prompt set past that would grow with every
+    // graph the session runs.
+    if (callId && event.type === 'dag.run_started') {
+      this.dagPromptsByCall.delete(callId)
+    }
+
     this.pinDagToEpisodeTool(event.payload.run_id)
+  }
+
+  /**
+   * Remember a `run_subagent_dag` call's per-node prompts until its run starts.
+   *
+   * Kept here rather than on the tool row because the graph is built from
+   * `dag.run_started`, which is the only frame that carries the node list. The
+   * two are matched by tool call id; a host that does not correlate the two
+   * sends none, and those rows fall back to naming their node id.
+   *
+   * `dag.run_started` releases an entry, but not every call reaches one: a graph
+   * rejected by validation returns its error before any `dag.*` frame, so its
+   * entry would sit for the life of the process. Insertion order therefore
+   * bounds the map as well -- and it is the only thing that can, because the
+   * obvious alternative of releasing on the call's completion races the
+   * background path, where the tool returns as soon as the runner is scheduled
+   * and so can complete before `dag.run_started` is emitted.
+   */
+  recordDagPrompts(toolCallId: string, templates: Record<string, string>) {
+    if (Object.keys(templates).length === 0) {
+      return
+    }
+
+    // Generous next to how many graphs a turn runs, so eviction only ever
+    // reaches calls that never started a run.
+    const LIMIT = 8
+
+    this.dagPromptsByCall.set(toolCallId, templates)
+
+    while (this.dagPromptsByCall.size > LIMIT) {
+      const oldest = this.dagPromptsByCall.keys().next()
+
+      if (oldest.done) {
+        break
+      }
+
+      this.dagPromptsByCall.delete(oldest.value)
+    }
   }
 
   /**
