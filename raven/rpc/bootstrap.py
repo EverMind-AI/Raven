@@ -61,6 +61,7 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
     from raven.cli.tui_commands import (
         _build_agent_loop,
         _build_cron_callback_spine,
+        _fanout_cron_missed,
     )
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
@@ -167,6 +168,12 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
             )
             agent_loop.cron_service.on_job = _build_cron_callback_spine(base_on_cron, emitter)
             await agent_loop.cron_service.start()
+            # start() dropped past-due one-shot reminders on this runner's
+            # partition. The served page reaches the runtime through here rather
+            # than through tui_commands, so without this the drops are collected
+            # and never told to anyone.
+            if agent_loop.cron_service.last_startup_drops:
+                await _fanout_cron_missed(emitter, drops=agent_loop.cron_service.last_startup_drops)
 
     # The sink is what makes an explicit version check visible to tabs other than
     # the one that asked: two windows on one gateway, one settings button, and

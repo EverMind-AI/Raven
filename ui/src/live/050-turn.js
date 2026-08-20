@@ -102,6 +102,11 @@ function onEvent(ev) {
     goState(); drawMeter(); drawList();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
+  } else if (ev.type === 'cron.missed') {
+    /* One-shot reminders whose time passed while the backend was down. Queued
+       at bring-up and flushed to the first subscription, so this arrives once
+       per restart rather than per job -- the count is the payload's own. */
+    toast(T('gui.cron.missed_x', { count: p.count }));
   } else if (ev.type === 'subagent.delivered') {
     /* The seam a delegated result re-enters the conversation at: the row is
        the "because" one line above the retelling that follows. Clicking it

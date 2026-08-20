@@ -1543,6 +1543,10 @@
       "en": "Schedule \"{name}\" produced something new",
       "zh": "定时任务「{name}」有新产出"
     },
+    "gui.cron.missed_x": {
+      "en": "Missed reminders while Raven was down: {count}",
+      "zh": "Raven 停机期间错过的提醒：{count}"
+    },
     "gui.cron.next": {
       "en": "{when} - next {next}",
       "zh": "{when} · 下次 {next}"

@@ -10,7 +10,10 @@ that renders a question or a progress stream.
 
 from __future__ import annotations
 
+import asyncio
+
 from raven.rpc import bootstrap
+from raven.rpc.subscriptions import COALESCE_WINDOW_S
 
 
 class _FakeCron:
@@ -18,6 +21,7 @@ class _FakeCron:
         self.on_job = None
         self.started = False
         self.stopped = False
+        self.last_startup_drops: list = []
 
     async def start(self) -> None:
         self.started = True
@@ -121,6 +125,57 @@ async def test_the_default_path_still_owns_the_whole_lifecycle(monkeypatch) -> N
 
     await stack.teardown()
     assert cron.stopped is True
+
+
+async def test_the_served_page_hears_reminders_dropped_at_startup(monkeypatch) -> None:
+    """``start()`` drops past-due one-shot reminders; whoever starts cron owns
+    telling someone. This path is the served page's, and it runs before any
+    client has subscribed -- so the assertion is that the notice survives that
+    gap and reaches the first subscription, not merely that a call was made.
+    """
+    from raven import browser as browser_module
+    from raven.cli import tui_commands
+    from raven.proactive_engine.schedulers.cron.types import CronStartupDrop
+
+    class _NoBrowser:
+        async def close(self) -> None:
+            pass
+
+    class _DroppingCron(_FakeCron):
+        async def start(self) -> None:
+            await super().start()
+            self.last_startup_drops = [CronStartupDrop(name="pills", message="take the pills", at_ms=1749024000000)]
+
+    monkeypatch.setattr(browser_module, "get_browser", lambda: _NoBrowser())
+    cron = _DroppingCron()
+    loop = _FakeLoop(cron)
+    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: loop)
+
+    frames: list[dict] = []
+
+    async def _record(frame: dict) -> None:
+        frames.append(frame)
+
+    stack = await bootstrap.build_rpc_stack(_record)
+    try:
+        assert [f for f in frames if f.get("method") == "event"] == []
+        await stack.emitter.register("tui:default")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    finally:
+        await stack.teardown()
+
+    events = [f["params"]["event"] for f in frames if f.get("method") == "event"]
+    assert [e["type"] for e in events] == ["cron.missed"]
+    assert events[0]["payload"] == {
+        "count": 1,
+        "items": [
+            {
+                "name": "pills",
+                "scheduled_at": "2025-06-04T08:00:00+00:00",
+                "message": "take the pills",
+            }
+        ],
+    }
 
 
 def test_the_approval_broker_is_conversation_scoped() -> None:

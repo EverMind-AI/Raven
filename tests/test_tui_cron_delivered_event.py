@@ -286,3 +286,62 @@ async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
         "scheduled_at": "2025-06-04T08:00:00+00:00",
         "message": "吃药",
     }
+
+
+def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
+    """A reminder dropped at startup has to be told to whoever is listening.
+
+    Discovered rather than listed: any file that starts a cron service is held to
+    the property. The earlier version of this test named two files and passed
+    while a third host violated it, which is the kind of green that reads as
+    covered when it is not.
+
+    ``EXEMPT`` is the honest half. ``gateway_commands.py`` starts a cron service
+    partitioned over the enabled IM channels, so a past-due WhatsApp one-shot
+    lands in *its* drops and nothing surfaces them -- it wires
+    ``on_missed_foreign``, which is the opposite set (``list_missed_foreign_oneshots``
+    skips every job the runner owns). Whether a host with no attached client
+    should surface them at all is a design question, so it is written down here
+    rather than silently passing.
+
+    Structural on purpose, and worth being clear about the limit: this asserts
+    the call is present after ``start()``, not that it runs. It would pass with
+    the block under ``if False`` or with the guard inverted. The behaviour of
+    ``_fanout_cron_missed`` itself is covered above; what this catches is a new
+    serve path that forgets to call it, which is the regression that already
+    happened once.
+    """
+    from pathlib import Path
+
+    # host -> why it does not surface its own drops
+    EXEMPT = {
+        "cli/gateway_commands.py": (
+            "cron is partitioned over the enabled IM channels here and the host has "
+            "no attached client; it surfaces other partitions' misses via "
+            "on_missed_foreign instead. Its own drops are an open design question."
+        ),
+    }
+
+    root = Path(__file__).resolve().parents[1] / "raven"
+    starters = []
+    for path in sorted(root.rglob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        marker = next(
+            (m for m in ("await agent_loop.cron_service.start()", "await cron.start()") if m in src),
+            None,
+        )
+        if marker is None:
+            continue
+        starters.append((path.relative_to(root).as_posix(), src, marker))
+
+    assert starters, "no cron start site found -- the markers this test greps for have moved"
+
+    for rel, src, marker in starters:
+        if rel in EXEMPT:
+            continue
+        tail = src[src.index(marker) :]
+        assert "last_startup_drops" in tail, f"{rel} starts cron without reading last_startup_drops"
+        assert "_fanout_cron_missed" in tail, f"{rel} reads the drops without fanning them out"
+
+    stale = sorted(set(EXEMPT) - {rel for rel, _, _ in starters})
+    assert not stale, f"EXEMPT names a file that no longer starts cron: {stale}"
