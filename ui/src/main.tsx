@@ -23,6 +23,8 @@ import * as subagentsStore from './features/subagents/store'
 import * as transcript from './features/transcript/mount'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
+import { XaApp } from './features/xa/XaPage'
+import * as xa from './features/xa/store'
 import * as foot from './shell/foot'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
@@ -163,6 +165,11 @@ window.RavenIslands = {
     installedCount: plugins.installedCount,
     event: plugins.onEvent,
   },
+  xa: {
+    open: xa.open,
+    close: xa.close,
+    redraw: xa.redraw,
+  },
 }
 
 /* The transcript's link handler lives with the island now; it arms itself
@@ -254,3 +261,5 @@ window.RavenIslands = {
 const listHost = document.getElementById('list')
 if (listHost) createRoot(listHost).render(<RailApp />)
 createRoot(plugHost).render(<PlugApp />)
+const xaHost = document.getElementById('xaBody')
+if (xaHost) createRoot(xaHost).render(<XaApp />)

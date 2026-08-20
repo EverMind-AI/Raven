@@ -6,8 +6,8 @@
 
    This part must load AFTER 152-skills.js: its drawCaps wrapper is the
    outermost of the chain, mirroring the old live-layer order -- the skill
-   branch below hands over to the skills wrapper, and the shared page hero
-   is synced from here for both tabs. */
+   branch below hands over to the skill tab's own draw, and the shared page
+   hero is synced from here for both tabs. */
 
 // Stable per-name hue: same plugin, same colour, every render and page.
 // Kept as a shell helper because the memory drawer uses it too.

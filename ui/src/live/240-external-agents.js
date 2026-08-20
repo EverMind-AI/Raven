@@ -2,7 +2,7 @@
    `subagents.*` is one surface shared with the TUI and the web UI: the rows,
    the install grouping and the write path all live server-side, so this layer
    only maps a row into what the page draws and sends the mutation back. The
-   page (demo/120-capabilities.js) owns the renderers and every flag they read;
+   xa island (ui/src/features/xa/) owns the renderer and every flag it reads;
    installing onto the seam replaces the fixture source before the first paint.
 
    The list is re-fetched after every mutation rather than patched locally: the
