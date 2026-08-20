@@ -87,7 +87,7 @@ its `execute` under a timeout, returning the string result or a structured error
 **Deep Research** (`agent/tools/deep_research.py`):
 Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a
 finished, cited answer. Streamed inline on CLI/TUI, async on channels (background run +
-verbatim `deliver_text` push). Configured via `raven deep-research` or onboarding Step 5.
+verbatim `deliver_text` push). Configured via `raven deep-research`.
 _Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
 
 **Checkpoint** (`agent/loop/checkpoint.py`):
@@ -828,7 +828,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → sub-agents → cold-start import) that also seeds
 Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:

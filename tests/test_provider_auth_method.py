@@ -497,6 +497,17 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/subagent/backends/openai_api.py",
         "raven/agent/subagent/probe.py",
         "raven/rpc/methods/subagents.py",
+        # Two reads, neither an opinion on whether a Raven provider is set up.
+        # One copies this raven's OpenRouter key into a sub-agent's own `.env`, so
+        # a user who configured one in step 1 is not asked for a second copy; the
+        # verdict that the provider is usable comes from `_configured_providers`
+        # (which rules through auth) before that value is touched at all. The
+        # other mirrors `inherit_llm` in the launchers, which are stdlib-only
+        # scripts outside this package: they cannot import auth and accept only a
+        # literal key, so an OAuth host is configured by auth's rule and has
+        # nothing to lend by theirs. That question is "will inherit_llm return
+        # non-empty", and only inherit_llm's own rule answers it.
+        "raven/cli/subagent_setup.py",
         # The skill hub's endpoint credential, read to store or forward it.
         "raven/config/update_skills.py",
         "raven/web_rpc/methods_config.py",

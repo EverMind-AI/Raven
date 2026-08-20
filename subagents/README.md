@@ -33,13 +33,28 @@ The three folders differ only in the names:
 
 ## Installing, from a fresh clone
 
-The repo's own `./install.sh` calls this one as its last step, so a clone that
-installs raven installs these too and there is nothing separate to remember. It
-is skipped when raven is installed from the published wheel, which ships no
-sub-agent tree, and when the machine has no `bash` or no `python3`.
+Two commands, in this order:
 
-Run it directly to install one folder, to re-run after filling in a key, or to
-install into a config other than the host raven's:
+```bash
+./install.sh    # builds raven, then the sub-agents' venvs
+raven           # setup asks about each folder and registers the ones you take up
+```
+
+The repo's own `./install.sh` calls this directory's as its last step, so there
+is nothing separate to remember. That step is skipped when raven is installed
+from the published wheel, which ships no sub-agent tree, and when the machine has
+no `bash` or no `python3`.
+
+**This script does not register anything.** Registration needs a configured host
+raven, and on a first install it runs before one exists: `~/.raven/config.json`
+is written by the setup wizard, minutes later. So the wizard owns that step. It
+finds this directory through the running raven's own package path - which is why
+only a source checkout is offered the agents at all - and asks, per folder,
+whether to run it on this raven's LLM, on a key of its own, or not at all.
+Answering later is re-running `raven onboard`; every other step defaults to
+"keep current".
+
+Run this one directly to build a single folder, or after adding one:
 
 ```bash
 cd subagents
@@ -47,21 +62,26 @@ cd subagents
 ./install.sh raven-code      # or only the ones named
 ```
 
-`install.sh` runs the three steps below for each folder. An agent whose api key
-is still blank is registered anyway and runs on the host raven's LLM; it is
-refused only when the host has no key to inherit either - so the normal sequence
-is still: run it, fill in the `.env` files it created, run it again. A second run
-rebuilds nothing it does not have to; the one thing it does overwrite is an entry
-you have since edited by hand (see below). `--dry-run` reports what each step
-would do, `--no-sync` skips the venv build, and `--config PATH` writes a config
-file other than the host raven's.
-It exits non-zero when any folder still needs attention.
+A second run rebuilds nothing it does not have to. `--dry-run` reports what each
+step would do, `--no-sync` skips the venv build. It exits non-zero only when a
+folder failed to build; a folder that is merely unbuilt (`--dry-run`,
+`--no-sync`) is reported, not treated as an error.
 
-**Then restart raven (or the gateway)**, which is the one thing no installer can
-do for you: the entry is written to the config file, and a running raven holds
-the roster it read at startup. After the restart the agent shows up in the TUI's
-`/subagents` and on the web UI's subagents page, and `/subagents test <name>`
-dispatches at it for real.
+A built venv is what makes a folder offerable: the wizard declines to register
+one it cannot start, because a name in the roster that fails the moment the model
+picks it is worse than an absent one.
+
+An agent registered without a key of its own is not a broken one - its launcher
+copies the host raven's provider block at every run. What a key of its own buys
+is the model the folder is tuned for: inheritance brings the host's
+`agents.defaults.model` along with its credentials, so without one the folder
+answers on whatever this raven answers on.
+
+All three are tuned for models served through OpenRouter, so a raven that already
+has an OpenRouter key needs no second copy: the wizard reuses that one and asks
+nothing. It reads `providers.openrouter` specifically - a key in `custom` belongs
+to whatever private gateway that section points at, and spending it against
+openrouter.ai would read as a bad credential rather than as the mistake it is.
 
 ### What the machine still has to provide
 
@@ -103,12 +123,17 @@ keys are optional, and an *exhausted* Jina key is worse than none at all (402 vs
 200). `<PREFIX>_STATE_ROOT` moves everything the agent persists; it defaults to
 `~/.raven/workspace/subagent_sessions/<folder>` and never lands in this tree.
 
-**3. Register the entry.**
+**3. Register the entry.** Setup does this for you; by hand it is the same
+script, and a running raven has to be restarted afterwards because it holds the
+roster it read at startup.
 
 ```bash
 python3 install.py --dry-run   # print the resolved entry and the interpreter
 python3 install.py             # back up the current list, then register
 ```
+
+After the restart the agent shows up in the TUI's `/subagents` and on the web
+UI's subagents page, and `/subagents test <name>` dispatches at it for real.
 
 The launcher also runs by hand, which is the shortest way to prove the venv and
 the keys are right before involving the host raven at all:
