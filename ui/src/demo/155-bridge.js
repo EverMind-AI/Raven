@@ -28,7 +28,6 @@ window.RavenShell = {
   down: () => down(),
   attImage: (p) => ATT_IMG.get(String(p)),
   attNotes: () => Object.values(I18N.ui['gui.att.note'] || {}),
-  pathOpen: (p) => pathOpen(p),
   hunkFromEdit: (o, n) => hunkFromEdit(o, n),
   hunkFromWrite: (c) => hunkFromWrite(c),
   hunkFromUnified: (l) => hunkFromUnified(l),

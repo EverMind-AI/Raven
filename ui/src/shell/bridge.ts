@@ -70,12 +70,11 @@ export interface Shell {
      through stays null, and the island never asks without a record). */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
   /* Transcript island verbs: the tail-follow, the attachment image bytes,
-     the lightbox, the path opener, the diff builders the workspace panel
-     already owns, and the turn's tl/raw logs the shell keeps per turn. */
+     the lightbox, the diff builders the workspace panel already owns, and
+     the turn's tl/raw logs the shell keeps per turn. */
   down?(): void
   attImage?(path: string): string | undefined
   attNotes?(): string[]
-  pathOpen?(path: string): void
   hunkFromEdit?(oldText: string, newText: string): unknown
   hunkFromWrite?(content: string): unknown
   hunkFromUnified?(lines: string | string[]): unknown

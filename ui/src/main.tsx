@@ -31,6 +31,7 @@ import * as xa from './features/xa/store'
 import { SettingsApp } from './features/settings/SettingsPage'
 import * as settings from './features/settings/store'
 import * as banner from './shell/banner'
+import * as chips from './shell/chips'
 import * as find from './shell/find'
 import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
@@ -234,14 +235,17 @@ installLinkTrap()
    because the markup is already in the document; the handlers read the shell
    and DS.composer lazily, which is what makes that safe this early. */
 composer.install()
-/* The chrome that installs itself. All four wire listeners over the static
+/* The chrome that installs itself. All five wire listeners over the static
    markup, which is already parsed by the time this bundle runs: the page script
    below is the LAST thing in the body. Installing here rather than from the
-   shell keeps each module's wiring next to the behaviour it belongs to. */
+   shell keeps each module's wiring next to the behaviour it belongs to. chips
+   is the one that binds nothing static -- it delegates off the document,
+   because the prose it acts on is replaced with every answer. */
 scrollbars.install()
 panes.install()
 navfly.install()
 find.install()
+chips.install()
 
 /* The model picker renders nothing until asked. One root at the body rather
    than a host inside a page: the popover is anchored to whatever button opened
