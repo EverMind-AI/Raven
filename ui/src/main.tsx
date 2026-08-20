@@ -37,6 +37,7 @@ import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
+import * as perm from './shell/perm'
 import { md } from './shell/prose'
 import * as scrollbars from './shell/scrollbars'
 import { toggle as toggleTheme } from './shell/theme'
@@ -61,6 +62,9 @@ declare global {
     openImage?: typeof lightbox.open
     closeImage?: typeof lightbox.close
     openModelPicker?: typeof modelPicker.open
+    drawPerm?: typeof perm.draw
+    togglePerm?: typeof perm.toggle
+    closePermPop?: typeof perm.close
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
   }
@@ -101,6 +105,13 @@ window.closeImage = lightbox.close
    island asks for, since the picker is one popover over the whole page rather
    than a page's own control). */
 window.openModelPicker = modelPicker.open
+/* The permission chip's three names. drawPerm has three callers, all in layers
+   this migration has not reached: the boot sequence (demo/160), and the language
+   flip on each side (demo/130's setLangShim, live/120's redrawAll). togglePerm
+   and closePermPop are the chip's click and the document's click-away. */
+window.drawPerm = perm.draw
+window.togglePerm = perm.toggle
+window.closePermPop = perm.close
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
