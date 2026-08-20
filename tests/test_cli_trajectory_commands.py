@@ -53,7 +53,7 @@ def test_group_registered_on_app() -> None:
 
 
 def test_subcommand_help() -> None:
-    for cmd in ("save", "verdict", "pin", "unpin", "list"):
+    for cmd in ("save", "report", "verdict", "pin", "unpin", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
         assert r.exit_code == 0, cmd
 
@@ -138,6 +138,149 @@ def test_save_reports_missing_artifacts(state) -> None:
 
     assert r.exit_code == 0
     assert "missing" in r.stdout
+
+
+# ── report ────────────────────────────────────────────────────────────
+
+_FAKE_CFG_KEY = "fk-cli-cfg-2b8e4a6c1d9f3b7aZ"
+
+
+@pytest.fixture
+def report_config(tmp_path, monkeypatch):
+    """Point config loading at a throwaway file so no test reads the user's real config."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"anthropic": {"apiKey": _FAKE_CFG_KEY}}}), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader._current_config_path", cfg)
+    return cfg
+
+
+def _write_leaky_log(state):
+    artifact = state / "logs" / "audit-artifacts" / "tool.output" / "2026-08-20" / "out.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(json.dumps({"stdout": f"auth={_FAKE_CFG_KEY}"}), encoding="utf-8")
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _span("trace-1", session_key="cli:a", attrs={"llm.input.preview": f"key is {_FAKE_CFG_KEY}"}),
+            _span("trace-1", name="tool.call", attrs={"tool.output.artifact_path": str(artifact)}),
+        ],
+    )
+
+
+def test_report_yes_produces_redacted_tarball(state, report_config) -> None:
+    import tarfile
+
+    _write_leaky_log(state)
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    tarball = state / "reports" / "trace-1.tar.gz"
+    assert tarball.exists()
+    assert "Report ready" in r.stdout
+    with tarfile.open(tarball, "r:gz") as tar:
+        names = tar.getnames()
+        assert "trace-1/redaction.json" in names
+        assert "trace-1/manifest.json" in names
+        for member in tar.getmembers():
+            if member.isfile():
+                data = tar.extractfile(member).read().decode("utf-8")
+                assert _FAKE_CFG_KEY not in data, member.name
+    # The original bundle keeps the unredacted data (local corpus).
+    spans = (state / "bundles" / "trace-1" / "spans.jsonl").read_text(encoding="utf-8")
+    assert _FAKE_CFG_KEY in spans
+
+
+def test_report_confirm_accept(state, report_config) -> None:
+    _write_leaky_log(state)
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1"], input="y\n")
+
+    assert r.exit_code == 0, r.output
+    assert (state / "reports" / "trace-1.tar.gz").exists()
+
+
+def test_report_declined_produces_no_tarball(state, report_config) -> None:
+    _write_leaky_log(state)
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1"], input="n\n")
+
+    assert r.exit_code == 1
+    assert "Aborted" in r.stdout
+    assert not (state / "reports").exists()
+
+
+def test_report_out_option(state, report_config, tmp_path) -> None:
+    _write_leaky_log(state)
+    out = tmp_path / "exports" / "bug.tar.gz"
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1", "--yes", "--out", str(out)])
+
+    assert r.exit_code == 0, r.output
+    assert out.exists()
+    assert not (state / "reports").exists()
+
+
+def test_report_config_option_covers_alternate_config(state, report_config, tmp_path) -> None:
+    """A trajectory traced under --config must not leak that config's keys:
+    report collects secrets from the named config AND the default one."""
+    import tarfile
+
+    alt_key = "fk-alt-cfg-7d3e9b1a5c8f2e4bZ"
+    alt_cfg = tmp_path / "alt.json"
+    alt_cfg.write_text(
+        json.dumps(
+            {
+                "providers": {"openai": {"apiKey": alt_key}},
+                "agents": {"defaults": {"workspace": str(tmp_path / "alt-ws")}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.input.preview": f"alt={alt_key} main={_FAKE_CFG_KEY}"})],
+    )
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1", "--yes", "--config", str(alt_cfg)])
+
+    assert r.exit_code == 0, r.output
+    with tarfile.open(state / "reports" / "trace-1.tar.gz", "r:gz") as tar:
+        for member in tar.getmembers():
+            if member.isfile():
+                data = tar.extractfile(member).read().decode("utf-8")
+                assert alt_key not in data, member.name
+                assert _FAKE_CFG_KEY not in data, member.name
+
+
+def test_report_config_supplies_workspace_for_session(state, report_config, tmp_path) -> None:
+    """Without --workspace, the session is looked up in the --config file's
+    workspace — not silently omitted."""
+    import tarfile
+
+    from raven.session.manager import SessionManager
+
+    ws = tmp_path / "cfg-ws"
+    manager = SessionManager(ws)
+    session = manager.get_or_create("cli:a")
+    session.add_message("user", "hello")
+    manager.save(session)
+    alt_cfg = tmp_path / "alt-ws.json"
+    alt_cfg.write_text(json.dumps({"agents": {"defaults": {"workspace": str(ws)}}}), encoding="utf-8")
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    r = runner.invoke(trajectory_app, ["report", "trace-1", "--yes", "--config", str(alt_cfg)])
+
+    assert r.exit_code == 0, r.output
+    with tarfile.open(state / "reports" / "trace-1.tar.gz", "r:gz") as tar:
+        assert "trace-1/session.jsonl" in tar.getnames()
+
+
+def test_report_unknown_id_errors(state, report_config) -> None:
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1")])
+    r = runner.invoke(trajectory_app, ["report", "no-such-id", "--yes"])
+    assert r.exit_code == 1
+    assert "no spans found" in r.stdout
 
 
 # ── verdict ───────────────────────────────────────────────────────────

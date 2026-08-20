@@ -601,6 +601,25 @@ bundle-relative paths) + `artifacts/` + the session's conversation record + its
 verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
 
+**Trajectory Redaction** (`raven/trajectory/redact.py`):
+The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory
+Bundle (the original is never modified): exact replacement of known secret values
+(secret-typed config fields + credential-shaped env vars, stable
+`[REDACTED:<source>]` placeholders, JSON-escaped spellings included), regex fallback
+for common credential shapes, and a residual scan that flags high-entropy leftovers
+for human review without rewriting. Non-UTF-8 files are excluded from the copy.
+_Avoid_: "masking"/"anonymization" — redaction removes credentials, it does not
+de-identify the user.
+
+**Trajectory Report** (`raven/trajectory/report.py`):
+The shippable form of a trajectory produced by `raven trajectory report`: the
+redacted copy of its Bundle plus `redaction.json` (per-layer replacement counts,
+residual findings, binary policy) packed into a `.tar.gz`, delivered through the
+pluggable `Uploader` protocol (v1 backend: `local` — the tarball itself, nothing
+is sent anywhere).
+_Avoid_: calling the unredacted Bundle a "report" — only the redacted tarball leaves
+the machine.
+
 ### Workspace & Onboarding
 
 **Workspace**:

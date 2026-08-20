@@ -14,6 +14,12 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``bundle``   — the bundle collector. Packs one attempt's spans, artifacts,
   session record, and verdicts into a self-contained offline directory (and
   pins the id, since bundling declares the trajectory corpus).
+- ``redact``   — the sanitizer. Produces a redacted **copy** of a bundle
+  (known secret values, credential patterns, residual scan); the original
+  bundle is never modified.
+- ``report``   — the shippable form: the redacted copy packed into a
+  ``.tar.gz``, delivered through the pluggable :class:`report.Uploader`
+  (v1: local file only).
 
 The address unit is the **attempt** (``attempt.id`` on every span): one task
 try, possibly spanning several turns. Without an explicitly opened attempt
@@ -25,6 +31,15 @@ attempt with zero ceremony.
 from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
+from raven.trajectory.redact import (
+    KnownSecret,
+    RedactionReport,
+    ResidualFinding,
+    collect_known_secrets,
+    redact_bundle,
+    scan_residuals,
+)
+from raven.trajectory.report import LocalTarballUploader, Uploader, get_uploader, pack_report
 from raven.trajectory.store import (
     is_pinned,
     iter_spans,
@@ -45,16 +60,26 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "KnownSecret",
+    "LocalTarballUploader",
+    "RedactionReport",
+    "ResidualFinding",
+    "Uploader",
     "Verdict",
     "collect_bundle",
+    "collect_known_secrets",
+    "get_uploader",
     "is_pinned",
     "iter_spans",
     "latest_verdict",
+    "pack_report",
     "pin",
     "pins",
     "read_verdicts",
     "record_verdict",
+    "redact_bundle",
     "resolve_attempt_id",
+    "scan_residuals",
     "span_log_paths",
     "unpin",
 ]

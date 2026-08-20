@@ -8,6 +8,8 @@ wrappers over the trajectory layer:
 
 - ``save``    — pack one attempt into a self-contained bundle directory
   (:func:`raven.trajectory.bundle.collect_bundle`; auto-pins the id).
+- ``report``  — re-pack, redact a copy (three layers, original untouched),
+  preview residual suspects, and produce a shareable ``.tar.gz``.
 - ``verdict`` — record a task-outcome label (source fixed to ``user``).
 - ``pin`` / ``unpin`` — grant / revoke the never-purge retention promise.
 - ``list``    — aggregate addressable attempts from the trace logs so users
@@ -17,15 +19,21 @@ wrappers over the trajectory layer:
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
+from collections import Counter
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import collect_bundle
+from raven.trajectory.redact import redact_bundle
+from raven.trajectory.report import get_uploader, pack_report
 from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_verdict
 
 console = Console()
@@ -85,6 +93,95 @@ def trajectory_save(
     missing = manifest.get("missing_artifacts") or []
     if missing:
         console.print(f"  [yellow]{len(missing)} referenced artifact(s) missing — listed in manifest.json[/yellow]")
+
+
+@trajectory_app.command("report")
+def trajectory_report(
+    id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
+    out: Path | None = typer.Option(
+        None, "--out", "-o", help="Output tarball path (default: <trace-state>/reports/<attempt-id>.tar.gz)"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the interactive confirmation (for scripts)"),
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Workspace holding the session records (default: the configured workspace)",
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        exists=True,
+        help="Config file the traced agent ran with; seeds redaction on top of the default config's"
+        " secrets and, unless --workspace is given, names the workspace for session lookup",
+    ),
+) -> None:
+    """Redact a trajectory and pack it into a shareable .tar.gz (the original bundle is untouched)."""
+    if workspace is None and config is not None:
+        # The traced agent's session records live in that config's workspace;
+        # without this the bundle silently omits session.jsonl. An unloadable
+        # config falls back to the default workspace — redaction reports the
+        # degradation separately (config_loaded).
+        try:
+            from raven.config.loader import load_config
+
+            workspace = load_config(config).workspace_path
+        except Exception:
+            pass
+    try:
+        bundle_dir = collect_bundle(id_, workspace=workspace)
+    except (LookupError, ValueError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    attempt_id = bundle_dir.name
+    console.print(f"Bundled [cyan]{attempt_id}[/cyan] (re-packed to pick up the latest data)")
+
+    staging = Path(tempfile.mkdtemp(prefix=f"raven-report-{attempt_id}-"))
+    try:
+        report = redact_bundle(bundle_dir, staging / attempt_id, config_path=config)
+
+        if not report.config_loaded:
+            console.print(
+                "[yellow]config could not be fully read — known-value redaction may be incomplete;"
+                " review the residual samples with extra care[/yellow]"
+            )
+        console.print(
+            f"Redacted a copy: {sum(report.exact.values())} known-value"
+            f" + {sum(report.patterns.values())} pattern replacement(s)"
+        )
+        for name, hits in sorted(report.patterns.items()):
+            console.print(f"  [dim]pattern {name}: {hits}[/dim]")
+        if report.skipped_binaries:
+            console.print(
+                f"  [yellow]{len(report.skipped_binaries)} non-UTF-8 file(s) excluded"
+                f" from the copy — listed in redaction.json[/yellow]"
+            )
+
+        if report.findings:
+            by_category = Counter(f.category for f in report.findings)
+            summary = ", ".join(f"{name}: {count}" for name, count in sorted(by_category.items()))
+            console.print(
+                f"[yellow]Residual scan flagged {len(report.findings)} suspicious token(s)[/yellow] ({summary}):"
+            )
+            for finding in report.findings[:5]:
+                console.print(f"  [dim]{escape(f'{finding.file}: {finding.sample}')}[/dim]")
+            if len(report.findings) > 5:
+                console.print(f"  [dim]... and {len(report.findings) - 5} more (see redaction.json)[/dim]")
+            console.print("Review the samples above — a flagged token may be a real secret the redactor missed.")
+        else:
+            console.print("[green]Residual scan: clean[/green]")
+
+        if not yes and not typer.confirm("Produce the report tarball?"):
+            console.print("Aborted — no tarball was produced.")
+            raise typer.Exit(code=1)
+
+        out_file = out or tracing_config.state_dir() / "reports" / f"{attempt_id}.tar.gz"
+        tarball = pack_report(staging / attempt_id, out_file)
+        destination = get_uploader("local").upload(tarball, metadata=report.metadata())
+        console.print(f"[green]✓[/green] Report ready at [cyan]{destination}[/cyan]")
+        console.print("  [dim]local backend: nothing was uploaded — hand the file over yourself[/dim]")
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 @trajectory_app.command("verdict")
