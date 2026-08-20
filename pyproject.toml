@@ -34,7 +34,7 @@ dependencies = [
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.2.1",
+    "everos[multimodal]==1.2.3",
     "tomli-w>=1.2.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",

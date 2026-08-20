@@ -903,7 +903,7 @@ class EverosBackend:
 
         The host already collects ``skill_usage`` signals (which everos
         skills were injected / used in a turn) and dispatches them here.
-        everos 1.2.1's HTTP surface still exposes no endpoint to consume
+        everos 1.2.3's HTTP surface still exposes no endpoint to consume
         them — its routes are get / health / knowledge / memorize /
         metrics / ome / search, and ``agent_skill.confidence`` lives in
         the persistence internals with no service-level write path — so
