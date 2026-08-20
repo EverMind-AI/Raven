@@ -1,23 +1,21 @@
-import {
-	AiHubMix,
-	Anthropic,
-	Azure,
-	Codex,
-	DeepSeek,
-	Gemini,
-	GithubCopilot,
-	Groq,
-	Minimax,
-	Moonshot,
-	Ollama,
-	OpenAI,
-	OpenRouter,
-	Qwen,
-	SiliconCloud,
-	Vllm,
-	Volcengine,
-	ZAI,
-} from '@lobehub/icons';
+import AiHubMix from '@lobehub/icons/es/AiHubMix';
+import Anthropic from '@lobehub/icons/es/Anthropic';
+import Azure from '@lobehub/icons/es/Azure';
+import Codex from '@lobehub/icons/es/Codex';
+import DeepSeek from '@lobehub/icons/es/DeepSeek';
+import Gemini from '@lobehub/icons/es/Gemini';
+import GithubCopilot from '@lobehub/icons/es/GithubCopilot';
+import Groq from '@lobehub/icons/es/Groq';
+import Minimax from '@lobehub/icons/es/Minimax';
+import Moonshot from '@lobehub/icons/es/Moonshot';
+import Ollama from '@lobehub/icons/es/Ollama';
+import OpenAI from '@lobehub/icons/es/OpenAI';
+import OpenRouter from '@lobehub/icons/es/OpenRouter';
+import Qwen from '@lobehub/icons/es/Qwen';
+import SiliconCloud from '@lobehub/icons/es/SiliconCloud';
+import Vllm from '@lobehub/icons/es/Vllm';
+import Volcengine from '@lobehub/icons/es/Volcengine';
+import ZAI from '@lobehub/icons/es/ZAI';
 import type { ReactNode } from 'react';
 
 import ServerIcon from '~icons/solar/server-square-bold-duotone';
