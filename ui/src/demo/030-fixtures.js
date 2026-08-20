@@ -191,7 +191,6 @@ const RUNS = {
     key: 'gtm', title: 'GTM agent 市场调研',
     ask: '调研一下市场上做 GTM agent 的产品',
     use: { calls: 4, in: 14226, out: 3180, cost: 0.021, wall: 41000 },
-    kids: [],
     /* 网页搜索未配置：搜索失败，降级为直接抓官网 */
     ev: [
       { t:'ep' },
@@ -250,10 +249,6 @@ const RUNS = {
     key: 'fix', title: '修复登录偶发超时',
     ask: '登录接口偶发超时，帮我定位并修掉',
     use: { calls: 7, in: 38104, out: 5202, cost: 0.058, wall: 96000 },
-    kids: [
-      { n:'log-analyst', task:'扫 7 天网关日志，统计超时分布', tools:12, ok:true },
-      { n:'db-inspector', task:'检查连接池配置与慢查询', tools:8, ok:true }
-    ],
     ev: [
       { t:'ep' },
       { t:'think', d:900, s:8, x:'偶发超时的常见成因：连接池耗尽、下游依赖抖动、锁竞争。先定位代码入口，日志量大就交给 subagent 并行扫。' },

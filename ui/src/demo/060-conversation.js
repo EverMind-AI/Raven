@@ -5,7 +5,7 @@ function openSession(s) {
   // row goes back to carrying its timestamp.
   if (s.status === 'done') s.status = null;
   markNewCurrent();
-  stop_(); busy = false; q = []; use = null; kids = []; tl = []; raw = []; lastRun = null;
+  stop_(); busy = false; q = []; use = null; tl = [];
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);
@@ -14,7 +14,7 @@ function openSession(s) {
   drawQ(); drawMeter(); goState(); drawBanner();
   if (s.run) {
     const r = RUNS[s.run];
-    use = r.use; kids = r.kids; lastRun = r;
+    use = r.use;
     setCtx(((r.use && r.use.in) || 0) + ((r.use && r.use.out) || 0), 200000);
     ask(r.ask); replay(r, true);
   } else if (s.status === 'err') {

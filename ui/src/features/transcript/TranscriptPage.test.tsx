@@ -44,7 +44,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     hunkFromWrite: (c) => ({ rows: [['add', c]], add: 1, del: 0 }),
     hunkFromUnified: () => ({ rows: [], add: 0, del: 0 }),
     tlPush: () => {},
-    rawPush: () => {},
   }
   window.RavenShell = fakeShell
   const source: TranscriptSource = {

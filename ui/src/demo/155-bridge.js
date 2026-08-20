@@ -32,7 +32,6 @@ window.RavenShell = {
   hunkFromWrite: (c) => hunkFromWrite(c),
   hunkFromUnified: (l) => hunkFromUnified(l),
   tlPush: (e) => { tl.push(e); },
-  rawPush: (s) => { raw.push(s); },
   send: (text) => send(text),
   halt: () => halt(),
   noteRow: (label, detail) => noteRow(label, detail),
