@@ -1,22 +1,8 @@
 /* ══ browser ═══════════════════════════════════════════════════════
-   The renderer is the browser island (ui/src/features/browser/); what
-   remains here is its shell face -- the draw name the workspace panel
-   dispatches to -- and the fixture source. */
-function drawWsWeb(box) {
-  /* box is #wsBody, the workspace panel's body. */
-  RavenIslands.browser.draw(box);
-}
-
-/* drawWs wipes #wsBody before dispatching, which would tear the island's
-   DOM out from under React: unmount first, while that DOM is still intact.
-   And leaving the browser view -- another tab, another session -- must drop
-   the frame watch, which the live layer's own drawWs override used to do. */
-const drawWsBare = drawWs;
-drawWs = function () {
-  RavenIslands.browser.detach();
-  drawWsBare();
-  if (!(wsOpen && wsTab === 'browser')) RavenIslands.browser.hidden();
-};
+   The renderer is the browser island (ui/src/features/browser/), reached
+   through the workspace island's dispatch (workspace/store.draw handles the
+   unmount-before-wipe and the frame-watch drop its old drawWs wrapper did).
+   What remains here is the fixture source. */
 
 /* The fixture source: the demo has no embedded Chromium, so the island
    draws the fetched-links list from the same WS.urls the replay fills.

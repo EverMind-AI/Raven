@@ -22,6 +22,14 @@ export interface MenuItem {
   bad?: boolean
 }
 
+/* What the workspace panel's chrome (still legacy: the tab bar, the badge,
+   the open/close buttons) currently shows. */
+export interface WsPanelView {
+  tab: string
+  open: boolean
+  picked: boolean
+}
+
 export interface Shell {
   /* `fallback` mirrors the legacy T(): what to show when the catalogue has no
      entry for the key (the connections form labels schema-declared fields). */
@@ -43,6 +51,11 @@ export interface Shell {
   showWorkspace?(tab: string): void
   wsShows?(tab: string): boolean
   lang?(): string
+  hostPlatform?(): string
+  wsView?(): WsPanelView
+  wsState?(): unknown
+  wsPick?(tab: string): void
+  drawWsAgents?(box: HTMLElement): void
 }
 
 declare global {

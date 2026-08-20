@@ -6,7 +6,12 @@
 
    It never opens itself: a pane that interrupts gets closed for good. The
    badge on the header chip does the asking. And it is never the only place a
-   fact appears, so collapsing it can't lose information.            */
+   fact appears, so collapsing it can't lose information.
+
+   The renderer is the workspace island (ui/src/features/workspace/); what
+   stays here is the shared state every layer mutates, the tool-event
+   bookkeeping the hooks feed, the panel chrome outside #wsBody, and the
+   fixture DS source. */
 let wsTab = 'diff', wsOpen = false, wsWide = false, wsPicked = false;
 
 const WS = {
@@ -20,6 +25,9 @@ const WS = {
 function wsReset() {
   WS.changes = []; WS.urls = []; WS.file = null; WS.turn = 0; WS.unseen = 0;
   wsTab = 'diff'; wsPicked = false;
+  /* A different session is a different workspace state: the island drops the
+     file tree listings it read before the switch. */
+  RavenIslands.workspace.reset();
   /* Subagents belong to the session that spawned them, so they leave with it
      -- carrying the list into the next conversation would attribute one
      conversation's background work to another. The open dag node goes for the
@@ -139,8 +147,8 @@ function wsArgs(name, args) {
 }
 
 /* Tools report absolute paths; the workspace root is the same on every row and
-   carries no information. live.js overrides this with the real root. */
-function wsShortPath(p) { return String(p); }
+   carries no information. The live layer's source knows the real root. */
+function wsShortPath(p) { return DS.workspace.shortPath(p); }
 
 /* One row per path, not per call: five edits to the same file is one changed
    file with five hunks, which is how a person thinks about it. */
@@ -214,40 +222,26 @@ function wsPick(tab) {
   drawWs(); bumpWs();
 }
 
-/* Bumped on every redraw. A view that fetches before it can render (the file
-   tree) must re-check this before appending, or a slow fs.list lands in
-   whatever view the user switched to meanwhile. */
+/* Bumped on every redraw. A view that fetches before it can render must
+   re-check this before appending, or a slow answer lands in whatever view the
+   user switched to meanwhile. */
 let wsEpoch = 0;
 const wsStale = (mine) => mine !== wsEpoch;
 
-/* Whether the view on screen draws anything a tool call changes. drawWs() wipes
-   the panel body and rebuilds it, so redrawing on every tool.start and every
-   tool.complete of a running turn -- for a view that shows none of that state --
-   is a panel that flickers once per call for the length of the turn, and takes
-   the reader's scroll position and text selection with it. The sub-agent tab is
-   routed before every turn-state view below, so when it is up there is nothing
-   here for a tool event to repaint. */
+/* Whether the view on screen draws anything a tool call changes. Redrawing on
+   every tool.start and every tool.complete of a running turn -- for a view
+   that shows none of that state -- is a panel that flickers once per call for
+   the length of the turn. The sub-agent tab shows nothing a tool event
+   repaints, so it is exempt. */
 const wsShowsTurn = () => wsOpen && wsTab !== 'agents';
 
 function drawWs() {
+  /* The island owns #wsBody; the agents and browser views still draw into it
+     from the legacy layers, dispatched by the island's draw. */
   wsEpoch += 1;
   [...$('#wsTabs').children].forEach((b) => b.setAttribute('aria-selected', String(b.dataset.w === wsTab)));
-  const box = $('#wsBody'); box.innerHTML = '';
-  /* Each view that needs one stamps its own; clearing here keeps a stale
-     layout mode from following the reader into the next tab. */
-  delete box.dataset.view;
   agentStopClock();
-  const bare = !WS.changes.length && !WS.urls.length;
-  /* The browser is a place, not a report: it works with an empty session, so it
-     is never behind the launcher the way "what changed" has to be. */
-  if (wsTab === 'browser') return drawWsWeb(box);
-  /* Like the browser, this is a place rather than a report on the current
-     turn: a session's subagents are worth opening even when nothing has
-     been touched yet, so it sits ahead of the launcher. */
-  if (wsTab === 'agents') { box.dataset.view = 'agents'; return drawWsAgents(box); }
-  if (bare && !wsPicked) return drawWsLaunch(box);
-  if (wsTab === 'file') return drawWsFile(box);
-  drawWsChanges(box);
+  RavenIslands.workspace.draw();
 }
 
 const ICO = {
@@ -272,123 +266,12 @@ function ico(d, cls) {
   return s;
 }
 
-function drawWsLaunch(box) {
-  const w = mk('div', 'wslaunch');
-  [['diff', ICO.diff, 'gui.ws.changes', 'gui.ws.sub.changes'],
-   ['file', ICO.file, 'gui.ws.files', 'gui.ws.sub.files'],
-   ['browser', ICO.web, 'gui.ws.browser', 'gui.ws.sub.browser']].forEach(([tab, d, name, sub]) => {
-    const b = mk('button', 'lcard');
-    b.appendChild(ico(d));
-    const t = mk('span', 't', T(name));
-    t.appendChild(mk('small', null, T(sub)));
-    b.appendChild(t);
-    b.onclick = () => wsPick(tab);
-    w.appendChild(b);
-  });
-  box.appendChild(w);
-}
-
-function drawWsChanges(box) {
-  if (!WS.changes.length) {
-    box.appendChild(mk('div', 'wsnote', T('gui.ws.no_changes')));
-    return;
-  }
-  let group = null;
-  /* Rendering the list IS looking at it, so the badge clears here rather than
-     at some separate "mark read" moment that could drift out of sync. */
-  WS.changes.forEach((c) => { c.seen = true; });
-  WS.changes.forEach((c) => {
-    const g = c.turn === WS.turn ? 'gui.ws.turn_now' : 'gui.ws.turn_earlier';
-    if (g !== group) { group = g; box.appendChild(mk('div', 'wsgrp', T(g))); }
-    box.appendChild(chgRow(c));
-  });
-}
-
-function chgRow(c) {
-  const row = mk('div', 'chg' + (c.flash ? ' flash' : ''));
-  c.flash = false;
-  const hd = mk('div', 'chghd');
-  hd.setAttribute('role', 'button');
-  hd.setAttribute('tabindex', '0');
-  hd.setAttribute('aria-expanded', String(!!c.open));
-  const chip = mk('i', 'chgc ' + c.kind, T('gui.ws.chip.' + c.kind));
-  chip.title = T('gui.ws.chip.' + c.kind + '_t');
-  hd.appendChild(chip);
-  /* direction:rtl on .chgp keeps the file NAME visible when a long path has to
-     ellipsize -- the tail is what identifies the file, not the root. */
-  const p = mk('span', 'chgp');
-  p.appendChild(document.createTextNode(c.name));
-  if (c.dir) p.insertBefore(mk('span', 'dir', c.dir), p.firstChild);
-  p.title = c.key;
-  hd.appendChild(p);
-  const st = mk('span', 'chgs');
-  if (c.add) st.appendChild(mk('span', 'a', `+${c.add}`));
-  if (c.del) st.appendChild(mk('span', 'd', `−${c.del}`));
-  hd.appendChild(st);
-  /* File actions live behind this, not in a bar under the row: the list is read
-     top to bottom, and a strip of icons per expanded file breaks that column. */
-  const more = mk('button', 'chgm', '\u22EF');
-  more.setAttribute('aria-label', T('gui.ws.actions'));
-  more.onclick = (e) => { e.stopPropagation(); chgMenu(c, more.getBoundingClientRect()); };
-  hd.appendChild(more);
-  hd.onclick = () => { c.open = !c.open; c.auto = false; drawWs(); };
-  hd.onkeydown = (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault(); c.open = !c.open; c.auto = false; drawWs();
-  };
-  ctxMenu(hd, () => chgItems(c));
-  row.appendChild(hd);
-  if (!c.open) return row;
-
-  const d = mk('div', 'diff');
-  /* One gutter decision per file, not per hunk: a mixed card (a numbered
-     unified hunk after an unnumbered edit guess) must not zigzag its left
-     edge between the two layouts. */
-  const numbered = c.hunks.some((h) => h.rows.some((r) => r.length > 2));
-  const dline = (kind, text, oldNo, newNo) => {
-    const el = mk('div', 'dl ' + kind);
-    if (!numbered) { el.textContent = text === '' ? ' ' : text; return el; }
-    el.classList.add('num');
-    /* The line's number in the file it still exists in: the new one for added
-       and unchanged lines, the old one for a line that was deleted. Two columns
-       side by side left one of them blank on every row that only exists on one
-       side, which is every row of a whole-file write. */
-    const no = newNo == null ? oldNo : newNo;
-    el.append(
-      mk('i', 'lno', no == null ? '' : String(no)),
-      mk('b', 'sg', kind === 'add' ? '+' : kind === 'del' ? '−' : ''),
-      mk('span', null, text === '' ? ' ' : text),
-    );
-    return el;
-  };
-  c.hunks.forEach((h, hi) => {
-    if (hi) d.appendChild(mk('div', 'hsep'));
-    h.rows.forEach((r, ri) => {
-      if (r[0] === 'gap') {
-        /* The toggle flips a flag instead of splicing the context lines in,
-           so an opened run can be folded back -- and reopening the card
-           renders whatever state the reader left it in. */
-        const g = mk('button', 'gap', r.open
-          ? `··· ${T('gui.ws.fold_lines', { n: r[1].length })} ···`
-          : `··· ${T('gui.ws.expand_lines', { n: r[1].length })} ···`);
-        g.onclick = (e) => { e.stopPropagation(); r.open = !r.open; drawWs(); };
-        d.appendChild(g);
-        if (r.open) r[1].forEach((l) => d.appendChild(dline('ctx', l)));
-        return;
-      }
-      if (r[0] === 'hunk') { if (ri) d.appendChild(mk('div', 'hsep')); return; }
-      d.appendChild(dline(r[0], r[1], r[2], r[3]));
-    });
-  });
-  row.appendChild(d);
-  return row;
-}
-
-function chgItems(c) {
-  return [
-    { label: T('gui.ws.open'), fn: () => wsOpenPath(c.key) },
-    { label: T('gui.ws.copy_path_do'), fn: () => copyToClip(c.key, T('gui.ws.copy_path')) },
-  ];
-}
-function chgMenu(c, r) { menuAt(r.left, r.bottom + 6, chgItems(c)); }
-
+/* The fixture source: what the workspace island may ask of demo mode. No
+   list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
+   opening a change stays the honest toast. Registered, not
+   declared-for-override: live mode installs its own DS.workspace and this
+   object is never consulted. */
+DS.workspace ??= {
+  shortPath: (p) => String(p),
+  openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
+};

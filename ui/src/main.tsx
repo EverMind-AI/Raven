@@ -1,3 +1,4 @@
+import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { ConnApp } from './features/connections/ConnPage'
@@ -11,6 +12,8 @@ import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
 import { SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
+import { WsApp } from './features/workspace/WorkspacePage'
+import * as workspace from './features/workspace/store'
 import { md } from './shell/prose'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
@@ -32,13 +35,13 @@ declare global {
 window.cronExprHuman = cronExprHuman
 window.cronWhen = cronWhen
 
-/* The prose renderer, called by name from nine legacy render sites: the
-   replay (demo/080 x3), history restore (live/040 x3), the turn machine
-   (live/050 x2) and the file viewer (live/170). Nothing reaches it through
-   RavenShell -- there is no md verb on that bridge -- so those nine are the
-   whole list to audit before this republish can go. Same mechanism as
-   cronExprHuman and cronWhen above: the bundle owns the function, the legacy
-   layers keep calling md(). */
+/* The prose renderer, called by name from eight legacy render sites: the
+   replay (demo/080 x3), history restore (live/040 x3) and the turn machine
+   (live/050 x2). Nothing reaches it through RavenShell -- no md verb on that
+   bridge -- and an island that needs it imports it (the workspace island's
+   file view does), so those eight are the whole list to audit before this
+   republish can go. Same mechanism as cronExprHuman and cronWhen above: the
+   bundle owns the function, the legacy layers keep calling md(). */
 window.md = md
 
 /* The skills island renders into a host node the legacy shim re-attaches
@@ -97,3 +100,20 @@ if (memHost) createRoot(memHost).render(<MemoryApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
 createRoot(skillsHost).render(<SkillsApp />)
+
+/* The workspace island mounts lazily: #wsBody is shared ground -- the agents
+   tab still draws into it from the legacy layers and the browser tab through
+   its own island root, so the workspace root exists only while a workspace
+   view is up (see workspace/store.draw). */
+workspace.setRenderer(() => createElement(WsApp))
+
+window.RavenIslands = {
+  ...(window.RavenIslands || {}),
+  workspace: {
+    draw: workspace.draw,
+    redraw: workspace.redraw,
+    reset: workspace.reset,
+    showFile: workspace.showFile,
+    openDir: workspace.openDir,
+  },
+}
