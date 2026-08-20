@@ -1553,11 +1553,16 @@ export interface SetupStatusParams {}
 export interface SetupStatusResult {
   provider_configured: boolean;
 }
-export interface ReloadMcpParams {}
+export interface ReloadMcpParams {
+  session_id?: string;
+  confirm?: boolean;
+}
 export interface ReloadMcpResult {
   ok: boolean;
-  reloaded?: number;
-  tools_changed?: boolean;
+  status: 'reloaded' | 'noop' | 'confirm_required';
+  message: string;
+  reloaded: number;
+  tools_changed: boolean;
 }
 export interface CommandsCatalogParams {}
 export interface CommandsCatalogResult {
