@@ -42,5 +42,18 @@
   },
   "context": {
     "curator_model": ""
+  },
+  "memory": {
+    "backend": "everos",
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "base_url": "http://localhost:18791"
+      }
+    }
   }
 }

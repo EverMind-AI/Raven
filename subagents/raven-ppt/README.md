@@ -165,9 +165,10 @@ or the RPC hot-apply path before it sees the change.
 
 ## Config choices
 
-`config.json` differs from a stock install in six deliberate ways. Five are
+`config.json` differs from a stock install in seven deliberate ways. Five are
 carried over from the container's rendered config; the sixth exists *because*
-the container's config does not port cleanly to this branch:
+the container's config does not port cleanly to this branch, and the seventh is
+the memory identity explained below the table:
 
 | Setting | Value | Why |
 |---|---|---|
@@ -176,6 +177,7 @@ the container's config does not port cleanly to this branch:
 | `tools.disabledTools` | no media generation, no `deep_research` | Unrelated surface for a deck builder |
 | `agents.defaults.maxToolIterations` | 240 | A page-by-page write-render-review loop over a 16-20 page deck spends iterations the way a research run spends fetches |
 | `agents.defaults.maxTokens` | 16384 | Enough for a page's worth of script; layout and text budgets are measured rather than invented, so nothing here needs a long tail. **No `temperature`**: `anthropic/claude-sonnet-5` does not list it as a supported parameter, and a value that is silently ignored reads as a determinism pin that is not there. raven-research drops it for the same reason |
+| `memory` + `plugins.config.everos-memory` | `raven-ppt` / `raven-ppt`, slice carries `base_url` alone | Keeps this agent's runs out of the host assistant's memory. Omitting the block does not mean "no memory" - see below |
 | `context.curator_model` | `""` (empty) | **The one setting that is new, not inherited.** This branch replaced turn-compaction with the Curator context engine, which is on by default and needs no config - but its slow path defaults to `gemini-2.5-flash`, and this install's single provider serves only its own pinned model. Empty is the documented value that follows the agent's model, and it is the only value that cannot send a request nothing here can answer |
 
 No `agents.defaults.workspace`: the launcher passes `--workspace` per job, which
@@ -194,6 +196,26 @@ recall, and degrades rather than failing. The container had the same gap, listed
 under its own known issues. Nothing this agent does depends on cross-run recall,
 so it is noise rather than a defect - but it is noise in `launcher.log`, not in
 the reply.
+
+### EverOS memory: on, and filed under this folder's own identity
+
+```json
+"memory": {"backend": "everos", "userId": "raven-ppt", "agentId": "raven-ppt", "memoryTopK": 5}
+```
+
+**Why the block must be present at all:** `memory.backend` defaults to `everos`
+(`config/raven.py:1133`) and `userId` / `agentId` both default to `default` -
+which is what the host Raven at `~/.raven/config.json` uses. A config that simply
+omits the block, as this one originally did, does not turn memory off. It files
+every run into the host assistant's track, and the omission looks identical to a
+deliberate choice. raven-code's README records the same default, measured from
+the other side.
+
+The plugin slice carries `base_url` alone. The identity is deliberately not
+repeated there: this checkout reads it from `memory` and treats a copy in the
+slice as obsolete, and two places holding one identity is how stores and recalls
+drift onto different ids. The three older folders here do repeat it, because
+their checkouts stamp stored messages from the slice instead.
 
 ## The LLM it runs on
 
