@@ -46,4 +46,13 @@ window.RavenShell = {
   attImageSet: (p, url) => { ATT_IMG.set(String(p), url); },
   slashName: (id) => slashName(id),
   slashHelp: (id) => slashHelp(id),
+  drawList: () => drawList(),
+  setCur: (id) => { cur = id; },
+  openSession: (s) => openSession(s),
+  removeSession: (s) => removeSession(s),
+  renameTitle: () => renameTitle(),
+  dropDraft: (id) => dropDraft(id),
+  pinPersist: (id, pinned) => { if (pinPersist) pinPersist(id, pinned); },
+  openCron: () => openCron(),
+  navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]), morePages: MORE_ROWS.map((r) => r[0]) }),
 };

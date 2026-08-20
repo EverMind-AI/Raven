@@ -47,13 +47,7 @@ let listReady = false;
   const origDrawList = drawList;
   drawList = function () {
     if (listReady) { origDrawList(); return; }
-    const box = $('#list'); box.innerHTML = '';
-    for (let i = 0; i < 6; i++) {
-      const r = mk('div', 'sess skel');
-      const bar = (w, h) => { const b = mk('span', 'sk'); b.style.cssText = `width:${w};height:${h}`; return b; };
-      r.append(bar(`${52 + ((i * 17) % 30)}%`, '11px'), bar('28px', '9px'));
-      box.appendChild(r);
-    }
+    RavenIslands.rail.skeleton();
   };
   drawList();
 }

@@ -11,6 +11,9 @@ import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
+import { RailApp } from './features/rail/RailPage'
+import * as rail from './features/rail/store'
+import { plainTitle } from './features/rail/title'
 import { SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
 import * as subagents from './features/subagents/mount'
@@ -32,6 +35,7 @@ declare global {
     cronWhen?: typeof cronWhen
     md?: typeof md
     workGlyphSvg?: typeof composer.workGlyphSvg
+    plainTitle?: typeof plainTitle
   }
 }
 
@@ -43,6 +47,9 @@ window.cronWhen = cronWhen
    legacy and draws its own graph, and one glyph means work in progress
    wherever it is drawn. */
 window.workGlyphSvg = composer.workGlyphSvg
+/* Same arrangement: the conversation header, the transcript's fork toast,
+   the subagents panel and the live overrides all strip titles through it. */
+window.plainTitle = plainTitle
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -107,6 +114,13 @@ window.RavenIslands = {
     openRow: subagentsStore.openRow,
     openDagNode: subagentsStore.openDagNode,
     sel: subagentsStore.sel,
+  },
+  rail: {
+    draw: rail.draw,
+    skeleton: rail.skeleton,
+    markNew: rail.markNew,
+    remove: rail.remove,
+    rename: rail.rename,
   },
 }
 
@@ -188,3 +202,6 @@ window.RavenIslands = {
     agentStage: transcript.agentStage,
   },
 }
+
+const listHost = document.getElementById('list')
+if (listHost) createRoot(listHost).render(<RailApp />)

@@ -93,6 +93,21 @@ export interface Shell {
   attImageSet?(path: string, url: string): void
   slashName?(id: string): string
   slashHelp?(id: string): string
+  /* Rail island verbs, all optional for the same reason. They are late-bound
+     closures over legacy names the live layer rebinds (openSession,
+     removeSession, renameTitle) or wraps (drawList during the live boot),
+     which is why the island calls back out instead of acting locally. */
+  drawList?(): void
+  setCur?(id: string | null): void
+  openSession?(s: unknown): void
+  removeSession?(s: unknown): void
+  renameTitle?(): void
+  dropDraft?(id: string): void
+  pinPersist?(id: string, pinned: boolean): void
+  openCron?(): void
+  /* What markNew needs of the chrome's page registry: the NAV_OF keys, the
+     button a page lights up, and the pages behind the More rows. */
+  navState?(): { pages: string[]; btnOf(p: string): string | undefined; morePages: Array<string | undefined> }
 }
 
 declare global {
