@@ -5,6 +5,7 @@ import * as store from './store'
 
 import type { Attachment, SlashCmd } from './types'
 import type { ReactElement } from 'react'
+import * as lightbox from '../../shell/lightbox'
 
 /* The dock's four drawn collections. Each is its own root over the container
  * page.html already carries -- #queued, #atts, #slashList, and a host at the
@@ -97,7 +98,7 @@ function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
       {isImg ? (
         /* the square crops the image, so a click has to be able to show all of it */
         <img src={a.url as string} alt={a.name} title={`${a.name} · ${size}`}
-          onClick={() => shell().openImage?.(a.url as string, a.name)} />
+          onClick={() => lightbox.open(a.url as string, a.name)} />
       ) : (
         <>
           <span className="nm">{a.name}</span>

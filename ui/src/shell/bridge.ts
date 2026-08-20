@@ -74,7 +74,6 @@ export interface Shell {
      already owns, and the turn's tl/raw logs the shell keeps per turn. */
   down?(): void
   attImage?(path: string): string | undefined
-  openImage?(src: string, name: string): void
   attNotes?(): string[]
   pathOpen?(path: string): void
   hunkFromEdit?(oldText: string, newText: string): unknown
@@ -118,6 +117,10 @@ export interface Shell {
   navState?(): { pages: string[]; btnOf(p: string): string | undefined }
   /* Chrome verbs. The nav flyout reaches the other two module pages through
      these, and re-decides the nav marks after a row navigates. */
+  /* One verb for one action: the banner's only button opens the plugins page
+     AND the websearch entry on it, and a reader who lands on the page without
+     the entry open has to hunt for what the banner was talking about. */
+  openWebsearch?(): void
   openXa?(): void
   openConn?(): void
   markNew?(): void

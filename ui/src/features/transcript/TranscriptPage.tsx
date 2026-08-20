@@ -9,6 +9,7 @@ import type {
   AnswerData, AskData, CallData, DeliveredData, FoldData, Lane, NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
+import * as lightbox from '../../shell/lightbox'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
  * renders as quiet activity rows, never cards; a stretch of consecutive
@@ -505,7 +506,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
     const src = sh.attImage!(String(p)) as string
     const nm = String(p).split('/').pop() || ''
     return <img key={p} className="shot" src={src} alt={nm}
-      {...(liveImg ? { title: t('gui.img.open', { name: nm }), onClick: () => sh.openImage?.(src, nm) } : {})} />
+      {...(liveImg ? { title: t('gui.img.open', { name: nm }), onClick: () => lightbox.open(src, nm) } : {})} />
   }
   const showClip = seg.clipped && !seg.clipOpen
   return (
