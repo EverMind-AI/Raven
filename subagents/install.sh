@@ -1,40 +1,30 @@
 #!/usr/bin/env bash
-# One command to install the sub-agents in this directory.
+# One command to build the sub-agents in this directory.
 #
-# Per folder: build the checkout's venv, scaffold `.env` from its template, then
-# register the entry in the host raven's config. Every step is idempotent, so
-# re-running after filling in a key is the normal way to finish an install.
+# Per folder: build the checkout's venv and scaffold `.env` from its template.
+# Both steps are idempotent, so re-running is cheap.
+#
+# It does not register anything. Registration needs a configured host raven, and
+# on a first install this script runs before one exists - so `raven` asks about
+# each folder during onboarding and writes the entries there. Run this, then
+# `raven`.
 #
 # Usage:
 #   ./install.sh                    # every folder here that ships an install.py
 #   ./install.sh raven-code ...     # only these
 #   ./install.sh --dry-run          # report what each step would do, change nothing
 #   ./install.sh --no-sync          # skip `uv sync` (the venvs are already built)
-#   ./install.sh --config PATH      # write that config file instead of the host raven's
-#
-# Restart raven (or the gateway) afterwards: the write lands in the config file,
-# and a running raven holds the roster it read at startup.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=0
 SYNC=1
-CONFIG=""
 FOLDERS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --no-sync) SYNC=0 ;;
-        # Absolute, because install.py is invoked with each folder as cwd: a
-        # relative path would resolve inside the folder, once per folder.
-        --config)
-            case "${2:?--config needs a path}" in
-                /*) CONFIG="$2" ;;
-                *) CONFIG="$PWD/$2" ;;
-            esac
-            shift
-            ;;
         -h | --help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
         *) FOLDERS+=("${1%/}") ;;
@@ -59,12 +49,6 @@ checkout_of() {
     done
     [ ${#found[@]} -eq 1 ] || return 1
     printf '%s\n' "${found[0]}"
-}
-
-# CODE_API_KEY for raven-code, RESEARCH_API_KEY for raven-research: the folder
-# name without its `raven-` prefix, upper-cased.
-prefix_of() {
-    printf '%s' "${1#raven-}" | tr '[:lower:]-' '[:upper:]_'
 }
 
 # The LLM a folder is tuned for, plus a cross-check. `subagent.json` records it
@@ -94,29 +78,13 @@ elif rec.get("apiBase") and base and rec["apiBase"] != base:
 PYEOF
 }
 
-# True when the host raven has a provider key a keyless sub-agent can inherit.
-# Mirrors `inherit_llm` in each run.py: any provider with an apiKey will do.
-host_has_llm() {
-    python3 - <<'PYEOF'
-import json, os, sys
-from pathlib import Path
-home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
-try:
-    cfg = json.loads((Path(home) / "config.json").read_text(encoding="utf-8"))
-except (OSError, ValueError):
-    sys.exit(1)
-providers = cfg.get("providers") or {}
-sys.exit(0 if any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()) else 1)
-PYEOF
-}
-
 if [ "$SYNC" = 1 ] && [ "$DRY_RUN" = 0 ] && ! command -v uv > /dev/null; then
     echo "error: no \`uv\` on PATH; it builds the checkouts' venvs (or pass --no-sync)" >&2
     exit 1
 fi
 
-registered=()
-needs_key=()
+ready=()
+not_built=()
 failed=()
 
 for folder in "${FOLDERS[@]}"; do
@@ -155,54 +123,25 @@ for folder in "${FOLDERS[@]}"; do
         echo "   .env: created from the template"
     fi
 
-    prefix="$(prefix_of "$folder")"
-    var="${prefix}_API_KEY"
-    # The environment wins over the file, matching what the launcher reads.
-    key="${!var-}"
-    if [ -z "$key" ] && [ -f "$dir/.env" ]; then
-        # First non-empty wins, matching env_value() in run.py and install.py. A
-        # last-match read disagrees with them on a file that sets the key twice.
-        key="$(sed -n "s/^[[:space:]]*${var}=//p" "$dir/.env" | grep -m1 '[^[:space:]]' | tr -d '[:space:]' || true)"
-    fi
     rec="$(recommendation_of "$dir")"
     echo "   recommended LLM: $(printf '%s' "$rec" | head -n1)"
     if mismatch="$(printf '%s' "$rec" | sed -n 's/^MISMATCH //p')" && [ -n "$mismatch" ]; then
         echo "   ! $mismatch - fix one of them"
     fi
-    if [ -z "$key" ]; then
-        if host_has_llm; then
-            echo "   $var is empty - this agent will inherit the host raven's LLM instead"
-            echo "   set it in $folder/.env and re-run to use the recommended one"
-        else
-            echo "   $var is empty and the host raven has no provider key to inherit"
-            echo "   fill in $folder/.env, or configure a provider in the host raven, then re-run"
-            needs_key+=("$folder")
-            continue
-        fi
+    # A built venv is what makes the folder offerable: onboarding declines to
+    # register one that cannot start.
+    if [ -x "$checkout/.venv/bin/raven" ]; then
+        ready+=("$folder")
     else
-        echo "   $var: set - running the recommended LLM"
+        not_built+=("$folder")
     fi
-
-    args=()
-    [ "$DRY_RUN" = 1 ] && args+=(--dry-run)
-    [ -n "$CONFIG" ] && args+=(--config "$CONFIG")
-    # ${args[@]+...} because expanding an empty array under `set -u` is an
-    # unbound-variable error before bash 4.4, which is the stock /bin/bash on macOS.
-    if ! output="$(cd "$dir" && python3 install.py ${args[@]+"${args[@]}"})"; then
-        failed+=("$folder")
-        continue
-    fi
-    # The entry itself is the first thing install.py prints; the caller wants the
-    # verdict, and `--dry-run` has nothing else to say.
-    printf '%s\n' "$output" | sed -n '/^}/,$p' | tail -n +2 | sed 's/^/   /'
-    registered+=("$folder")
 done
 
 echo "== summary"
-[ ${#registered[@]} -gt 0 ] && echo "   done:       ${registered[*]}"
-[ ${#needs_key[@]} -gt 0 ] && echo "   needs a key: ${needs_key[*]}"
-[ ${#failed[@]} -gt 0 ] && echo "   failed:      ${failed[*]}"
-if [ ${#registered[@]} -gt 0 ] && [ "$DRY_RUN" = 0 ]; then
-    echo "   restart raven (or the gateway) to pick these up"
+[ ${#ready[@]} -gt 0 ] && echo "   ready:     ${ready[*]}"
+[ ${#not_built[@]} -gt 0 ] && echo "   not built: ${not_built[*]}"
+[ ${#failed[@]} -gt 0 ] && echo "   failed:    ${failed[*]}"
+if [ ${#ready[@]} -gt 0 ] && [ "$DRY_RUN" = 0 ]; then
+    echo "   now run \`raven\` - onboarding asks about each of these and registers the ones you take up"
 fi
-[ ${#needs_key[@]} -eq 0 ] && [ ${#failed[@]} -eq 0 ]
+[ ${#failed[@]} -eq 0 ]

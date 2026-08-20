@@ -62,8 +62,29 @@ All notable changes to Raven are documented here.
 - The gateway now closes the ACP connection pool on the way out. Those adapter servers
   are launched with `start_new_session=True` and receive none of the gateway's signals,
   so every gateway exit used to orphan them.
+- Setup now offers the sub-agents that ship in a source checkout. Step 5 of the wizard
+  lists each folder under `subagents/` and asks whether to run it on the model it is
+  tuned for, on this raven's LLM, or not at all, then writes the roster entries. The
+  tuned model leads the menu because it is the one a key of its own buys: inheritance
+  copies the host's `agents.defaults.model` too, so a folder without a key stops running
+  the model it was built around. All three are tuned for models served through
+  OpenRouter, so a raven that already has an OpenRouter key is not asked for a second
+  copy of it - and that reuse reads `providers.openrouter` alone, never a key parked in
+  `custom`, which belongs to whichever private gateway that section names. It replaces the
+  deep_research step, which is unchanged and still reachable through
+  `raven deep-research enable`. Previously `subagents/install.sh` did the registering,
+  which could not work on a first install: it runs before `~/.raven/config.json` exists,
+  read that file to decide whether an agent had an LLM to fall back on, and so declined
+  to register every folder on exactly the machines that had just been set up. It now
+  builds the venvs and stops there, and its `--config` flag is gone with the write it
+  fed. A folder whose venv is not built is not offered: a name in the roster that fails
+  the moment the model picks it is worse than an absent one.
 
 ### Breaking Changes
+
+- `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the
+  sub-agent step. Typer rejects an unknown option, so a script or CI job passing the old
+  name exits 2 with `No such option` rather than skipping anything.
 
 - A `run_subagent_dag` node id must now be unique across the whole conversation, not
   just within its own graph, and a graph that reuses one an earlier run took is refused

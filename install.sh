@@ -24,8 +24,8 @@ RAVEN_HOME="${RAVEN_HOME:-${HOME:?HOME is required, or set RAVEN_HOME explicitly
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
 # Set by install_raven when it installed from a source checkout, and read by
 # install_subagents. Empty after a wheel install, which is the whole gate: the
-# wheel and the sdist ship `raven/` only, so there is no sub-agent tree to
-# install from unless this is a clone.
+# wheel and the sdist ship `raven/` only, so there is no sub-agent tree to build
+# unless this is a clone.
 RAVEN_SRC_DIR=""
 
 # --- pretty output ---------------------------------------------------------
@@ -308,18 +308,13 @@ install_subagents() {
     return 0
   fi
 
-  info "Installing the sub-agents (builds one venv each; first run takes a few minutes)..."
-  # ~/.local/bin first: the sub-installer resolves the interpreter that can
-  # import raven by reading the `raven` console script's shebang, and the raven
-  # just installed is not on the PATH this shell started with.
-  #
-  # A non-zero exit is the normal outcome of a fresh clone -- the installer
-  # reports "needs a key" for every folder whose .env is still a template -- so
-  # it is reported, not propagated.
-  if PATH="$HOME/.local/bin:$PATH" bash "$installer"; then
-    ok "sub-agents installed"
+  info "Building the sub-agents (one venv each; first run takes a few minutes)..."
+  # Reported, not propagated: a machine that cannot build them still gets a
+  # working raven, and the sub-installer already said which folder failed.
+  if bash "$installer"; then
+    ok "sub-agents built"
   else
-    warn "Some sub-agents are not ready yet (see above); raven itself is installed."
+    warn "Some sub-agents did not build (see above); raven itself is installed."
   fi
   SUBAGENTS_RAN=1
 }
@@ -350,8 +345,8 @@ main() {
     printf '\n    \033[1mraven\033[0m    # sets you up on first run, then opens the TUI\n\n'
   fi
   if [ "$SUBAGENTS_RAN" = 1 ]; then
-    printf '  sub-agents: fill in any \033[1msubagents/<name>/.env\033[0m that still needs a key, re-run this\n'
-    printf '  script to finish it, and restart raven so it reads the new roster.\n\n'
+    printf '  sub-agents: the run above only built them. \033[1mraven\033[0m asks about each one during\n'
+    printf '  setup and registers the ones you take up.\n\n'
   fi
   if ! printf '%s' "$PATH" | grep -q "$HOME/.local/bin"; then
     warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\""
