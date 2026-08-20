@@ -38,9 +38,7 @@ export interface Shell {
   menuAt(x: number, y: number, items: Array<MenuItem | '-'>): void
   confirmAsk(title: string, body: string, label: string, fn: () => void): void
   showPage(id: string | null): void
-  /* Optional so fakes written before it keep type-checking; the page
-     bridge always publishes it. */
-  /* Grown by the skills island. Optional, so fakes that predate a helper
+  /* Grown by the islands. Optional, so fakes that predate a helper
      stay valid: each one is only reached from the island that asked. */
   useInTask?(promptKey: string, name: string): void
   reachText?(reach: string): string
@@ -125,6 +123,7 @@ export interface Shell {
   /* Republishes the offset the docked composer stands at; a panel drag moves
      the column the composer lives in. */
   dockLift?(): void
+  plugRedraw?(): void
 }
 
 declare global {

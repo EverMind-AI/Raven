@@ -63,4 +63,5 @@ window.RavenShell = {
   modKey: () => modKey(),
   isMac: () => isMac(),
   dockLift: () => dockLift(),
+  plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
