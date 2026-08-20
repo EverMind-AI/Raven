@@ -30,11 +30,11 @@ function parkTurn() {
     turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
       sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
     busy, use, tl, raw, lastRun, q,
-    /* The live clock's anchor. It is module state in the demo shell, and the away
-       session's idle drawTurnLive zeroes it -- without carrying it here, a
-       turn ten minutes in read "2s" after a round trip through another
-       session. */
-    liveT0,
+    /* The live clock's anchor. It is the composer island's own state, and the
+       away session's idle turn-live paint zeroes it -- without carrying it
+       here, a turn ten minutes in read "2s" after a round trip through
+       another session. */
+    liveT0: RavenIslands.composer.liveAnchor(),
     ws: { changes: WS.changes, cmds: WS.cmds, urls: WS.urls, file: WS.file, turn: WS.turn, unseen: WS.unseen },
     wsTab, wsPicked,
     events: [], overflow: false,
@@ -57,9 +57,9 @@ function restoreTurn(pk) {
   pk.nodes.forEach((n) => stage.appendChild(n));
   Object.assign(live, pk.turn);
   busy = pk.busy; use = pk.use; tl = pk.tl; raw = pk.raw; lastRun = pk.lastRun; q = pk.q;
-  /* Before drawMeter below: its drawTurnLive keeps a non-zero anchor, so the
+  /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
-  liveT0 = pk.liveT0 || 0;
+  RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
   Object.assign(WS, pk.ws);
   wsTab = pk.wsTab; wsPicked = pk.wsPicked;
   const s = sess(cur);

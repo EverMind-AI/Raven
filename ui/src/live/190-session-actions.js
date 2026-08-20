@@ -16,7 +16,7 @@ DS.transcript.branch = () => {
     .catch((e) => toast(`分叉失败：${e.message || e}`));
 };
 
-SLASH.forEach((x) => {
+DS.composer.slash.forEach((x) => {
   if (x.id === 'gui.clear') {
     x.fn = () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
       rpc.call('session.clear', { session_id: cur })

@@ -1,6 +1,7 @@
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 
+import * as composer from './features/composer/mount'
 import { ConnApp } from './features/connections/ConnPage'
 import * as connections from './features/connections/store'
 import * as browser from './features/browser/mount'
@@ -30,6 +31,7 @@ declare global {
     cronExprHuman?: typeof cronExprHuman
     cronWhen?: typeof cronWhen
     md?: typeof md
+    workGlyphSvg?: typeof composer.workGlyphSvg
   }
 }
 
@@ -37,6 +39,10 @@ declare global {
    and the fixture source's save build their `when` prose through these. */
 window.cronExprHuman = cronExprHuman
 window.cronWhen = cronWhen
+/* The working glyph's svg twin, for the dag sheet's nodes: the sheet is still
+   legacy and draws its own graph, and one glyph means work in progress
+   wherever it is drawn. */
+window.workGlyphSvg = composer.workGlyphSvg
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -108,6 +114,12 @@ window.RavenIslands = {
    only when the installed DS.browser source is the embedded one. */
 installLinkTrap()
 
+/* The dock's own listeners -- the field, the send button, the file picker, the
+   drop target, the pill. Registered here rather than on the first paint
+   because the markup is already in the document; the handlers read the shell
+   and DS.composer lazily, which is what makes that safe this early. */
+composer.install()
+
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)
 
@@ -136,6 +148,21 @@ window.RavenIslands = {
 
 window.RavenIslands = {
   ...(window.RavenIslands || {}),
+  /* The composer island: the dock at the bottom of the chat. The shims in
+     demo/090-composer.js call these by name, the parked-turn machinery
+     (live/060) carries the live clock's anchor through them, and live's send
+     takes the staged attachment paths off the tray the same way. */
+  composer: {
+    goPaint: composer.goPaint,
+    drawQueue: composer.drawQueue,
+    drawMeter: composer.drawMeter,
+    fitField: composer.fitField,
+    dockLift: composer.dockLift,
+    liveAnchor: composer.liveAnchor,
+    setLiveAnchor: composer.setLiveAnchor,
+    attsPending: composer.attsPending,
+    takeAtts: composer.takeAtts,
+  },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine
      (live/040, live/050, live/230) drive these; the DOM they used to build

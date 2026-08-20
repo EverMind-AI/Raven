@@ -75,6 +75,24 @@ export interface Shell {
   hunkFromUnified?(lines: string | string[]): unknown
   tlPush?(entry: { name: string; arg: string; ms: number; ok: boolean }): void
   rawPush?(line: string): void
+  /* Composer island verbs. `send`/`halt` stay with the shell on purpose: they
+     mutate the turn globals (busy, use, tl, raw) and diverge between the demo
+     replay and the live rpc, so the dock asks for the action and the page
+     decides what it means. The rest are the draft store, the tail anchor and
+     the two catalogues the palette renders from. */
+  send?(text: string): void
+  halt?(): void
+  noteRow?(label: string, detail: string): void
+  stick?(): boolean
+  setStick?(on: boolean): void
+  /* The draft debounce, kept whole: the composer parks 250ms after a
+     keystroke and drops the parked copy the moment the text is sent. */
+  draftTouch?(): void
+  draftDrop?(): void
+  draftPark?(): void
+  attImageSet?(path: string, url: string): void
+  slashName?(id: string): string
+  slashHelp?(id: string): string
 }
 
 declare global {
