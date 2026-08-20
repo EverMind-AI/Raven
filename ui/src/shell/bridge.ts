@@ -105,9 +105,26 @@ export interface Shell {
   dropDraft?(id: string): void
   pinPersist?(id: string, pinned: boolean): void
   openCron?(): void
-  /* What markNew needs of the chrome's page registry: the NAV_OF keys, the
-     button a page lights up, and the pages behind the More rows. */
-  navState?(): { pages: string[]; btnOf(p: string): string | undefined; morePages: Array<string | undefined> }
+  /* What markNew needs of the chrome's page registry: the NAV_OF keys and the
+     button a page lights up. The More rows are not in here -- the nav flyout
+     module marks its own (see shell/navfly.ts). */
+  navState?(): { pages: string[]; btnOf(p: string): string | undefined }
+  /* Chrome verbs. The nav flyout reaches the other two module pages through
+     these, and re-decides the nav marks after a row navigates. */
+  openXa?(): void
+  openConn?(): void
+  markNew?(): void
+  /* Remembers a theme pick: the preference belongs to the legacy look store,
+     which also persists it and repaints the appearance page. */
+  themeSet?(next: 'dark' | 'light'): void
+  /* What the foot row says: the running build, and how this platform spells
+     the settings shortcut. */
+  appVersion?(): string | null
+  modKey?(): string
+  isMac?(): boolean
+  /* Republishes the offset the docked composer stands at; a panel drag moves
+     the column the composer lives in. */
+  dockLift?(): void
 }
 
 declare global {
