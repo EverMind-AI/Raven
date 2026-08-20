@@ -21,6 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from raven.agent.loop import AgentLoop
 from raven.memory_engine.backend import Memory
 from raven.providers.base import LLMProvider, LLMResponse
@@ -77,7 +79,7 @@ class _FakeBackend:
     async def stop(self) -> None:
         pass
 
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+    async def recall(self, query, *, user_id=None, agent_id=None, session_id=None, top_k):
         self.recall_calls.append(
             {
                 "query": query,
@@ -176,13 +178,16 @@ async def test_no_backend_turn_completes_silently(tmp_path: Path) -> None:
     assert out is not None  # legacy mode: pipeline runs, no backend seams
 
 
-async def test_store_failure_does_not_break_turn(tmp_path: Path) -> None:
+async def test_store_failure_surfaces(tmp_path: Path) -> None:
+    """The MemoryBackend contract says the host does not silently swallow
+    store failures. A run whose writes all failed has nothing to recall next
+    time while still reporting success."""
     backend = _FakeBackend()
     backend.store_raises = RuntimeError("everos down")
     agent = _make_agent(tmp_path, backend=backend)
 
-    out = await agent._process_message(_msg())
-    assert out is not None  # exception swallowed; turn already saved
+    with pytest.raises(RuntimeError, match="everos down"):
+        await agent._process_message(_msg())
     assert len(backend.store_calls) == 1  # store was attempted
 
 

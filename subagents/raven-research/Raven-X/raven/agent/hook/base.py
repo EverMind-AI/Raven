@@ -91,6 +91,19 @@ class AgentHookContext:
     turn, so it cannot be recovered from ``messages`` once the loop is running.
     """
 
+    turn_base: int = 0
+    """Index into ``messages`` where THIS turn's messages begin.
+
+    Everything before it is persisted history from previous turns of the
+    session. Hooks that scan ``messages`` for per-turn state (streak counters,
+    elision snapshots, tool-result watermarks) must start at this index, not
+    at 0 — a full-list scan re-counts the previous turns' messages, which a
+    single-turn benchmark can never detect because there the two are the same
+    list. Same convention as ``turn_base`` in ``_run_agent_loop`` /
+    ``_save_turn`` / ``TurnJournal``; defaults to 0 so a hook driven directly
+    (as tests do) sees the whole list, which for one turn is identical.
+    """
+
     # ── before_iteration / before_execute_tools / after_iteration ──
     iteration: int | None = None
     messages: list[dict[str, Any]] | None = None

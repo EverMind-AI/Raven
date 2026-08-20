@@ -206,6 +206,24 @@ class TestBuildPluginTools:
 
         assert build_plugin_tools(tmp_path, self._config(), registry=PluginRegistry()) == []
 
+    def test_provider_reaches_factory_via_services(self, tmp_path: Path) -> None:
+        from raven.cli._plugin_stack import build_plugin_tools
+
+        seen = {}
+
+        def fake_factory(ctx):
+            seen["provider"] = ctx.services.provider
+            return "tool"
+
+        _install_test_module("_tp_tools_p", {"make_tool": fake_factory})
+        reg = PluginRegistry()
+        reg.activate([_discovered_with_tools("provplugin", [("t1", "_tp_tools_p:make_tool")])])
+
+        fake_provider = object()
+        tools = build_plugin_tools(tmp_path, self._config(), registry=reg, provider=fake_provider)
+        assert tools == ["tool"]
+        assert seen["provider"] is fake_provider
+
     def test_failing_factory_is_skipped(self, tmp_path: Path) -> None:
         from raven.cli._plugin_stack import build_plugin_tools
 

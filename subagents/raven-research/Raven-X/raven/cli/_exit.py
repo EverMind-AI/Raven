@@ -1,13 +1,16 @@
-"""Hard-exit past CPython interpreter finalization for native-unsafe runtimes.
+"""Exit path for a process that hosts native runtimes.
 
-Building the agent loop opens a lancedb-backed store, and lancedb starts a
-process-global ``LanceDBBackgroundEventLoop`` (Rust/tokio) daemon thread with
-no public shutdown hook. Finalizing the interpreter while that native runtime
-is still live segfaults (``Py_FinalizeEx``; SIGSEGV, exit 139), masking the
-command's real exit code. Every raven command that builds the loop starts that
-thread, so the guard lives once at the CLI exit chokepoint
-(:func:`raven.cli.commands.run`): when the hazard is live, flush and
-``os._exit`` past finalization.
+Raven starts native runtimes on daemon threads (a skill-tree watcher on almost
+every command, a lancedb event loop when that backend opens), and finalizing
+CPython while one is live can segfault (SIGSEGV, exit 139) -- masking the
+command's real exit code. Which runtimes those are, and which can be shut down,
+is :mod:`raven.utils.native_runtimes`' business.
+
+The order here is the whole point: stop what can be stopped, and only skip
+finalization for what cannot. Hard-exiting unconditionally would be simpler and
+strictly worse -- ``os._exit`` runs no ``atexit`` hook and flushes nothing this
+function did not flush by hand, and this path now covers essentially every CLI
+invocation rather than only lancedb-backed ones.
 
 CliRunner invokes the Typer ``app`` object directly (in-process), never the
 console-script ``run`` wrapper, so test hosts keep normal exit semantics.
@@ -17,17 +20,19 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 from typing import NoReturn
 
+from raven.utils.native_runtimes import native_finalization_hazard, shutdown_native_runtimes
 
-def lancedb_finalization_hazard() -> bool:
-    """Whether lancedb's Rust/tokio background thread is live in this process.
 
-    Merely importing lancedb is safe — the thread only exists once a connection
-    is opened — so key on the live thread, not the imported module.
+def settle_native_runtimes() -> bool:
+    """Shut down every stoppable native runtime; report whether a hazard remains.
+
+    ``True`` means something unstoppable is still live and the caller must not
+    let the interpreter finalize -- see :func:`flush_and_hard_exit`.
     """
-    return any(t.name == "LanceDBBackgroundEventLoop" for t in threading.enumerate())
+    shutdown_native_runtimes()
+    return native_finalization_hazard()
 
 
 def flush_and_hard_exit(code: int) -> NoReturn:

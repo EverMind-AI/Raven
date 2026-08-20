@@ -49,7 +49,7 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "edit_file",
     "list_dir",
     "grep",
-    "find",
+    "glob",
     "exec",
     "ask_user",
     "spawn",

@@ -31,7 +31,7 @@ async def test_find_refuses_system_root():
 @pytest.mark.asyncio
 async def test_grep_normal_search_still_works(tmp_path, monkeypatch):
     # Force the pure-Python os.walk fallback so the deadline path is exercised.
-    monkeypatch.setattr(file_search.shutil, "which", lambda *_a, **_k: None)
+    monkeypatch.setattr(file_search, "resolve_rg", lambda: None)
     (tmp_path / "a.txt").write_text("the needle is here\n", encoding="utf-8")
 
     result = await GrepTool().execute(pattern="needle", path=str(tmp_path))
@@ -41,7 +41,7 @@ async def test_grep_normal_search_still_works(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_grep_walk_deadline_short_circuits(tmp_path, monkeypatch):
-    monkeypatch.setattr(file_search.shutil, "which", lambda *_a, **_k: None)
+    monkeypatch.setattr(file_search, "resolve_rg", lambda: None)
     # Deadline already in the past -> the walk bails before yielding any file.
     monkeypatch.setattr(file_search, "_WALK_DEADLINE_S", -1.0)
     (tmp_path / "a.txt").write_text("the needle is here\n", encoding="utf-8")

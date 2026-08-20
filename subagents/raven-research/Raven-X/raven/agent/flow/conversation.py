@@ -69,13 +69,13 @@ session. It is not the default because it has a real failure mode - see
 from __future__ import annotations
 
 import asyncio
-import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
 
+from raven.agent.flow._verdict import parse_bool_verdict
 from raven.agent.flow.answer_text import visible_answer
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 
@@ -259,31 +259,12 @@ class ConversationGate:
 
     @staticmethod
     def _parse(text: str) -> tuple[bool, str] | None:
-        if not text:
+        parsed = parse_bool_verdict(text, "research")
+        if parsed is None:
             return None
-        candidates = [text]
-        start, end = text.find("{"), text.rfind("}")
-        if 0 <= start < end:
-            candidates.append(text[start : end + 1])
-        for candidate in candidates:
-            try:
-                import json_repair
-
-                data = json_repair.loads(candidate)
-            except Exception:
-                try:
-                    data = json.loads(candidate)
-                except Exception:
-                    continue
-            if not isinstance(data, dict):
-                continue
-            value = data.get("research")
-            if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-                value = value.strip().lower() == "true"
-            if isinstance(value, bool):
-                why = data.get("why")
-                return value, str(why)[:200] if isinstance(why, str) else ""
-        return None
+        data, value = parsed
+        why = data.get("why")
+        return value, str(why)[:200] if isinstance(why, str) else ""
 
 
 class GatedHook(AgentHook):

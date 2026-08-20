@@ -77,6 +77,31 @@ def test_enabling_the_feature_wraps_every_observer_not_a_chosen_few():
     assert all(isinstance(o, GatedHook) for o in a.observers)
 
 
+def test_the_shape_bar_is_the_one_observer_deliberately_left_unwrapped():
+    """dr@3.7. The exception to the rule above, pinned so it stays deliberate.
+
+    Every other observer runs the research machine - model calls, evidence,
+    ledger rows - and a turn answered from context has no business paying for
+    any of it. ``ReportShapeGate`` runs a markdown parse over text the turn
+    already produced, and the non-research turn is the stratum it was built for:
+    2/9 well-formed there against 8/14 on research turns. Wrapping it would gate
+    it out of the only place it is needed, which is why the append happens after
+    the wrap rather than inside a predicate.
+    """
+    from raven.agent.flow.report_shape import ReportShapeGate
+
+    config = DRFlowConfig(
+        enabled=True,
+        conversation={"enabled": True},
+        final_shape={"report_bounce": True},
+    )
+    a = build_dr_flow(config, _StubProvider(), max_iterations=40, context_window_tokens=65536)
+
+    unwrapped = [o for o in a.observers if not isinstance(o, GatedHook)]
+    assert [type(o).__name__ for o in unwrapped] == ["ReportShapeGate"]
+    assert isinstance(a.observers[-1], ReportShapeGate), "and it runs last, after the reviewer"
+
+
 def test_the_wrapper_preserves_observer_order():
     """Observer order is part of the flow contract - a restart has to be
     intercepted before the terminal gates see it - and wrapping must not be a

@@ -41,6 +41,7 @@ from raven.plugin import (
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
     from raven.memory_engine import MemoryBackend
+    from raven.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +52,17 @@ def plugin_discovery_sources() -> dict:
     Shared by :func:`build_plugin_registry` (live boot) and the
     ``raven plugins`` CLI command so both see the same set:
 
-    - bundled — ``raven/plugin/memory/`` inside the package.
+    - bundled — ``raven/plugin/`` inside the package (plus the legacy
+      ``raven/plugin/memory/`` nesting where the everos backend lives).
     - user    — ``~/.raven/plugin/``.
     - project — ``./.raven/plugin/``.
     - entry_points — the ``raven.plugins`` group.
     """
     import raven
 
+    plugin_root = Path(raven.__path__[0]) / "plugin"
     return {
-        "bundled_dir": Path(raven.__path__[0]) / "plugin" / "memory",
+        "bundled_dir": (plugin_root, plugin_root / "memory"),
         "user_dir": Path.home() / ".raven" / "plugins",
         "project_dir": Path.cwd() / ".raven" / "plugins",
         "entry_points_group": "raven.plugins",
@@ -88,10 +91,12 @@ def build_plugin_registry(
       third-party pip-installed plugins register their factories.
     """
     disabled = frozenset(config.plugins.disabled)
+    enabled = frozenset(config.plugins.enabled)
     try:
         return assemble_plugin_registry(
             **plugin_discovery_sources(),
             disabled=disabled,
+            enabled=enabled,
         )
     except (PluginConflictError, PluginFactoryImportError) as e:
         logger.warning(
@@ -120,6 +125,10 @@ def maybe_build_memory_backend(
        ``config.plugins.config`` — first by plugin id (the canonical
        key, e.g. ``"everos-memory"``), then by backend contribution
        name (the friendlier key, e.g. ``"everos"``) as a fallback.
+    4. Fold ``memory.user_id`` / ``memory.agent_id`` into that slice.
+       The recall side reads them from ``memory``, the store side from
+       the slice; leaving both authoritative meant a config that set
+       only one wrote to a track it never searched.
 
     The returned backend has **not** been ``await``-started — the
     caller (CLI bootstrap) is responsible for the
@@ -129,9 +138,35 @@ def maybe_build_memory_backend(
     name = config.memory.backend
     if name is None:
         return None
+    if (
+        name == "everos"
+        and "backend" not in config.memory.model_fields_set
+        and not (config.plugins.config.get("everos-memory") or {}).get("base_url")
+    ):
+        # Memory defaults on for this line, but a keyless local EverOS
+        # refuses to boot -- and the one-shot path is fail-fast, so honoring
+        # the DEFAULT on a keyless install would turn every -m run into a
+        # 30s hang + exit 1. The default therefore degrades to "no memory"
+        # with the fix named. An explicit ``memory.backend: "everos"`` in
+        # the user config skips this: stated intent should fail loudly with
+        # the startup error rather than be silently un-chosen.
+        from raven.config.update_everos import everos_models_configured
+
+        if not everos_models_configured():
+            logger.info(
+                "memory stays off: the local EverOS runtime has no model keys. "
+                "Run `raven onboard` (memory step) or set EVEROS_LLM__API_KEY "
+                "and EVEROS_EMBEDDING__API_KEY to enable recall.",
+            )
+            return None
     if registry is None:
         registry = build_plugin_registry(config)
     plugin_slice = _resolve_plugin_config_slice(registry, config, name)
+    plugin_slice = {
+        "user_id": config.memory.user_id,
+        "agent_id": config.memory.agent_id,
+        **plugin_slice,
+    }
     services = ServiceLocator(workspace=workspace)
     try:
         backend = registry.build_memory_backend(
@@ -160,11 +195,41 @@ def maybe_build_memory_backend(
     return backend
 
 
+async def start_memory_backend(
+    backend: "MemoryBackend | None",
+    *,
+    fail_fast: bool,
+) -> None:
+    """Bring a memory backend online.
+
+    ``fail_fast`` separates the two kinds of caller. A one-shot run is
+    usually unattended and its output is consumed as a result, so a memory
+    backend that never came up has to end the run rather than produce work
+    that silently had no memory behind it. An interactive session keeps
+    going without memory, because losing the whole agent over an unreachable
+    memory service is worse than working without recall -- but it says so at
+    ERROR level rather than filing it as a warning nobody reads.
+    """
+    if backend is None:
+        return
+    try:
+        await backend.start()
+    except Exception as e:
+        if fail_fast:
+            raise
+        logger.error(
+            "memory backend failed to start (%s); this session runs WITHOUT memory: "
+            "nothing will be recalled and nothing will be stored.",
+            e,
+        )
+
+
 def build_plugin_tools(
     workspace: Path,
     config: "RavenConfig",
     *,
     registry: PluginRegistry | None = None,
+    provider: "LLMProvider | None" = None,
 ) -> list:
     """Construct every plugin-contributed tool admitted by ``config``.
 
@@ -185,7 +250,7 @@ def build_plugin_tools(
     names = registry.tool_names()
     if not names:
         return []
-    services = ServiceLocator(workspace=workspace)
+    services = ServiceLocator(workspace=workspace, provider=provider)
     slices = config.plugins.config
     tools = []
     for name in names:

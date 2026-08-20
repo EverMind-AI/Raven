@@ -36,7 +36,7 @@ def test_resolution_is_case_insensitive():
 
 def test_family_without_a_file_falls_back_to_default():
     """A family may be reserved in the table before its prompt is written."""
-    family, text = identity_prompts.load_template("qwen3.6-35B-A3B")
+    _, family, text = identity_prompts.load_template("qwen3.6-35B-A3B")
     assert identity_prompts.resolve_family("qwen3.6-35B-A3B") == "qwen"
     if "qwen" not in identity_prompts.available_families():
         assert family == "default"
@@ -48,7 +48,7 @@ def test_default_family_always_has_a_file():
 
 
 def test_anthropic_family_has_a_file():
-    family, _ = identity_prompts.load_template("claude-opus-4-8")
+    _, family, _ = identity_prompts.load_template("claude-opus-4-8")
     assert family == "anthropic"
 
 
@@ -102,3 +102,78 @@ def test_retired_assistant_behaviors_reach_every_family():
         assert "# Working discipline" in rendered, model
         assert "call the `ask_user` tool and wait for the answer" in rendered, model
         assert "the `#tag` is a random nonce" in rendered, model
+
+
+# ---- domain axis ---------------------------------------------------------------
+
+
+def _render_for_domain(monkeypatch: pytest.MonkeyPatch, domain: str, model: str | None = None) -> str:
+    from raven.agent import profile as run_profile
+
+    monkeypatch.setenv(run_profile.DOMAIN_ENV, domain)
+    monkeypatch.setattr(run_profile, "_current", None)
+    monkeypatch.setattr(run_profile, "_current", run_profile.resolve_profile())
+    return render.identity_text(Path("/workspace"), model=model)
+
+
+def test_data_domain_serves_its_own_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    rendered = _render_for_domain(monkeypatch, "data")
+    assert "Data Analysis Methodology" in rendered
+    assert "{{" not in rendered
+
+
+def test_data_domain_drops_the_software_discipline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The coding discipline is not merely unhelpful here, it is wrong work."""
+    rendered = _render_for_domain(monkeypatch, "data")
+    assert "Software Engineering Discipline" not in rendered
+    assert "the project's existing tests come first" not in rendered
+    assert "DO NOT ADD ***ANY*** COMMENTS" not in rendered
+
+
+def test_data_domain_keeps_the_domain_agnostic_clauses(monkeypatch: pytest.MonkeyPatch) -> None:
+    rendered = _render_for_domain(monkeypatch, "data")
+    assert "# Platform Policy" in rendered
+    assert "# Working discipline" in rendered
+    assert "the `#tag` is a random nonce" in rendered
+    assert "`<system-reminder>`" in rendered
+
+
+def test_coding_domain_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    rendered = _render_for_domain(monkeypatch, "coding")
+    assert "Software Engineering Discipline" in rendered
+    assert "Data Analysis Methodology" not in rendered
+
+
+def test_a_domain_without_a_prompt_falls_back_to_coding() -> None:
+    """Same rule as a missing family file: degrade, never raise."""
+    domain, family, text = identity_prompts.load_template("claude-opus-4-8", "no-such-domain")
+    assert domain == identity_prompts.DEFAULT_DOMAIN
+    assert family == "default"
+    assert text
+
+
+def test_domain_family_beats_domain_default() -> None:
+    """A family file inside the domain wins over that domain's default."""
+    domain, family, _ = identity_prompts.load_template("claude-opus-4-8", "coding")
+    assert (domain, family) == ("coding", "anthropic")
+
+
+def test_data_prompt_carries_the_data_discipline_sentinel() -> None:
+    """The block is substituted, not inlined -- the file must ask for it."""
+    text = identity_prompts.prompt_path("data", "default").read_text(encoding="utf-8")
+    assert "{{DATA_DISCIPLINE}}" in text
+    assert "{{SE_DISCIPLINE}}" not in text
+
+
+def test_bootstrap_files_are_coding_only(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """AGENTS.md states how to build *this repo*; a data workspace has no such thing."""
+    from raven.agent import profile as run_profile
+
+    (tmp_path / "AGENTS.md").write_text("repo rules", encoding="utf-8")
+    monkeypatch.setattr(run_profile, "_current", None)
+    monkeypatch.setenv(run_profile.DOMAIN_ENV, "coding")
+    monkeypatch.setattr(run_profile, "_current", run_profile.resolve_profile())
+    assert "repo rules" in render.load_bootstrap_files(tmp_path)
+    monkeypatch.setenv(run_profile.DOMAIN_ENV, "data")
+    monkeypatch.setattr(run_profile, "_current", run_profile.resolve_profile())
+    assert render.load_bootstrap_files(tmp_path) == ""

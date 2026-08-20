@@ -154,18 +154,38 @@ app.add_typer(session_app, name="sessions")
 def run() -> None:
     """Console-script entry point.
 
-    Runs the Typer app, then hard-exits past CPython interpreter finalization
-    when a native runtime that segfaults at finalization is live (lancedb's
-    Rust/tokio background thread — see :mod:`raven.cli._exit`). Any command that
-    builds the agent loop starts that thread, so guarding here covers them all
-    at once. CliRunner invokes ``app`` directly and never reaches this wrapper,
-    so in-process test hosts keep normal exit semantics.
-    """
-    from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
-    from raven.config.loader import ConfigReadError
+    Runs the Typer app, then settles the native runtimes the loop started
+    before the interpreter finalizes: the stoppable ones are shut down, and
+    only an unstoppable one left live (lancedb's Rust/tokio thread) forces a
+    hard exit past finalization. See :mod:`raven.cli._exit`.
 
+    Every exit path converges on that one settle step, which is the fix for
+    what the earlier shape got wrong: a ``raise SystemExit`` from inside one of
+    the ``except`` blocks below is not caught by their sibling handler, so those
+    paths -- and any unhandled exception -- finalized unguarded and segfaulted
+    (exit 139), replacing the real exit code. Measured on both.
+
+    CliRunner invokes ``app`` directly and never reaches this wrapper, so
+    in-process test hosts keep normal exit semantics.
+    """
+    from raven.cli._exit import flush_and_hard_exit, settle_native_runtimes
+    from raven.config.loader import ConfigReadError
+    from raven.providers.auth import MissingCredentialsError
+
+    code: int | None = None
     try:
         app()
+    except MissingCredentialsError as exc:
+        # The gate is decided in `providers.auth` because more than one entry
+        # point asks it; printing and exiting is this one's idiom, so it happens
+        # here rather than there. Rendered once for every command, like
+        # ConfigReadError.
+        from raven.cli._helpers import console
+
+        console.print(f"[red]Error: {exc.summary}.[/red]")
+        if exc.remedy:
+            console.print(exc.remedy)
+        code = 1
     except ConfigReadError as exc:
         # A config-write command (channels/provider/onboard) hit an
         # unparseable config. The write layer already refused (file untouched);
@@ -173,14 +193,39 @@ def run() -> None:
         from rich.console import Console
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
-        raise SystemExit(1) from exc
+        code = 1
     except SystemExit as exc:
-        code = exc.code
-        if not isinstance(code, int):
-            code = 0 if code is None else 1
-        if lancedb_finalization_hazard():
-            flush_and_hard_exit(code)
-        raise
+        raw = exc.code
+        if raw is None or isinstance(raw, int):
+            code = raw or 0
+        else:
+            # `sys.exit("message")`: the payload *is* the message, and the
+            # interpreter would print it before exiting 1. Re-raising a plain
+            # int below would drop it, so print it here instead.
+            print(raw, file=sys.stderr)
+            code = 1
+    except BaseException:
+        # Rendered here rather than left to the interpreter: reaching
+        # finalization is exactly what this function may have to prevent, and a
+        # hard exit would take the traceback with it. Through `sys.excepthook`
+        # so typer's rich traceback survives (it renders from the config typer
+        # attaches to the exception in `Typer.__call__`).
+        exc_info = sys.exc_info()
+        try:
+            sys.excepthook(*exc_info)
+        except Exception:
+            import traceback
+
+            traceback.print_exception(*exc_info)
+        # An interrupt's conventional code, which the interpreter produces by
+        # re-raising SIGINT; click usually converts it to Abort/1 first, so this
+        # covers the interrupts that land outside click's own guard.
+        code = 130 if isinstance(exc_info[1], KeyboardInterrupt) else 1
+
+    if settle_native_runtimes():
+        flush_and_hard_exit(code or 0)
+    if code:
+        raise SystemExit(code)
 
 
 if __name__ == "__main__":

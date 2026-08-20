@@ -1,10 +1,35 @@
 """File system tools: read, write, edit, list."""
 
+import ast
 import difflib
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool
+
+
+def _python_syntax_note(fp: Path, text: str) -> str:
+    """Post-write syntax verdict for ``.py`` files, appended to the result.
+
+    Deterministic and in-band: a write/edit that leaves the file unparseable
+    is told so in the same tool result, costing zero extra rounds. Catches
+    truncated or mangled content landing silently (repaired tool arguments
+    have written partial files before). Syntax only - a line that crashes at
+    runtime still needs tests to surface.
+    """
+    if fp.suffix != ".py":
+        return ""
+    try:
+        ast.parse(text)
+    except SyntaxError as exc:
+        location = f"line {exc.lineno}" if exc.lineno else "unknown line"
+        return (
+            f"\nWARNING: {fp.name} now has a Python syntax error at {location}: "
+            f"{exc.msg}. The file cannot even be parsed; fix it before moving on."
+        )
+    except Exception:
+        return ""
+    return ""
 
 
 def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
@@ -95,16 +120,18 @@ class ReadFileTool(_FsTool):
             "of the file. Use offset and limit to paginate through large files. "
             f"Lines longer than {self._MAX_LINE_CHARS} chars are truncated; use "
             "grep to search inside such files. "
-            "Do not assume a path exists: locate it with find or list_dir instead of guessing, "
+            "Do not assume a path exists: locate it with glob or list_dir instead of guessing, "
             "and if a read fails, find the real path rather than retrying a guess."
         )
+
+    param_aliases = {"path": "file_path"}
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The file path to read"},
+                "file_path": {"type": "string", "description": "The file path to read"},
                 "offset": {
                     "type": "integer",
                     "description": "Line number to start reading from (1-indexed, default 1)",
@@ -116,14 +143,21 @@ class ReadFileTool(_FsTool):
                     "minimum": 1,
                 },
             },
-            "required": ["path"],
+            "required": ["file_path"],
         }
 
-    async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, file_path: str | None = None, offset: int = 1, limit: int | None = None, **kwargs: Any
+    ) -> str:
+        if file_path is None:
+            file_path = kwargs.get("path")
+        if file_path is None:
+            return "Error: missing required parameter 'file_path'."
+        path = file_path
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return f"Error: File not found: {path}. Check the location with list_dir or find before retrying."
+                return f"Error: File not found: {path}. Check the location with list_dir or glob before retrying."
             if not fp.is_file():
                 return f"Error: Not a file: {path}. Use list_dir to view a directory."
 
@@ -193,20 +227,26 @@ class WriteFileTool(_FsTool):
             "sites, overrides, and sibling branches for the same required change."
         )
 
+    param_aliases = {"path": "file_path"}
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The file path to write to"},
+                "file_path": {"type": "string", "description": "The file path to write to"},
                 "content": {"type": "string", "description": "The content to write"},
             },
-            "required": ["path", "content"],
+            "required": ["file_path", "content"],
         }
 
-    async def execute(self, path: str, content: str, **kwargs: Any) -> str:
+    async def execute(self, file_path: str | None = None, content: str | None = None, **kwargs: Any) -> str:
+        if file_path is None:
+            file_path = kwargs.get("path")
+        if file_path is None or content is None:
+            return "Error: missing required parameter(s): write_file needs file_path and content."
         try:
-            fp = self._resolve(path)
+            fp = self._resolve(file_path)
             existed = fp.exists()
             old_size = fp.stat().st_size if existed else 0
             fp.parent.mkdir(parents=True, exist_ok=True)
@@ -217,9 +257,10 @@ class WriteFileTool(_FsTool):
             # "Created" vs "Overwrote" tells the model whether it just replaced
             # something that already existed - the signal that catches both
             # accidental clobbers and rewrite-the-same-file loops.
+            note = _python_syntax_note(fp, content)
             if existed:
-                return f"Overwrote existing file {fp} (was {old_size} bytes, now {len(data)} bytes)"
-            return f"Created new file {fp} ({len(data)} bytes)"
+                return f"Overwrote existing file {fp} (was {old_size} bytes, now {len(data)} bytes){note}"
+            return f"Created new file {fp} ({len(data)} bytes){note}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -231,23 +272,23 @@ class WriteFileTool(_FsTool):
 # ---------------------------------------------------------------------------
 
 
-def _find_matches(content: str, old_text: str) -> list[tuple[int, str]]:
-    """Locate old_text in content: exact first, then line-trimmed sliding window.
+def _find_matches(content: str, old_string: str) -> list[tuple[int, str]]:
+    """Locate old_string in content: exact first, then line-trimmed sliding window.
 
     Both inputs should use LF line endings (caller normalises CRLF).
     Returns non-overlapping ``(char_offset, matched_fragment)`` pairs in file
     order — offsets rather than fragments alone, so the caller can replace a
     specific occurrence and report the line of each one.
     """
-    if old_text in content:
+    if old_string in content:
         matches = []
         start = 0
-        while (i := content.find(old_text, start)) != -1:
-            matches.append((i, old_text))
-            start = i + max(len(old_text), 1)
+        while (i := content.find(old_string, start)) != -1:
+            matches.append((i, old_string))
+            start = i + max(len(old_string), 1)
         return matches
 
-    old_lines = old_text.splitlines()
+    old_lines = old_string.splitlines()
     if not old_lines:
         return []
     stripped_old = [line.strip() for line in old_lines]
@@ -284,26 +325,28 @@ class EditFileTool(_FsTool):
     @property
     def description(self) -> str:
         return (
-            "Edit a file by replacing old_text with new_text. "
+            "Edit a file by replacing old_string with new_string. "
             "You must have read the file (read_file) earlier in the session — "
             "editing an unread file is rejected. "
-            "old_text must be the file's actual content — never include the "
+            "old_string must be the file's actual content — never include the "
             "'N| ' line-number prefix that read_file output adds. "
             "Supports minor whitespace/line-ending differences. "
-            "If old_text matches several places, either set replace_all=true to "
+            "If old_string matches several places, either set replace_all=true to "
             "change every one, or occurrence=<n> to change only the nth. "
             "After changing a symbol that is used elsewhere, check its other call "
             "sites, overrides, and sibling branches for the same required change."
         )
+
+    param_aliases = {"path": "file_path", "old_text": "old_string", "new_text": "new_string"}
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "The file path to edit"},
-                "old_text": {"type": "string", "description": "The text to find and replace"},
-                "new_text": {"type": "string", "description": "The text to replace with"},
+                "file_path": {"type": "string", "description": "The file path to edit"},
+                "old_string": {"type": "string", "description": "The text to find and replace"},
+                "new_string": {"type": "string", "description": "The text to replace with"},
                 "replace_all": {
                     "type": "boolean",
                     "description": "Replace all occurrences (default false)",
@@ -311,33 +354,42 @@ class EditFileTool(_FsTool):
                 "occurrence": {
                     "type": "integer",
                     "description": (
-                        "When old_text matches multiple places, replace only the Nth match (1-based, in file order)"
+                        "When old_string matches multiple places, replace only the Nth match (1-based, in file order)"
                     ),
                     "minimum": 1,
                 },
             },
-            "required": ["path", "old_text", "new_text"],
+            "required": ["file_path", "old_string", "new_string"],
         }
 
     _MAX_LISTED_MATCHES = 8
 
     async def execute(
         self,
-        path: str,
-        old_text: str,
-        new_text: str,
+        file_path: str | None = None,
+        old_string: str | None = None,
+        new_string: str | None = None,
         replace_all: bool = False,
         occurrence: int | None = None,
         **kwargs: Any,
     ) -> str:
+        if file_path is None:
+            file_path = kwargs.get("path")
+        if old_string is None:
+            old_string = kwargs.get("old_text")
+        if new_string is None:
+            new_string = kwargs.get("new_text")
+        if file_path is None or old_string is None or new_string is None:
+            return "Error: missing required parameter(s): edit_file needs file_path, old_string and new_string."
+        path = file_path
         try:
             fp = self._resolve(path)
             if not fp.exists():
                 return f"Error: File not found: {path}. To create a new file use write_file instead."
             if replace_all and occurrence is not None:
                 return "Error: replace_all and occurrence are mutually exclusive; pass one or the other."
-            if not old_text:
-                return "Error: old_text is empty. To create or overwrite a file use write_file instead."
+            if not old_string:
+                return "Error: old_string is empty. To create or overwrite a file use write_file instead."
             if self._tracker is not None:
                 seen = self._tracker.status(fp)
                 if seen == "unread":
@@ -355,26 +407,26 @@ class EditFileTool(_FsTool):
             raw = fp.read_bytes()
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
-            matches = _find_matches(content, old_text.replace("\r\n", "\n"))
+            matches = _find_matches(content, old_string.replace("\r\n", "\n"))
             count = len(matches)
 
             if count == 0:
-                return self._not_found_msg(old_text, content, path)
+                return self._not_found_msg(old_string, content, path)
             if occurrence is not None and occurrence > count:
                 return (
-                    f"Error: occurrence={occurrence} but old_text matches only {count} "
+                    f"Error: occurrence={occurrence} but old_string matches only {count} "
                     f"location(s) in {path}:\n{self._match_lines(content, matches)}"
                 )
             if count > 1 and not replace_all and occurrence is None:
                 return (
-                    f"Error: old_text matches {count} locations in {path}:\n"
+                    f"Error: old_string matches {count} locations in {path}:\n"
                     f"{self._match_lines(content, matches)}\n"
-                    "Add surrounding context to old_text to make it unique, pass "
+                    "Add surrounding context to old_string to make it unique, pass "
                     "occurrence=<n> to target one of the matches above, or set "
                     "replace_all=true to change every one."
                 )
 
-            norm_new = new_text.replace("\r\n", "\n")
+            norm_new = new_string.replace("\r\n", "\n")
             targets = matches if replace_all else [matches[(occurrence or 1) - 1]]
             new_content = content
             for off, frag in sorted(targets, reverse=True):
@@ -384,8 +436,9 @@ class EditFileTool(_FsTool):
             fp.write_bytes(written.encode("utf-8"))
             if self._tracker is not None:
                 self._tracker.record(fp)
+            syntax_note = _python_syntax_note(fp, new_content)
             if replace_all and count > 1:
-                return f"Successfully edited {fp} ({count} occurrences replaced)"
+                return f"Successfully edited {fp} ({count} occurrences replaced){syntax_note}"
             # Echo the edited region back so a bad edit (wrong indentation, an
             # extra deleted line) surfaces now instead of at the next run.
             # Offsets live in the LF-normalized space, so the snippet must be
@@ -393,7 +446,7 @@ class EditFileTool(_FsTool):
             # window and echoes untouched code as if the edit missed.
             line = _line_of(content, targets[0][0])
             snippet = self._after_snippet(new_content, targets[0][0], len(norm_new))
-            return f"Successfully edited {fp} (line {line}). New content:\n{snippet}"
+            return f"Successfully edited {fp} (line {line}).{syntax_note} New content:\n{snippet}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -432,9 +485,9 @@ class EditFileTool(_FsTool):
         return "\n".join(listed)
 
     @staticmethod
-    def _not_found_msg(old_text: str, content: str, path: str) -> str:
+    def _not_found_msg(old_string: str, content: str, path: str) -> str:
         lines = content.splitlines(keepends=True)
-        old_lines = old_text.splitlines(keepends=True)
+        old_lines = old_string.splitlines(keepends=True)
         window = len(old_lines)
 
         best_ratio, best_start = 0.0, 0
@@ -448,13 +501,13 @@ class EditFileTool(_FsTool):
                 difflib.unified_diff(
                     old_lines,
                     lines[best_start : best_start + window],
-                    fromfile="old_text (provided)",
+                    fromfile="old_string (provided)",
                     tofile=f"{path} (actual, line {best_start + 1})",
                     lineterm="",
                 )
             )
-            return f"Error: old_text not found in {path}.\nBest match ({best_ratio:.0%} similar) at line {best_start + 1}:\n{diff}"
-        return f"Error: old_text not found in {path}. No similar text found. Verify the file content."
+            return f"Error: old_string not found in {path}.\nBest match ({best_ratio:.0%} similar) at line {best_start + 1}:\n{diff}"
+        return f"Error: old_string not found in {path}. No similar text found. Verify the file content."
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +578,7 @@ class ListDirTool(_FsTool):
         try:
             dp = self._resolve(path)
             if not dp.exists():
-                return f"Error: Directory not found: {path}. Check the parent with list_dir or locate it with find."
+                return f"Error: Directory not found: {path}. Check the parent with list_dir or locate it with glob."
             if not dp.is_dir():
                 return f"Error: Not a directory: {path}. Use read_file to view a file."
 

@@ -462,5 +462,6 @@ def test_missing_usage_keeps_prefill_path():
 def test_midstream_kill_with_small_reasoning_not_flagged():
     from raven.agent.loop.recovery import is_midstream_kill
 
-    r = LLMResponse(content="", reasoning_content="short", finish_reason="stop", usage={"completion_tokens": 1})
+    r = LLMResponse(content="", reasoning_content="short", finish_reason="stop",
+                    usage={"completion_tokens": 1})
     assert is_midstream_kill(r) is False

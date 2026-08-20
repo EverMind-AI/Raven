@@ -25,6 +25,7 @@ from raven.agent.loop.recovery import (
     classify_empty_response,
 )
 from raven.agent.loop.time_budget import TimeBudgetReminder
+from raven.agent.profile import RunProfile, describe_effective, resolve_profile, set_current_profile
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.background import (
@@ -108,6 +109,7 @@ class TurnOutcome:
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
     gate_triggers: dict[str, int] = field(default_factory=dict)
+    profile_name: str = ""
 
 
 def format_gate_counters(counters: dict[str, int]) -> str:
@@ -160,6 +162,26 @@ _MAX_ITER_STATIC_FALLBACK = (
     "I reached the maximum number of tool call iterations ({n}) without "
     "completing the task. You can try breaking the task into smaller steps."
 )
+
+# Returned when the wall-clock deadline stops the turn before the model wrote a
+# reply: the turn must never be silent, and "nothing" is exactly the outcome
+# the deadline machinery exists to prevent.
+_DEADLINE_STATIC_FALLBACK = (
+    "I ran out of the task's time budget before finishing. Whatever was "
+    "completed is in the working environment; nothing further was finalized."
+)
+
+
+def _last_assistant_text(messages: list[dict[str, Any]]) -> str | None:
+    """The most recent plain assistant text, for a turn cut short mid-work."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return None
+
 
 # Origins whose turns skip the user-inbound hooks (engagement / decision): a turn
 # from one of these is not genuine user input. cron/heartbeat are deliberately
@@ -218,7 +240,7 @@ def _is_hard_tool_failure(result: object) -> bool:
     if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
         return False
     if not m and not s.lstrip().startswith("Error"):
-        # Real not-found failures (file / dir / path / old_text) all start
+        # Real not-found failures (file / dir / path / old_string) all start
         # with "Error:" or carry a non-zero exit code; anything else is
         # successful output regardless of what phrases it contains.
         return False
@@ -308,14 +330,37 @@ class AgentLoop:
     # source of false completion claims. Nudges are bounded so the gate itself
     # can never loop.
     _TEST_GATE_MAX_NUDGES = 2
+    # Runner detection spans every ecosystem the agent may be dropped into: a
+    # Python-only pattern silently withholds the gate on Go/JS/Rust repos, where
+    # it then nudges for pytest output that can never appear.
     _TEST_GATE_CMD_RE = re.compile(
         r"(pytest|runtests(?:\.py)?\b|manage\.py\s+test|(?:^|[\s/&;(])bin/test\b"
-        r"|-m\s+unittest\b|\btox\b|\bsympy\.test\(|\bdoctest\()"
+        r"|-m\s+unittest\b|\btox\b|\bsympy\.test\(|\bdoctest\("
+        r"|\bgo\s+test\b|\bgotestsum\b"
+        r"|\bcargo\s+(?:test|nextest)\b"
+        r"|\b(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test\b"
+        # jest/vitest/mocha/karma are distinctive enough to match bare; `ava`
+        # and `tap` are ordinary words (`ip link ... mode tap`), so they only
+        # count behind an explicit runner invocation.
+        r"|\b(?:npx\s+)?(?:jest|vitest|mocha|karma)\b"
+        r"|\b(?:npx|yarn|pnpm|bunx?)\s+(?:ava|tap)\b"
+        r"|\bdeno\s+test\b"
+        r"|\b(?:mvn|gradle|\./gradlew)\s+(?:\S+\s+)*test\b"
+        r"|\bctest\b|\brspec\b|\bphpunit\b|\bdotnet\s+test\b|\bswift\s+test\b"
+        r"|\bmake\s+(?:test|check)\b)"
     )
     _TEST_GATE_OUT_RE = re.compile(
         r"(\b\d+\s+(?:passed|failed|errors?|xfailed|xpassed|skipped|deselected)\b"
         r"|\bRan\s+\d+\s+tests?\b|\bOK\b|\bFAILED\b|\bPASSED\b|\bERROR\b"
-        r"|\btest process starts\b|\btests finished\b)"
+        r"|\btest process starts\b|\btests finished\b"
+        r"|^---\s+(?:PASS|FAIL|SKIP)\b|^(?:ok|FAIL)\s+\S+"  # go test
+        r"|\btest result:\s+(?:ok|FAILED)\b"  # cargo test
+        r"|\bTests?:\s+\d+|\bTest Suites:|\bTest Files\s+\d+"  # jest / vitest
+        r"|\b\d+\s+(?:passing|failing)\b"  # mocha
+        r"|\b\d+\s+tests?\s+(?:passed|failed)\b"  # ava / tap style
+        r"|\bBUILD\s+(?:SUCCESSFUL|FAILED)\b"  # gradle / maven
+        r"|\b\d+%\s+tests\s+passed\b)",  # ctest
+        re.MULTILINE,
     )
     # Terminal color codes glue onto adjacent digits/words and defeat \b
     # matching (e.g. ESC[32m201 passed) — strip before any output matching.
@@ -325,18 +370,16 @@ class AgentLoop:
     _GATE_SCRATCH_PATH_RE = re.compile(r"^(/tmp|/var/tmp|/dev/shm)(/|$)")
     _TEST_GATE_NUDGE = (
         "STOP: you are about to declare completion, but this session has not "
-        "run the repository's own test runner even once (no pytest / "
-        "runtests.py / unittest output was observed). Scripts you wrote "
+        "run the repository's own test runner even once. Scripts you wrote "
         "yourself do NOT count as verification. Locate the tests covering the "
-        "code you changed and run them with the repo's real runner (e.g. "
-        "`python -m pytest <test_file> -x -q`, or for Django "
-        "`python tests/runtests.py <app>.<TestCase> --parallel 1`), from the "
-        "repo root, using the repo environment's own `python` from PATH. If "
+        "code you changed and run them with whatever runner this repository "
+        "actually uses — `python -m pytest <test_file> -x -q`, `go test "
+        "./...`, `cargo test`, `npm test` / `npx vitest run`, `mvn test`, or "
+        "the repo's own bundled script (`bin/test`, `runtests.py`, `make "
+        "test`) — from the repo root, using the toolchain already on PATH. If "
         "the runner errors out, fix the invocation instead of falling back to "
-        "your own scripts — do NOT install packages; if pytest is unavailable, "
-        "use the repo's bundled runner (e.g. `bin/test` or `runtests.py`) or "
-        "`python -m unittest`. Only reply TASK_COMPLETE after the relevant "
-        "tests actually pass."
+        "your own scripts, and do NOT install packages. Only reply "
+        "TASK_COMPLETE after the relevant tests actually pass."
     )
     # Requirement-verification gate (opt-in via RAVEN_VERIFY_BEFORE_COMPLETE):
     # a single one-shot nudge fired the first time the model tries to finish,
@@ -355,6 +398,10 @@ class AgentLoop:
         "cases the task calls out actually handled? Where you can, run a "
         "concrete command to verify each (inspect the file, check its size, "
         "exercise a boundary input) rather than assuming. "
+        "If at any point this session you observed a failure that is still "
+        "unresolved -- no matter how informal the evidence -- either it is "
+        "fixed by now or your final reply names it explicitly; do not omit it "
+        "because only your own script saw it. "
         "If your deliverable produces output at runtime, confirm it from a "
         "clean state: remove any scratch or demo files you created while "
         "working and run it fresh, so leftover state cannot make a broken "
@@ -362,6 +409,41 @@ class AgentLoop:
         "If you have already verified each requirement this way, reply "
         "TASK_COMPLETE again — do not redo work or change a solution that "
         "already checks out. If any check fails, fix it first."
+    )
+    # Stronger variant, selected with RAVEN_VERIFY_BEFORE_COMPLETE=spec, for
+    # tasks whose grade is "does the code do everything the statement says".
+    # The generic nudge above asks the model to re-read the task, which it
+    # answers from memory of its own plan; this one names the artifacts to
+    # enumerate (identifiers, invariants, the untouched-behaviour tests) so the
+    # re-check is driven by the statement text rather than by recollection.
+    _VERIFY_COMPLETE_NUDGE_SPEC = (
+        "Before finalizing, audit your work against the ORIGINAL task "
+        "statement — not against your memory of it. Scroll back and re-read it "
+        "verbatim, then:\n"
+        "1. Enumerate every concrete thing it names: each function, method, "
+        "class, CLI flag, config key, field name, error-message text, output "
+        "format, ordering rule and default. Prose sentences hide requirements "
+        "as reliably as bullet lists do, so go clause by clause.\n"
+        "2. For EACH item, prove from the CODEBASE that it exists and behaves "
+        "as stated by running a command — grep the symbol, exercise the flag, "
+        "trigger the error and compare the message text. Do not mark an item "
+        "satisfied from memory. An item already satisfied by pre-existing code "
+        "is fine, and some items are illustrative notation rather than symbols "
+        "to add; what must not happen is an item the statement requires that "
+        "nothing in the codebase actually implements.\n"
+        "3. Check the requirements that say what must NOT change or what must "
+        "still hold in the ordinary case — 'existing behaviour is unchanged', "
+        "'valid input still reports clean', 'the no-op path stays silent'. "
+        "These are as heavily tested as the new feature and are the easiest to "
+        "break while adding one.\n"
+        "4. Run the repository's whole test suite, not only the tests or "
+        "packages you touched: a change that satisfies the new requirement "
+        "while breaking unrelated existing tests still fails. If the suite is "
+        "sharded by package or directory, run the whole tree.\n"
+        "5. Make sure the work is saved the way the task requires (correct "
+        "branch, everything committed) — uncommitted work is not delivered.\n"
+        "Fix whatever fails. Reply TASK_COMPLETE only once every enumerated "
+        "item has been checked against actual command output."
     )
     # Soft completion reminders (opt-in via RAVEN_GATE_STALE / RAVEN_GATE_RED,
     # both require RAVEN_REQUIRE_REAL_TEST_EVIDENCE). Design contract: fire at
@@ -393,21 +475,60 @@ class AgentLoop:
         "new failure is yours to fix). If you are certain the edits cannot\n"
         "affect behavior (e.g. comments only), you may finish now."
     )
+    # v2 (wave10): the old exit 1 accepted a one-sentence staleness claim with
+    # "no file edits or tool calls needed" -- and was walked through by tasks
+    # that rationalized self-caused regressions as stale (django-11885,
+    # sympy-15976, with gates ON). The claim now costs one baseline
+    # comparison; the soft exits stay -- removing them recreates the hard gate
+    # the replay data vetoed (10 legitimate finish-red tasks).
     _TEST_GATE_RED_NUDGE_TMPL = (
         "CHECK (shown once, before you finish): your most recent test run\n"
         "(`{cmd}`) reported failures: {detail}\n"
         "The task description is the source of truth for intended behavior.\n"
         "Decide which case this is:\n"
-        "1. The failing test asserts the exact OLD behavior the task asks to\n"
-        "   change — then the test is stale, not your patch. State in one\n"
-        "   sentence, in your reply (no file edits or tool calls needed), which\n"
-        "   requirement contradicts it, keep your fix intact, and finish (that\n"
-        "   test may remain failing). Do NOT weaken your fix or edit the test's\n"
-        "   assertions just to make it pass.\n"
-        "2. Anything else — the failure points at a real problem in your patch.\n"
-        "   Fix the patch and re-run that test. If it still fails after your\n"
-        "   fix, say so explicitly when you finish.\n"
-        "After addressing this once, you may declare completion."
+        "1. You believe a failing test asserts the exact OLD behavior the task\n"
+        "   asks to change. That claim needs baseline evidence, not assertion:\n"
+        "   show the same test already failed BEFORE your change. In a git\n"
+        "   repo: `git diff > /tmp/mypatch.diff` (keep this safety copy),\n"
+        "   then `git stash -u`, re-run that test, `git stash pop`. Outside\n"
+        "   git, re-run it on a clean copy, or point at equivalent proof that\n"
+        "   the failure predates your change. If you already ran such a\n"
+        "   baseline comparison, cite that result -- no need to redo it.\n"
+        "   A test that was green before your change and red after it is YOUR\n"
+        "   regression: fix the patch, do not reinterpret the test.\n"
+        "2. Anything else -- the failure points at a real problem in your\n"
+        "   patch. Fix the patch and re-run that test. If it still fails after\n"
+        "   your fix, say so explicitly when you finish.\n"
+        "If a baseline comparison is genuinely impossible here (rerun too\n"
+        "costly, workspace not copyable), say why, state your judgement, and\n"
+        "finish. Either way: do NOT weaken your fix or edit the test's\n"
+        "assertions just to make it pass."
+    )
+    # Stale-claim challenge (G2, rides the RAVEN_GATE_RED switch): fires when
+    # the finish text itself declares failing/changed tests stale or
+    # "updated by the test patch" while no baseline comparison was observed
+    # this turn. Pattern fitted to the deepseek offline round's wording (70
+    # tasks, 40% unresolved vs 24% baseline); on other model families it may
+    # simply never fire -- zero triggers there is NOT evidence of absence.
+    _STALE_CLAIM_RE = re.compile(
+        r"test patch(?:'s)? (?:will |would )?(?:updates?|replaces?|covers?|changes?)"
+        r"|(?:covered|updated|replaced) by the (?:pr'?s? )?test patch"
+        r"|assert(?:s|ing)? the (?:exact )?old behavior"
+        r"|intentionally (?:chang\w+|fail\w+)",
+        re.IGNORECASE,
+    )
+    _STALE_CLAIM_NUDGE = (
+        "CHECK (shown once, before you finish): your reply declares failing or\n"
+        "to-be-updated tests as stale/expected. That claim needs baseline\n"
+        "evidence, not assertion -- and how this problem was fixed elsewhere\n"
+        "is not evidence about this workspace. Show the same failure already\n"
+        "existed BEFORE your change: in a git repo, `git diff >\n"
+        "/tmp/mypatch.diff` (keep this safety copy), then `git stash -u`,\n"
+        "re-run the test, `git stash pop`; outside git, re-run on a clean\n"
+        "copy. If you already ran such a comparison, cite it and finish. If\n"
+        "it is genuinely impossible, say why, state your judgement, and\n"
+        "finish. A test that was green before your change and red after it is\n"
+        "YOUR regression: fix the patch instead of reinterpreting the test."
     )
     # Same-call breaker: once a byte-identical (tool, arguments) call has
     # hard-failed this many times running, further identical calls are refused
@@ -450,7 +571,11 @@ class AgentLoop:
         now_fn: Callable | None = None,
         context_config: "ContextConfig | None" = None,
         runtime_config: "RuntimeConfig | None" = None,
+        # Deprecated: still honored for inference when no profile is given
+        # (True -> "interactive", False -> "legacy_oneshot", both replicating
+        # the pre-profile behavior exactly), so existing callers are unchanged.
         interactive: bool = True,
+        profile: "RunProfile | None" = None,
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
@@ -570,6 +695,10 @@ class AgentLoop:
             skill_forge_config=skill_forge_config,
             llm_provider=provider,
             now_fn=now_fn,
+            # Estimation must render the same per-family identity the live
+            # ContextAssembler sends, or the history budget overstates by the
+            # size difference between the family prompt and default.txt.
+            model=self.model,
             wrap_tool_outputs=wrap_tool_outputs,
         )
         self.sessions = session_manager or SessionManager(workspace)
@@ -635,8 +764,15 @@ class AgentLoop:
             runtime_config = RuntimeConfig()
         self.runtime_config = runtime_config
         self.interactive = interactive
+        # Single in-process source of truth for mode-dependent behavior; the
+        # deprecated ``interactive`` flag only feeds inference when no profile
+        # was given. Published module-wide so prompt rendering (which has no
+        # loop reference) reads the same resolution.
+        self.profile = profile if isinstance(profile, RunProfile) else resolve_profile(interactive=interactive)
+        set_current_profile(self.profile)
+        logger.info("{}", describe_effective(self.profile))
         self._checkpoint = None
-        if self._checkpoint_active(runtime_config.checkpoint.policy, interactive):
+        if self._checkpoint_active(runtime_config.checkpoint.policy, self.profile.shadow_checkpoint):
             from raven.agent.loop.checkpoint import CheckpointService
 
             try:
@@ -885,7 +1021,10 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
-        self.tools.register(AskUserTool())
+        # Unattended profiles drop the tool entirely: no one can answer, and a
+        # tool that waits for an answer is a stall, not a question.
+        if self.profile.ask_user_enabled:
+            self.tools.register(AskUserTool())
         # ``cron`` is not a default tool: scheduling reminders is orthogonal to the
         # work a coding agent does, and its schema is the largest of any tool here.
         # ``CronService`` still runs, so jobs added through the CLI keep firing --
@@ -1077,18 +1216,18 @@ class AgentLoop:
         return messages
 
     @staticmethod
-    def _checkpoint_active(policy: str, interactive: bool) -> bool:
-        """Resolve ``runtime.checkpoint.policy`` against the call-site's
-        ``interactive`` signal. ``"interactive"`` (the default) skips the
-        snapshot for one-shot ``-m`` invocations — those have no "next turn"
-        to inject recovery into, so paying the snapshot cost there is just
-        deadweight. ``"always"`` opts in regardless; ``"never"`` opts out
-        regardless."""
+    def _checkpoint_active(policy: str, profile_default: bool) -> bool:
+        """Resolve ``runtime.checkpoint.policy`` against the run profile's
+        ``shadow_checkpoint`` default. ``"interactive"`` (the policy default)
+        follows the profile: multi-turn interactive sessions snapshot, one-shot
+        runs don't — those have no "next turn" to inject recovery into, so
+        paying the snapshot cost there is just deadweight. ``"always"`` opts in
+        regardless; ``"never"`` opts out regardless."""
         if policy == "never":
             return False
         if policy == "always":
             return True
-        return interactive  # policy == "interactive"
+        return profile_default  # policy == "interactive"
 
     def _stash_recovery(self, session_key: str, outcome: "TurnOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
@@ -1208,10 +1347,11 @@ class AgentLoop:
         legacy callsites that never registered a plugin behave
         identically to pre-AG-1.
 
-        Exceptions raised by the backend are logged and swallowed —
-        the AgentLoop's main pipeline must never abort because the
-        plugin-side index failed; the turn is already saved to the
-        session log and the host's MEMORY.md compaction will still run.
+        Store failures propagate, as the MemoryBackend contract states.
+        The turn is already saved to the session log, but a run whose
+        writes all failed has no memory to recall next time while still
+        reporting success -- an unattended run has to end on that rather
+        than hand back work that silently had no memory behind it.
         """
         if self.backend is None:
             return
@@ -1221,9 +1361,10 @@ class AgentLoop:
             await self.backend.store(session_key, messages_slice)
         except Exception:
             logger.exception(
-                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
+                "backend.store failed for session {}; turn data preserved in session log",
                 session_key,
             )
+            raise
 
     def _collect_injected_skill_ids(
         self,
@@ -1996,23 +2137,44 @@ class AgentLoop:
         malformed_resamples = 0
         call_max_tokens: int | None = None
         length_nudges = 0
-        time_budget = TimeBudgetReminder.from_env(time.time())
-        # Guardrails are opt-in on the swarm-integration line: an orchestrated
-        # worker also serves non-coding requests (explain code, answer a
-        # question, follow-up turns of a conversation), where completion gates
-        # tuned for change-the-code tasks only mis-fire. Env vars force any
-        # gate on for coding-style runs; evaluation lines keep their own default.
-        gates_default = False
-        test_gate_enabled = completion_gates.gate_enabled("RAVEN_REQUIRE_REAL_TEST_EVIDENCE", gates_default)
+        time_budget = TimeBudgetReminder.from_env(
+            time.time(),
+            checkpoint_default=self.profile.deadline_checkpoint,
+            wrapup_sec=self.profile.deadline_wrapup_sec,
+            hard_stop_sec=self.profile.deadline_hard_stop_sec,
+        )
+        # Guardrail defaults come from the run profile. On the
+        # swarm-integration line every preset an implicit invocation can
+        # reach ships gates off (see raven.agent.profile): an orchestrated
+        # worker also serves non-coding requests, where change-the-code
+        # gates only mis-fire. Env vars override either way, per gate.
+        gate_defaults = self.profile.gates
+        test_gate_enabled = completion_gates.gate_enabled(
+            "RAVEN_REQUIRE_REAL_TEST_EVIDENCE", gate_defaults.test_evidence
+        )
         real_test_evidence = False
         test_gate_nudges = 0
-        verify_complete_enabled = completion_gates.gate_enabled("RAVEN_VERIFY_BEFORE_COMPLETE", gates_default)
+        verify_complete_enabled = completion_gates.gate_enabled(
+            "RAVEN_VERIFY_BEFORE_COMPLETE", gate_defaults.verify_complete
+        )
+        # The same switch also selects the wording: "spec" swaps in the variant
+        # for tasks graded on covering a written statement. When the env is
+        # unset, the profile's wording applies (acceptance="spec" derives it).
+        env_wording = completion_gates.gate_variant("RAVEN_VERIFY_BEFORE_COMPLETE")
+        verify_wording = (
+            ("spec" if env_wording == "spec" else "generic") if env_wording else gate_defaults.verify_wording
+        )
+        verify_complete_text = (
+            self._VERIFY_COMPLETE_NUDGE_SPEC if verify_wording == "spec" else self._VERIFY_COMPLETE_NUDGE
+        )
         verify_complete_nudged = False
         # Evidence ledger for the soft completion reminders: what the latest
         # real-test run said (red/green/None=unparseable), and which non-doc
         # files were edited AFTER it (staleness). Both reminders are one-shot.
-        gate_stale_enabled = test_gate_enabled and completion_gates.gate_enabled("RAVEN_GATE_STALE", gates_default)
-        gate_red_enabled = test_gate_enabled and completion_gates.gate_enabled("RAVEN_GATE_RED", gates_default)
+        gate_stale_enabled = test_gate_enabled and completion_gates.gate_enabled(
+            "RAVEN_GATE_STALE", gate_defaults.stale
+        )
+        gate_red_enabled = test_gate_enabled and completion_gates.gate_enabled("RAVEN_GATE_RED", gate_defaults.red)
         last_test_status: str | None = None
         last_test_cmd = ""
         last_test_detail = ""
@@ -2021,10 +2183,22 @@ class AgentLoop:
         red_nudged = False
         # Empty-diff falsification gate (2026-08, trajectory error analysis across two
         # model rounds). Same conventions as the four gates above: turn-local, one-shot,
-        # facts only, opt-in.
-        empty_diff_gate_enabled = completion_gates.gate_enabled(completion_gates.EMPTY_DIFF_ENV, gates_default)
+        # facts only, default from the profile.
+        empty_diff_gate_enabled = completion_gates.gate_enabled(
+            completion_gates.EMPTY_DIFF_ENV, gate_defaults.empty_diff
+        )
         turn_code_edits = False
         empty_diff_nudged = False
+        # Shared round budget across ALL completion gates (wave10 gate
+        # economy): a turn spends at most this many nudge rounds total, so
+        # armed-but-chatty gates cannot chain (pre-rework measurement: mean
+        # 1.44 extra rounds per task, max 4).
+        max_gate_rounds = completion_gates.gate_round_budget()
+        gate_rounds_used = 0
+        # Evidence-in-hand exemption (stale-claim challenge): a model that
+        # already ran its own baseline comparison is never asked to redo it.
+        baseline_check_observed = False
+        stale_claim_nudged = False
         # How often each gate fired this turn. Rides on TurnOutcome so a run can be
         # summarised without parsing the transcript: loguru is disabled inside the
         # ``raven`` package unless ``--logs`` is passed, so gate logs alone never
@@ -2032,6 +2206,14 @@ class AgentLoop:
         gate_triggers: dict[str, int] = {}
 
         while iteration < self.max_iterations:
+            # Asked before the call, not after: an iteration that cannot finish
+            # inside the budget leaves the turn to be killed with no reply. The
+            # reminder that produces the reply fired earlier, from the same
+            # TimeBudgetReminder (see raven.agent.loop.time_budget).
+            if time_budget is not None and time_budget.should_stop(time.time()):
+                logger.info("task deadline reached; ending the turn before another call")
+                status = "deadline"
+                break
             iteration += 1
             logger.info(
                 "Iteration {}/{} model={}",
@@ -2298,8 +2480,13 @@ class AgentLoop:
                     # ran, not the model's raw spelling (execute repairs
                     # mangled names like Web_Fetch -> web_fetch).
                     executed_name = self.tools.canonical_name(tool_call.name)
-                    if test_gate_enabled and executed_name == "exec":
+                    if (test_gate_enabled or verify_complete_enabled) and executed_name == "exec":
+                        # verify_complete consults this evidence too (a turn
+                        # that ran real tests has no re-check deficit), so the
+                        # ledger must be maintained when either gate is armed.
                         cmd = str((tool_call.arguments or {}).get("command", ""))
+                        if "git stash" in cmd or "git worktree" in cmd:
+                            baseline_check_observed = True
                         plain_out = self._ANSI_RE.sub("", model_text)
                         if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(plain_out):
                             if not real_test_evidence:
@@ -2309,11 +2496,14 @@ class AgentLoop:
                             last_test_cmd = cmd.replace("\n", " ")[:200]
                             edits_since_test = []
                     elif (
-                        (gate_stale_enabled or gate_red_enabled or empty_diff_gate_enabled)
+                        (test_gate_enabled or gate_stale_enabled or gate_red_enabled or empty_diff_gate_enabled)
                         and executed_name in ("write_file", "edit_file")
                         and not _is_hard_tool_failure(model_text)
                     ):
-                        path = str((tool_call.arguments or {}).get("path", ""))
+                        # The schema name is file_path; "path" is the accepted
+                        # legacy alias, so the edit ledger must read both.
+                        _args = tool_call.arguments or {}
+                        path = str(_args.get("file_path") or _args.get("path") or "")
                         if (
                             path
                             and not self._GATE_DOC_PATH_RE.search(path)
@@ -2378,11 +2568,25 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
-                if time_budget is not None and messages and messages[-1].get("role") == "tool":
-                    budget_note = time_budget.poll(time.time())
+                if time_budget is not None and messages:
+                    # Reminders ride on the latest tool result: one channel, and
+                    # the model reads it where it is already looking. The single
+                    # exception is the wrap-up line -- that one is what turns an
+                    # unfinished run into a delivered answer, so it is not worth
+                    # dropping because the last message happens not to be a tool
+                    # result; then, and only then, it goes in as its own message.
+                    riding = messages[-1].get("role") == "tool"
+                    budget_note = (
+                        time_budget.poll(time.time())
+                        if riding or time_budget.in_wrapup(time.time())
+                        else None
+                    )
                     if budget_note:
                         logger.info("time-budget reminder injected: {}", budget_note[:80])
-                        messages[-1]["content"] = str(messages[-1].get("content", "")) + "\n\n" + budget_note
+                        if riding:
+                            messages[-1]["content"] = str(messages[-1].get("content", "")) + "\n\n" + budget_note
+                        else:
+                            messages.append({"role": "user", "content": budget_note})
                 # Incremental persistence for long turns: a crash at iteration
                 # 300 should not lose iterations 1-299.
                 if on_checkpoint is not None and iteration % self._MID_TURN_CHECKPOINT_ITERS == 0:
@@ -2474,13 +2678,28 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
-                if (
+                # Gate economy (wave10): a gate fires only on an observable
+                # deficit and spends from one shared round budget; priority
+                # runs concrete-to-generic (missing test run > red > stale >
+                # unbacked stale claim > empty diff > requirement re-check),
+                # so the generic re-check is last in line, not a ritual.
+                test_gate_pending = (
                     test_gate_enabled
                     and not real_test_evidence
                     and test_gate_nudges < self._TEST_GATE_MAX_NUDGES
+                    and gate_rounds_used < max_gate_rounds
                     and iteration < self.max_iterations
-                ):
+                )
+                if test_gate_pending and not turn_code_edits:
+                    # "Go run the tests" is only a deficit when code actually
+                    # changed. Positive evidence required: an unknown answer
+                    # (no git, probe failure) must not restart the ritual on a
+                    # turn that plausibly changed nothing.
+                    _dirty = await completion_gates.workspace_has_changes(self.workspace)
+                    test_gate_pending = _dirty is True
+                if test_gate_pending:
                     test_gate_nudges += 1
+                    gate_rounds_used += 1
                     gate_triggers["test_evidence"] = gate_triggers.get("test_evidence", 0) + 1
                     logger.warning(
                         "test-evidence gate: refusing final answer without a real test run (nudge {}/{})",
@@ -2488,15 +2707,6 @@ class AgentLoop:
                         self._TEST_GATE_MAX_NUDGES,
                     )
                     messages.append({"role": "user", "content": self._TEST_GATE_NUDGE})
-                    prev_had_tool_calls = False
-                    continue
-                if verify_complete_enabled and not verify_complete_nudged and iteration < self.max_iterations:
-                    verify_complete_nudged = True
-                    gate_triggers["verify_complete"] = gate_triggers.get("verify_complete", 0) + 1
-                    logger.info(
-                        "verify-before-complete gate: one-shot requirement re-check nudge before accepting completion"
-                    )
-                    messages.append({"role": "user", "content": self._VERIFY_COMPLETE_NUDGE})
                     prev_had_tool_calls = False
                     continue
                 # Soft one-shot reminders, mutually exclusive by construction:
@@ -2508,9 +2718,11 @@ class AgentLoop:
                     and real_test_evidence
                     and edits_since_test
                     and not stale_nudged
+                    and gate_rounds_used < max_gate_rounds
                     and iteration < self.max_iterations
                 ):
                     stale_nudged = True
+                    gate_rounds_used += 1
                     gate_triggers["test_stale"] = gate_triggers.get("test_stale", 0) + 1
                     logger.info(
                         "test-evidence gate: stale reminder (edits after last test: {})",
@@ -2533,9 +2745,11 @@ class AgentLoop:
                     and not edits_since_test
                     and last_test_status == "red"
                     and not red_nudged
+                    and gate_rounds_used < max_gate_rounds
                     and iteration < self.max_iterations
                 ):
                     red_nudged = True
+                    gate_rounds_used += 1
                     gate_triggers["test_red"] = gate_triggers.get("test_red", 0) + 1
                     logger.info(
                         "test-evidence gate: red inquiry (last test failed: {})",
@@ -2552,15 +2766,44 @@ class AgentLoop:
                     )
                     prev_had_tool_calls = False
                     continue
+                # Stale-claim challenge (G2): the finish text itself declares
+                # failing tests stale / to-be-updated, yet no baseline
+                # comparison happened this turn. Mutually exclusive with the
+                # red/stale inquiries (same family, one question per finish)
+                # and exempt when the model already ran its own comparison.
+                if (
+                    gate_red_enabled
+                    and not stale_claim_nudged
+                    and not red_nudged
+                    and not stale_nudged
+                    and not baseline_check_observed
+                    and gate_rounds_used < max_gate_rounds
+                    and iteration < self.max_iterations
+                    and self._STALE_CLAIM_RE.search(clean or "")
+                ):
+                    stale_claim_nudged = True
+                    gate_rounds_used += 1
+                    gate_triggers["stale_claim"] = gate_triggers.get("stale_claim", 0) + 1
+                    logger.info("stale-claim gate: finish text declares failing tests stale without baseline evidence")
+                    messages.append({"role": "user", "content": self._STALE_CLAIM_NUDGE})
+                    prev_had_tool_calls = False
+                    continue
+                workspace_dirty = (
+                    await completion_gates.workspace_has_changes(self.workspace)
+                    if empty_diff_gate_enabled and not empty_diff_nudged and gate_rounds_used < max_gate_rounds
+                    else None
+                )
                 empty_nudge = completion_gates.empty_diff_nudge(
-                    enabled=empty_diff_gate_enabled,
+                    enabled=empty_diff_gate_enabled and gate_rounds_used < max_gate_rounds,
                     code_edits_observed=turn_code_edits,
+                    workspace_dirty=workspace_dirty,
                     already_nudged=empty_diff_nudged,
                     iteration=iteration,
                     max_iterations=self.max_iterations,
                 )
                 if empty_nudge:
                     empty_diff_nudged = True
+                    gate_rounds_used += 1
                     gate_triggers["empty_diff"] = gate_triggers.get("empty_diff", 0) + 1
                     logger.info(
                         "empty-diff gate: finishing with no repository edits observed; asking for falsification evidence"
@@ -2568,8 +2811,39 @@ class AgentLoop:
                     messages.append({"role": "user", "content": empty_nudge})
                     prev_had_tool_calls = False
                     continue
+                # Requirement re-check, LAST and conditional (wave10 M1): a
+                # turn that produced real test evidence has no re-check
+                # deficit. Before the rework this fired unconditionally on 97%
+                # of tasks (gates-on 492-task run) -- a ritual, not a gate.
+                # Turns without test-shaped evidence (typical for build-style
+                # tasks) still get the one-shot clean-state re-check.
+                if (
+                    verify_complete_enabled
+                    and not verify_complete_nudged
+                    and not real_test_evidence
+                    and gate_rounds_used < max_gate_rounds
+                    and iteration < self.max_iterations
+                ):
+                    verify_complete_nudged = True
+                    gate_rounds_used += 1
+                    gate_triggers["verify_complete"] = gate_triggers.get("verify_complete", 0) + 1
+                    logger.info(
+                        "verify-before-complete gate: one-shot requirement re-check nudge before accepting completion"
+                    )
+                    messages.append({"role": "user", "content": verify_complete_text})
+                    prev_had_tool_calls = False
+                    continue
                 final_content = clean
                 break
+
+        if final_content is None and status == "deadline":
+            # The stop lands between iterations, so the last message is usually
+            # a tool result and there is no reply yet. Hand back the most recent
+            # assistant text rather than nothing: a harness that grades stdout
+            # sees a partial answer instead of an empty run, which is the
+            # timeout-empty failure this machinery exists to remove.
+            final_content = _last_assistant_text(messages) or _DEADLINE_STATIC_FALLBACK
+            logger.info("deadline stop: returning the last assistant text as the reply")
 
         if final_content is None and iteration >= self.max_iterations:
             logger.warning("Max iterations ({}) reached; synthesizing final answer", self.max_iterations)
@@ -2620,7 +2894,7 @@ class AgentLoop:
         # ``backend.feedback`` run from ``_process_message``. We surface
         # ``outcome.status`` so that pipeline can gate on completion later.
 
-        outcome = TurnOutcome(status=status, gate_triggers=gate_triggers)
+        outcome = TurnOutcome(status=status, gate_triggers=gate_triggers, profile_name=self.profile.name)
         if self._checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
             # for both normal and interrupted exits (matches Claude Code/Cursor
@@ -2972,7 +3246,9 @@ class AgentLoop:
             on_checkpoint=_mid_turn_checkpoint,
         )
         self._stash_recovery(key, outcome)
-        if not self.interactive and any(outcome.gate_triggers.values()):
+        if (not self.profile.attended or self.profile.name == "legacy_oneshot") and any(
+            outcome.gate_triggers.values()
+        ):
             # Batch runs capture stdout but disable loguru inside the ``raven``
             # package, so fired-gate counters go to stdout directly or they are
             # lost. Quiet turns print nothing: an orchestrator consuming stdout

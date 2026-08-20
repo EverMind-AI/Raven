@@ -65,12 +65,14 @@ class PluginDiscovery:
     def __init__(
         self,
         *,
-        bundled_dir: Path | None = None,
+        bundled_dir: Path | tuple[Path, ...] | None = None,
         user_dir: Path | None = None,
         project_dir: Path | None = None,
         entry_points_group: str | None = None,
     ) -> None:
-        self._bundled_dir = bundled_dir
+        self._bundled_dirs: tuple[Path, ...] = (
+            () if bundled_dir is None else (bundled_dir,) if isinstance(bundled_dir, Path) else tuple(bundled_dir)
+        )
         self._user_dir = user_dir
         self._project_dir = project_dir
         self._entry_points_group = entry_points_group
@@ -82,9 +84,9 @@ class PluginDiscovery:
         log / display it deterministically.
         """
         all_found: list[DiscoveredPlugin] = []
-        if self._bundled_dir is not None:
+        for bundled_root in self._bundled_dirs:
             all_found.extend(
-                self._scan_dir(self._bundled_dir, Source.BUNDLED),
+                self._scan_dir(bundled_root, Source.BUNDLED),
             )
         if self._user_dir is not None:
             all_found.extend(self._scan_dir(self._user_dir, Source.USER))

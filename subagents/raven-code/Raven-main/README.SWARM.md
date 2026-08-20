@@ -11,6 +11,7 @@
 | web_fetch / web_search | **默认开**（web_fetch 免钥；web_search 需在配置里给搜索 key） | 默认关（断网评测口径） |
 | 五道完成护栏 | **默认全关**——非编码任务（解释代码、问答）不被"改代码专用"的门误拦；编码任务用环境变量逐个打开 | 一次性任务默认全开 |
 | stdout | **干净**：就是模型回复，可直接当结果消费；仅护栏真触发时多一行 `gate_triggers: ...` | 每轮固定打一行计数 |
+| 长期记忆（EverOS） | **默认开**——但只在配好记忆模型 key 时生效，没配 key 自动降级为"无记忆"（零延迟零报错） | 默认关（防跨题串味；评测 config 必须钉 `"memory": {"backend": null}`） |
 | 定时任务服务（CronService） | agent 路径**已整个移除**（个人助理遗产，编码工人用不到，也不再在配置目录旁留空 `cron/`） | 同（已合入） |
 
 护栏环境变量（语义：设 `0/false/no/off/disabled` 强制关，其他值强制开）：
@@ -84,6 +85,51 @@ raven 的自身状态（会话轨迹、缓存）都放在配置文件所在目�
 - **同一个 session 的多次调用必须串行**（编排层保证）；两个工人同时改同一个仓库的隔离也是编排层职责。
 - 中途实时问答（干到一半停下来问、不结束本轮）目前做不到，需要给 `ask_user` 接阻塞式双向通道；
   建议先用轮次边界模式，真实撞到"歧义中途才发现"的案例再谈。
+
+## 长期记忆（EverOS）
+
+`memory.backend` 在本分支默认 `"everos"`。**默认值只在"能工作"时生效**：没配记忆模型 key 时
+自动降级为无记忆（不起服务、不拖慢、不报错）；而在 raven config 里**显式**写了 `"backend": "everos"`
+则严格执行——起不来就响亮报错（一次性任务直接失败退出），声明过的意图不被静默取消。
+
+### 本地模式（默认）
+
+不配 `base_url` 时 raven 自动拉起自带的 everos 服务（本机 18791 端口，v1 接口）。
+服务启动就需要**两个模型 key**（LLM 抽取 + embedding 检索，缺一个都拒绝启动；rerank 可选）。
+两种输入方式，**都不写进 raven 的 config.json**：
+
+1. 向导（推荐）：`raven onboard` 第 4 步，逐项收集后写入 `<配置目录>/everos/everos.toml`
+   （`[llm]` / `[embedding]` 小节的 `model` / `api_key` / `base_url`）。
+2. 环境变量（无人值守部署）：`EVEROS_LLM__API_KEY` / `EVEROS_LLM__BASE_URL` / `EVEROS_LLM__MODEL`
+   与 `EVEROS_EMBEDDING__API_KEY` / `EVEROS_EMBEDDING__BASE_URL` / `EVEROS_EMBEDDING__MODEL`，
+   环境变量优先于 toml。任意 OpenAI 协议端点均可。
+
+### 云端 / 远端模式
+
+指向一个已在运行的 EverOS 服务时，配置写在 raven config.json 的插件小节：
+
+```json
+{
+  "plugins": {"config": {"everos-memory": {
+    "base_url": "https://<服务地址>",
+    "api_version": "v2",
+    "api_key": "<服务的访问token>"
+  }}}
+}
+```
+
+- `api_version`：**托管 Cloud 只挂 `/api/v2`，自带服务只挂 `/api/v1`**（默认 v1）；配错时 404
+  会报出该改哪个旋钮。
+- `api_key` 也可用环境变量 `EVEROS_API_KEY` 传，避免落盘。
+- 配了 `base_url` 就不做本地 key 降级检查——远端服务的凭据与本地模型 key 无关。
+
+### 隔离语义（对蜂群重要）
+
+- 检索**默认钉在当前 `--session`**：工人 A 的记忆不会串进工人 B 的上下文
+  （插件配置 `scope_recall_to_session: false` 可放开为跨会话记忆，个人助理场景用）。
+- 存储按 workspace 路径派生 `project_id` 分桶：不同仓库的记忆物理隔离。
+- 抽取是服务端异步的（`flush_every_turns` 默认 0，不做每轮无效 flush）；
+  同 session 内的召回不受抽取滞后影响（带 session 过滤的检索会返回未抽取的缓冲尾巴）。
 
 ## 蜂群规模化
 

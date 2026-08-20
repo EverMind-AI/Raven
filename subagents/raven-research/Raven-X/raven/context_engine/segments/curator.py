@@ -133,6 +133,7 @@ class CuratorSegmentBuilder:
 
         plan = self.assembler.fallback_plan(state)
         assembled, validation = self.assembler.build(state, plan)
+        structural = self.assembler.trimmer.structural_errors(assembled.messages)
         meta = {
             "path": "fallback",
             "trace_path": str(self.archive.trace_path(session_key, turn_id)),
@@ -144,8 +145,33 @@ class CuratorSegmentBuilder:
             {
                 "plan": asdict(plan),
                 "validation": validation,
+                "structural_errors": structural,
             },
         )
+        if structural:
+            # A structurally broken history is a guaranteed 400 at the provider,
+            # so the turn that most needed compression would die outright. The
+            # fast-path projection of the raw session is over budget (that is why
+            # the slow path ran) but structurally sound, and the loop's own
+            # pre-call fit can still elide its way under the window - recoverable,
+            # where a dangling tool call is not.
+            logger.warning(
+                "Curator fallback assembled a structurally invalid history ({}); "
+                "degrading to the raw-session projection",
+                "; ".join(structural),
+            )
+            meta["degraded"] = "structural_errors"
+            return Segment(
+                text=self.assembler.working_state_segment(None),
+                history=self._history_from_messages(ctx.session_messages),
+                meta=meta,
+            )
+        if not validation.get("ok"):
+            logger.warning(
+                "Curator fallback is over budget by {} tokens; shipping for the "
+                "loop's pre-call fit to elide",
+                validation.get("over_by"),
+            )
         return Segment(
             text=self.assembler.working_state_segment(plan.working_state_injection or None),
             history=assembled.messages[1:-1],

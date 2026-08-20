@@ -4,8 +4,8 @@ The on-call (值守) line of Raven, installed as a third-party subagent of the h
 Raven on this box.
 
 - **Source:** `gitlab.com/npc-work/aic/ai/raven`, branch `feat/ops_round3_device`
-- **Pinned at:** `438ac51` (2026-08-18, *feat(ops): let an agent set up the experiment it was asked to run*)
-- **Installed:** 2026-08-13, updated 2026-08-19
+- **Pinned at:** `4aba1245` (2026-08-19, *fix(agent): refuse a declaration that copies the case in*)
+- **Installed:** 2026-08-13, updated 2026-08-20
 - **Model:** `anthropic/claude-opus-5` via OpenRouter (`providers.custom`)
 
 It is the same Raven codebase as this repo's `main`, plus `raven/ops/` — the
@@ -104,7 +104,11 @@ agent's.** `ops_declare` is the front door now: the agent writes the campaign's
 `meta.json` itself, once, before anything runs, and refuses a second declaration
 over the same campaign because that would move the target under results already
 recorded. A hand-written meta is no longer a precondition, and a task statement
-no longer carries a host, a port or a key path.
+no longer carries a host, a port or a key path. `4aba1245` tightened the same
+door: a declaration whose command copies *from* the staged case is refused,
+because the round's directory is already filled with a link to every file in the
+case, so the copy stops on "are the same file" — which upstream watched cost a
+live campaign its round 0.
 
 What the owner sets up instead, once per machine, is a **connection**:
 
@@ -112,18 +116,55 @@ What the owner sets up instead, once per machine, is a **connection**:
 STATE=~/.raven/workspace/subagent_sessions/raven-oncall   # $ONCALL_STATE_ROOT
 cat > "$STATE"/connections.json <<'EOF'
 {
-  "my-cpu-box": {
-    "backend": "process",
-    "host": "<ip>",
-    "port": 58717,
-    "key": "~/.ssh/id_rsa",
-    "remote_dir": "/remote/workdir",
-    "budget_unit": "minutes",
-    "max_concurrent": 2
-  }
+  "connections": [
+    {
+      "id": "cpu-32c",
+      "display_name": "my-cpu-box",
+      "kind": "linux",
+      "device": "cpu",
+      "cores": 32,
+      "software": "CalculiX 2.17 (/opt/calculix)",
+      "budget_unit": "minute",
+      "concurrency": 2,
+      "host": "<ip>",
+      "port": 58717,
+      "user": "root",
+      "key": "~/.ssh/id_rsa"
+    },
+    {
+      "id": "this-box",
+      "display_name": "the workstation",
+      "kind": "linux",
+      "device": "cpu",
+      "software": "OpenFOAM 11 (/opt/openfoam)",
+      "transport": "local"
+    }
+  ]
 }
 EOF
 ```
+
+**The shape matters more than the fields.** `connections.load` reads a list of
+rows each carrying an `id`, either bare or under a `connections` key, and a file
+shaped any other way parses as *no connections at all* — the same state as no
+file. A `connections.json` written from the example this README carried before
+2026-08-20 — an object keyed by machine name — loads as zero; check yours.
+
+`id` is internal and never renamed; `display_name` is the owner's own word for
+the box and may change. `host` / `port` / `user` / `key` / `transport` are hidden
+from the agent, and `transport: local` is how a machine that *is* this computer
+gets registered (upstream `499a78e9`) — someone who wrote their own solver runs
+it where they wrote it. Everything else in the row is shown: `kind`, `device`,
+`cores`, `memory`, `software`, `budget_unit`, `concurrency`, `note`. `software`
+is the deciding field rather than the hardware — what a machine has installed
+decides where work can run, what it is made of only narrows. An optional `paths`
+list claims directories for the machine (absolute paths already written into
+`software` are read as claims when it is absent), which is what lets a look
+report whose work it touched.
+
+`backend` and `remote_dir` are **not** connection fields — the agent chooses
+them per campaign through `ops_declare`. A connection describes a machine, not a
+run.
 
 The agent sees the name and what the machine is — never the key path — and a
 task then reads "run it on my-cpu-box". Until this file exists there is nothing
@@ -186,6 +227,20 @@ guessed:
   apparatus and any earlier round left under the same ops home. **For a
   controlled comparison, use a separate campaign directory.**
 
+Three of those were worked on between `438ac51` and `4aba1245`, and none is
+closed by construction: `exec` now takes a `machine` and routes to that
+connection's transport when it is given one, a look that lands on a path some
+connection claims says whose machine it is in the tool result, and `max_rounds`
+defaults to 50 instead of 8 — upstream measured a search concluding at round 8
+with 15% of its budget unspent, so the backstop had become the thing that ended
+campaigns. The first two are lines in a tool result, not restrictions: the
+unnamed local path stays open, which is the point of the second one.
+
+`raven/templates/TOOLS.md` also gained four standing rules that used to be
+written per campaign, in a hand-written `operating_policy` nothing writes now
+that the agent declares its own campaign. They ride on **every** request this
+install makes, including turns that never touch ops, at roughly 230 tokens.
+
 Added by *this* hosting:
 
 - **`ops_ask_owner` does not reach a person live.** It records the question on the
@@ -193,6 +248,13 @@ Added by *this* hosting:
   surfaces an unanswered question in the reply footer of the next spawn, which is
   the only way you will see it. Tell it in the prompt what to do when it cannot
   decide alone.
+- **While any campaign is unconcluded, `ask_user` refuses outright** and names
+  `ops_ask_owner` instead (upstream `b0ca477f`: `ask_user` waits ten minutes doing
+  nothing else, which upstream watched burn a 25-minute budget on a question that
+  blocked nothing). Together with the line above, that leaves this install with no
+  synchronous way to reach a person while a campaign is live — the question goes
+  on the campaign's record and surfaces in the next spawn's footer, and
+  `blocks_progress: True` waits on a channel nobody is reading.
 - **A woken turn is a cold start** with no memory of the spawn that started it —
   by design, since picking up from its own ledger is the behaviour under test.
 - The wake shell does not survive a reboot; the next spawn restarts it.
@@ -206,7 +268,7 @@ Added by *this* hosting:
 | `agents.defaults.workspace` | `<here>/workspace` | Sessions live under the workspace in this build; keeping it here keeps them off the host's. |
 | `tools.restrictToWorkspace` | `false` | It has to read the campaign's ops home and an ssh key, both outside the workspace. |
 | `tools.disabledTools` | no `spawn` / `cron` / skills / hub / media / deep_research | `cron` is off so the only scheduling path is the ops contract; the rest are unrelated surface. `message` stays enabled because `ops_ask_owner` delivers through it. |
-| `memory.backend` | `null` | Cross-round contamination is a measured hazard on this line; a memory that carries yesterday's campaign into today's would be another. Set it to `everos` with an isolated `userId`/`agentId` if you want recall. |
+| `memory.backend` | `everos`, on `userId`/`agentId` `raven-oncall` | Cross-round contamination is a measured hazard on this line, so recall is isolated from the host's store rather than switched off: `plugins.config.everos-memory` points this install at `localhost:18791`. Set it to `null` to take recall out of the picture entirely. |
 | `agents.defaults.llmCallTimeout` / `tools.exec.maxTimeout` | 1800s / 1200s | Bound a *stalled* backend or command. There is deliberately no wall-clock cap on a turn. |
 
 ## Verified on 2026-08-13, re-checked at `438ac51` on 2026-08-19
@@ -224,6 +286,24 @@ Added by *this* hosting:
 Not verified: a real campaign against a real remote host. Nothing here exercises
 `ops_submit` end to end — the budget gate, the report gates and the interruption
 contract are all untested on this install.
+
+### Re-checked at `4aba1245` on 2026-08-20
+
+Source-level only. **No turn was run on this tip**, so every row above still
+dates from `438ac51` and the live findings there have not been reproduced here.
+
+| Check | Result |
+|---|---|
+| the two things `run.py` reaches into | `SessionManager._get_session_path` still takes `(self, key)`; `raven.ops.wake_shell` still accepts the `--store` / `--config` / `--fire-missed` it is passed |
+| registered `ops_*` tools | **13, down from 14** — `ops_exec` is de-registered, its module kept as the implementation `exec` calls once it is given a `machine`. All 13 register unconditionally |
+| the vendored tree | pristine at `4aba1245`: the checkout's own diff in this commit is exactly upstream's `438ac51..4aba1245` -- 24 files, 1813 insertions, 243 deletions -- so no local edit was carried in and none was lost |
+| what stayed out | the checkout's `.git` and `.venv`, and seven PDFs / PNG / SVGs / HTML, all by the repo's `subagents/**` rules — 1486 files tracked, up 6 |
+
+Not re-checked on this tip: `uv sync` in the checkout, a turn end to end, a wake
+firing, registration with the host raven. **The live install under
+`subagents/raven-oncall/` on this box is still the `438ac51` checkout** — this
+change updates what the repo ships, and the running copy needs the pull and the
+wake-shell restart below.
 
 ## The LLM it runs on
 
@@ -265,7 +345,7 @@ pkill -f 'raven.ops.wake_shell'          # see below
 Then re-run the checks above. `run.py` is host-side and not part of the
 checkout, so a pull cannot conflict with it — but a pull *can* move
 `SessionManager._get_session_path` or the `wake_shell` CLI, which are the two
-things `run.py` reaches into. Both were checked by hand after the `438ac51`
+things `run.py` reaches into. Both were checked by hand after the `4aba1245`
 pull: the method still takes `(self, key)`, and the CLI still accepts the
 `--store` / `--config` / `--fire-missed` that `run.py` passes.
 
@@ -281,6 +361,14 @@ by pulling, leaves the changes uncommitted and unattributable. That happened on
 2026-08-17: 60 files showed as modified, and separating them cost an afternoon.
 Of the 60, 59 were `ruff format` and import churn and one was a real local patch.
 Pull; do not unpack.
+
+In a worktree of *this* repo there is no `.git` inside the checkout to pull with
+— `.gitignore` keeps it out — so the equivalent is to empty `Raven-Oncall/` and
+refill it from this repo's own objects (`git archive <tip> | tar -x`), then check
+that the staged diff equals upstream's diff for the same range before committing.
+That is not the unpacking warned about above: the bytes come from the same
+history rather than from an archive of unknown provenance, and the diff check is
+what proves it.
 
 ## Secrets
 

@@ -25,6 +25,7 @@ from raven.agent.fetch_gate import FetchGate
 from raven.agent.flow.fetch_floor import FetchFloorObserver
 from raven.agent.flow.fetch_gate import FetchGateObserver
 from raven.agent.flow.finalize import ForcedFinalizeGate
+from raven.agent.flow.report_shape import ReportShapeGate
 from raven.agent.flow.spin_breaker import SpinEntryBreaker
 from raven.agent.flow.verify import DraftReviewerGate
 from raven.agent.search_saturation import SearchSaturation
@@ -146,7 +147,33 @@ _DR_ANSWER_MARKER_CLAUSE = """{n}. End your reply with the answer wrapped in `<a
    it - the tags mark the answer, they do not replace the rest of the reply. If
    the question asks for one value, put only that value inside the tags."""
 
-# dr@2.8, appended only when ``final_shape.report_structure`` is on.
+# dr@2.8, appended only when ``final_shape.report_structure`` is on. Rewritten at
+# dr@3.5: the ordered-prose request becomes a fixed three-section template with
+# exact headings. The dr@2.8 text asked for optional comparison/mechanism
+# sections and "no heading at all" when the question did not call for one, so
+# the product surface had no stable reply shape a renderer or a reader could
+# rely on; the template fixes the layout while keeping the core commitments -
+# answer first, findings each carrying their URL, gaps named plainly, and the
+# non-shortening rule stated in the clause's own words - and drops the explicit
+# comparison/mechanism guidance outright.
+#
+# dr@3.6: the template additionally overrides formatting instructions carried by
+# the question itself. Under dr@3.5 the layout was fixed only where the question
+# was silent - "answer in one word" or "reply as JSON" still won, so the product
+# surface's shape was stable only for questions that never asked. The clause now
+# says the layout is fixed against the question too, and tells the model where a
+# requested shape goes instead (inside the report), because a bare prohibition
+# leaves the two instructions in open conflict and the model free to pick either.
+# Product surface only, same as ever: a bench answer must keep taking its format
+# from the task text, and every bench profile pins this clause off.
+#
+# The override passage fills the ``{format_override}`` slot below and has its own
+# switch (``final_shape.report_format_override``, default on): an unablatable
+# claim in a prompt cannot be priced, and this one has a price worth asking about
+# - it trades per-question format compliance for shape stability. With the switch
+# off the clause is byte-identical to the dr@3.5 template, which keeps that
+# superseded label's prompt reproducible from this build and lets a same-batch
+# A/B run template-vs-template+override.
 #
 # What this is for. The contract above is five rules of research discipline and
 # says nothing at all about the shape of the reply; the format of a bench answer
@@ -171,20 +198,34 @@ _DR_ANSWER_MARKER_CLAUSE = """{n}. End your reply with the answer wrapped in `<a
 # other's state - four spellings to keep true instead of two. They compose
 # because the marker clause already says the tags go last and the reasoning stays
 # above them, which is exactly where this clause leaves the body.
-_DR_REPORT_STRUCTURE_CLAUSE = """{n}. Write the reply as a research report, in this order: a direct answer to the
-   question in one or two sentences; if the question was ambiguous, one line on
-   how you read it; then the findings that decide it, each with the URL of the
-   page you fetched it from; then whatever you could not establish, named
-   plainly. Let it run as long as the evidence needs - never drop evidence,
-   sources, or caveats to make it shorter.
-   Two sections only when the question calls for them, and no heading at all when
-   it does not: when the answer turns on choosing between several options, put
-   them side by side on the dimensions that decide it; when it asks why or how
-   something works, say what the mechanism is and which fetched page shows it.
-   Do not add sections you have no evidence for - an empty heading is worse than
-   no heading. Do not close with a list of sources: every finding already carries
-   the page it came from, and the reply is followed by the full record of what was
-   searched and opened."""
+_DR_REPORT_STRUCTURE_CLAUSE = """{n}. Write the reply as a research report with exactly these three sections,
+   under these exact headings, in this order, each one present every time:
+   `## Answer` - the direct answer to the question in one or two sentences; if
+   the question was ambiguous, one more line on how you read it.
+   `## Findings` - the findings that decide the answer, each with the URL of
+   the page you fetched it from; a finding no fetched page supports is named
+   as unverified, never given an invented source.
+   `## Limitations` - whatever you could not establish, named plainly; when
+   nothing material is missing, say so in one line.
+{format_override}   Add no other headings, and do not close with a list of sources: every
+   finding already carries the page it came from, and the reply is followed by
+   the full record of what was searched and opened. Let the report run as long
+   as the evidence needs - never drop evidence, sources, or caveats to make it
+   shorter."""
+
+# Filled into the slot above by ``str.replace``, and the clause numbering that
+# follows it is a ``replace`` too - the passage talks about JSON, so a literal
+# brace has to stay harmless through BOTH substitutions. It was not: the numbering
+# step ran ``format`` until dr@3.7 and turned one example object into a KeyError
+# at assembly time. Trailing newline included so the empty substitution leaves the
+# dr@3.5 bytes with no seam.
+_DR_REPORT_FORMAT_OVERRIDE_PASSAGE = """   This layout is fixed and takes precedence over any formatting instructions
+   in the question itself: when the question asks for a different shape - one
+   word, a JSON object, a table, a specific layout - still write the report on
+   the question's topic, and satisfy the request inside it where it fits: the
+   bare value the question asked for goes in `## Answer`, a requested table or
+   JSON object goes in `## Findings`.
+"""
 
 
 class DRModeSegmentBuilder:
@@ -202,6 +243,7 @@ class DRModeSegmentBuilder:
         measured_guidance: bool = True,
         require_answer_marker: bool = True,
         report_structure: bool = True,
+        report_format_override: bool = True,
     ):
         # ``text`` overrides the CONTRACT only, ``identity`` the identity block.
         # Neither can delete the other: DR mode drops the product identity segment,
@@ -224,11 +266,21 @@ class DRModeSegmentBuilder:
         # switched independently without leaving a gap in the list. Marker-only -
         # the shipped state through dr@2.7 - still renders "6.", so that segment's
         # sha is unchanged and the published stamp still describes it.
+        #
+        # ``replace``, not ``format``: these clauses are prompt text that already
+        # talks about JSON, and one literal brace anywhere in them would make
+        # ``format`` raise while assembling the system prompt. Byte-identical to
+        # the ``format(n=i)`` this replaced - ``{n}`` is the only field either
+        # clause has ever carried - so no measured sha moves.
         if text is None:
+            report_clause = _DR_REPORT_STRUCTURE_CLAUSE.replace(
+                "{format_override}",
+                _DR_REPORT_FORMAT_OVERRIDE_PASSAGE if report_format_override else "",
+            )
             optional = [c for c, on in ((_DR_ANSWER_MARKER_CLAUSE, require_answer_marker),
-                                        (_DR_REPORT_STRUCTURE_CLAUSE, report_structure)) if on]
+                                        (report_clause, report_structure)) if on]
             for i, clause in enumerate(optional, start=_DR_CONTRACT_RULES + 1):
-                self._contract = self._contract.rstrip() + "\n" + clause.format(n=i)
+                self._contract = self._contract.rstrip() + "\n" + clause.replace("{n}", str(i))
         self._identity = identity or _DR_IDENTITY
         self._measured_guidance = measured_guidance
 
@@ -280,6 +332,16 @@ class DRFlowAssembly:
     web_search_kwargs: dict[str, Any] = field(default_factory=dict)
     web_fetch_kwargs: dict[str, Any] = field(default_factory=dict)
     max_iterations: int | None = None
+    context_window_tokens: int | None = None
+    """Same override shape as ``max_iterations``: ``None`` means AgentLoop keeps
+    its own (resolved) window; a value here re-points ``AgentLoop.context_window_tokens``
+    to this arm's override after the assembly is built - see the call site in
+    ``AgentLoop.__init__``. The flow's own observers already divided by
+    ``effective_window`` at build time (``build_dr_flow``), so this field only
+    has to carry the same raw override forward for the loop-level consumers
+    that come later: the context engine / ``HistoryTrimmer``, the memory
+    consolidator, and the flow-off default ``BudgetObserver`` never sees it,
+    which is what keeps the anchor unmoved by construction."""
     tools_allowlist: tuple[str, ...] = ()
     drop_segments: frozenset[str] = frozenset()
     think_closing_tag_required: bool = False
@@ -302,6 +364,20 @@ class DRFlowAssembly:
     overflow - a distribution change whose sign is known and asymmetric between arms.
     See DRFlowReactiveClampConfig."""
     reactive_clamp_factor: float = 0.5
+    report_structure: bool = False
+    """dr@2.8: whether this arm asked the model for the report template.
+
+    Carried here only so the read-only ``report_shape`` observer can stamp
+    whether a missing section was a deviation or a shape nobody asked for. The
+    clause itself is applied by ``DRModeSegmentBuilder``, which owns it; nothing
+    branches on this field."""
+    report_reminder: bool = False
+    """dr@3.7: repeat the report template on the current user message each turn.
+
+    Carried on the assembly for the same reason as ``record_final_shape``: the
+    flow-off anchor builds no assembly, so a seam that read the config directly
+    would inject into it too. Resolved against ``report_structure`` at build
+    time, so an arm that never asked for the template cannot be reminded of it."""
     process_appendix: bool = False
     """dr@2.8: attach the deterministic research trail to the returned answer.
 
@@ -375,12 +451,23 @@ def build_dr_flow(
     runs on (``AgentLoop._window_for``), not the configured default. Two
     observers below divide by it and one of them writes the quotient into the
     model's history, so a wrong denominator is a wrong sentence rather than a
-    wrong estimate.
+    wrong estimate. ``config.context_window_tokens`` (``None`` on every config
+    that exists today) overrides this parameter for this arm only - see
+    ``effective_window`` below; the caller applies the same override to
+    ``AgentLoop.context_window_tokens`` afterward so later consumers agree.
     """
     if not config.enabled:
         return None
 
     effective_iterations = config.max_iterations or max_iterations
+    # Same override shape as `effective_iterations` immediately above: `None` keeps
+    # the resolved window this function was called with, a config value overrides it
+    # for this arm only. Every observer below that divides by a window must key on
+    # this, not the raw parameter, or a set override would apply to the assembly's
+    # own field (see the `DRFlowAssembly(...)` return below) while every observer
+    # built here keeps dividing by the old number - the "N copies of one number"
+    # shape this file's docstring already warns about, one call site over.
+    effective_window = config.context_window_tokens or context_window_tokens
 
     # Observer order is part of the flow contract: note appenders first,
     # then the spin breaker (a restart must be intercepted before the
@@ -420,7 +507,7 @@ def build_dr_flow(
         observers.append(
             BudgetNoteObserver(
                 max_iterations=effective_iterations,
-                context_window_tokens=context_window_tokens,
+                context_window_tokens=effective_window,
                 warn_ratio=config.budget_note.warn_ratio,
             )
         )
@@ -446,7 +533,7 @@ def build_dr_flow(
         observers.append(
             SpinEntryBreaker(
                 max_iterations=effective_iterations,
-                context_window_tokens=context_window_tokens,
+                context_window_tokens=effective_window,
                 phrase_hits=config.spin_breaker.phrase_hits,
                 min_budget_ratio=config.spin_breaker.min_budget_ratio,
                 min_entity_overlap=config.spin_breaker.min_entity_overlap,
@@ -484,6 +571,7 @@ def build_dr_flow(
                 strict_reject_only=config.verify.strict_reject_only,
                 fail_open_on_elided_evidence=config.verify.fail_open_on_elided_evidence,
                 evidence_round=evidence_round,
+                closing_tag_required=config.think_closing_tag_required,
             )
         )
 
@@ -508,6 +596,23 @@ def build_dr_flow(
     if config.conversation.enabled:
         observers = [GatedHook(o, is_research_turn) for o in observers]
 
+    # dr@3.7. The one observer deliberately outside the wrap above, appended
+    # after it so the exception is visible at the seam rather than hidden in a
+    # predicate. The wrap exists because every other observer runs the research
+    # machine - model calls, evidence, ledger rows - and a turn answered from
+    # context has no business paying for any of it. This one runs a markdown
+    # parse over text the turn already produced, and the stratum it exists for IS
+    # the non-research turn: 2/9 well-formed there against 8/14 on research
+    # turns. Wrapping it would gate it out of the only place it was built for.
+    #
+    # Also gated on ``report_structure``: the bar checks a template that clause
+    # asks for, so with the clause off there is nothing to check - which is what
+    # keeps it away from every bench profile without those profiles naming it.
+    if config.final_shape.report_structure and config.final_shape.report_bounce:
+        observers.append(
+            ReportShapeGate(closing_tag_required=config.think_closing_tag_required)
+        )
+
     return DRFlowAssembly(
         version=config.version,
         observers=observers,
@@ -517,6 +622,7 @@ def build_dr_flow(
             measured_guidance=config.measured_guidance,
             require_answer_marker=config.final_shape.require_marker,
             report_structure=config.final_shape.report_structure,
+            report_format_override=config.final_shape.report_format_override,
         ),
         web_search_kwargs={
             "include_answer_box": config.search.include_answer_box,
@@ -534,6 +640,7 @@ def build_dr_flow(
         },
         web_fetch_kwargs=web_fetch_kwargs,
         max_iterations=config.max_iterations,
+        context_window_tokens=config.context_window_tokens,
         tools_allowlist=tuple(config.tools_allowlist),
         think_closing_tag_required=config.think_closing_tag_required,
         drop_segments=_MINIMAL_CONTEXT_DROPPED_SEGMENTS if config.minimal_context else frozenset(),
@@ -543,6 +650,8 @@ def build_dr_flow(
         reactive_clamp=config.reactive_clamp.enabled,
         reactive_clamp_factor=config.reactive_clamp.shrink_factor,
         record_final_shape=config.final_shape.record,
+        report_structure=config.final_shape.report_structure,
+        report_reminder=config.final_shape.report_structure and config.final_shape.report_reminder,
         process_appendix=config.final_shape.process_appendix,
         conversation_enabled=config.conversation.enabled,
         conversation_gate_mode=config.conversation.gate,

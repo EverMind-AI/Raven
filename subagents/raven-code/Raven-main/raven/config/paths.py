@@ -60,6 +60,19 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
+def workspace_state_path(workspace: Path | str, name: str) -> Path:
+    """Resolve a per-workspace state directory without creating it.
+
+    For components constructed on every run whether or not they are used:
+    creating the bucket eagerly leaves an empty directory next to the config
+    file for features that never ran.
+    """
+    from raven.utils.helpers import safe_filename
+
+    key = safe_filename(str(Path(workspace).expanduser().resolve())) or "workspace"
+    return get_data_dir() / name / key
+
+
 def get_workspace_state_dir(workspace: Path | str, name: str) -> Path:
     """A per-workspace directory for raven's own runtime state.
 
@@ -69,10 +82,7 @@ def get_workspace_state_dir(workspace: Path | str, name: str) -> Path:
     absolute path, the same way claude-code keeps its per-project state under
     ``~/.claude/projects/<escaped-path>/``.
     """
-    from raven.utils.helpers import safe_filename
-
-    key = safe_filename(str(Path(workspace).expanduser().resolve())) or "workspace"
-    return ensure_dir(get_runtime_subdir(name) / key)
+    return ensure_dir(workspace_state_path(workspace, name))
 
 
 def get_cli_history_path() -> Path:

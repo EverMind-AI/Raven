@@ -81,9 +81,12 @@ class LocalSkillCatalog:
         # Background SKILL.md watcher. Auto-started by default so the
         # common long-lived consumer (ContextBuilder) picks up hand-edits
         # to ``<workspace>/skills/**/SKILL.md`` without anyone needing to
-        # remember a separate call. The watcher runs in a daemon thread
-        # so process exit cleans it up; when ``watchfiles`` is missing
-        # this collapses to a no-op + one INFO log.
+        # remember a separate call. Its daemon thread does not hold the
+        # process open, but process exit does NOT clean it up safely --
+        # finalizing under the live notify runtime segfaults on its own,
+        # which is why the watcher registers a stop hook with
+        # ``raven.utils.native_runtimes``. When
+        # ``watchfiles`` is missing this collapses to a no-op + one INFO log.
         #
         # Short-lived consumers (a single CLI command, a one-shot
         # ``build_skills_summary()`` for a subagent) should pass
@@ -176,7 +179,10 @@ class LocalSkillCatalog:
     def stop_file_watcher(self) -> None:
         """Signal the watcher thread to exit and best-effort join.
 
-        Safe to call when no watcher was ever started.
+        Safe to call when no watcher was ever started. Not the only way the
+        thread gets stopped: the watcher registers :meth:`SkillFileWatcher.stop`
+        with ``raven.utils.native_runtimes``, so the CLI exit path shuts it down
+        even when nobody holds this catalog any more.
         """
         watcher = self._file_watcher
         if watcher is None:

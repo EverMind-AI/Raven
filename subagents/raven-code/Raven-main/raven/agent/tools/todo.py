@@ -64,7 +64,8 @@ class TodoStore:
         if not self.items:
             return "(empty)"
         return "\n".join(
-            f"{_STATUS_MARK.get(str(item.get('status')), '[?]')} {item.get('content', '')}" for item in self.items
+            f"{_STATUS_MARK.get(str(item.get('status')), '[?]')} {item.get('content', '')}"
+            for item in self.items
         )
 
 

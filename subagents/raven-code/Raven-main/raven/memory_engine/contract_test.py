@@ -108,7 +108,7 @@ class MemoryBackendContractTests:
         await backend.store(
             "contract-metadata",
             [{"role": "user", "content": "test"}],
-            metadata={"app_id": "test", "project_id": "test", "is_final": True},
+            metadata={"is_final": True},
         )
 
     async def test_feedback_accepts_arbitrary_signals(self, backend) -> None:

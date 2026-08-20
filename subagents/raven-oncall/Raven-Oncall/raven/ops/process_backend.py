@@ -113,6 +113,31 @@ _WRITES_FILE = ".raven-case-writes.json"
 _RESERVED = ("config.json", "result.json", "pid", "job.log", _LAUNCHER, _MARKER)
 
 
+_SHELL_OPERATORS = frozenset({"&&", "||", "|", ";", ">", ">>", "<", "&"})
+
+
+def _is_simple(command: str) -> bool:
+    """Whether ``exec`` can take this command as it stands.
+
+    ``exec`` replaces the shell with one program, so an operator between two
+    commands has to be read by a shell first. Quoting decides: ``sh -c 'cd x && y'``
+    IS one command -- the ``&&`` belongs to the argument, not to this line -- and
+    wrapping it again would put a second shell in front of every campaign written
+    that way. So the split is done the way a shell would do it, not by looking for
+    characters.
+
+    A command that cannot be split at all goes to the shell; whatever it is doing
+    with quotes, a shell is the thing that understands it.
+    """
+    import shlex
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return not any(tok in _SHELL_OPERATORS for tok in tokens) and "$" not in command
+
+
 class ProcessExecutor(JobBackend):
     name = "process"
 
@@ -375,18 +400,29 @@ class ProcessExecutor(JobBackend):
 
         await self._load_known_writes()
         cfg_path = f"{job_dir}/config.json"
-        cmd = self._command.format(job_dir=job_dir, config=cfg_path)
+        cmd = self._command.format(job_dir=job_dir, config=cfg_path,
+                                  staged_case=self._staged_case,
+                                  remote_dir=self._remote_dir)
         # The command goes into a launcher script rather than onto the ssh command
         # line, for two reasons. Backgrounding with `&` applies to the whole `&&`
         # chain, so writing the pid on the same line runs it before mkdir has
         # finished; and the command carries quotes that would have to survive two
         # levels of shell. The script writes its own pid and then execs, so the pid
-        # file holds the training process itself rather than a wrapper.
+        # file holds the job itself rather than a wrapper.
+        #
+        # ``exec`` takes ONE simple command, so a template that chains -- "cd x &&
+        # cp y . && bash run.sh" -- has to be handed to a shell instead. Measured
+        # 2026-08-19: without this the launcher became ``exec cd ... && ...``,
+        # which runs nothing at all and says nothing about it. The pid file was
+        # written, so the job looked started, and it never produced a result. Only
+        # chaining commands pay the extra shell; a single command still execs
+        # directly and keeps the pid pointing at the job.
+        body = f"exec {cmd}" if _is_simple(cmd) else f"exec sh -c {shlex.quote(cmd)}"
         launcher = (
             "#!/bin/sh\n"
             f"cd {job_dir}\n"
             "echo $$ > pid\n"
-            f"exec {cmd}\n"
+            f"{body}\n"
         )
         staged = await self._arun(
             f"mkdir -p {job_dir} && "
@@ -741,24 +777,12 @@ def process_from_meta(meta: dict[str, Any]) -> JobBackend:
 
     from raven.ops import make_ssh_runner
 
-    host = str(meta.get("host") or "").strip()
-    if not host and meta.get("connection"):
-        # The campaign names a connection that the registry no longer has, so
-        # nothing filled the address in. A KeyError here reads to a caller as "the
-        # tool wants a host", and the repair it invites is to pass one by hand or
-        # to edit the campaign's own declaration -- both measured 2026-08-17.
-        raise JobBackendError(
-            f"campaign has no address to run on: connection {meta['connection']!r} "
-            "is not in the connection registry"
-        )
-    run = make_ssh_runner(
-        host, int(meta.get("port", 22)),
-        os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
-        # A connection names the account to log in as. Dropping it here would
-        # make that field one more setting that is written, accepted and does
-        # nothing -- the failure this line of work exists to stop.
-        user=str(meta.get("user") or "root"),
-    )
+    # A connection names the account to log in as, and says whether there is an
+    # account at all: a machine that is this one is reached by running the
+    # command. Both live behind one seam so nothing here has to know which.
+    from raven.ops.transport import runner_from
+
+    run = runner_from(meta)
     command = meta.get("command")
     if not command:
         raise JobBackendError("process backend needs a 'command' template in the campaign meta")

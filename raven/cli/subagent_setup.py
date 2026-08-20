@@ -26,7 +26,7 @@ host's `agents.defaults.model` along with its credentials, so the folder stops
 running the one it was tuned for. A key of its own is the only way to keep it,
 which is why the recommended model leads the menu.
 
-All three folders are tuned for models served through OpenRouter, so a host that
+All four folders are tuned for models served through OpenRouter, so a host that
 already has an OpenRouter key needs no second copy of it: the step reuses that
 one and asks nothing. The reuse is keyed on `providers.openrouter` specifically -
 a key sitting in `custom` belongs to whatever private gateway that section points
@@ -161,9 +161,10 @@ def host_model() -> str:
 def _checkout_of(folder: Path) -> Optional[Path]:
     """The folder's raven checkout: its one subdirectory that is a python project.
 
-    Discovered rather than named - the three folders spell it differently and a
-    fourth is free to spell it a fourth way. ``subagents/install.sh`` finds it
-    the same way, and disagreeing with it would mean two answers to one question.
+    Discovered rather than named - the four folders spell it four ways already
+    (``Raven-main``, ``Raven-Oncall``, ``Raven-X``, ``Raven-PPT``) and a fifth is
+    free to spell it a fifth. ``subagents/install.sh`` finds it the same way, and
+    disagreeing with it would mean two answers to one question.
     """
     found = [project.parent for project in folder.glob("*/pyproject.toml")]
     return found[0] if len(found) == 1 else None

@@ -31,6 +31,22 @@ class _FsTool(Tool):
     def _resolve(self, path: str) -> Path:
         return _resolve_path(path, self._workspace, self._allowed_dir)
 
+    @staticmethod
+    def _whose(path: str) -> str:
+        """One line naming the machine this path is on, or "" when unclaimed.
+
+        A look that succeeds says nothing about who the directory belongs to. On
+        a machine that is a different box the look fails instead, and that failure
+        is what sends the loop to the machine list -- so the fact travels back the
+        same way, in the result.
+        """
+        try:
+            from raven.ops.connections import provenance_line
+
+            return provenance_line(path)
+        except Exception:  # noqa: BLE001 -- a read must not depend on this
+            return ""
+
 
 # ---------------------------------------------------------------------------
 # read_file
@@ -110,7 +126,7 @@ class ReadFileTool(_FsTool):
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
             else:
                 result += f"\n\n(End of file — {total} lines total)"
-            return result
+            return result + self._whose(path)
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -379,7 +395,7 @@ class ListDirTool(_FsTool):
             result = "\n".join(items)
             if total > cap:
                 result += f"\n\n(truncated, showing first {cap} of {total} entries)"
-            return result
+            return result + self._whose(path)
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:

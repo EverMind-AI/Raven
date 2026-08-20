@@ -241,3 +241,32 @@ def test_the_notice_carries_no_varying_number():
     """It takes no argument on purpose; see ``fetch_gate_notice``."""
     assert fetch_gate_notice() == fetch_gate_notice()
     assert not any(ch.isdigit() for ch in fetch_gate_notice())
+
+
+@pytest.mark.asyncio
+async def test_previous_turns_tool_history_does_not_close_the_gate():
+    """dr@3.4. The first-iteration scan starts at ``ctx.turn_base``, never 0.
+
+    The session persists every earlier turn's tool messages, and the assembled
+    context replays them below the current user message. A previous turn that
+    ended on a long unread-search tail (the failure bucket routinely ends with
+    100+ searches) must not close ``web_search`` on this turn's very first
+    iteration - single-turn tests cannot see this, because there the slice IS
+    the whole list.
+    """
+    history = [_search_msg() for _ in range(20)]
+    ctx = AgentHookContext(session_key="test", turn_base=len(history))
+    ctx.messages = history + [{"role": "user", "content": "next question"}]
+    ctx.tools = _tools()
+    hook = FetchGateObserver(FetchGate(k=15))
+    decision = await hook.before_iteration(ctx)
+    assert decision.modified_tools is None, "prior-turn searches closed this turn's gate"
+
+    # Same shape with turn_base=0 (a single-turn run) must still close it -
+    # asserted so this test cannot pass by the gate never firing at all.
+    ctx2 = AgentHookContext(session_key="test", turn_base=0)
+    ctx2.messages = [_search_msg() for _ in range(20)]
+    ctx2.tools = _tools()
+    hook2 = FetchGateObserver(FetchGate(k=15))
+    decision2 = await hook2.before_iteration(ctx2)
+    assert decision2.modified_tools is not None

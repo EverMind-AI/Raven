@@ -40,8 +40,8 @@ fi
 [ ${#FOLDERS[@]} -gt 0 ] || { echo "no sub-agent folder found in $HERE" >&2; exit 1; }
 
 # The checkout is the one subdirectory that is a python project. Discovered
-# rather than named, because the three folders spell it differently and a new
-# folder is free to spell it a fourth way.
+# rather than named, because the four folders already spell it four ways and a
+# new folder is free to spell it a fifth.
 checkout_of() {
     local found=()
     for project in "$1"/*/pyproject.toml; do
@@ -85,6 +85,26 @@ fi
 
 ready=()
 not_built=()
+extra_of() {
+    # `ppt` for `raven-ppt`, when the checkout declares an optional-dependency
+    # group by that name: the folder name without its `raven-` prefix, the same
+    # derivation prefix_of uses for the .env variables. Nothing here enumerates
+    # the folders, so a new one that needs an extra gets it by being named for it.
+    #
+    # Printed empty when the group does not exist. `uv sync --extra` on an
+    # undeclared extra is an error, so guessing would turn a working install into
+    # a failed one -- which is why this reads the section rather than the file.
+    local folder="$1" checkout="$2" extra="${1#raven-}"
+    [ -f "$checkout/pyproject.toml" ] || return 0
+    awk -v want="$extra" '
+        /^\[project\.optional-dependencies\]/ { inside = 1; next }
+        /^\[/ { inside = 0 }
+        inside && $0 ~ "^[[:space:]]*" want "[[:space:]]*=" { found = 1 }
+        END { exit !found }
+    ' "$checkout/pyproject.toml" && printf '%s' "$extra"
+    return 0
+}
+
 failed=()
 
 for folder in "${FOLDERS[@]}"; do
@@ -103,14 +123,20 @@ for folder in "${FOLDERS[@]}"; do
         continue
     fi
 
+    extra="$(extra_of "$folder" "$checkout")"
+
     if [ -x "$checkout/.venv/bin/raven" ]; then
         echo "   venv: present in $(basename "$checkout")"
     elif [ "$DRY_RUN" = 1 ] || [ "$SYNC" = 0 ]; then
         echo "   venv: MISSING in $(basename "$checkout") - the agent cannot run until \`uv sync\` builds it"
     fi
     if [ "$SYNC" = 1 ] && [ "$DRY_RUN" = 0 ]; then
-        echo "   venv: uv sync in $(basename "$checkout")"
-        if ! (cd "$checkout" && uv sync > /dev/null); then
+        sync_args=(sync)
+        if [ -n "$extra" ]; then
+            sync_args+=(--extra "$extra")
+        fi
+        echo "   venv: uv ${sync_args[*]} in $(basename "$checkout")"
+        if ! (cd "$checkout" && uv "${sync_args[@]}" > /dev/null); then
             echo "   uv sync failed"
             failed+=("$folder")
             continue

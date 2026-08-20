@@ -1,0 +1,20 @@
+{
+  "agents": {
+    "defaults": {
+      "provider": "openrouter",
+      "model": "anthropic/claude-opus-5",
+      "maxToolIterations": 120
+    }
+  },
+  "providers": {
+    "openrouter": {
+      "apiKey": "sk-or-v1-REPLACE_WITH_YOUR_OWN_KEY",
+      "apiBase": "https://openrouter.ai/api/v1"
+    }
+  },
+  "tools": {
+    "ppt": {
+      "enabled": true
+    }
+  }
+}

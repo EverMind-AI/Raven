@@ -1,0 +1,135 @@
+"""Read what a running EverOS server can actually do.
+
+``_server._probe_health`` answers "is the process up". From everos 1.2.1
+``/health`` also reports which capabilities the server managed to *build*, and
+those are different questions: 1.2.1 boots with ``[llm]`` alone rather than
+aborting, so a server whose embedding provider is misconfigured still answers
+200 and quietly degrades to keyword-only search. A caller that stops at
+"reachable" therefore reports a healthy install that cannot recall anything.
+
+This module only reports what the server says. Deciding whether that contradicts
+what the user configured belongs to the caller, which is the side that can read
+``everos.toml``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
+
+# Health is a local, in-process check; a slow answer means the server is wedged,
+# and waiting on it would only delay the work it is meant to inform.
+HEALTH_TIMEOUT_S = 5.0
+
+# everos.toml section name -> the key /health reports it under. The two differ
+# (`embedding` vs `embed`, `multimodal` vs `multimodal_llm`), so a caller that
+# reuses the section name reads a present capability as missing.
+_SECTION_TO_CAPABILITY = {
+    "llm": "llm",
+    "embedding": "embed",
+    "rerank": "rerank",
+    "multimodal": "multimodal_llm",
+}
+
+# Nothing works without the llm: extraction needs it, and everos 1.2.1 will not
+# even boot without `[llm]` configured.
+#
+# Which is also why nothing reaches this branch on 1.2.1: its `/health` reports
+# `llm` as a hardcoded True (`entrypoints/api/routes/health.py`) precisely
+# because a server that got that far must have one. An llm that fails at boot
+# surfaces as an unreachable server instead. Kept because everos' own comment
+# says that literal may become a real probe, and because the section list is the
+# contract, not a description of one release's behaviour.
+REQUIRED_SECTIONS = ("llm",)
+
+# Configured but unbuilt, these cost some part of memory rather than memory
+# itself -- the adapter drops to KEYWORD search without embedding and to the LLM
+# rerank lane without rerank, and without the multimodal llm images / PDFs /
+# audio never make it in. Reported, never treated as a fault.
+#
+# Every optional role the wizard can write belongs here: `update_everos`
+# WRITABLE_SECTIONS is the source of that list, and a role missing from here is
+# one that can fail to build with nobody saying so.
+DEGRADING_SECTIONS = ("embedding", "rerank", "multimodal")
+
+
+@dataclass(frozen=True)
+class CapabilityReport:
+    """What ``/health`` said, or why it could not be asked."""
+
+    reachable: bool
+    capabilities: dict[str, bool] = field(default_factory=dict)
+    error: str = ""
+
+    @property
+    def reports_capabilities(self) -> bool:
+        """Whether the server is new enough to report capabilities at all.
+
+        Pre-1.2.1 servers return a bare ``{"status": "ok"}``; treating that as
+        "everything unavailable" would report a working install as broken.
+        """
+        return bool(self.capabilities)
+
+    def available(self, section: str) -> bool | None:
+        """Whether ``section``'s capability was built, or ``None`` if unknown."""
+        return capability_available(self.capabilities, section)
+
+
+def capability_available(capabilities: dict[str, bool], section: str) -> bool | None:
+    """Whether ``section``'s capability was built, per a ``/health`` map.
+
+    ``None`` whenever the map cannot answer -- it is empty (no server reached,
+    or one too old to report), or ``/health`` does not cover that section. A
+    caller must not read that silence as a negative: doing so condemns a working
+    install.
+    """
+    key = _SECTION_TO_CAPABILITY.get(section)
+    if key is None:
+        return None
+    value = capabilities.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def configured_base_url(config: Any) -> str:
+    """Where the backend will actually be, per ``plugins.config``.
+
+    A caller that probes the default while the backend reads the configured
+    value reports on a server nobody is using: someone who moved everos off port
+    18791 is told it is not running. Key order mirrors
+    ``_plugin_stack._resolve_plugin_config_slice`` (plugin id, then contribution
+    name) without building a registry, which the callers -- ``raven doctor`` and
+    the wizard -- have no other reason to do.
+    """
+    slices = getattr(getattr(config, "plugins", None), "config", None) or {}
+    for key in ("everos-memory", "everos"):
+        slice_ = slices.get(key)
+        if isinstance(slice_, dict) and slice_.get("base_url"):
+            return str(slice_["base_url"])
+    return DEFAULT_EVEROS_BASE_URL
+
+
+def parse_capabilities(payload: Any) -> dict[str, bool]:
+    """The bool-valued subset of a ``/health`` body's ``capabilities`` map.
+
+    ``{}`` whenever the body cannot answer -- absent, malformed, or from a
+    pre-1.2.1 server. Shared with the adapter, which reads the same map to pick
+    its search lane: parsed two ways, ``raven doctor`` and recall could disagree
+    about the same server.
+    """
+    raw = (payload or {}).get("capabilities") if isinstance(payload, dict) else None
+    return {k: v for k, v in raw.items() if isinstance(v, bool)} if isinstance(raw, dict) else {}
+
+
+def probe_capabilities(base_url: str = DEFAULT_EVEROS_BASE_URL) -> CapabilityReport:
+    """Ask a running server what it can do. Never raises."""
+    import httpx
+
+    try:
+        r = httpx.get(f"{base_url.rstrip('/')}/health", timeout=HEALTH_TIMEOUT_S)
+        r.raise_for_status()
+        payload = r.json() or {}
+    except Exception as exc:
+        return CapabilityReport(reachable=False, error=f"{type(exc).__name__}: {exc}")
+    return CapabilityReport(reachable=True, capabilities=parse_capabilities(payload))

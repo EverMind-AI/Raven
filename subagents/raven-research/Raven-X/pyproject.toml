@@ -18,7 +18,7 @@ classifiers = [
 
 dependencies = [
     "typer>=0.20.0,<1.0.0",
-    "litellm>=1.82.1,<2.0.0",
+    "litellm==1.85.0",
     "pydantic>=2.12.0,<3.0.0",
     "pydantic-settings>=2.14.2,<3.0.0",
     "httpx>=0.28.0,<1.0.0",
@@ -36,10 +36,6 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.1.2",
     "tomli-w>=1.2.0",
-    # OAuth provider login (Codex / GitHub Copilot) imports this during onboard,
-    # so it must be a runtime dep -- otherwise `uv tool install raven` users hit
-    # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
-    "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -92,7 +88,6 @@ channels = [
 ]
 tools = [
     "readability-lxml>=0.8.4,<1.0.0",
-    "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
 retrieval = [
     "torch>=2.0.0",
@@ -144,6 +139,7 @@ path = "hatch_build.py"
 include = [
     "raven/**/*.py",
     "raven/plugin/**/raven-plugin.toml",
+    "raven/providers/data/*.json",
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
@@ -264,7 +260,6 @@ markers = [
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
-    "oauth-cli-kit>=0.1.6",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",

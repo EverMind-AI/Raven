@@ -56,10 +56,14 @@ class FetchFloorObserver(AgentHook):
         if not getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         messages = ctx.messages or []
+        # The watermark opens at ``ctx.turn_base``, not 0: below it sits the
+        # session's persisted history, and counting the previous turns' tool
+        # results would double-book them into this turn's streak on the first
+        # tool iteration of every follow-up.
         state = ctx.metadata.setdefault(
             "fetch_floor",
-            {"searches": 0, "fetches": 0, "notes": 0, "watermark": 0, "streak": 0,
-             "max_streak": 0},
+            {"searches": 0, "fetches": 0, "notes": 0, "watermark": ctx.turn_base or 0,
+             "streak": 0, "max_streak": 0},
         )
         state.setdefault("streak", 0)
         state.setdefault("max_streak", 0)

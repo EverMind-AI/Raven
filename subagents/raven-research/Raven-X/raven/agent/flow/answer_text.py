@@ -50,4 +50,24 @@ def visible_answer(text: str | None, *, closing_tag_required: bool = False) -> s
     return text.strip()
 
 
-__all__ = ["visible_answer"]
+def closing_tag_bar(configured: bool, reasoning_content: object | None) -> bool:
+    """Effective ``closing_tag_required`` for one response.
+
+    The closing-tag bar presumes reasoning shares the content channel
+    (``reasoning</think>answer``), so a missing tag means the turn was cut
+    before it reached its answer. A response that delivered its reasoning
+    out-of-band -- a non-empty ``reasoning_content``, the channel LiteLLM
+    keeps separate from ``content`` -- has by construction only answer text
+    in ``content``, and holding it to the bar erases every complete answer.
+    Measured on a live-web config over OpenRouter (channel-separated
+    reasoning): 4 of 4 turns force-finalized as ``empty_visible_answer``
+    while carrying a full report, and the dr@3.4 verify gate never saw a
+    draft.
+
+    Truthiness, not ``is None``: the provider normalizes an empty stream to
+    ``None``, but a persisted message dict may carry either.
+    """
+    return configured and not reasoning_content
+
+
+__all__ = ["closing_tag_bar", "visible_answer"]

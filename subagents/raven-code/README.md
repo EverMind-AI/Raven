@@ -11,9 +11,10 @@ outside this directory.
 
 | | |
 |---|---|
-| Source | `../Raven-feat-swarm_integration.zip` (installed 2026-08-12) |
+| Source | `github.com/TongLi31/Raven`, branch `feat/swarm_integration`, commit `e16aec5f` |
 | Local checkout | `./Raven-main` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.9, branch `feat/swarm_integration`, files dated 2026-08-12 |
+| Package / version | `raven` 0.1.9, branch `feat/swarm_integration`, updated 2026-08-20 (installed 2026-08-12 from a zip of the same branch at `537578e6`) |
+| Local patches | **one**, recorded in `local-patches.diff` - see below |
 | **Read first** | **`Raven-main/README.SWARM.md`** - the branch's own contract, and the authority on everything below |
 
 This is **Raven-X's swarm-integration branch**, not plain upstream Raven. It is
@@ -32,11 +33,73 @@ patches is obsolete** - the branch does all six jobs itself, and better:
 | Raised the 10k exec output cap and made it configurable | 30k cap **plus** spill-to-file: past the cap the full output is written out and the truncation notice names the path for `grep` / `read_file`. Strictly better than a bigger cap |
 | Stripped `ask_user` from the system prompt, since the tool was disabled | Keeps `ask_user` registered and makes it answer instantly with `Error: ask_user not configured (no question broker)` when there is no channel. Verified here. So the tool stays enabled and the prompt stays honest |
 
-**The checkout therefore carries no local patches.** That is worth protecting: it
-is what makes the next update a straight replacement. Everything that adapts this
-agent to our gateway lives *beside* the checkout, never inside it.
+Those six are gone for good. **One patch has since come back**, and the rule that
+matters is that it is recorded rather than remembered:
+
+| Patch | Why it is still here |
+|---|---|
+| `raven/plugin/memory/everos/backend.py` - coerce a message `timestamp` to the ms epoch | EverOS's `MessageItemDTO` declares `timestamp: int` while raven stamps its own records with an ISO-8601 string. A caller forwarding a persisted message fails the entire write with `422 INVALID_INPUT`, logged at warning level and surfaced nowhere else, so the store silently stops receiving turns. Upstream still carries the bare `m.get("timestamp") or now_ms` at `e16aec5f`. **Defense-in-depth, not an observed outage**: verified 2026-08-17 that no current caller sends an ISO string, so this is for the replay and direct-chat paths that do forward persisted messages |
+
+`local-patches.diff` holds it as an appliable diff with that rationale in its
+header. Everything that adapts this agent to our gateway still lives *beside*
+the checkout, never inside it - the patch above is the one exception, and it is
+inside only because it is a fix to upstream's own code.
+
+**The 2026-08-20 update found this the hard way.** The tree that was here
+differed from its own stated source in eight files. Seven were `ruff format`
+churn with identical ASTs and were discarded; the eighth was this patch, which a
+wholesale replacement would have dropped without a trace. Prove the split by AST
+rather than by reading the diff -- reflowed strings and moved blank lines look
+exactly like real edits, and `git diff --ignore-all-space` does not separate
+them.
 
 ## Updating to a newer source drop
+
+The source is a git repository now, not a zip, which makes the update both
+cheaper and checkable. Fetch it read-only, never as a push remote:
+
+```bash
+cd <repo root>
+git fetch --no-tags https://github.com/TongLi31/Raven.git \
+    'refs/heads/*:refs/remotes/tongli31/*'
+
+# What you are about to take, as a real commit range. The base is the commit
+# whose tree the current checkout matches - find it by diffing trees, because
+# no file here records it.
+git log --oneline <base>..tongli31/feat/swarm_integration
+```
+
+Then replace the body from those objects and re-apply the patches:
+
+```bash
+cd subagents/raven-code
+rm -rf Raven-main && mkdir Raven-main
+git -C <repo root> archive tongli31/feat/swarm_integration | tar -x -C Raven-main
+(cd Raven-main && git apply ../local-patches.diff)
+git add -A .
+```
+
+**The check that makes this safe**, run before committing: the staged tree must
+differ from upstream in exactly the files `local-patches.diff` touches, and in
+nothing else. Deletions of `.pdf` / `.png` / `.svg` / `.html` are expected - the
+repo's `subagents/**` rules keep report assets out - but a deleted source file
+means the extraction lost something.
+
+```bash
+git diff --name-status "tongli31/feat/swarm_integration^{tree}" \
+    $(git write-tree --prefix=subagents/raven-code/Raven-main)
+```
+
+A `.venv` inside the checkout is gitignored and so is absent from a fresh
+worktree; in a clone that has one, move it aside first and `uv sync --reinstall`
+afterwards (the install is editable, but `uv sync` bakes absolute-path shebangs
+into `.venv/bin/`, so a venv that moved needs them rewritten). Re-sync whenever
+`pyproject.toml` or `uv.lock` moved -- the 2026-08-20 update added `sqlglot`,
+`jedi` (with `parso`), `ripgrep-bin`, and an opt-in `data-agent` extra
+(`duckdb`, `pandas`).
+
+The zip-era procedure below still applies when a drop arrives as an archive
+rather than a branch.
 
 The work splits in two, and keeping the split is what makes an update cheap:
 
@@ -73,6 +136,26 @@ so a venv that moved needs them rewritten.
 If a future drop reintroduces something that has to be patched locally, capture
 it as a `local-patches.diff` beside this file rather than as six hand edits, and
 re-add it to step 4 - that is how the previous drop was handled.
+
+### What `e16aec5f` brought that is worth knowing
+
+125 files, +11053/-629 over 29 commits. Two items change this agent's risk
+surface rather than its behaviour:
+
+- **An in-process Python execution kernel** ships in the new `data-agent`
+  plugin (`raven/plugin/data_agent/kernel_program.py` runs
+  `exec(compile(...), self.ns)` on model-written code). It is **dormant here**:
+  its manifest sets `enabled_by_default = false` and this folder's
+  `config.json` has no `plugins.enabled`, so nothing loads it. Opting in would
+  put model-generated Python in the agent's own process, where the `ExecTool`
+  deny-list -- which only guards shell commands -- does not reach it.
+- **`ripgrep-bin`** is a new runtime dependency that ships a prebuilt binary,
+  rather than a pure-Python package.
+
+The rest is upstream's own line: cron removed from the agent CLI, the
+tree-sitter symbols tool dropped, the file-tool surface realigned, gate
+defaults made explicit, and the everos memory backend reworked into an opt-in
+with session-scoped recall.
 
 ### The five contract points to re-check
 

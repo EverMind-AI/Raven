@@ -13,6 +13,8 @@ so a default flip would move the reference frame without any test failing.
 
 from __future__ import annotations
 
+import pytest
+
 from raven.agent.flow.final_shape import (
     ANSWER_LINE_PREFIX,
     shape_final_answer,
@@ -41,12 +43,23 @@ def test_both_knobs_default_on():
         assert cfg.record is True
         assert cfg.require_marker is True
         assert cfg.report_structure is True
-    # Every boolean here is on. If a future knob should default off, it needs its
-    # own reason written down and this assertion narrowed deliberately.
+    # Every boolean here is on except the ones named below, each of which owes a
+    # reason. Narrowing this is the deliberate act the previous comment asked
+    # for, not a way to let a default drift.
+    #
+    # ``report_bounce`` (dr@3.7) is off because it is the one knob here that
+    # spends a whole extra generation, and its benefit is not yet priced: the
+    # session record stamps ``flow_version`` but never stamped which finalShape
+    # knobs were on, so the 43%-malformed baseline that motivated it is an upper
+    # bound that cannot be attributed. dr@3.7 adds the ``report_shape`` observer
+    # that closes that gap; the knob earns its default from those readings, not
+    # from this file.
+    off_by_design = {"report_bounce"}
     bools = {n: getattr(DRFlowFinalShapeConfig(), n)
              for n, f in DRFlowFinalShapeConfig.model_fields.items()
              if f.annotation is bool}
-    assert all(bools.values()), bools
+    assert all(v for n, v in bools.items() if n not in off_by_design), bools
+    assert not any(bools[n] for n in off_by_design), bools
 
 
 def test_the_default_cannot_reach_a_flow_off_arm():
@@ -300,8 +313,13 @@ def test_the_report_clause_is_product_only_and_purely_appended():
     """
     from raven.agent.flow.dr import (
         _DR_ANSWER_MARKER_CLAUSE,
+        _DR_REPORT_FORMAT_OVERRIDE_PASSAGE,
         _DR_REPORT_STRUCTURE_CLAUSE,
         DRModeSegmentBuilder,
+    )
+
+    report_clause = _DR_REPORT_STRUCTURE_CLAUSE.replace(
+        "{format_override}", _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
     )
 
     bench = DRModeSegmentBuilder(require_answer_marker=False, report_structure=False)._contract
@@ -309,13 +327,22 @@ def test_the_report_clause_is_product_only_and_purely_appended():
 
     assert product.startswith(bench.rstrip()), "appended only; no prior byte moved"
     assert _DR_ANSWER_MARKER_CLAUSE.format(n=6).strip() in product
-    assert _DR_REPORT_STRUCTURE_CLAUSE.format(n=7).strip() in product
+    assert report_clause.format(n=7).strip() in product
 
     report_only = DRModeSegmentBuilder(
         require_answer_marker=False, report_structure=True
     )._contract
-    assert _DR_REPORT_STRUCTURE_CLAUSE.format(n=6).strip() in report_only
+    assert report_clause.format(n=6).strip() in report_only
     assert "7." not in report_only.split("Contract", 1)[1]
+
+    # The override rides its own switch inside the clause: off leaves the
+    # dr@3.5 template with no seam, and no other byte of the clause moves.
+    no_override = DRModeSegmentBuilder(
+        require_answer_marker=True, report_structure=True, report_format_override=False
+    )._contract
+    template_only = _DR_REPORT_STRUCTURE_CLAUSE.replace("{format_override}", "")
+    assert template_only.format(n=7).strip() in no_override
+    assert _DR_REPORT_FORMAT_OVERRIDE_PASSAGE.strip() not in no_override
 
 
 def test_the_report_clause_never_asks_for_a_shorter_answer():
@@ -327,12 +354,40 @@ def test_the_report_clause_never_asks_for_a_shorter_answer():
     or for the answer alone, would make the model perform that truncation during
     generation, where no downstream transform can refuse it.
     """
-    from raven.agent.flow.dr import _DR_REPORT_STRUCTURE_CLAUSE
+    from raven.agent.flow.dr import (
+        _DR_REPORT_FORMAT_OVERRIDE_PASSAGE,
+        _DR_REPORT_STRUCTURE_CLAUSE,
+    )
 
-    text = _DR_REPORT_STRUCTURE_CLAUSE.format(n=6).lower()
+    text = _DR_REPORT_STRUCTURE_CLAUSE.replace(
+        "{format_override}", _DR_REPORT_FORMAT_OVERRIDE_PASSAGE
+    ).format(n=6).lower()
     for banned in ("concise", "brief", "summarize", "only the answer", "keep it short"):
         assert banned not in text, f"the clause asks for {banned!r}"
     assert "never" in text and "drop evidence" in text
+
+
+def test_a_literal_brace_in_a_clause_does_not_crash_the_assembly(monkeypatch):
+    """dr@3.7. The clause text talks about JSON, so a brace must stay inert.
+
+    It did not: the override passage was spliced with ``replace`` (safe) and the
+    clause numbering right after it ran ``format`` (not), so one example object in
+    prompt text raised ``KeyError`` while building the system prompt - a crash
+    reachable only by editing a constant, which is exactly the kind nobody meets
+    until they are mid-edit on something else. The comment above the passage
+    promised the safety this test now enforces.
+    """
+    import asyncio
+
+    import raven.agent.flow.dr as dr_module
+
+    monkeypatch.setattr(
+        dr_module,
+        "_DR_REPORT_FORMAT_OVERRIDE_PASSAGE",
+        dr_module._DR_REPORT_FORMAT_OVERRIDE_PASSAGE.rstrip() + '\n   Example: {"k": "v"}.\n',
+    )
+    seg = asyncio.run(dr_module.DRModeSegmentBuilder().build(None))
+    assert '{"k": "v"}' in seg.text, "the brace must survive verbatim, not be consumed"
 
 
 def test_a_contract_override_owns_the_contract_including_both_clauses():
@@ -374,3 +429,45 @@ def test_counters_payload_is_wire_safe_scalars():
     }
     for v in c.values():
         assert isinstance(v, (str, int, bool)), v
+
+
+# dr@3.4. Table-driven pin of the marker grammar - a pure function is the
+# cheapest thing in the package to pin exhaustively, and two of these shapes
+# were extracted wrong for two versions: ``**Final Answer:** 42`` yielded
+# ``** 42`` (the regex allowed ``**`` before the colon but not after), and
+# ``\boxed{\frac{1}{2}}`` was cut to ``\frac{1`` by a lazy group, on exactly
+# the nested-brace inputs boxed exists for.
+_MARKER_FORMS = [
+    ("<answer>Berlin</answer>", "answer_tag", "Berlin"),
+    ("prose\n<answer>a\nb</answer>", "answer_tag", "a\nb"),
+    (r"\boxed{42}", "boxed", "42"),
+    (r"so \boxed{\frac{1}{2}} holds", "boxed", r"\frac{1}{2}"),
+    (r"\boxed{a_{1}b_{2}}", "boxed", r"a_{1}b_{2}"),
+    ("Answer: Paris", "labeled", "Paris"),
+    ("Final Answer: Paris", "labeled", "Paris"),
+    ("**Final Answer:** 42", "labeled", "42"),
+    ("**Final Answer**: 42", "labeled", "42"),
+    ("- Answer: Paris", "labeled", "Paris"),
+    ("> Answer: Paris", "labeled", "Paris"),
+    ("答案：北京", "labeled", "北京"),
+    ("Answer: line one\nline two", "labeled", "line one\nline two"),
+    ("Answer: **Paris**", "labeled", "Paris"),
+    ("Answer: the **bold** middle", "labeled", "the **bold** middle"),
+]
+
+
+@pytest.mark.parametrize("text,form,span", _MARKER_FORMS)
+def test_marker_form_table(text, form, span):
+    r = shape_final_answer(text)
+    assert r.form == form
+    assert r.span == span
+
+
+def test_unbalanced_boxed_yields_nothing_rather_than_a_guess():
+    r = shape_final_answer(r"\boxed{\frac{1}{2}")
+    assert r.form == "unmarked" and r.span is None
+
+
+def test_mid_sentence_answer_colon_still_does_not_match():
+    r = shape_final_answer("the answer: it depends on context")
+    assert r.form == "unmarked"

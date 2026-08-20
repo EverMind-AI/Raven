@@ -343,7 +343,10 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
                 "tool_call_id": tool_call_id,
                 "name": tool_name,
                 "content": content,
-                "timestamp": datetime.now().isoformat(),
+                # Through ``_now_fn``, not the wall clock: fake-clock harnesses
+                # inject it, and a real-time stamp beside fake-clock prompt text
+                # gives the trajectory two disagreeing clocks.
+                "timestamp": self._now_fn().isoformat(),
             }
         )
         return messages
@@ -364,7 +367,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
         )
-        msg["timestamp"] = datetime.now().isoformat()
+        msg["timestamp"] = self._now_fn().isoformat()
         # Why the LLM stopped generating this turn — the diagnostic for a
         # no-op turn (closed think, meant to call a tool, emitted no
         # tool_call): ``finish_reason == "tool_calls"`` with no parsed calls

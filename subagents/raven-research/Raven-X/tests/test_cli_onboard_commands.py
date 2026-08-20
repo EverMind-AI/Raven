@@ -598,14 +598,15 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker. The schema's pre-existing default model
-    # (``anthropic/claude-opus-4-5``) routes to anthropic by prefix, so it
-    # gets prepended as the "keep current" candidate.
+    # Catalog feeds the picker, every id carrying the provider's route prefix
+    # (``stored_model_id``): a bare id would be routed by keyword and fallback
+    # rather than to the provider just configured. The schema's pre-existing
+    # default (``anthropic/claude-opus-4-5``) routes to anthropic by prefix and
+    # is already among the formatted choices, so nothing is prepended.
     assert captured_choices["choices"] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
-        "claude-haiku-4-5",
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
     # User's pick made it into config
@@ -614,7 +615,7 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
 
 
 def test_format_model_for_provider_prefix_rules() -> None:
-    """Provider's ``litellm_prefix`` is applied unless model_id already has one."""
+    """The provider's model prefix is applied unless the id already carries one."""
     from raven.providers.registry import find_by_name
 
     openrouter = find_by_name("openrouter")
@@ -623,19 +624,25 @@ def test_format_model_for_provider_prefix_rules() -> None:
 
     # Gateway with prefix: bare id gets prefixed
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Already prefixed by us → idempotent
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
-    # Direct provider with empty prefix → pass-through
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "gpt-4o-mini"
+    # Standard provider: LiteLLM knows it under our own name, so that is the prefix
+    assert onboard_commands._format_model_for_provider("openai", openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider("openai", openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek/deepseek-chat")
+        == "deepseek/deepseek-chat"
+    )
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    )
 
 
 def test_model_routes_to_provider_heuristic() -> None:
@@ -661,7 +668,13 @@ def test_model_routes_to_provider_heuristic() -> None:
 
 
 def test_registry_default_models_present() -> None:
-    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``."""
+    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``.
+
+    ``openai_codex`` is deliberately absent: every id shipped for it came back
+    "not supported when using Codex with a ChatGPT account", so carrying one means
+    the wizard writes a model that cannot answer. The account catalogue is the
+    only source, and ``test_codex_carries_no_static_default_model`` pins that.
+    """
     from raven.providers.registry import find_by_name
 
     for name in (
@@ -671,14 +684,12 @@ def test_registry_default_models_present() -> None:
         "gemini",
         "deepseek",
         "github_copilot",
-        "openai_codex",
+        "minimax_global",
+        "minimax_cn",
     ):
         spec = find_by_name(name)
         assert spec is not None, f"missing provider in registry: {name}"
         assert spec.default_model, f"{name} has empty default_model"
-
-
-# --------------------------------------------------------------------------- fixtures (4-step)
 
 
 @pytest.fixture

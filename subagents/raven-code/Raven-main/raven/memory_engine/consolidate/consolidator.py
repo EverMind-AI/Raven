@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.config.paths import workspace_state_path
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_message_tokens, estimate_prompt_tokens_chain
 
@@ -698,14 +699,19 @@ class MemoryStore:
         # pillar. ``memory_dir`` is an alias of ``memory_file.parent``
         # for callsites that derive sibling paths (lock file below).
         #
-        # Paths only — no directory is created here. Constructing a store must
-        # leave the workspace untouched, because for a coding agent the
-        # workspace IS the user's repository: eagerly creating these would
-        # show up as untracked directories in every run. Each writer creates
-        # its own parent (see ``write_long_term`` / ``append_history``; the
-        # sidecar writers and ``file_lock`` already do).
-        self.memory_file = workspace / "user_memory" / "profile" / "user.md"
-        self.history_file = workspace / "user_memory" / "episodic" / "episodes.md"
+        # The pillar hangs off raven's own data dir, bucketed by workspace,
+        # the same way sessions are: for a coding agent the workspace IS the
+        # user's repository, so memory written there turns up as untracked
+        # files in the diff the run is judged on. Bucketing keeps one
+        # repository's memory out of another's.
+        #
+        # Paths only — no directory is created here, so a store that is never
+        # written to leaves nothing behind. Each writer creates its own parent
+        # (see ``write_long_term`` / ``append_history``; the sidecar writers
+        # and ``file_lock`` already do).
+        user_memory_root = workspace_state_path(workspace, "user_memory")
+        self.memory_file = user_memory_root / "profile" / "user.md"
+        self.history_file = user_memory_root / "episodic" / "episodes.md"
         self.memory_dir = self.memory_file.parent
         # Sibling lock file (`MEMORY.md.lock`). Shared across all processes
         # that write MEMORY.md so Personalizer + MemoryConsolidator +
@@ -716,7 +722,6 @@ class MemoryStore:
         # attention.md + behaviors.md siblings at user_memory root.
         # Independent fcntl locks: sentinel writes attention.md frequently
         # and shouldn't contend with Personalizer/Consolidator on user.md.
-        user_memory_root = workspace / "user_memory"
         self.attention_file = user_memory_root / "attention.md"
         self.behaviors_file = user_memory_root / "behaviors.md"
         self.behaviors_offsets_path = user_memory_root / ".behaviors_offsets.json"

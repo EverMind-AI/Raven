@@ -217,3 +217,29 @@ def test_a_submit_says_where_the_work_went_without_an_address(store, tmp_path, m
         campaign="beam", configs=[{"n": 1}], round=0, eta_seconds=60, objective="x"))
     assert "KeyError" not in out and "'host'" not in out
     assert "the GPU machine" in out or "refused" in out
+
+
+def test_the_listing_says_where_the_id_goes(monkeypatch):
+    """An id with no destination gets dropped.
+
+    Measured 2026-08-19: a loop reached this listing, picked the right machine,
+    wrote "that one is this laptop, I will just run it here", and hand-ran five
+    trials. The run before it skipped the listing, was handed ops_declare by a
+    tool result, and used it. The listing named a parameter and no call.
+    """
+    from raven.ops.connections import describe
+
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [
+        {"id": "conn_here", "display_name": "the laptop", "kind": "cpu"},
+    ])
+
+    out = describe()
+
+    assert "ops_declare" in out, "the next call has to be named, not just the parameter"
+    assert "costs nothing and runs nothing" in out, (
+        "declaring is free, and a loop weighing whether it is worth it needs that"
+    )
+    assert "not distance" in out, (
+        "the machine being this computer is what made it decide the machinery was "
+        "unnecessary; the listing has to answer that where it arises"
+    )

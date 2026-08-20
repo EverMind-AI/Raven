@@ -40,7 +40,7 @@ class MemorySegmentBuilder:
         # recall propagates on hard failure so a backend outage surfaces
         # at AgentLoop rather than silently dropping memory.
         host = self._memory_store.get_memory_context(current_message=ctx.current_message)
-        recall_hits = await self._recall(ctx.current_message)
+        recall_hits = await self._recall(ctx.current_message, ctx.session_key)
         recall_bullets = render.render_recalled_memory(recall_hits)
 
         sections = [s for s in (host, recall_bullets) if s]
@@ -50,13 +50,16 @@ class MemorySegmentBuilder:
         return Segment(text="# Memory\n\n" + "\n\n".join(sections), meta=meta)
 
     @trace.instrument("memory.recall", extract=semconv.memory_recall)
-    async def _recall(self, query: str) -> list[Any]:
+    async def _recall(self, query: str, session_id: str) -> list[Any]:
         if self._backend is None:
             return []
+        # The session is what a coding run is scoped to; the backend decides
+        # whether to narrow by it (see EverosBackend.scope_recall_to_session).
         return list(
             await self._backend.recall(
                 query=query,
                 user_id=self._user_id,
+                session_id=session_id,
                 top_k=self._memory_top_k,
             )
         )

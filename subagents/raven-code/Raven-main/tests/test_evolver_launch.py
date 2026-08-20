@@ -64,6 +64,12 @@ class TestRunSpec:
         assert spec.funnel.k_confirm == 3
         assert spec.funnel.termination.patience == 10
         assert spec.funnel.sealed_output_dir == spec.work_dir / "sealed"
+        assert spec.funnel.gsme is True
+
+    def test_funnel_gsme_off_parses(self, tmp_path, subject_repo):
+        repo, sha = subject_repo
+        spec = load_run_spec(_write_spec(tmp_path, repo, sha, funnel={"gsme": False}))
+        assert spec.funnel.gsme is False
 
     def test_omitted_base_sha_resolves_to_head(self, tmp_path, subject_repo):
         repo, sha = subject_repo

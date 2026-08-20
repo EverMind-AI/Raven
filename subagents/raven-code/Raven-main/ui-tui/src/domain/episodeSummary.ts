@@ -48,7 +48,7 @@ const ruleFor = (name: string): VerbRule =>
   OVERRIDES[name] ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
 
 // Search-like tools read better with the needle quoted: searched "DeviceFlow".
-const QUOTED = new Set(['grep', 'find', 'web_search'])
+const QUOTED = new Set(['grep', 'glob', 'find', 'web_search'])
 
 // Only path-like arguments are clipped from the LEFT (a path's meaning lives in
 // its tail). Questions, commands and prose must keep their head, or the row

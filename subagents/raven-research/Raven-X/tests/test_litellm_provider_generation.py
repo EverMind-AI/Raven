@@ -92,7 +92,7 @@ async def test_request_timeout_configured_overrides_default():
     # Batch runs against congested endpoints lower this so one stalled call
     # (x4 retry ladder) cannot eat the whole wall-clock budget.
     provider = LiteLLMProvider(api_key="k", default_model="openai/stub")
-    provider.generation = GenerationSettings(request_timeout_seconds=180.0)
+    provider.generation = GenerationSettings(timeout=180.0)
 
     kwargs = await _captured_chat_kwargs(provider)
 

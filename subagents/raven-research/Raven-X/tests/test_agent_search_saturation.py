@@ -218,3 +218,42 @@ def test_the_default_ladder_is_unchanged_so_the_offline_pricing_still_applies():
     _run(sat, [[]])
     assert sat.width(5) == 5
     assert sat.page == 2
+
+
+def test_page_for_keys_depth_on_the_query_family():
+    """dr@3.4. The escalation level is turn-global; the served page is per query.
+
+    Before this, one query family reaching page 2 sent every LATER query -
+    brand-new terms included - to page 2, i.e. ranks 11-20 for terms whose
+    first ten ranks nobody had seen, and the fresh query's near-certain empty
+    return then scored as dry and fed the ``stop`` rung.
+    """
+    sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
+    sat.note_page("old query", 1)
+    sat.observe(())
+    sat.observe(())
+    assert sat.page == 2
+    assert sat.page_for("brand new terms") == 1, "a fresh query was beheaded to page 2"
+    assert sat.page_for("old query") == 2
+    sat.note_page("brand new terms", 1)
+    assert sat.page_for("brand new terms") == 2
+
+
+def test_page_for_never_exceeds_the_escalation_level():
+    sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
+    sat.note_page("q", 1)
+    sat.note_page("q", 2)
+    assert sat.page_for("q") == 1, "no escalation yet, page must stay 1"
+    sat.observe(())
+    sat.observe(())
+    assert sat.page_for("q") == 2
+
+
+def test_reset_clears_the_per_query_pages():
+    sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
+    sat.note_page("q", 2)
+    sat.observe(())
+    sat.observe(())
+    sat.reset(keep_seen=True)
+    assert sat.page == 1
+    assert sat.page_for("q") == 1

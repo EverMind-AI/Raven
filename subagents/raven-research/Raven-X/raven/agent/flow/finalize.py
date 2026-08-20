@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from raven.agent.flow.answer_text import visible_answer
+from raven.agent.flow.answer_text import closing_tag_bar, visible_answer
 from raven.agent.flow.turn_task import task_for
 from raven.agent.harness_text import harness_body_kind, is_harness_echo
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
@@ -134,7 +134,13 @@ class ForcedFinalizeGate(AgentHook):
         # re-sample — never runs and the turn falls straight through to terminal
         # salvage. Measured on one batch: nudges fired 11 of 110 and 20 of 120
         # against 36 and 25 answerless turns.
-        answer = visible_answer(content, closing_tag_required=self._closing_tag_required)
+        answer = visible_answer(
+            content,
+            closing_tag_required=closing_tag_bar(
+                self._closing_tag_required,
+                getattr(ctx.response, "reasoning_content", None),
+            ),
+        )
         if answer and not is_spin(spin_stats(answer)):
             return HookDecision()
 
@@ -279,7 +285,10 @@ class ForcedFinalizeGate(AgentHook):
         # the seam is invisible downstream because the tag is already stripped.
         answer = visible_answer(
             getattr(response, "content", None) or "",
-            closing_tag_required=self._closing_tag_required,
+            closing_tag_required=closing_tag_bar(
+                self._closing_tag_required,
+                getattr(response, "reasoning_content", None),
+            ),
         )
         # dr@3.2: the harness must not be able to answer its own question. When
         # the evidence pack is all placeholders and refusals, the salvage model

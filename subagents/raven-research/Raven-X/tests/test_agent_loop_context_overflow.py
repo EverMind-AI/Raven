@@ -278,7 +278,10 @@ async def test_reactive_clamp_is_the_net_when_the_pre_call_estimate_was_wrong(wo
     final, _, messages, _ = await agent._run_agent_loop(first_call)
 
     assert final == "answer after clamping"
-    assert provider.max_tokens_seen[0] == 4096
+    # No pin on the first call: generation.max_tokens defaults to None, which
+    # chat_with_retry forwards as "the model's own ceiling applies".
+    assert provider.max_tokens_seen[0] is None
+    # The clamp retry pins a real number below the 4096 the clamp assumed.
     assert AgentLoop._MIN_CLAMPED_COMPLETION_TOKENS <= provider.max_tokens_seen[1] < 4096
     assert not any(m.get("content") == _PLACEHOLDER for m in messages)
 

@@ -53,6 +53,24 @@ class ToolRegistry:
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
+        # An argument the tool does not have is normally harmless -- it lands in
+        # **kwargs and is ignored. ``machine`` is not harmless: it says WHERE, and a
+        # tool that ignores it answers about the wrong machine. Measured 2026-08-19:
+        # read_file was given machine="conn_cpu_32c" for a path that also exists
+        # here, and returned this computer's copy of the file with nothing to say
+        # it had. The path in that run happened not to exist locally, so the loop
+        # saw "file not found" and corrected itself; a shared mount or a common
+        # path like /opt would have handed it the wrong contents silently.
+        if params.get("machine") and "machine" not in (
+            tool.parameters.get("properties") or {}
+        ):
+            return (
+                f"Error: {name} runs on this computer and has no 'machine' -- it would have "
+                f"ignored the one you gave and answered about the wrong machine. To reach "
+                f"{params['machine']!r}, use exec with a machine: "
+                f"exec(command=\"...\", machine={params['machine']!r}). Nothing was done."
+            )
+
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)

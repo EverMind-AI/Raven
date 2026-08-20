@@ -21,6 +21,15 @@ class TestServiceLocator:
         with pytest.raises(FrozenInstanceError):
             loc.workspace = tmp_path / "other"  # type: ignore[misc]
 
+    def test_provider_defaults_to_none(self, tmp_path: Path) -> None:
+        loc = ServiceLocator(workspace=tmp_path)
+        assert loc.provider is None
+
+    def test_carries_provider(self, tmp_path: Path) -> None:
+        fake_provider = object()
+        loc = ServiceLocator(workspace=tmp_path, provider=fake_provider)  # type: ignore[arg-type]
+        assert loc.provider is fake_provider
+
 
 class TestPluginContext:
     def test_constructed_with_minimum_fields(self, tmp_path: Path) -> None:

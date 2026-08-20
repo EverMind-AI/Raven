@@ -52,20 +52,69 @@ from raven.agent.flow.answer_text import visible_answer
 # Marker forms, most explicit first. The first hit wins: a turn carrying both an
 # <answer> tag and a stray "Answer:" line in its prose meant the tag.
 _ANSWER_TAG_RE = re.compile(r"<answer>(.*?)</answer>", re.S | re.I)
-_BOXED_RE = re.compile(r"\\boxed\s*\{(.*?)\}", re.S)
+_BOXED_OPEN_RE = re.compile(r"\\boxed\s*\{")
 # Anchored to a line start so "the answer: it depends" mid-sentence does not
-# match. ``\*\*`` covers the markdown form the model emits most often. The span
+# match. ``\*\*`` covers the markdown form the model emits most often, on either
+# side of the colon (``**Final Answer:** 42`` closes its emphasis after the
+# colon); the leading class covers bullets including ``- Answer:``. The span
 # ends at a blank line or end of text - not at the next newline, because
 # multi-line answers (a list, a date range) are common and cutting at the first
 # newline would be exactly the truncation this module exists to prevent.
 _LABEL_RE = re.compile(
-    r"(?:\A|\n)[ \t>*_]*(?:\*\*)?\s*"
+    r"(?:\A|\n)[ \t>*_-]*(?:\*\*)?\s*"
     r"(?:final\s+answer|answer|最终答案|答案)"
-    r"\s*(?:\*\*)?\s*[:：]\s*(.+?)(?=\n[ \t]*\n|\Z)",
+    r"\s*(?:\*\*)?\s*[:：]\s*(?:\*\*)?\s*(.+?)(?=\n[ \t]*\n|\Z)",
     re.S | re.I,
 )
 
-_MARKERS = (("answer_tag", _ANSWER_TAG_RE), ("boxed", _BOXED_RE), ("labeled", _LABEL_RE))
+
+def _boxed_spans(text: str) -> list[str]:
+    """Brace-balanced ``\\boxed{...}`` spans.
+
+    A lazy regex group cut ``\\boxed{\\frac{1}{2}}`` at the first ``}`` -
+    nested braces are the reason boxed exists, so the span is scanned with a
+    depth counter instead. An unbalanced open brace yields nothing rather than
+    a guess.
+    """
+    spans: list[str] = []
+    for m in _BOXED_OPEN_RE.finditer(text):
+        depth = 1
+        i = m.end()
+        start = i
+        while i < len(text) and depth:
+            char = text[i]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            i += 1
+        if depth == 0:
+            spans.append(text[start : i - 1])
+    return spans
+
+
+def _labeled_spans(text: str) -> list[str]:
+    """``_LABEL_RE`` hits with a dangling closing ``**`` trimmed.
+
+    The pattern consumes an opening ``**`` after the colon (so
+    ``**Final Answer:** 42`` yields ``42``), which leaves the capture of
+    ``Answer: **Paris**`` holding only the closing pair. A trailing ``**``
+    with no opener left in the span is that artifact, not content.
+    """
+    spans: list[str] = []
+    for hit in _LABEL_RE.findall(text):
+        span = hit.strip()
+        if span.endswith("**") and "**" not in span[:-2]:
+            span = span[:-2].rstrip()
+        spans.append(span)
+    return spans
+
+
+_MARKERS = (
+    ("answer_tag", _ANSWER_TAG_RE.findall),
+    ("boxed", _boxed_spans),
+    ("labeled", _labeled_spans),
+)
 
 #: Canonical terminal line the shaped text is guaranteed to end with whenever a
 #: marker was found. Downstream scoring parses this instead of asking a judge to
@@ -130,8 +179,8 @@ class ShapedAnswer:
 
 
 def _find_span(visible: str) -> tuple[str, str] | None:
-    for form, rx in _MARKERS:
-        hits = rx.findall(visible)
+    for form, finder in _MARKERS:
+        hits = finder(visible)
         if not hits:
             continue
         # Last hit, not first: a model that restates its answer at the end has

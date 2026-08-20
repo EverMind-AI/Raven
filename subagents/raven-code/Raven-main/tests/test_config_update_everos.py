@@ -1,7 +1,7 @@
 """Full coverage for ``raven.config.update_everos``.
 
 The onboard memory step writes EverOS model settings to
-``~/.everos/raven/everos.toml`` through these ops. EverOS reads that file back
+``<data dir>/everos/everos.toml`` through these ops. EverOS reads that file back
 via its own pydantic-settings loader, so a malformed / mislocated write silently
 breaks memory at runtime — hence the thorough round-trip + section-preservation
 coverage here.
@@ -18,11 +18,11 @@ import raven.config.update_everos as ue
 
 
 @pytest.fixture
-def everos_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the ops library at a throwaway config path."""
-    cfg = tmp_path / ".everos" / "everos.toml"
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
-    return cfg
+def everos_home() -> Path:
+    """The derived config path. The autouse ``_isolated_data_dir`` fixture
+    already redirects the data dir this hangs off, so no patching is needed
+    -- and nothing can land in the developer's real home."""
+    return ue.get_everos_config_path()
 
 
 def _read(path: Path) -> dict:
@@ -35,10 +35,10 @@ def _read(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_config_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", Path("~/.everos/everos.toml"))
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert ue.get_everos_config_path() == tmp_path / ".everos" / "everos.toml"
+def test_config_path_sits_under_the_instance_data_dir() -> None:
+    from raven.config.paths import get_data_dir
+
+    assert ue.get_everos_config_path() == get_data_dir() / "everos" / "everos.toml"
 
 
 def test_load_absent_returns_empty(everos_home: Path) -> None:
@@ -50,33 +50,47 @@ def test_load_absent_returns_empty(everos_home: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_configure_everos_env_points_at_raven_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
+def test_configure_everos_env_points_at_the_instance_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
     monkeypatch.delenv("EVEROS_ROOT", raising=False)
 
     ue.configure_everos_env()
 
-    base = tmp_path / ".everos" / "raven"
+    assert os.environ["EVEROS_ROOT"] == str(ue.get_everos_home())
+
+
+def test_configure_everos_env_respects_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An operator-set EVEROS_ROOT must win (setdefault, not overwrite).
     import os
 
-    assert os.environ["EVEROS_ROOT"] == str(base)
-
-
-def test_configure_everos_env_respects_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # An operator-set EVEROS_ROOT must win (setdefault, not overwrite).
-    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
     monkeypatch.setenv("EVEROS_ROOT", "/custom/root")
 
     ue.configure_everos_env()
 
-    import os
-
     assert os.environ["EVEROS_ROOT"] == "/custom/root"
 
 
-def test_default_config_path_under_raven_home() -> None:
-    # The production default lives under ~/.everos/raven, not bare ~/.everos.
-    assert ue.get_everos_config_path() == (Path("~/.everos/raven/everos.toml").expanduser())
+def test_configure_everos_env_reports_a_conflicting_override(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Which root is in force decides which store a run reads and writes, so a
+    pre-set value that disagrees is announced rather than silently obeyed."""
+    monkeypatch.setenv("EVEROS_ROOT", "/custom/root")
+
+    with caplog.at_level("WARNING"):
+        ue.configure_everos_env()
+
+    assert "/custom/root" in caplog.text
+
+
+def test_home_is_not_bucketed_per_workspace() -> None:
+    """One root, one server process. Workspaces are separated by the scope's
+    project_id instead -- see raven.plugin.memory.everos.scope."""
+    from raven.config.paths import get_data_dir
+
+    assert ue.get_everos_home() == get_data_dir() / "everos"
 
 
 def test_load_round_trips_written_content(everos_home: Path) -> None:
@@ -198,3 +212,75 @@ def test_clear_absent_section_with_existing_file_preserves_it(everos_home: Path)
 def test_clear_unknown_section_rejected(everos_home: Path) -> None:
     with pytest.raises(KeyError):
         ue.clear_everos_section("sqlite")
+
+
+def test_resolving_the_home_does_not_create_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off has to mean no directory, so merely asking for the path must not be
+    what creates it -- the tool factory used to seed the home this way and made
+    a disabled backend leave files behind."""
+    home = ue.get_everos_home()
+    assert not home.exists()
+    ue.get_everos_config_path()
+    assert not home.exists()
+
+
+def test_importing_the_cli_does_not_resolve_everos_settings() -> None:
+    """``configure_everos_env`` only works while EverOS's settings are still
+    unresolved: ``load_settings`` is cached, so the first call freezes the root
+    for the process. Every everos import in raven is therefore deferred into a
+    function body, and a module-level one would silently pin the root to the
+    default home. This guards that.
+    """
+    import subprocess
+    import sys
+
+    probe = "import sys, raven.cli.commands; print('everos.config.settings' in sys.modules)"
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "False", out.stdout
+
+
+# ---------------------------------------------------------------------------
+# everos_models_configured
+# ---------------------------------------------------------------------------
+
+
+class TestModelsConfigured:
+    @pytest.fixture(autouse=True)
+    def _no_env_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("EVEROS_LLM__API_KEY", raising=False)
+        monkeypatch.delenv("EVEROS_EMBEDDING__API_KEY", raising=False)
+
+    def test_absent_config_and_env_is_unconfigured(self) -> None:
+        assert ue.everos_models_configured() is False
+
+    def test_both_toml_keys_configure(self, everos_home: Path) -> None:
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        everos_home.write_text(
+            '[llm]\napi_key = "k1"\n\n[embedding]\napi_key = "k2"\n'
+        )
+        assert ue.everos_models_configured() is True
+
+    def test_llm_key_alone_is_not_enough(self, everos_home: Path) -> None:
+        """The embedding provider is built at server startup too, so an
+        LLM-only config still refuses to boot (measured on 1.1.3)."""
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        everos_home.write_text('[llm]\napi_key = "k1"\n')
+        assert ue.everos_models_configured() is False
+
+    def test_env_fills_a_section_the_toml_leaves_empty(
+        self, everos_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        everos_home.write_text('[llm]\napi_key = "k1"\n\n[embedding]\napi_key = ""\n')
+        monkeypatch.setenv("EVEROS_EMBEDDING__API_KEY", "k2")
+        assert ue.everos_models_configured() is True
+
+    def test_whitespace_keys_do_not_count(self, everos_home: Path) -> None:
+        everos_home.parent.mkdir(parents=True, exist_ok=True)
+        everos_home.write_text('[llm]\napi_key = "  "\n\n[embedding]\napi_key = " "\n')
+        assert ue.everos_models_configured() is False

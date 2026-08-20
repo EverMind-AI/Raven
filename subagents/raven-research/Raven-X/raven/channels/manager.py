@@ -62,7 +62,8 @@ class ChannelManager:
         """
         from raven.channels.registry import discover_specs
 
-        groq_key = self.config.providers.groq.api_key
+        groq = self.config.providers.get("groq")
+        groq_key = getattr(groq, "api_key", "") or ""
 
         for modname, spec in discover_specs().items():
             section = getattr(self.config.channels, modname, None)

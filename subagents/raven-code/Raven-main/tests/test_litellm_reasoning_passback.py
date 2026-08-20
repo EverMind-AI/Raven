@@ -38,25 +38,19 @@ def test_assistant_missing_reasoning_is_backfilled_with_empty_string() -> None:
             "role": "assistant",
             "content": "",
             "reasoning_content": "let me look around",
-            "tool_calls": [
-                {"id": "call00001", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}
-            ],
+            "tool_calls": [{"id": "call00001", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": "call00001", "content": "src/"},
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [
-                {"id": "call00002", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
-            ],
+            "tool_calls": [{"id": "call00002", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
         },
         {"role": "tool", "tool_call_id": "call00002", "content": "..."},
     ]
     out = _sanitize(messages)
     assert out[1]["reasoning_content"] == "let me look around"
-    assert out[3]["reasoning_content"] == "", (
-        "keyless assistant msgs in thinking replays must get '' or the official endpoint 400s"
-    )
+    assert out[3]["reasoning_content"] == "", "keyless assistant msgs in thinking replays must get '' or the official endpoint 400s"
 
 
 def test_pruned_reasoning_history_is_backfilled() -> None:

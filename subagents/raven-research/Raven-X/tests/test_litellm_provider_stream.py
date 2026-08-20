@@ -108,11 +108,27 @@ def test_normalize_stream_chunk_openai_shape_default() -> None:
 
 
 def test_normalize_stream_chunk_returns_none_for_empty_payload() -> None:
-    """Chunks with no content/tool_calls/usage return None — chat_stream skips them."""
+    """Chunks with no payload at all return None — chat_stream skips them."""
     provider = _make_provider()
-    # delta.content is None AND no tool_calls AND no usage — pure stop-marker chunk
-    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="stop")])
+    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason=None)])
     assert provider._normalize_stream_chunk(chunk) is None
+
+
+def test_normalize_stream_chunk_carries_the_stop_marker() -> None:
+    """dr@3.4. A pure stop-marker chunk is a payload, not noise.
+
+    The provider's finish_reason rides on exactly this chunk, and it is the
+    only source for "length" / "content_filter" - dropping it forced the
+    stream consumer to fabricate ``finish_reason`` from the presence of tool
+    calls, which is why the dr@2.9 truncation fallback could never fire on the
+    streaming path.
+    """
+    provider = _make_provider()
+    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="length")])
+    delta = provider._normalize_stream_chunk(chunk)
+    assert delta is not None
+    assert delta.finish_reason == "length"
+    assert delta.content is None and delta.tool_call_delta is None and delta.usage is None
 
 
 @pytest.mark.asyncio
@@ -203,8 +219,56 @@ async def test_chat_stream_forwards_request_timeout(monkeypatch: pytest.MonkeyPa
     )
 
     provider = _make_provider()
-    provider.generation = GenerationSettings(request_timeout_seconds=240.0)
+    provider.generation = GenerationSettings(timeout=240.0)
     async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o"):
         pass
 
     assert captured_kwargs.get("timeout") == 240.0
+
+
+def test_normalize_stream_chunk_keeps_the_empty_choices_usage_tail() -> None:
+    """dr@3.4. ``stream_options.include_usage`` sends usage on a chunk with
+    EMPTY choices - the shape the early ``if not choices`` return was throwing
+    away, so a streamed turn's only usage record never reached the consumer."""
+    provider = _make_provider()
+
+    @dataclass
+    class _FakeUsage:
+        prompt_tokens: int = 11
+        completion_tokens: int = 7
+        total_tokens: int = 18
+
+    delta = provider._normalize_stream_chunk(_FakeChunk(choices=[], usage=_FakeUsage()))
+    assert delta is not None
+    assert delta.usage == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+    assert delta.content is None and delta.tool_call_delta is None
+
+    # Empty choices AND no usage is still noise.
+    assert provider._normalize_stream_chunk(_FakeChunk(choices=[], usage=None)) is None
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_bounds_pin_by_model_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pin above the model's own output ceiling is clamped to it, exactly as
+    the non-streaming path clamps via send_max_tokens -- unbounded, the same
+    pin built two different requests and only the streaming one was rejected."""
+    from raven.providers import rates
+
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+    monkeypatch.setattr(rates, "resolve_max_output_tokens", lambda model, **_: 64)
+
+    provider = _make_provider()
+    async for _ in provider.chat_stream(
+        messages=[{"role": "user", "content": "hi"}],
+        model="openai/gpt-4o",
+        max_tokens=128,
+    ):
+        pass
+
+    assert captured["max_tokens"] == 64

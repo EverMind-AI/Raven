@@ -24,7 +24,7 @@ from raven.cli._helpers import (
     parse_fake_now,
     print_deprecated_memory_window_notice,
 )
-from raven.cli._plugin_stack import maybe_build_memory_backend
+from raven.cli._plugin_stack import maybe_build_memory_backend, start_memory_backend
 
 console = Console()
 
@@ -364,17 +364,9 @@ def register(app: typer.Typer) -> None:
             # Bring the memory backend online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired;
             # the start / stop awaits are then skipped entirely.
-            from loguru import logger as _logger  # local import: gateway
-
-            # doesn't have a module-
-            # level logger
-            if backend is not None:
-                try:
-                    await backend.start()
-                except Exception:
-                    _logger.exception(
-                        "memory backend start failed; continuing with legacy memory path",
-                    )
+            # A long-running service keeps serving without memory rather than
+            # refusing to boot, but the failure is logged at ERROR.
+            await start_memory_backend(backend, fail_fast=False)
             try:
                 # Spine assembly for the gateway's host sources (cron submits
                 # through it, replies route to channels via a per-channel outlet).
@@ -585,6 +577,8 @@ def register(app: typer.Typer) -> None:
                     try:
                         await backend.stop()
                     except Exception:
+                        from loguru import logger as _logger
+
                         _logger.exception(
                             "memory backend stop failed; continuing shutdown",
                         )

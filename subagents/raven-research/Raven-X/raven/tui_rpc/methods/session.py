@@ -32,9 +32,9 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from raven.config.loader import load_config
+from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
-from raven.token_wise.pricing import resolve_context_window
 from raven.tui_rpc.errors import TurnInProgressError
 from raven.tui_rpc.methods import turn as turn_module
 from raven.tui_rpc.methods.system import _raven_version

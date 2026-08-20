@@ -60,7 +60,7 @@ _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and r
 
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
-`execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,
+`execute`). Built-ins: file read/write/edit/list, grep/glob, exec, web search/fetch,
 ask_user, spawn (Subagent), MCP, media generation, and skill read/use. A reply is plain
 assistant text — there is no second reply channel.
 _Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
@@ -313,12 +313,29 @@ and injects into the main agent's system prompt so evicted facts stay present.
 ### Memory
 
 **EverOS** (`raven/plugin/memory/everos/`):
-Raven's default bundled memory-backend plugin (`everos-memory`; ships enabled, works
-out of the box). Provides dual-track semantic recall — the user track (episodes/profiles,
-injected into the `# Memory` segment) and the agent track (skills/cases, one of
-SkillForge's three sources at RRF weight 0.9). The name refers to the external package
+Raven's bundled memory-backend plugin (`everos-memory`), off unless
+`memory.backend` is set to `"everos"` — a coding agent is judged one repository at a
+time, and recalled memory from earlier tasks changes the prompt an evaluation
+believes it is measuring. Provides dual-track semantic recall — the user track
+(episodes/profiles, injected into the `# Memory` segment) and the agent track
+(skills/cases, one of SkillForge's three sources at RRF weight 0.9). The name refers
+to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
-adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
+adapter over its HTTP API. The same plugin also contributes the `understand_media`
+multimodal-parsing tool, which registers independently of the memory backend.
+
+**Storage Scope** (`raven/plugin/memory/everos/scope.py`):
+The `(app_id, project_id)` pair EverOS partitions memory by on disk
+(`<root>/<app>/<project>/{users,agents}/`) and confines every search to. Raven fixes
+the app to `raven` and derives the project from the workspace path, so one repository's
+memory is not recalled in another while a single EverOS process serves them all. The
+pair belongs to the backend instance and is stamped onto every outbound request in one
+place — passing it per call is what previously let a write address one partition while
+the matching read addressed another, returning nothing with no error.
+
+_Avoid_: bucketing the EverOS home per workspace instead. `EVEROS_ROOT` decides which
+store the server process serves, so a per-workspace root means a server per workspace;
+the home is one directory under the instance data dir and the scope does the isolating.
 
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
@@ -416,12 +433,14 @@ raven's own files live); confusing it with the Workspace Template it can be seed
 
 **Agent State Directory** (`paths.get_workspace_state_dir(workspace, name)`):
 A per-workspace directory under raven's instance data dir where raven keeps its own
-runtime files (Curator archives/manifests/traces, skill-injection telemetry), bucketed by
-the workspace's absolute path — the same shape claude-code uses for
+runtime files (session transcripts, skill-injection telemetry, the `user_memory` pillar),
+bucketed by the workspace's absolute path — the same shape claude-code uses for
 `~/.claude/projects/<escaped-path>/`. Exists because the Workspace may be a user
-repository, where raven's files would surface as untracked noise in every run.
-_Avoid_: `sessions/` — session transcripts still live in the Workspace (the one remaining
-exception, deliberately deferred).
+repository, where raven's files would surface as untracked noise in every run. Raven
+writes nothing of its own into the Workspace.
+`paths.workspace_state_path()` is the same resolution without creating the directory,
+for components built on every run whether or not the feature is used.
+_Avoid_: bucketing the EverOS home this way — see Storage Scope.
 
 **Workspace Template** (`templates/`):
 The bundled markdown seed files copied into a Workspace by `sync_workspace_templates()`

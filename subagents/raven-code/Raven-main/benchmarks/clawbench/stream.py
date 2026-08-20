@@ -98,6 +98,7 @@ class RavenSession:
         restrict_to_workspace: bool,
     ) -> None:
         from raven.agent.loop import AgentLoop
+        from raven.agent.profile import PROFILES
         from raven.cli.commands import _make_provider
         from raven.config.loader import load_config, set_config_path
         from raven.config.raven import ContextConfig
@@ -151,10 +152,10 @@ class RavenSession:
             channels_config=self.config.channels,
             everos_config=self.config.agents.defaults.everos,
             context_config=context_config,
-            # Benchmarks are non-interactive batch runs — opt out of Bug2's
-            # per-turn shadow-git checkpoint (no recovery channel to inject
-            # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-            interactive=False,
+            # Answer-style benchmark turns: no shadow-git checkpoint in task
+            # workspaces, and none of the code-completion gates (finishing a
+            # turn here means answering, not changing a repository).
+            profile=PROFILES["eval_answer"],
         )
 
     @staticmethod

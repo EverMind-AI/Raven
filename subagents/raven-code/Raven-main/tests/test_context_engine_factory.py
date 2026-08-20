@@ -58,7 +58,7 @@ class _FakeBackend:
     async def store(self, session_id, messages, *, metadata=None):
         pass
 
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+    async def recall(self, query, *, user_id=None, agent_id=None, session_id=None, top_k):
         return []
 
 
@@ -85,6 +85,7 @@ def _build_engine(
     backend=None,
     hub_endpoint: str | None = None,
     memory_config: MemoryConfig | None = None,
+    router_enabled: bool = True,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
@@ -98,6 +99,7 @@ def _build_engine(
         backend=backend,
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
+            enabled=router_enabled,
             hub=HubSourceConfig(endpoint=hub_endpoint),
         ),
     )
@@ -392,3 +394,62 @@ class TestRepoRulesBootstrap:
         text = render.identity_text(tmp_path)
         assert "software engineering tasks" in text
         assert "personal AI assistant" not in text
+
+
+class TestRouterMasterSwitch:
+    """``skillForge.router.enabled`` documents itself as the switch that makes
+    the host bypass SkillForgeRouter entirely, but nothing read it: the router
+    was always built and the Everos skill source attached on the sole
+    condition that a memory backend existed. Turning memory on therefore
+    turned the agent-side skill track on with it."""
+
+    def test_disabled_router_is_not_built(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend(), router_enabled=False)
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._router is None
+
+    def test_disabled_router_keeps_everos_off_while_memory_is_on(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        engine = _build_engine(tmp_path, backend=_FakeBackend(), router_enabled=False)
+        assert _memory_builder(engine)._backend is not None
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._router is None
+
+
+class TestMemoryOffLeavesNoTrace:
+    """The knob is ``memory.backend``. Off has to mean the prompt is the same
+    prompt an evaluation would have seen before any of this existed."""
+
+    async def test_no_memory_heading_without_a_backend(self, tmp_path: Path) -> None:
+        from raven.context_engine.base import TurnContext
+        from raven.memory_engine import TokenBudget
+
+        engine = _build_engine(tmp_path, backend=None)
+        assembled = await engine.assemble(
+            "s",
+            [],
+            TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+            turn=TurnContext(current_message="hi"),
+        )
+        rendered = "\n".join(str(m.get("content", "")) for m in assembled.messages)
+        assert "# Memory" not in rendered
+
+    async def test_assembling_with_memory_on_leaves_the_workspace_clean(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Not just the off path: turning memory on must not start writing into
+        the repository either, which is where its files used to land."""
+        from raven.context_engine.base import TurnContext
+        from raven.memory_engine import TokenBudget
+
+        engine = _build_engine(tmp_path, backend=_FakeBackend())
+        await engine.assemble(
+            "s",
+            [],
+            TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+            turn=TurnContext(current_message="hi"),
+        )
+        assert list(tmp_path.iterdir()) == []

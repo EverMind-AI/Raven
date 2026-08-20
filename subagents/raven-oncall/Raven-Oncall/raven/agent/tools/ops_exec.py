@@ -1,44 +1,22 @@
-"""Run a command on the machine a campaign uses.
+"""Run a command on a machine the owner registered.
 
-The loop's exec runs here, on the operator's laptop. The work runs on a host it
-reaches only through this tool family, and the credentials for that host belong
-to the connection rather than to the loop. So every question of the form "what is
-actually in that directory / what did the solver print / how big is that output"
-had to be answered by whichever narrow tool we had thought to build, and when
-none of them fitted, the loop improvised with the exec it did have -- which
-reaches the operator's own filesystem and nothing else.
+``exec`` runs on the computer the loop itself lives on. The owner's code and
+their cases live on the machines in the connection registry, which may be a
+different box or may be this one -- and the credentials for a different box
+belong to the connection rather than to the loop. So "what is in that directory /
+what did the solver print / how big is that output" is answered here, by naming
+the machine, and ``exec`` routes to this the moment it is given one.
 
-Measured 2026-08-17, in one afternoon:
+Two things this refuses that a plain shell would not:
 
-  * a case directory could be read a file at a time but not listed, so one arm
-    guessed seven filenames, missed all seven, and went reading raven's own state
-    files instead -- where it found a session from a discarded round and rebuilt
-    its idea of the campaign from it;
-  * a 2 MB ``job.dat`` held the contact pressures a task was asking for, and the
-    arm reported the metric as unobtainable because no tool served that file;
-  * three separate turns spent themselves on ``ls`` and ``ssh`` against the local
-    machine, because the remote path in the task statement looks like a path.
+**Anything that outlives the call.** ``nohup``, a trailing ``&``, ``screen``,
+``tmux``, ``at``, ``crontab``: on a registered machine, work that keeps running
+belongs to ``ops_submit``, which is what makes its budget enforceable, its state
+survive a restart, and its results wake the loop when they are due. On the loop's
+own computer there is no ledger to escape, so a plain shell keeps that freedom.
 
-None of that is a shell being dangerous. It is a shell pointed at the wrong
-machine. Pointed at the right one, ``ls``, ``cat``, ``tail``, ``grep``,
-``sha256sum`` and ``diff`` answer all of the above, and answer questions nobody
-thought to build a tool for.
-
-**This is for looking, not for starting work.** A job has to go through
-``ops_submit`` -- that is what makes its compute budget enforceable, its state
-survive a restart and its results wake the loop when they are due. Two things
-hold that line here: a hard timeout, since a solver round takes tens of minutes
-and a command that cannot outlive its call cannot become an experiment; and a
-refusal of the shapes that detach. Neither stops a determined author -- a
-self-triggering script would slip through both -- and that is the point of the
-apparatus fingerprint, which reports what changed after the fact. What these two
-stop is the casual version, which is the one that actually happened.
-
-Writes are not filtered. A shell can edit a case in place, and
-``ops_edit_case_dict`` exists so that such a change is recorded where a grader
-can see it. But the apparatus fingerprint already compares the case file by file
-and reports drift, so an unrecorded edit is visible afterwards -- while a string
-filter over commands would only look like it had prevented one.
+**Anything slower than a look.** Every command is capped; something that needs
+longer is a job, and a job has a different home.
 """
 
 from __future__ import annotations
@@ -47,7 +25,6 @@ import re
 import shlex
 from typing import Any
 
-from raven.agent.tools.base import Tool
 
 # Long enough to tail a large log or hash a directory; far short of any solver
 # round measured on these campaigns (16 to 30 minutes). That gap is the boundary.
@@ -79,7 +56,41 @@ def _detaching(command: str) -> str | None:
     return None
 
 
-def _runner_for_connection(conn_id: str):
+# A wait long enough to be a wake. Two seconds settles a filesystem; a minute of
+# it is the loop standing in for the scheduler.
+_WAIT_CAP_S = 5
+
+
+def waiting_only(command: str) -> int:
+    """Seconds this command spends purely waiting, or 0 if it does something.
+
+    Only a leading ``sleep`` counts. ``build && sleep 2 && check`` waits for a
+    reason and is left alone; ``sleep 290 && echo check`` is a wake written by
+    hand -- twelve of those in one session on 2026-08-19, the longest 290s, four
+    of them after being told on the machine path that anything longer than a
+    minute is a job.
+    """
+    import re
+
+    m = re.match(r"\s*sleep\s+(\d+(?:\.\d+)?)\b", command or "")
+    if not m:
+        return 0
+    seconds = int(float(m.group(1)))
+    return seconds if seconds > _WAIT_CAP_S else 0
+
+
+def waiting_note(asked_for: int, capped_to: int) -> str:
+    """What a clipped wait says, in the words the machine path already uses."""
+    return (
+        f"\n\nThat asked to wait {asked_for}s and was cut to {capped_to}s. Waiting inside a "
+        f"call keeps this turn open: the window has to stay up, nothing survives a restart, "
+        f"and the context grows for the whole wait. A wait long enough to matter is a wake --"
+        f" ops_check_later(eta_seconds={asked_for}, basis=...) ends the turn and brings you "
+        f"back to the ledger when it is worth looking."
+    )
+
+
+def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
     """A command runner for a machine named directly, plus a meta-shaped dict.
 
     Returns ``(None, message)`` when the id is unknown, so the caller can hand
@@ -92,132 +103,135 @@ def _runner_for_connection(conn_id: str):
         from raven.ops.connections import describe
 
         return None, (f"No connection with id {conn_id!r}.\n" + describe())
-    import os
+    from raven.ops.backend import JobBackendError
+    from raven.ops.transport import runner_from
 
-    from raven.ops import make_ssh_runner
+    try:
+        runner = runner_from(row, what="machine", cap_seconds=cap_seconds)
+    except JobBackendError as exc:
+        return None, f"Cannot reach {conn_id!r}: {exc}"
+    # The transport travels with it: the caller decides from this whether the cap
+    # can go through the `timeout` binary, and a meta that omits it silently reads
+    # as ssh -- which is how the first local look ended in "timeout: command not
+    # found" even after the runner already knew better.
+    return runner, {"connection": conn_id, "remote_dir": "",
+                    "transport": row.get("transport") or "ssh"}
 
-    runner = make_ssh_runner(
-        str(row.get("host") or ""), int(row.get("port") or 22),
-        os.path.expanduser(str(row.get("key") or "~/.ssh/id_rsa")),
-        user=str(row.get("user") or "root"),
-    )
-    return runner, {"connection": conn_id, "remote_dir": ""}
+
+def resolve_machine(name: str) -> tuple[str, str]:
+    """A machine named by a caller, as ``(connection_id, campaign)``.
+
+    One name, two kinds of thing: an id from the connection list, or a campaign
+    whose declaration already says which machine it runs on. The registry decides
+    which -- asking the caller to know would be asking them to keep two
+    namespaces apart for no reason.
+    """
+    from raven.ops.connections import get
+
+    return (name, "") if get(name) is not None else ("", name)
 
 
-class OpsExecTool(Tool):
-    """Look at a campaign's machine with a shell, under a hard timeout."""
+async def run_on_machine(command: str, *, campaign: str = "", connection: str = "",
+                         cwd: str | None = None, ledger: str | None = None) -> str:
+    """Run one command on a registered machine and return what it said.
 
-    timeout_seconds = float(_TIMEOUT_S + 30)
-
-    @property
-    def name(self) -> str:
-        return "ops_exec"
-
-    @property
-    def description(self) -> str:
+    Shared by ``exec`` (when it is given a machine) and by this module's tool, so
+    there is one implementation of what running on someone else's machine means.
+    """
+    command = (command or "").strip()
+    if not command:
+        return "No command given."
+    detached = _detaching(command)
+    if detached:
+        # Refused before anything is sent, so a refusal never half-runs.
         return (
-            "Run a shell command ON THE MACHINE a campaign runs on, and return what it "
-            "printed. Use this to look at anything remote: list a directory, read or "
-            "grep a file, tail a log, check a size or a hash, diff two files. The plain "
-            "exec tool runs on this computer instead, which is why a remote path looks "
-            "missing there. "
-            "cwd defaults to the campaign's working directory, the one holding jobs/; "
-            "pass cwd to look elsewhere, such as the staged case. A non-zero exit is "
-            "returned as it happened and is not an error of this tool -- grep says 1 when "
-            "it matches nothing. "
-            f"FOR LOOKING, NOT FOR STARTING WORK: commands are killed after {_TIMEOUT_S}s "
-            "and anything that would detach is refused. A job belongs to ops_submit, which "
-            "is what makes its compute budget enforceable, its state survive a restart, and "
-            "its results wake you when they are due."
+            f"Refusing this command: it uses {detached}, which is a way to leave work "
+            "running after this call returns. Submit work with ops_submit -- that is what "
+            "makes its compute budget enforceable, its state survive a restart, and its "
+            "results wake you when they are due. This tool is for looking at the machine; "
+            f"anything it runs is killed after {_TIMEOUT_S}s. Nothing was run."
         )
 
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string",
-                            "description": "Shell command to run on the campaign's machine."},
-                "campaign": {"type": "string",
-                             "description": "Campaign name. Omit when this window is watching one."},
-                "connection": {
-                    "type": "string",
-                    "description": "Machine id from ops_connections. Use this before any campaign "
-                                   "exists -- looking at a machine is what tells you what a "
-                                   "campaign should run.",
-                },
-                "cwd": {"type": "string",
-                        "description": "Absolute directory to run in. Defaults to the "
-                                       "campaign's working directory."},
-                "ledger": {"type": "string", "description": "Ledger path (locates the campaign)."},
-            },
-            "required": ["command"],
-        }
+    # A machine named directly, with no campaign in the picture. That is the
+    # order the work actually happens in: the owner names a path, the machine
+    # is chosen from the connection list, and what is on it is what tells you
+    # what a campaign should run. Requiring a campaign first inverted that --
+    # measured 2026-08-18, an arm had the machine id and the path in hand and
+    # no tool that took both, so it created an empty campaign to get a runner
+    # and spent the next three minutes repairing it.
+    if connection:
+        runner, meta = _runner_for_connection(connection, cap_seconds=_TIMEOUT_S)
+        if runner is None:
+            return meta  # the message explaining why not
+    else:
+        from raven.agent.tools.ops_case_dict import _campaign
 
-    async def execute(self, command: str, campaign: str = "", connection: str = "",
-                      cwd: str | None = None, ledger: str | None = None, **kwargs: Any) -> str:
-        command = (command or "").strip()
-        if not command:
-            return "No command given."
-        detached = _detaching(command)
-        if detached:
-            # Refused before anything is sent, so a refusal never half-runs.
-            return (
-                f"Refusing this command: it uses {detached}, which is a way to leave work "
-                "running after this call returns. Submit work with ops_submit -- that is what "
-                "makes its compute budget enforceable, its state survive a restart, and its "
-                "results wake you when they are due. This tool is for looking at the machine; "
-                f"anything it runs is killed after {_TIMEOUT_S}s. Nothing was run."
+        try:
+            resolved = _campaign(campaign, ledger)
+        except ValueError as exc:
+            # Only once resolution has actually failed: a name that resolves is
+            # not worth second-guessing, and checking first made this branch
+            # answer for campaigns the caller had named perfectly well.
+            return _unknown_machine(campaign) or (
+                f"{exc}\n"
+                "If you are looking at a machine before any campaign exists, name a machine "
+                "instead -- ops_connections lists them and their ids."
             )
+        if isinstance(resolved, str):
+            return _unknown_machine(campaign) or resolved
+        backend, _led, _cdir, meta = resolved
+        runner = getattr(backend, "_run", None)
+        if runner is None:
+            return "This campaign's backend cannot run commands on a host."
 
-        # A machine named directly, with no campaign in the picture. That is the
-        # order the work actually happens in: the owner names a path, the machine
-        # is chosen from the connection list, and what is on it is what tells you
-        # what a campaign should run. Requiring a campaign first inverted that --
-        # measured 2026-08-18, an arm had the machine id and the path in hand and
-        # no tool that took both, so it created an empty campaign to get a runner
-        # and spent the next three minutes repairing it.
-        if connection:
-            runner, meta = _runner_for_connection(connection)
-            if runner is None:
-                return meta  # the message explaining why not
-        else:
-            from raven.agent.tools.ops_case_dict import _campaign
+    where = (cwd or str(meta.get("remote_dir") or "") or ".").rstrip("/") or "/"
+    # bash, not sh: /bin/sh is dash on these hosts, and shell gets written the way
+    # bash is written -- `[[ ]]`, brace expansion, arrays. Verified present
+    # (5.1.16) before relying on it.
+    #
+    # The cap goes through `timeout` only where that binary exists. It is GNU
+    # coreutils, macOS does not ship it, and a local connection is most likely to
+    # BE a mac: the first local look came back `exit 127, timeout: command not
+    # found`. Where it is missing the runner caps the call itself.
+    from raven.ops.transport import LOCAL, transport_of
 
-            try:
-                resolved = _campaign(campaign, ledger)
-            except ValueError as exc:
-                return (
-                    f"{exc}\n"
-                    "If you are looking at a machine before any campaign exists, pass "
-                    "'connection' instead -- ops_connections lists the machines and their ids."
-                )
-            if isinstance(resolved, str):
-                return resolved
-            backend, _led, _cdir, meta = resolved
-            runner = getattr(backend, "_run", None)
-            if runner is None:
-                return "This campaign's backend cannot run commands on a host."
+    body = f"bash -c {shlex.quote(command)} 2>&1"
+    if transport_of(meta) != LOCAL:
+        body = f"timeout {_TIMEOUT_S} {body}"
+    rc, out = runner(f"cd {shlex.quote(where)} 2>/dev/null || exit 66; {body}")
+    body = out if len(out) <= _MAX_BYTES else (
+        out[:_MAX_BYTES] + f"\n...[truncated, {len(out)} bytes total]"
+    )
+    head = f"on {_where(meta)} in {where} (exit {rc})"
+    if rc == 66:
+        return f"{head}: no such directory. Nothing was run."
+    if rc == _TIMED_OUT_RC:
+        return (f"{head}: killed at the {_TIMEOUT_S}s limit -- the host answered, the "
+                f"command did not finish. Anything that takes longer is a job, and a job "
+                f"belongs to ops_submit.\n{body}")
+    return f"{head}\n{body}" if body.strip() else f"{head}, no output"
 
-        where = (cwd or str(meta.get("remote_dir") or "") or ".").rstrip("/") or "/"
-        rc, out = runner(
-            f"cd {shlex.quote(where)} 2>/dev/null || exit 66; "
-            # bash, not sh: /bin/sh is dash on these hosts, and shell gets written
-            # the way bash is written -- `[[ ]]`, brace expansion, arrays. Verified
-            # present (5.1.16) before relying on it.
-            f"timeout {_TIMEOUT_S} bash -c {shlex.quote(command)} 2>&1"
-        )
-        body = out if len(out) <= _MAX_BYTES else (
-            out[:_MAX_BYTES] + f"\n...[truncated, {len(out)} bytes total]"
-        )
-        head = f"on {_where(meta)} in {where} (exit {rc})"
-        if rc == 66:
-            return f"{head}: no such directory. Nothing was run."
-        if rc == _TIMED_OUT_RC:
-            return (f"{head}: killed at the {_TIMEOUT_S}s limit -- the host answered, the "
-                    f"command did not finish. Anything that takes longer is a job, and a job "
-                    f"belongs to ops_submit.\n{body}")
-        return f"{head}\n{body}" if body.strip() else f"{head}, no output"
+
+def _unknown_machine(name: str) -> str | None:
+    """A message when ``name`` is neither a machine nor a campaign, else None.
+
+    A caller who names one thing and gets told about the other has to work out
+    which of two namespaces it missed. Measured while wiring this up: a mistyped
+    connection id came back as "No campaign meta under .../conn-typo", which is
+    true and answers a question nobody asked.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    from raven.agent.tools.ops import _ops_home, _slug
+    from raven.ops.connections import describe, get
+
+    if get(name) is not None or (_ops_home() / _slug(name)).exists():
+        return None
+    return (
+        f"No machine and no campaign called {name!r}.\n{describe()}\n"
+        f"ops_campaigns lists the campaigns, if you meant one of those. Nothing was run."
+    )
 
 
 def _where(meta: dict[str, Any]) -> str:

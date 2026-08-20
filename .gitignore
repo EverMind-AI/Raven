@@ -110,6 +110,7 @@ subagents/*
 !subagents/raven-code/
 !subagents/raven-oncall/
 !subagents/raven-research/
+!subagents/raven-ppt/
 !subagents/README.md
 !subagents/install.sh
 

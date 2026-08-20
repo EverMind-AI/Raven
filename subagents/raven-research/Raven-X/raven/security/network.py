@@ -6,6 +6,7 @@ allowlist removed; revisit if a Tailscale-style whitelist becomes needed.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -73,6 +74,16 @@ def validate_url_target(url: str, *, strict_dns: bool = True) -> tuple[bool, str
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}"
 
     return True, ""
+
+
+async def validate_url_target_async(url: str, *, strict_dns: bool = True) -> tuple[bool, str]:
+    """:func:`validate_url_target`, with the DNS lookup off the event loop.
+
+    ``socket.getaddrinfo`` is synchronous and can hang for seconds on a slow
+    resolver; called from an async tool it stalls every concurrent turn the
+    process is serving, not just the one that asked.
+    """
+    return await asyncio.to_thread(validate_url_target, url, strict_dns=strict_dns)
 
 
 def validate_resolved_url(url: str) -> tuple[bool, str]:

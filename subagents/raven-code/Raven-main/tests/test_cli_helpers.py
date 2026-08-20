@@ -233,3 +233,11 @@ def test_make_lazy_provider_returns_lazy_without_building(monkeypatch: pytest.Mo
 
     assert isinstance(provider, LazyProvider)
     assert provider.get_default_model() == "my-model"
+
+
+def test_make_provider_builds_the_configured_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    provider = _helpers.make_provider(load_config(_write_config(tmp_path, api_key="sk-x")))
+    assert isinstance(provider, LiteLLMProvider)

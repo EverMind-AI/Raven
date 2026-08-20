@@ -278,6 +278,16 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+    # Run profile ("interactive" / "oneshot" / "eval_coding" / "eval_answer");
+    # "" infers from the invocation as before profiles existed. Named
+    # run_profile because bare "profile" is a RETIRED key old harnesses still
+    # write (coding/assistant prompt selector) and must stay ignored. Harnesses
+    # should select run profiles via RAVEN_PROFILE, the skew-safe channel.
+    run_profile: str = ""
+    # Task domain ("coding" / "data"); "" keeps raven's coding default. Selects
+    # the identity-prompt directory, and is orthogonal to run_profile -- one
+    # profile serves several domains. --domain and RAVEN_DOMAIN override it.
+    domain: str = ""
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1

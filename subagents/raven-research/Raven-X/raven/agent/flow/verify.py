@@ -15,14 +15,14 @@ unparseable output must never silence the turn — the draft passes.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 
 from raven.agent.context import is_elided_tool_output
 from raven.agent.harness_text import harness_body_kind
 from raven.agent.evidence_round import EvidenceRound
-from raven.agent.flow.answer_text import visible_answer
+from raven.agent.flow._verdict import parse_bool_verdict
+from raven.agent.flow.answer_text import closing_tag_bar, visible_answer
 from raven.agent.flow.turn_task import task_for
 from raven.agent.hook.base import AgentHook, AgentHookContext, HookDecision
 from raven.agent.ledger import ledger_append
@@ -152,6 +152,7 @@ class DraftReviewerGate(AgentHook):
         strict_reject_only: bool = False,
         fail_open_on_elided_evidence: bool = True,
         evidence_round: "EvidenceRound | None" = None,
+        closing_tag_required: bool = False,
     ) -> None:
         self._provider = provider
         self._model = model
@@ -165,6 +166,7 @@ class DraftReviewerGate(AgentHook):
         self._strict_reject_only = strict_reject_only
         self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
         self._evidence_round = evidence_round
+        self._closing_tag_required = closing_tag_required
         # Order is load-bearing. _CONSTRAINT_RUBRIC says "treat any failed
         # constraint as an unsupported claim"; the elision carve-out says a claim
         # whose evidence was elided is NOT unsupported. Those collide exactly when
@@ -232,7 +234,19 @@ class DraftReviewerGate(AgentHook):
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         content = getattr(ctx.response, "content", None) or ""
-        draft = visible_answer(content)
+        # The arm's own closing-tag bar, same flag finalize and the loop's
+        # terminal check read. Without it, ``think_closing_tag_required=true``
+        # plus ``force_finalize.enabled=false`` sent a truncated bare reasoning
+        # chain to review as a draft - and a reject then injected that raw
+        # reasoning into persisted history as an assistant message. Waived for
+        # a response whose reasoning arrived out-of-band (see closing_tag_bar).
+        draft = visible_answer(
+            content,
+            closing_tag_required=closing_tag_bar(
+                self._closing_tag_required,
+                getattr(ctx.response, "reasoning_content", None),
+            ),
+        )
         if not draft:
             return HookDecision()
 
@@ -343,13 +357,21 @@ class DraftReviewerGate(AgentHook):
         # so a turn that kept working after an elision reports 0: measured on one
         # 120-item arm, 26 items carried the placeholder while only 6 had
         # elided_skipped>0, i.e. the carve-out reached 31-57% of the population it
-        # was written for. elided_in_context counts the whole context, and it is a
+        # was written for. elided_in_context counts THIS TURN's context, and it is a
         # per-review SNAPSHOT rather than a running total - the accumulating form is
         # a latch that degrades every later reject in the turn once any review has
-        # skipped one body.
+        # skipped one body. The scan starts at ``ctx.turn_base`` because elision
+        # placeholders are persisted: one left on disk by a previous turn would
+        # otherwise degrade every later turn's reject to a pass for the rest of
+        # the session - the same latch one scope level up. Deliberate cost of
+        # that scope: a draft resting on evidence elided in an EARLIER turn is
+        # invisible here, so its reject stays a reject (fail-closed for that
+        # draft) even with ``fail_open_on_elided_evidence`` on. Accepted trade:
+        # cross-turn evidence is the rare case, a session-wide fail-open latch
+        # was the measured one.
         elided_in_context = sum(
             1
-            for m in messages
+            for m in messages[ctx.turn_base or 0:]
             if m.get("role") == "tool" and is_elided_tool_output(str(m.get("content") or ""))
         )
         if ctx.metadata is not None:
@@ -406,52 +428,33 @@ class DraftReviewerGate(AgentHook):
 
     @staticmethod
     def _parse_verdict(text: str) -> dict | None:
-        candidates = [text]
-        brace_start, brace_end = text.find("{"), text.rfind("}")
-        if 0 <= brace_start < brace_end:
-            candidates.append(text[brace_start : brace_end + 1])
-        for candidate in candidates:
-            verdict = None
-            try:
-                import json_repair
-
-                verdict = json_repair.loads(candidate)
-            except Exception:
-                try:
-                    verdict = json.loads(candidate)
-                except Exception:
-                    continue
-            if not isinstance(verdict, dict):
+        parsed = parse_bool_verdict(text, "pass")
+        if parsed is None:
+            logger.warning("verify-gate: reviewer output missing boolean 'pass'; fail-open")
+            return None
+        verdict, _ = parsed
+        # The list fields are iterated without a type check downstream, so a
+        # reviewer answering `"unsupported_claims": 3` makes the gate raise
+        # mid-rejection. The hook chain treats a raised hook as a no-op, so the
+        # rejection then disappears with nothing marking it as lost: the draft
+        # ships and the reject counter never moves. Normalise here, where the
+        # verdict shape is already being fixed up.
+        #
+        # A count is not a named claim, so it collapses to empty rather than to
+        # a fake entry -- that keeps ``strict_reject_only`` honest, since its
+        # whole rule is that an unnamed reject degrades to a pass.
+        for key in ("unsupported_claims", "issues"):
+            value = verdict.get(key)
+            if value is None or isinstance(value, list):
                 continue
-            gate = verdict.get("pass")
-            if isinstance(gate, str) and gate.strip().lower() in ("true", "false"):
-                gate = gate.strip().lower() == "true"
-                verdict["pass"] = gate
-            if isinstance(gate, bool):
-                # The list fields are iterated without a type check downstream, so a
-                # reviewer answering `"unsupported_claims": 3` makes the gate raise
-                # mid-rejection. The hook chain treats a raised hook as a no-op, so the
-                # rejection then disappears with nothing marking it as lost: the draft
-                # ships and the reject counter never moves. Normalise here, where the
-                # verdict shape is already being fixed up.
-                #
-                # A count is not a named claim, so it collapses to empty rather than to
-                # a fake entry -- that keeps ``strict_reject_only`` honest, since its
-                # whole rule is that an unnamed reject degrades to a pass.
-                for key in ("unsupported_claims", "issues"):
-                    value = verdict.get(key)
-                    if value is None or isinstance(value, list):
-                        continue
-                    verdict[key] = [value] if isinstance(value, str) and value.strip() else []
-                    logger.warning(
-                        "verify-gate: reviewer returned %s as %s, not a list; normalised to %d entries",
-                        key,
-                        type(value).__name__,
-                        len(verdict[key]),
-                    )
-                return verdict
-        logger.warning("verify-gate: reviewer output missing boolean 'pass'; fail-open")
-        return None
+            verdict[key] = [value] if isinstance(value, str) and value.strip() else []
+            logger.warning(
+                "verify-gate: reviewer returned %s as %s, not a list; normalised to %d entries",
+                key,
+                type(value).__name__,
+                len(verdict[key]),
+            )
+        return verdict
 
     def _evidence_pack(self, messages: list[dict]) -> tuple[str, int]:
         """Last ``evidence_items`` tool results that still carry a body.

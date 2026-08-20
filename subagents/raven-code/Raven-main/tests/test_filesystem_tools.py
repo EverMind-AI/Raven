@@ -18,6 +18,7 @@ from raven.agent.tools.filesystem import (
     WriteFileTool,
     _find_matches,
 )
+from raven.agent.tools.registry import ToolRegistry
 
 
 @pytest.fixture
@@ -258,7 +259,7 @@ class TestDoNotAssumePathsExist:
     def test_read_file_warns_against_guessed_paths(self) -> None:
         desc = ReadFileTool().description
         assert "Do not assume a path exists" in desc
-        assert "find or list_dir" in desc
+        assert "glob or list_dir" in desc
 
     def test_list_dir_warns_against_assumed_directories(self) -> None:
         assert "Do not assume a directory exists" in ListDirTool().description
@@ -267,3 +268,97 @@ class TestDoNotAssumePathsExist:
 class TestRepositoryMapping:
     def test_list_dir_recommends_recursive_for_a_first_look(self) -> None:
         assert "recursive=true" in ListDirTool().description
+
+
+class TestPythonSyntaxNote:
+    """Wave10 P5: a .py write/edit that leaves the file syntactically broken
+    gets flagged in the tool result itself (deterministic, zero extra rounds).
+
+    Origin: truncated/mangled writes silently landing broken content (the
+    wave5 tool-args theme). Scope is honest: this catches syntax-level
+    breakage only - a runtime-only crash line (django-13401's
+    ``ModelBase < ModelBase``) still needs tests to surface.
+    """
+
+    async def test_write_file_flags_broken_python(self, tmp_path):
+        result = await WriteFileTool(workspace=tmp_path).execute(
+            path=str(tmp_path / "m.py"), content="def f(:\n    pass\n"
+        )
+        assert "syntax error" in result.lower()
+
+    async def test_write_file_quiet_on_valid_python(self, tmp_path):
+        result = await WriteFileTool(workspace=tmp_path).execute(
+            path=str(tmp_path / "m.py"), content="def f():\n    return 1\n"
+        )
+        assert "syntax error" not in result.lower()
+
+    async def test_edit_file_flags_broken_python(self, tool, tmp_path):
+        write(tmp_path, "m.py", "def f():\n    return 1\n")
+        result = await tool.execute(
+            path=str(tmp_path / "m.py"), old_text="return 1", new_text="return ("
+        )
+        assert "syntax error" in result.lower()
+
+    async def test_non_python_files_never_flagged(self, tmp_path):
+        result = await WriteFileTool(workspace=tmp_path).execute(
+            path=str(tmp_path / "notes.txt"), content="def f(:\n"
+        )
+        assert "syntax error" not in result.lower()
+
+
+class TestParameterRenames:
+    """Schema parameter names align with the file_path/old_string/new_string
+    convention; the legacy names stay accepted as hidden execute-time aliases."""
+
+    def test_schemas_expose_only_new_names(self):
+        for tool in (ReadFileTool(), WriteFileTool(), EditFileTool()):
+            props = tool.parameters["properties"]
+            assert "file_path" in props
+            assert "path" not in props
+            assert "file_path" in tool.parameters["required"]
+        edit_schema = EditFileTool().parameters
+        props = edit_schema["properties"]
+        assert {"old_string", "new_string"} <= set(props)
+        assert not {"old_text", "new_text"} & set(props)
+        assert edit_schema["required"] == ["file_path", "old_string", "new_string"]
+
+    async def test_new_names_work_when_called_directly(self, tmp_path):
+        fp = write(tmp_path, "f.txt", "one two three\n")
+        read = ReadFileTool(workspace=tmp_path)
+        assert "one two three" in await read.execute(file_path=str(fp))
+        edit = EditFileTool(workspace=tmp_path)
+        result = await edit.execute(file_path=str(fp), old_string="two", new_string="TWO")
+        assert "Successfully edited" in result
+        assert fp.read_text() == "one TWO three\n"
+        wr = WriteFileTool(workspace=tmp_path)
+        result = await wr.execute(file_path=str(tmp_path / "new.txt"), content="hello\n")
+        assert "Created new file" in result
+
+    async def test_legacy_names_work_through_registry(self, tmp_path):
+        fp = write(tmp_path, "f.txt", "alpha beta\n")
+        registry = ToolRegistry()
+        registry.register(ReadFileTool(workspace=tmp_path))
+        registry.register(EditFileTool(workspace=tmp_path))
+        registry.register(WriteFileTool(workspace=tmp_path))
+        result = str(await registry.execute("read_file", {"path": str(fp)}))
+        assert "alpha beta" in result
+        result = str(
+            await registry.execute(
+                "edit_file",
+                {"path": str(fp), "old_text": "alpha", "new_text": "gamma"},
+            )
+        )
+        assert "Successfully edited" in result
+        assert fp.read_text() == "gamma beta\n"
+        result = str(await registry.execute("write_file", {"path": str(fp), "content": "delta\n"}))
+        assert "Overwrote existing file" in result
+
+    async def test_both_names_new_wins_with_note(self, tmp_path):
+        wanted = write(tmp_path, "wanted.txt", "wanted content\n")
+        other = write(tmp_path, "other.txt", "other content\n")
+        registry = ToolRegistry()
+        registry.register(ReadFileTool(workspace=tmp_path))
+        result = str(await registry.execute("read_file", {"file_path": str(wanted), "path": str(other)}))
+        assert "wanted content" in result
+        assert "other content" not in result
+        assert "note" in result and "file_path" in result

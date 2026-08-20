@@ -105,9 +105,15 @@ class MemoryBackend(Protocol):
         *,
         user_id: str | None = None,
         agent_id: str | None = None,
+        session_id: str | None = None,
         top_k: int,
     ) -> list[Memory]:
         """Retrieve memories matching ``query`` for one track.
+
+        ``session_id`` narrows the result to one conversation. A coding
+        agent is one session per task, so without it every task recalls
+        every other task's memory under the same owner. Backends that
+        cannot scope by session ignore it.
 
         Exactly one of ``user_id`` / ``agent_id`` is set (XOR) — the
         caller knows which track it wants at construction time, so the
@@ -139,10 +145,11 @@ class MemoryBackend(Protocol):
         Protocol is fire-and-forget per call.
 
         ``metadata`` is an optional dict for caller-supplied context
-        that does not fit the message list.  Callers may pass
-        backend-specific fields such as ``app_id``, ``project_id``,
-        or ``is_final``; normal AgentLoop turns leave it ``None``.
-        Backends that do not consume metadata ignore it silently.
+        that does not fit the message list, such as ``is_final``;
+        normal AgentLoop turns leave it ``None``. Backends that do not
+        consume metadata ignore it silently. A backend's storage scope
+        is not addressable here: it belongs to the backend instance so
+        that a write and the matching read cannot diverge.
 
         Raises on transport / auth errors so AgentLoop can surface
         them; the host does **not** silently swallow store failures.

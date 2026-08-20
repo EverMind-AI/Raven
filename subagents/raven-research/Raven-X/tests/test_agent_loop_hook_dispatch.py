@@ -367,6 +367,32 @@ async def test_rollback_cap_bounds_resampling(workspace):
     assert provider.chat_calls == AgentLoop._MAX_HOOK_ROLLBACKS + 1
 
 
+def test_the_cap_clears_the_sum_of_the_installed_observers_budgets():
+    """The cap is a backstop against a misbehaving observer, never a budget.
+
+    Every gate books its bounce before the loop can refuse it, so a cap below the
+    within-budget worst case turns into phantom entries in the ledger - a
+    ``bounces`` count for a rollback that never ran, readable only by joining
+    ``rollbacks_refused``. The number was justified by an enumeration in the
+    comment beside it, that enumeration omitted the verify gate, and dr@3.7's
+    shape bar was the sixth claimant on a cap sized for four.
+    """
+    worst_case = {
+        "loopscan": 2,          # installed by default
+        "dup_query": 2,         # installed by default
+        "spin_breaker": 1,
+        "force_finalize": 1,
+        "verify_gate": 1,
+        "report_shape": 1,      # dr@3.7
+    }
+    # RefusalObserver also rolls back (budget 1) but nothing installs it outside
+    # tests; the day something does, it belongs in this sum.
+    assert AgentLoop._MAX_HOOK_ROLLBACKS >= sum(worst_case.values()), (
+        "a within-budget terminal gate can now be refused; raise the cap and "
+        "extend the enumeration in the comment beside it"
+    )
+
+
 class _RecordingTerminalHook(AgentHook):
     """Answers at the terminal seam; records what context it was handed."""
 

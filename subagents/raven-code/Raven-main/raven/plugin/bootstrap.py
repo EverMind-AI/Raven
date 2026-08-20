@@ -18,11 +18,12 @@ from raven.plugin.registry import PluginRegistry
 
 def assemble_plugin_registry(
     *,
-    bundled_dir: Path | None = None,
+    bundled_dir: Path | tuple[Path, ...] | None = None,
     user_dir: Path | None = None,
     project_dir: Path | None = None,
     entry_points_group: str | None = "raven.plugins",
     disabled: frozenset[str] = frozenset(),
+    enabled: frozenset[str] = frozenset(),
 ) -> PluginRegistry:
     """Discover all manifests, admit the enabled ones, return the registry.
 
@@ -38,7 +39,7 @@ def assemble_plugin_registry(
         entry_points_group=entry_points_group,
     )
     registry = PluginRegistry()
-    registry.activate(discovery.discover(), disabled=disabled)
+    registry.activate(discovery.discover(), disabled=disabled, enabled=enabled)
     return registry
 
 

@@ -175,10 +175,23 @@ async def model_disconnect(params: dict) -> dict:
     return {"disconnected": True}
 
 
+def _stored_spelling(slug: str, model: str) -> str:
+    """The id to store for a model the user typed. See ``providers.wire``.
+
+    This used to prefix only the three providers whose own client strips the
+    prefix back off, while the wizard prefixed nearly all of them -- so the same
+    model picked in the two places was written two different ways into the same
+    list.
+    """
+    from raven.providers.wire import stored_model_id
+
+    return stored_model_id(slug, model)
+
+
 async def model_add_model(params: dict) -> dict:
     parsed = _parse(ModelAddModelParams, params)
     try:
-        await asyncio.to_thread(add_provider_model, parsed.slug, parsed.model)
+        await asyncio.to_thread(add_provider_model, parsed.slug, _stored_spelling(parsed.slug, parsed.model))
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()

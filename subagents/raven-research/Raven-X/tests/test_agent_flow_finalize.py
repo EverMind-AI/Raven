@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.context import TOOL_OUTPUT_ELIDED
-from raven.agent.flow import ForcedFinalizeGate, visible_answer
+from raven.agent.flow import ForcedFinalizeGate, closing_tag_bar, visible_answer
 from raven.agent.hook import AgentHookContext
 from raven.providers.base import LLMResponse
 
@@ -360,3 +360,54 @@ async def test_salvage_that_merely_quotes_the_refusal_still_commits():
 
     assert decision.short_circuit_result is not None
     assert "Ada, 1992" in decision.short_circuit_result
+
+
+@pytest.mark.parametrize(
+    ("configured", "reasoning", "expected"),
+    [
+        (True, None, True),
+        (True, "", True),
+        (True, "chain of thought, delivered out-of-band", False),
+        (False, None, False),
+        (False, "chain of thought", False),
+    ],
+)
+def test_closing_tag_bar_waives_only_for_oob_reasoning(configured, reasoning, expected):
+    assert closing_tag_bar(configured, reasoning) == expected
+
+
+@pytest.mark.asyncio
+async def test_tagless_answer_with_oob_reasoning_passes_under_the_strict_caliber():
+    """A stack that returns reasoning on its own channel (``reasoning_content``)
+    leaves only answer text in ``content``, so the closing-tag bar's premise is
+    void for that response -- holding it anyway erased every complete answer
+    (4/4 turns on the OpenRouter live-web config) and burned a commit nudge each
+    time."""
+    provider = _SalvageProvider([])
+    gate = ForcedFinalizeGate(provider, closing_tag_required=True)
+    ctx = _ctx("Ada founded X in 1992.")
+    ctx.response.reasoning_content = "chain of thought, delivered out-of-band"
+
+    decision = await gate.after_iteration(ctx)
+
+    assert not decision.rollback and decision.short_circuit_result is None
+    assert provider.calls == 0
+    assert "force_finalize" not in ctx.metadata
+
+
+@pytest.mark.asyncio
+async def test_tagless_salvage_with_oob_reasoning_commits_under_the_strict_caliber():
+    provider = _SalvageProvider(
+        [
+            LLMResponse(
+                content="Ada founded X in 1992.",
+                reasoning_content="salvage thinking, delivered out-of-band",
+                finish_reason="stop",
+            )
+        ]
+    )
+    gate = ForcedFinalizeGate(provider, max_nudges=0, closing_tag_required=True)
+
+    decision = await gate.after_iteration(_ctx("reasoning only</think>"))
+
+    assert decision.short_circuit_result == "Ada founded X in 1992."

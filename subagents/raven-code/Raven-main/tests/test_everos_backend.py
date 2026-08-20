@@ -36,13 +36,14 @@ class _FakeAdapter:
         self.search_raises: Exception | None = None
         self.memorize_raises: Exception | None = None
 
-    async def search(self, *, user_id, agent_id, query, top_k):
+    async def search(self, *, user_id, agent_id, query, top_k, session_id=None):
         self.search_calls.append(
             {
                 "user_id": user_id,
                 "agent_id": agent_id,
                 "query": query,
                 "top_k": top_k,
+                "session_id": session_id,
             }
         )
         if self.search_raises is not None:
@@ -55,16 +56,12 @@ class _FakeAdapter:
         payload_messages,
         *,
         is_final=False,
-        app_id=None,
-        project_id=None,
     ):
         self.memorize_calls.append(
             {
                 "session_id": session_id,
                 "payload_messages": payload_messages,
                 "is_final": is_final,
-                "app_id": app_id,
-                "project_id": project_id,
             }
         )
         if self.memorize_raises is not None:
@@ -342,15 +339,18 @@ class TestAgentSearchConversion:
 
 
 class TestErrorIsolation:
-    async def test_adapter_search_exception_returns_empty(
+    async def test_adapter_search_exception_propagates(
         self,
         tmp_path: Path,
     ) -> None:
+        """An unreachable EverOS used to be reported as an empty result, which
+        is indistinguishable from a store holding nothing relevant -- a whole
+        session could recall nothing and look healthy."""
         adapter = _FakeAdapter()
         adapter.search_raises = RuntimeError("everos unreachable")
         b = _backend(tmp_path, adapter=adapter)
-        hits = await b.recall("q", user_id="x", top_k=5)
-        assert hits == []  # logged + swallowed
+        with pytest.raises(RuntimeError, match="everos unreachable"):
+            await b.recall("q", user_id="x", top_k=5)
 
     async def test_none_response_returns_empty(self, tmp_path: Path) -> None:
         adapter = _FakeAdapter(search_response=None)
@@ -551,3 +551,94 @@ class TestFeedback:
         await b.feedback({})
         await b.feedback({"kind": "skill_usage", "ids": ["x"]})
         await b.feedback({"arbitrary": object()})
+
+
+class TestStoreRejectsPerCallScope:
+    """A caller passing app_id/project_id believed it was choosing a bucket
+    while the value was dropped on the floor. Silently ignoring it is the
+    failure mode this whole scope rework exists to remove."""
+
+    async def test_scope_in_metadata_raises(self, tmp_path: Path) -> None:
+        b = _backend(tmp_path)
+        with pytest.raises(ValueError, match="storage scope"):
+            await b.store(
+                "s",
+                [{"role": "user", "content": "hi"}],
+                metadata={"project_id": "somewhere-else"},
+            )
+
+    async def test_is_final_metadata_still_accepted(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter)
+        await b.store(
+            "s",
+            [{"role": "user", "content": "hi"}],
+            metadata={"is_final": True},
+        )
+        assert adapter.memorize_calls[0]["is_final"] is True
+
+
+class TestUnprocessedTailConversion:
+    """A session-pinned search returns the unextracted buffer tail in
+    ``unprocessed_messages``. The converter must surface it: extraction lags
+    the conversation, so pre-extraction recall on a real server is ONLY the
+    tail -- dropping it made recall silently empty (measured on 1.1.3)."""
+
+    @staticmethod
+    def _data(msgs: list) -> SimpleNamespace:
+        return SimpleNamespace(
+            episodes=[], profiles=[], agent_cases=[], agent_skills=[],
+            unprocessed_messages=msgs,
+        )
+
+    @staticmethod
+    def _msg(i: int, role: str = "user", content: object = None) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=f"m{i}", session_id="cli:s1", role=role,
+            content=f"fact number {i}" if content is None else content,
+        )
+
+    def test_tail_becomes_memories(self) -> None:
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(1), self._msg(2, role="assistant")]), "user"
+        )
+        assert [m.text for m in out] == ["fact number 1", "fact number 2"]
+        assert all(m.metadata["type"] == "unprocessed" for m in out)
+        assert out[0].metadata["session_id"] == "cli:s1"
+
+    def test_tool_messages_are_skipped(self) -> None:
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(1, role="tool"), self._msg(2)]), "user"
+        )
+        assert [m.text for m in out] == ["fact number 2"]
+
+    def test_tail_is_bounded_to_the_most_recent(self) -> None:
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(i) for i in range(25)]), "user"
+        )
+        assert len(out) == 10
+        assert out[0].text == "fact number 15"  # oldest surviving = last 10
+        assert out[-1].text == "fact number 24"
+
+    def test_each_message_text_is_capped(self) -> None:
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(1, content="x" * 2000)]), "user"
+        )
+        assert len(out[0].text) == 500
+
+    def test_multimodal_content_keeps_text_items(self) -> None:
+        content = [
+            SimpleNamespace(type="text", text="part one"),
+            SimpleNamespace(type="image_url", image_url="http://x"),
+            SimpleNamespace(type="text", text="part two"),
+        ]
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(1, content=content)]), "user"
+        )
+        assert out[0].text == "part one\npart two"
+
+    def test_agent_track_ignores_the_tail(self) -> None:
+        out = EverosBackend._search_data_to_memories(
+            self._data([self._msg(1)]), "agent"
+        )
+        assert out == []

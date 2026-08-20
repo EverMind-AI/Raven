@@ -18,10 +18,15 @@ expectations.
    `source_case_ids`.
 4. **Dual-track isolation** — a user query never surfaces agent skills;
    an unprefixed `owner_id` returns `[]`.
+4b. **Scope isolation** — memory written from one workspace is not
+   recalled from another, because `project_id` differs and a search is
+   confined to its scope. Unit-level coverage of the symmetry between the
+   write and read sides is in `tests/test_everos_http_adapter.py`
+   (`TestScopeSymmetry`) and `tests/test_everos_scope.py`.
 5. **Degradation / contract** — everos absent ⇒ `recall → []`, `store`
    does not raise (covered by unit layer; kept as regression).
 
-## Hard constraints (from everos 1.0.0)
+## Hard constraints (from everos 1.1.3)
 
 | Constraint | Fact | Test impact |
 |---|---|---|
@@ -29,7 +34,8 @@ expectations.
 | Skills cluster from cases | agent pipeline runs `trigger_skill_clustering` + `extract_agent_skill`; skills carry `maturity_score`, `source_case_ids` | The corpus must repeat the same procedure across sessions |
 | Backend has no flush | `_RealEverosAdapter.memorize` sends `{session_id, messages}` only, no `is_final` | L2 calls `everos.service.memorize(..., is_final=True)` directly; L3 relies on boundary-by-volume |
 | LLM non-determinism | every `extract_*` calls a real LLM + embedding | Assertions are structural + semantic-keyword, never exact-string |
-| Runtime deps | `EVEROS_LLM__*`, `EVEROS_EMBEDDING__*`, sqlite/lancedb under `EVEROS_MEMORY__ROOT` | Real LLM key required; store isolated to a temp dir |
+| Runtime deps | `EVEROS_LLM__*`, `EVEROS_EMBEDDING__*`, sqlite/lancedb under `EVEROS_ROOT` | Real LLM key required (the server refuses to start without one); store isolated to a temp dir |
+| Scope confines a search | every request carries `(app_id, project_id)`; a search never crosses that pair | A write and its matching read must use the same pair or recall is silently empty |
 
 ### Search item fields (assertion targets — `everos.memory.search.dto`)
 
@@ -65,7 +71,9 @@ docs/everos-memory-e2e-test-plan.md   # this file
 
 ## Fixtures / environment / gating
 
-- `everos_env` (session): sets `EVEROS_MEMORY__ROOT` → temp dir,
+- `everos_env` (session): sets `EVEROS_ROOT` → temp dir (1.1.3 resolves the
+  root from that alone; the legacy `EVEROS_MEMORY__ROOT` is also set and is
+  now redundant),
   `EVEROS_MEMORIZE__MODE=agent`, a tight `EVEROS_BOUNDARY_DETECTION__HARD_MSG_LIMIT`,
   clears `load_settings` cache, and **skips** when everos / LLM key /
   embedding model are absent.
@@ -97,8 +105,9 @@ uv run pytest tests/integration -m real_llm
    session close.
 3. **Cost / latency** — `real_llm` tests are slow and billable; isolate to
    a dedicated CI job, never the default suite.
-4. **Store pollution** — the fixture forces `EVEROS_MEMORY__ROOT` to a
-   temp dir and clears the settings cache so `~/.everos` is never touched.
+4. **Store pollution** — the fixture forces `EVEROS_ROOT` to a temp dir and
+   clears the settings cache so no real store is touched. In production the
+   root is `<data dir>/everos`, resolved from the active config file.
 
 ## Naming compliance note (AGENTS.md §5.2)
 

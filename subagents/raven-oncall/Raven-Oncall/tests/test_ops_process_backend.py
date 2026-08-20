@@ -770,3 +770,81 @@ async def test_a_write_that_was_measured_is_remembered_on_the_machine() -> None:
     wrote = [c for c in host.seen if ".raven-case-writes.json" in c and c.startswith("python3")]
     assert wrote, "nothing persisted the finding, so the next round links the file again"
     assert "/root/ops/.raven-case-writes.json" in wrote[0]
+
+
+@pytest.mark.asyncio
+async def test_a_command_may_name_the_case_and_the_round_directory() -> None:
+    # The template is the only place a campaign can say how its case gets into a
+    # trial directory, and copying from it is the ordinary way. Before this, a
+    # {staged_case} in the template raised KeyError inside submit.
+    host = FakeHost()
+    ex = ProcessExecutor(
+        host, remote_dir="/root/ops", staged_case="/srv/case",
+        command="cd {job_dir} && cp {staged_case}/run.sh . && bash run.sh {config}")
+
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+
+    # The launcher is staged base64-encoded, and the same command carries the
+    # config's own blob -- so pick the fragment that decodes to a shell script.
+    import base64 as _b64
+    import re
+
+    staged = next(c for c in host.seen if ".raven-launch.sh" in c)
+    body = ""
+    for blob in re.findall(r"echo '?([A-Za-z0-9+/=]{16,})'?", staged):
+        try:
+            text = _b64.b64decode(blob).decode()
+        except Exception:  # noqa: BLE001
+            continue
+        if text.startswith("#!"):
+            body = text
+    assert body, "the launcher script should be in there somewhere"
+    assert "cp /srv/case/run.sh ." in body
+    assert "/root/ops/jobs/k1/config.json" in body
+
+
+def test_exec_only_takes_a_command_it_can_actually_replace_itself_with():
+    """A chained template has to reach a shell, a single one must not.
+
+    Measured 2026-08-19: a template of "cd x && cp y . && bash run.sh" became
+    ``exec cd x && ...`` in the launcher, which runs nothing and reports nothing.
+    The pid file was written, so the job looked started, and no result ever came.
+    Quoting is what decides -- ``sh -c 'cd x && y'`` is one command, and wrapping
+    it again would put a second shell in front of every campaign written that way.
+    """
+    from raven.ops.process_backend import _is_simple
+
+    assert _is_simple("bash run_fea.sh")
+    assert _is_simple("env CUDA_VISIBLE_DEVICES=1 python3 train.py --config c.json")
+    assert _is_simple("sh -c 'cd /work && bash run_fea.sh'"), (
+        "the six campaigns written this way must not gain a second shell"
+    )
+
+    assert not _is_simple("cd /work && bash run.sh")
+    assert not _is_simple("solver > out.log")
+    assert not _is_simple("a | b")
+    assert not _is_simple("echo $HOME")
+    assert not _is_simple("unbalanced 'quote"), "a shell is the thing that understands quotes"
+
+
+@pytest.mark.asyncio
+async def test_a_chained_command_reaches_a_shell_in_the_launcher() -> None:
+    host = FakeHost()
+    ex = ProcessExecutor(host, remote_dir="/root/ops", staged_case="/srv/case",
+                         command="cd {job_dir} && cp {staged_case}/run.sh . && bash run.sh")
+    await ex.submit(JobSpec(payload={"lr": 1e-5}, idem_key="k1"))
+
+    import base64 as _b64
+    import re
+
+    staged = next(c for c in host.seen if ".raven-launch.sh" in c)
+    body = ""
+    for blob in re.findall(r"echo '?([A-Za-z0-9+/=]{16,})'?", staged):
+        try:
+            text = _b64.b64decode(blob).decode()
+        except Exception:  # noqa: BLE001
+            continue
+        if text.startswith("#!"):
+            body = text
+    assert "exec sh -c" in body, body
+    assert "cp /srv/case/run.sh ." in body

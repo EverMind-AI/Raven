@@ -195,6 +195,7 @@ def test_prompt_files_explain_the_system_reminder_marker():
     """The marker is only safe if the model is told the system inserts it."""
     from raven.context_engine.segments import identity_prompts
 
-    for family in identity_prompts.available_families():
-        text = (identity_prompts._PROMPT_DIR / f"{family}.txt").read_text(encoding="utf-8")
-        assert "`<system-reminder>`" in text, family
+    for domain in identity_prompts.available_domains():
+        for family in identity_prompts.available_families(domain):
+            text = identity_prompts.prompt_path(domain, family).read_text(encoding="utf-8")
+            assert "`<system-reminder>`" in text, f"{domain}/{family}"

@@ -116,3 +116,104 @@ async def test_docker_is_allowed_but_only_when_asked_for(home) -> None:
     assert not out.startswith("REFUSED"), out
     meta = json.loads((home / "beam" / "meta.json").read_text(encoding="utf-8"))
     assert meta["backend"] == "docker" and meta["image"] == "py:3.12"
+
+
+@pytest.mark.asyncio
+async def test_the_case_and_the_round_directory_can_be_named_in_the_command(home) -> None:
+    # Naming the case is still ordinary -- running a script that lives in it,
+    # reading a file out of it -- it is only copying it in that is refused.
+    out = await OpsDeclareTool().execute(**_args(
+        command="cd {job_dir} && python3 {staged_case}/gen.py {config} > in && bash run.sh"))
+
+    assert not out.startswith("REFUSED"), out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("copying", [
+    "cd {job_dir} && cp {staged_case}/run.sh . && bash run.sh",
+    "cp -r {staged_case}/* {job_dir}/ && cd {job_dir} && bash run.sh",
+    "rsync -a {staged_case}/ {job_dir}/ && bash {job_dir}/run.sh",
+    "cd {job_dir} && cp /srv/case/run.sh . && bash run.sh",
+])
+async def test_copying_the_case_in_is_refused(home, copying) -> None:
+    """Measured 2026-08-19, twice, and the second time cost the campaign.
+
+    The round's directory is filled with a link to every file in the case before
+    the command runs, so copying the case in has the same file as source and
+    target and cp stops with "are the same file". Round 0 of beam-limit-load
+    failed on exactly that, and the arm's answer was not to fix the declaration
+    but to abandon the ledger and run the sweep by hand on the shared box.
+
+    The two descriptions that say the case is already there were in place when it
+    was declared. Saying so was not enough; this refuses it.
+    """
+    out = await OpsDeclareTool().execute(**_args(command=copying))
+
+    assert out.startswith("REFUSED"), out
+    assert "already there" in out
+    assert not (home / "beam").exists(), "a campaign that cannot run is not left behind"
+
+
+@pytest.mark.asyncio
+async def test_copying_within_the_round_directory_is_its_own_business(home) -> None:
+    # Only copying FROM the case is refused. What a trial does with its own
+    # directory -- a backup before overwriting, staging an input -- is not ours.
+    out = await OpsDeclareTool().execute(**_args(
+        command="cd {job_dir} && cp {config} in.json && bash run.sh"))
+
+    assert not out.startswith("REFUSED"), out
+
+
+@pytest.mark.asyncio
+async def test_a_placeholder_nothing_fills_in_is_refused_at_declaration(home) -> None:
+    """Caught here rather than at the first submit, where it was a bare KeyError.
+
+    Measured 2026-08-19: a command using {staged_case} -- which nothing expanded
+    at the time -- came back as "KeyError 'staged_case'. This is a fault inside
+    the tool itself, do not work around it". True, and it left the loop with
+    nothing it was permitted to do: it repeated the identical call three times and
+    the campaign never ran a round.
+    """
+    out = await OpsDeclareTool().execute(**_args(
+        command="bash {arena}/run.sh --cores {cores}"))
+
+    assert out.startswith("REFUSED")
+    assert "arena" in out and "cores" in out
+    for known in ("{job_dir}", "{config}", "{staged_case}", "{remote_dir}"):
+        assert known in out, "a refusal has to say what IS available"
+    assert not (home / "beam").exists(), "a campaign that cannot run is not left behind"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rounds", ["/srv/case/runs", "/srv/case", "/srv/case/a/b"])
+async def test_rounds_inside_the_case_are_refused(home, rounds) -> None:
+    """Measured 2026-08-19: an arm put rounds at "<staged_case>/runs".
+
+    Two things go wrong and the second is worse. The case stops being read-only --
+    that run left job.inp and config.json inside it -- and each round is built from
+    a tree of links to the case, so a round directory inside the case gets linked
+    into the round after it.
+
+    The write-set probe does not catch this: it asks which FILES in the case
+    changed, and a new directory beside them changes none.
+    """
+    out = await OpsDeclareTool().execute(**_args(remote_dir=rounds))
+
+    assert out.startswith("REFUSED") and "inside the owner's case" in out
+    assert "/srv/case" in out and rounds in out, "both paths have to be visible"
+    assert not (home / "beam").exists()
+
+
+@pytest.mark.asyncio
+async def test_rounds_beside_the_case_are_fine(home) -> None:
+    out = await OpsDeclareTool().execute(**_args(remote_dir="/srv/runs"))
+
+    assert not out.startswith("REFUSED"), out
+
+
+@pytest.mark.asyncio
+async def test_a_name_that_merely_starts_the_same_is_not_inside(home) -> None:
+    # "/srv/case-old" begins with "/srv/case" as text and is a different directory.
+    out = await OpsDeclareTool().execute(**_args(remote_dir="/srv/case-old/runs"))
+
+    assert not out.startswith("REFUSED"), out

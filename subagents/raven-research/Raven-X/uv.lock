@@ -732,37 +732,37 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cublas" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-runtime" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cufft" },
 ]
 cufile = [
-    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
+    { name = "nvidia-cufile" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-cupti" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-curand" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusolver" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cusparse" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvjitlink" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-cuda-nvrtc" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "nvidia-nvtx" },
 ]
 
 [[package]]
@@ -2368,19 +2368,6 @@ wheels = [
 ]
 
 [[package]]
-name = "oauth-cli-kit"
-version = "0.1.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "platformdirs" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/65/db8768844cff218ae2bb19305ec1abe95e414c9953af205fe1b75a5e2300/oauth_cli_kit-0.1.6.tar.gz", hash = "sha256:7252f57e1a2f9dba7a94894c11b979f83884b3c88af3b4fe0206370a2b120499", size = 8529, upload-time = "2026-06-30T06:18:35.295Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/9f/53555ec2543e6ba5f6eeff4331cca43842a2c48983c793c97560500b6764/oauth_cli_kit-0.1.6-py3-none-any.whl", hash = "sha256:d4a73beae7333ae642a9e5766ab0a04de53279667fefdf064c23db77a3494e7f", size = 11490, upload-time = "2026-06-30T06:18:34.467Z" },
-]
-
-[[package]]
 name = "openai"
 version = "2.24.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3259,7 +3246,6 @@ dependencies = [
     { name = "litellm" },
     { name = "loguru" },
     { name = "mcp" },
-    { name = "oauth-cli-kit" },
     { name = "orjson" },
     { name = "portalocker" },
     { name = "prompt-toolkit" },
@@ -3350,14 +3336,12 @@ sandbox = [
     { name = "boxlite" },
 ]
 tools = [
-    { name = "oauth-cli-kit" },
     { name = "readability-lxml" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "json-repair" },
-    { name = "oauth-cli-kit" },
     { name = "pexpect" },
     { name = "pip-audit" },
     { name = "pre-commit" },
@@ -3379,15 +3363,13 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'eval'", specifier = ">=1.11.0" },
     { name = "json-repair", specifier = ">=0.30.0" },
     { name = "lark-oapi", marker = "extra == 'channel-feishu'", specifier = ">=1.5.0,<2.0.0" },
-    { name = "litellm", specifier = ">=1.82.1,<2.0.0" },
+    { name = "litellm", specifier = "==1.85.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
     { name = "matrix-nio", marker = "sys_platform != 'win32' and extra == 'channel-matrix'", specifier = ">=0.25.2" },
     { name = "mcp", specifier = ">=1.27.0" },
     { name = "mistune", marker = "extra == 'channel-matrix'", specifier = ">=3.0.0,<4.0.0" },
     { name = "msgpack", marker = "extra == 'channel-mochat'", specifier = ">=1.2.1,<2.0.0" },
     { name = "nh3", marker = "extra == 'channel-matrix'", specifier = ">=0.2.17,<1.0.0" },
-    { name = "oauth-cli-kit", specifier = ">=0.1.6,<1.0.0" },
-    { name = "oauth-cli-kit", marker = "extra == 'tools'", specifier = ">=0.1.6,<1.0.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0" },
     { name = "portalocker", specifier = ">=3.2.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
@@ -3436,7 +3418,6 @@ provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "chan
 [package.metadata.requires-dev]
 dev = [
     { name = "json-repair", specifier = ">=0.59.5" },
-    { name = "oauth-cli-kit", specifier = ">=0.1.6" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },

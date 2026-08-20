@@ -830,13 +830,13 @@ def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model
 
 
 @pytest.fixture
-def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect EverOS writes to a throwaway toml (never touches ~/.everos)."""
+def everos_isolated() -> Path:
+    """The EverOS toml for this test. It hangs off raven's data dir, which the
+    autouse ``_isolated_data_dir`` fixture already redirects, so the real home
+    is out of reach without any patching here."""
     import raven.config.update_everos as ue
 
-    cfg = tmp_path / ".everos" / "everos.toml"
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
-    return cfg
+    return ue.get_everos_config_path()
 
 
 def _seed_provider(provider: str = "openai", key: str = "sk-seed", model: str = "openai/gpt-4o-mini") -> None:
@@ -1179,8 +1179,11 @@ def test_memory_enable_writes_everos_sections(
     assert everos["embedding"]["model"] == "mem-embed"
     assert everos["embedding"]["api_key"] == "k-embed"
     assert everos["embedding"]["base_url"] == "https://llm/v1"
-    assert "rerank" not in everos
-    assert "multimodal" not in everos
+    # Skipped sections keep whatever the shipped template had and gain none of
+    # the answers the wizard collected for the sections that were configured.
+    for skipped in ("rerank", "multimodal"):
+        assert everos.get(skipped, {}).get("api_key") in (None, "")
+        assert everos.get(skipped, {}).get("model") != "mem-llm"
 
 
 def test_memory_llm_reuse_pulls_provider_creds(
@@ -1764,12 +1767,13 @@ def test_skip_memory_disables_backend_effective(tmp_env: Path, everos_isolated: 
     assert load_raven_config().memory.backend is None
 
 
-def test_fresh_bootstrap_defaults_memory_backend_everos(
+def test_fresh_bootstrap_defaults_memory_backend_on(
     tmp_env: Path, stub_verify, stub_step3, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A fresh config seeds memory.backend="everos" (schema default). EverOS
-    degrades gracefully without models, and Step 4 / the skip-guard resolve it
-    back to None when memory is opted out or left unconfigured."""
+    """A fresh config seeds memory.backend="everos" (the swarm-line schema
+    default). Step 4 of the wizard resolves it back to None when memory is
+    opted out or its models stay unconfigured, so an unattended keyless
+    install still never contacts a memory server."""
     onboard_commands._bootstrap_empty_config()
     from raven.config.raven import load_raven_config
 

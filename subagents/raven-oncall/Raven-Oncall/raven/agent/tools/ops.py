@@ -1618,7 +1618,9 @@ class OpsSubmitTool(_OpsScheduler):
         ledger: str = "",
         round: int = 0,
         basis: str = "",
-        max_rounds: int = 8,
+        # Only reached by a campaign whose declaration names no cap. Matches
+        # ops_declare's default: a runaway stop, not a round count anyone chose.
+        max_rounds: int = 50,
         port: int = 22,
         key: str = "~/.ssh/id_rsa",
         remote_dir: str = "/root/raven-ops",

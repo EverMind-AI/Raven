@@ -37,6 +37,7 @@ from raven.cli._plugin_stack import (
     build_plugin_registry,
     build_plugin_tools,
     maybe_build_memory_backend,
+    start_memory_backend,
 )
 
 console = Console()
@@ -166,6 +167,19 @@ def register(app: typer.Typer) -> None:
         resume: str | None = typer.Option(None, "--resume", "-r", help="Resume session by bare id or unique prefix"),
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", help="Config file path"),
+        profile: str | None = typer.Option(
+            None,
+            "--profile",
+            help=(
+                "Run profile: interactive, oneshot, eval_coding or eval_answer. "
+                "Default infers from the invocation (REPL vs -m)."
+            ),
+        ),
+        domain: str | None = typer.Option(
+            None,
+            "--domain",
+            help="Task domain: coding (default) or data. Selects the identity prompt.",
+        ),
         markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
         logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
         wait_skill_extract: bool = typer.Option(
@@ -227,6 +241,7 @@ def register(app: typer.Typer) -> None:
 
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.agent.profile import resolve_profile
         from raven.cli._proactive_stack import (
             attach_sentinel_decision_consumer,
             attach_sentinel_spawn,
@@ -310,6 +325,7 @@ def register(app: typer.Typer) -> None:
             config.workspace_path,
             ec_config,
             registry=plugin_registry,
+            provider=provider,
         )
 
         agent_loop = AgentLoop(
@@ -345,7 +361,14 @@ def register(app: typer.Typer) -> None:
             # ``-m "..."`` is a one-shot — no next turn for recovery
             # injection, so the ``"interactive"`` policy skips the
             # checkpoint here. REPL (``message is None``) is multi-turn.
-            interactive=message is None,
+            # --profile / config / RAVEN_PROFILE override the inference.
+            profile=resolve_profile(
+                cli=profile,
+                config=config.agents.defaults.run_profile or None,
+                interactive=message is None,
+                domain_cli=domain,
+                domain_config=config.agents.defaults.domain or None,
+            ),
             response_modifier=sentinel_response_modifier,
             on_user_inbound=sentinel_on_user_inbound,
             backend=backend,
@@ -385,15 +408,11 @@ def register(app: typer.Typer) -> None:
             from raven.spine import ChatType, Origin, Source, TurnRequest
 
             async def run_once():
-                # Bring the memory-backend plugin online before any turn
-                # runs. ``backend`` is ``None`` when no plugin is wired.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
+                # Bring the memory-backend plugin online before any turn runs.
+                # A one-shot run is unattended and its output is consumed as a
+                # result, so memory that never came up ends the run instead of
+                # producing work that silently had none behind it.
+                await start_memory_backend(backend, fail_fast=True)
                 try:
                     # Build inside the running loop: Scheduler pins its home loop in
                     # __init__, so build_repl must not run in the sync prologue.
@@ -423,8 +442,16 @@ def register(app: typer.Typer) -> None:
                                 conversation=session_id,
                             )
                         )
-                        await handle.result()
+                        outcome = await handle.result()
                     await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
+                    if outcome is None:
+                        # The turn failed (the scheduler logged the traceback
+                        # and swallowed it into a TurnFailed event no CLI
+                        # outlet renders). An unattended -m run is consumed by
+                        # its output, so it must fail loudly, not exit 0 empty.
+                        await teardown()
+                        console.print("[red]turn failed; re-run with --logs for the traceback[/red]")
+                        raise typer.Exit(1)
                     await teardown()
                     if wait_skill_extract or flush_skill_buffer:
                         # ``flush_skill_buffer`` sends session_end so any
@@ -482,16 +509,9 @@ def register(app: typer.Typer) -> None:
                 signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
             async def run_interactive():
-                # Backend lifecycle matches the single-message
-                # mode; ``backend`` is ``None`` when no plugin is wired,
-                # in which case start/stop are skipped.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
+                # An interactive session keeps working without memory rather
+                # than refusing to start, but says so loudly.
+                await start_memory_backend(backend, fail_fast=False)
                 # agent_loop.run() is now a lifecycle keep-alive (executor /
                 # debug server / MCP up, then idle); all turns go through the
                 # spine. Gathered on teardown.
@@ -545,6 +565,9 @@ def register(app: typer.Typer) -> None:
                         handle_slash=_slash,
                         thinking=_thinking_ctx,
                         on_exit=_on_exit,
+                        on_turn_failed=lambda: console.print(
+                            "[red]turn failed; re-run with --logs for the traceback[/red]"
+                        ),
                     )
                 finally:
                     if sentinel_runner is not None:

@@ -414,6 +414,7 @@ async def execute_task(
         usage, cost_usd, models_used
     """
     from raven.agent.loop import AgentLoop
+    from raven.agent.profile import PROFILES
     from raven.config.schema import ExecToolConfig
     from raven.session.manager import SessionManager
 
@@ -457,10 +458,10 @@ async def execute_task(
         router=router,
         skill_forge_config=skill_forge_cfg,
         runtime_config=getattr(_ec_cfg, "runtime", None),
-        # Benchmarks are non-interactive batch runs — opt out of Bug2's
-        # per-turn shadow-git checkpoint (no recovery channel to inject
-        # into, and we don't want ``.raven/shadow.git`` in task workspaces).
-        interactive=False,
+        # Answer-style benchmark turns: no shadow-git checkpoint in task
+        # workspaces, and none of the code-completion gates (finishing a turn
+        # here means answering, not changing a repository).
+        profile=PROFILES["eval_answer"],
     )
 
     timeout_seconds = task.timeout_seconds * timeout_multiplier

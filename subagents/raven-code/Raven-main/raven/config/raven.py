@@ -1099,6 +1099,11 @@ class PluginsConfig(_Base):
     disabled: list[str] = Field(default_factory=list)
     """Plugin ids the user opted out of (e.g. ``["everos-memory"]``)."""
 
+    enabled: list[str] = Field(default_factory=list)
+    """Explicit opt-in for plugins that ship ``enabled_by_default = false``
+    (e.g. ``["data-agent"]``). Ignored for plugins that are on by default;
+    ``disabled`` always wins over ``enabled``."""
+
     config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     """Per-plugin configuration, keyed by plugin id. Each plugin's
     factory receives ``ctx.config = plugins.config.get(<id>, {})``."""
@@ -1116,23 +1121,33 @@ class MemoryConfig(_Base):
     agent-track recall (``backend.recall`` takes one XOR the other).
     EverOS routes each to its matching store; flat backends (mem0 /
     MemOS / Letta) use ``user_id`` and return empty for the agent call.
-    Each value must match the corresponding id the active backend
-    stamps on stored messages (e.g. ``plugins.config["everos-memory"]``
-    ``user_id`` / ``agent_id``) for stored memory to be retrievable.
+    Both are forwarded into the active plugin's config slice so the
+    recall side and the store side cannot drift onto different ids.
     """
 
     backend: str | None = "everos"
-    """Activated backend contribution name. ``None`` disables the
-    plugin-driven memory path; AgentLoop continues with raven-core's
-    MemoryStore alone."""
+    """Activated backend contribution name -- the single knob that turns
+    plugin-driven memory on and off. On by default on the swarm line: a
+    daily-use worker should remember. When the field is LEFT AT this
+    default and the local EverOS runtime has no model keys, the plugin
+    stack degrades to "no memory" (log line names the fix) so a keyless
+    install never pays for it; stating ``"everos"`` explicitly skips the
+    degrade and surfaces the startup error. Evaluation configs must pin
+    ``null``: recalled memory from
+    earlier tasks changes the prompt an evaluation believes it is
+    measuring. ``None`` builds no backend at all, so no EverOS home is
+    seeded, no server is contacted and the ``# Memory`` segment stays
+    empty."""
 
     user_id: str = "default"
     """Bare user identity passed as ``backend.recall(user_id=...)`` for
-    the user-track recall channel inside ``ContextAssembler.assemble``."""
+    the user-track recall channel inside ``ContextAssembler.assemble``,
+    and forwarded to the backend so stored messages carry the same id."""
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by
-    ``EverosSkillSource`` for agent-track skill recall."""
+    ``EverosSkillSource`` for agent-track skill recall, and forwarded to
+    the backend so stored cases carry the same id."""
 
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for

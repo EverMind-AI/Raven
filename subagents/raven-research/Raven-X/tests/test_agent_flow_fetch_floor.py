@@ -160,3 +160,23 @@ async def test_max_streak_reaches_the_persisted_trajectory():
     # Both must be present: reading only one of them is how the 2x discrepancy
     # became invisible in the first place.
     assert {"streak", "max_streak"} <= set(exported["fetch_floor"])
+
+
+@pytest.mark.asyncio
+async def test_previous_turns_tool_results_are_not_double_booked():
+    """dr@3.4. The watermark opens at ``ctx.turn_base``, never 0.
+
+    The assembled context replays earlier turns' persisted tool messages below
+    the current user message; counted into this turn's streak they fire the
+    note on the first tool iteration of every follow-up.
+    """
+    observer = FetchFloorObserver(min_searches=5)
+    history = [{"role": "tool", "name": "web_search", "content": f"old {i}"} for i in range(10)]
+    ctx = AgentHookContext(session_key="cli:test", turn_base=len(history))
+    ctx.iteration = 1
+    ctx.messages = history + [{"role": "user", "content": "follow-up"}]
+    ctx.response = SimpleNamespace(has_tool_calls=True)
+    _add_tool_results(ctx, "web_search", 1)
+    decision = await observer.after_iteration(ctx)
+    assert not decision.notes, "prior-turn searches fired this turn's note"
+    assert ctx.metadata["fetch_floor"]["searches"] == 1

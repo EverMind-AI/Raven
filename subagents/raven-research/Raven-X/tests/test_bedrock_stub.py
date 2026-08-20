@@ -5,9 +5,11 @@ later will break a test and force this file to be revisited:
 
   (a) the import-time log filter drops only the two known LiteLLM
       botocore-preload warnings and nothing else;
-  (b) there is no Bedrock code path — no `bedrock` provider spec, and the sole
-      bedrock touchpoint in cli/_helpers.py is the ``model.startswith("bedrock/")``
-      key-gate bypass that falls through to LiteLLM (no `converse` call).
+  (b) there is no Bedrock code path — no `bedrock` provider spec. The sole
+      bedrock touchpoint is the ambient-credential declaration in
+      providers/auth.py (the AWS chain, not an api_key), which is what lets a
+      ``bedrock/...`` model pass the key gate and fall through to LiteLLM
+      (no `converse` call).
 """
 
 from __future__ import annotations
@@ -47,10 +49,14 @@ def test_no_bedrock_provider_in_registry():
     assert find_by_model("bedrock/amazon.titan-text-express-v1") is None
 
 
-def test_only_bedrock_touchpoint_is_the_helpers_key_gate_bypass():
+def test_only_bedrock_touchpoint_is_the_ambient_auth_declaration():
+    # cli/_helpers.py no longer special-cases bedrock: the key gate is
+    # providers.auth, where bedrock is declared ambient (the AWS chain).
     source = Path(helpers_mod.__file__).read_text(encoding="utf-8")
-    # The sole bedrock reference: the key-gate bypass in make_provider.
-    assert source.count("bedrock") == 1
-    assert 'model.startswith("bedrock/")' in source
+    assert source.count("bedrock") == 0
+
+    from raven.providers.auth import credential_status
+
+    assert credential_status("bedrock", None, include_external=True).ok
     # No Bedrock Converse backend has been wired in.
     assert "converse" not in source

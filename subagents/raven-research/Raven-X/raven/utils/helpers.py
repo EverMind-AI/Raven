@@ -37,8 +37,17 @@ _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 
 
 def safe_filename(name: str) -> str:
-    """Replace unsafe path characters with underscores."""
-    return _UNSAFE_CHARS.sub("_", name).strip()
+    """Replace unsafe path characters with underscores.
+
+    A name that is nothing but dots (``.`` / ``..``) is a path component with
+    meaning of its own and would climb out of the directory it is joined to
+    (``-s ..:x`` escaped the sessions dir by one level); it collapses to
+    underscores instead.
+    """
+    cleaned = _UNSAFE_CHARS.sub("_", name).strip()
+    if cleaned and cleaned.strip(".") == "":
+        cleaned = "_" * len(cleaned)
+    return cleaned
 
 
 def split_message(content: str, max_len: int = 2000) -> list[str]:
@@ -90,12 +99,24 @@ def build_assistant_message(
     return msg
 
 
+# Flat per-image estimate. Serializing an image part hands its base64 payload
+# to the text tokenizer, and one 1MB data URI then "costs" ~250k tokens against
+# a 65k window - the pre-call fit reacted by eliding every older tool body on
+# every remaining iteration of the turn. Providers bill vision by tiles/pixels,
+# capped in the low thousands; 1600 is the high end of that range, so the
+# estimate stays conservative without ever scaling with payload bytes.
+_IMAGE_PART_TOKENS = 1600
+
+_IMAGE_PART_TYPES = ("image_url", "image", "input_image")
+
+
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
     """Estimate prompt tokens with tiktoken."""
     parts: list[str] = []
+    image_tokens = 0
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str):
@@ -106,6 +127,8 @@ def estimate_prompt_tokens(
                     txt = part.get("text", "")
                     if txt:
                         parts.append(txt)
+                elif isinstance(part, dict) and part.get("type") in _IMAGE_PART_TYPES:
+                    image_tokens += _IMAGE_PART_TOKENS
                 else:
                     parts.append(json.dumps(part, ensure_ascii=False))
         elif content is not None:
@@ -128,18 +151,19 @@ def estimate_prompt_tokens(
 
     payload = "\n".join(parts)
     if not payload:
-        return 0
+        return image_tokens
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(1, len(enc.encode(payload)))
+        return max(1, len(enc.encode(payload)) + image_tokens)
     except Exception:
-        return max(1, len(payload) // 4)
+        return max(1, len(payload) // 4 + image_tokens)
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
     parts: list[str] = []
+    image_tokens = 0
     if isinstance(content, str):
         parts.append(content)
     elif isinstance(content, list):
@@ -148,6 +172,8 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 text = part.get("text", "")
                 if text:
                     parts.append(text)
+            elif isinstance(part, dict) and part.get("type") in _IMAGE_PART_TYPES:
+                image_tokens += _IMAGE_PART_TOKENS
             else:
                 parts.append(json.dumps(part, ensure_ascii=False))
     elif content is not None:
@@ -167,12 +193,12 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
 
     payload = "\n".join(parts)
     if not payload:
-        return 1
+        return max(1, image_tokens)
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(1, len(enc.encode(payload)))
+        return max(1, len(enc.encode(payload)) + image_tokens)
     except Exception:
-        return max(1, len(payload) // 4)
+        return max(1, len(payload) // 4 + image_tokens)
 
 
 def estimate_prompt_tokens_chain(

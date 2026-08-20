@@ -88,6 +88,7 @@ _FINALIZE_SYS_ZH = (
 try:
     from eval_clean_adapter import extract as _clean_extract
     from eval_clean_adapter import salvage_committed as _salvage_committed
+    from eval_clean_adapter import _think_closing_tag_required as _think_tag_required
     _VIS_SRC = "eval_clean_adapter.extract"
 except Exception as _exc:  # pragma: no cover
     _VIS_SRC = f"(unavailable: {type(_exc).__name__}) —— answer_visible 不可信"
@@ -97,6 +98,9 @@ except Exception as _exc:  # pragma: no cover
 
     def _salvage_committed(_row):  # type: ignore[misc]
         return False
+
+    def _think_tag_required(_run):  # type: ignore[misc]
+        return True
 
 
 @functools.lru_cache(maxsize=8)
@@ -691,6 +695,9 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
     qtok = _tok(qid, 12)
     ws = WS_ROOT / f"{qtok}_s{sample_id}"
     ws.mkdir(parents=True, exist_ok=True)
+    # ★ 20260818 Test(转 FutureX 报告):run_dir 必须在 `config` 被 per_question_config()
+    # 重绑成逐题渲染路径*之前*存下来 —— arm_env.json 只活在批级目录,不在渲染件旁边。
+    _run_dir_for_tag = Path(config).parent
     config = per_question_config(config, qtok, sample_id)
     env = web_ledger_env(env, qtok, sample_id)
     message = msg_prefix + seed["question"]
@@ -798,8 +805,13 @@ async def run_one(seed: dict, sample_id: int, timeout: float,
     answerless_diag = None
     try:
         _raw_ans = info["final_answer"] or ""
-        _visible = _clean_extract(_raw_ans,
-                                  exempt_closing_tag=_salvage_committed({"trajectory": traj}))
+        # ★ 20260818(FutureX 报告转 Test 修):原判据漏了 drFlow.thinkClosingTagRequired——
+        # 任何模型的推理走独立 reasoning_content 字段(deepseek-v4-flash/Opus 5 皆如此)时,
+        # `content` 里结构上不会出现 `</think>`,与 eval_clean_adapter.main() 的判据不一致
+        # 会把完整答案错记成空答。与那边同源:一样调 _think_tag_required(run_dir)。
+        _exempt_tag = (_salvage_committed({"trajectory": traj})
+                       or not _think_tag_required(_run_dir_for_tag))
+        _visible = _clean_extract(_raw_ans, exempt_closing_tag=_exempt_tag)
         answer_visible = bool((_visible or "").strip())
         _closed = "</think>" in _raw_ans.lower()
         finish_shape = ("closed_with_answer" if answer_visible else

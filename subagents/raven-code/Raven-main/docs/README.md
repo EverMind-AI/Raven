@@ -9,6 +9,7 @@ need to understand the internal architecture or extend a subsystem.
 ## Index
 
 - `dev.md` - local development notes.
+- `domain-coding-vs-data.md` - running raven as a coding agent or a data agent.
 - `Raven-vs-OpenClaw-Hermes.md` - product and architecture comparison notes.
 - `memory-plugin-architecture.md` - memory/plugin architecture details.
 - `everos-memory-e2e-test-plan.md` - end-to-end memory validation plan.

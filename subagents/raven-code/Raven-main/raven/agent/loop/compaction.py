@@ -91,7 +91,9 @@ def projected_context_used(
     return last_reported + estimate(messages[counted_upto:])
 
 
-def should_compact(context_used: int, limit: int, reserved: int, trigger_ratio: float | None = None) -> bool:
+def should_compact(
+    context_used: int, limit: int, reserved: int, trigger_ratio: float | None = None
+) -> bool:
     """True when the last observed context size crosses the trigger line.
 
     The base trigger is ``limit - reserved`` (just below overflow). A
