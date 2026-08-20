@@ -55,7 +55,7 @@ function send(text) {
   if (busy) { q.push(text); drawQ(); toast('已排队，本轮结束后发出'); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
-  busy = true; use = null; tl = [];
+  busy = true; use = null;
   drawMeter(); goState(); drawList();
   const run = pickRun(text);
   const s = sess(cur);

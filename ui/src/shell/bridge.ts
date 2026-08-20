@@ -70,17 +70,15 @@ export interface Shell {
      through stays null, and the island never asks without a record). */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
   /* Transcript island verbs: the tail-follow, the attachment image bytes,
-     the lightbox, the diff builders the workspace panel already owns, and
-     the turn's tl/raw logs the shell keeps per turn. */
+     the lightbox, and the diff builders the workspace panel already owns. */
   down?(): void
   attImage?(path: string): string | undefined
   attNotes?(): string[]
   hunkFromEdit?(oldText: string, newText: string): unknown
   hunkFromWrite?(content: string): unknown
   hunkFromUnified?(lines: string | string[]): unknown
-  tlPush?(entry: { name: string; arg: string; ms: number; ok: boolean }): void
   /* Composer island verbs. `send`/`halt` stay with the shell on purpose: they
-     mutate the turn globals (busy, use, tl) and diverge between the demo
+     mutate the turn globals (busy, q) and diverge between the demo
      replay and the live rpc, so the dock asks for the action and the page
      decides what it means. The rest are the draft store, the tail anchor and
      the two catalogues the palette renders from. */

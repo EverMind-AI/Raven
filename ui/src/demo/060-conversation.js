@@ -5,7 +5,7 @@ function openSession(s) {
   // row goes back to carrying its timestamp.
   if (s.status === 'done') s.status = null;
   markNewCurrent();
-  stop_(); busy = false; q = []; use = null; tl = [];
+  stop_(); busy = false; q = []; use = null;
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);
