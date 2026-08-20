@@ -505,3 +505,137 @@ async def test_hub_auto_install_appends_audit_record(tmp_path: Path) -> None:
     assert rec["trigger"] == "auto_inject"
     assert rec["score_safety"] == 0.9
     assert rec["ts"]
+
+
+# ----------------------------------------------------------------------
+# Delivery note -- the injected body's own ending is what it argues with
+# ----------------------------------------------------------------------
+
+
+def _defs(*names: str) -> Any:
+    return lambda: [{"type": "function", "function": {"name": n}} for n in names]
+
+
+async def test_delivery_note_rides_an_injected_body_when_the_tool_is_offered() -> None:
+    """The observed failure is a hub skill ending in ``print(path)`` winning over
+    the one sentence in deliver_files' description. The counter-line has to travel
+    with the body that carries the foreign convention."""
+    from raven.context_engine.segments import render
+
+    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="prs.save(f)\nprint(f)")])
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([src]),
+        skill_top_k=1,
+        get_tool_definitions=_defs("read_file", "deliver_files"),
+    )
+    seg = await builder.build(_ctx("make me a deck"))
+    assert seg is not None
+    assert seg.text.startswith("# Skills")
+    assert seg.text.endswith(render.SKILL_DELIVERY_NOTE)
+    # Named as a conflict, not as a bare restatement: without the clause about
+    # where the other convention comes from, the model holds two rules and no
+    # reason to prefer this one.
+    assert "another product" in render.SKILL_DELIVERY_NOTE
+
+
+async def test_no_delivery_note_where_the_tool_is_absent() -> None:
+    """Every IM channel. Pointing at a tool that is not in the definitions reads
+    as an instruction that cannot be followed."""
+    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([src]),
+        skill_top_k=1,
+        get_tool_definitions=_defs("read_file", "message"),
+    )
+    seg = await builder.build(_ctx("make me a deck"))
+    assert seg is not None
+    assert "# Skills" in seg.text
+    assert "deliver_files" not in seg.text
+
+
+async def test_no_delivery_note_without_tool_awareness() -> None:
+    """``collect_tool_names`` returns None for a builder wired without tool
+    awareness. Content degrades to showing too much; this line degrades to
+    silence, because its whole content is "call this tool"."""
+    src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])
+    builder = SkillsSegmentBuilder(SkillForgeRouter([src]), skill_top_k=1)
+    seg = await builder.build(_ctx("make me a deck"))
+    assert seg is not None
+    assert "# Skills" in seg.text
+    assert "deliver_files" not in seg.text
+
+
+async def test_no_delivery_note_when_nothing_was_injected() -> None:
+    """An empty segment stays empty -- the note is an argument with a skill body,
+    so with no body there is nothing to argue with and nothing to pay for."""
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([_StubSource("local", [])]),
+        get_tool_definitions=_defs("deliver_files"),
+    )
+    seg = await builder.build(_ctx("hi"))
+    assert seg is not None
+    assert seg.text == ""
+
+
+async def test_the_note_follows_the_real_channel_gate(tmp_path: Path) -> None:
+    """The join the stubs cannot make: the real tool in a real registry, driven
+    through the real _set_tool_context, read back through the real definitions.
+    ``DeliverFilesTool.channels`` stays the one place that decides -- a web turn
+    gets the note, the same builder on an IM turn does not."""
+    from raven.agent.loop.main import AgentLoop
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.agent.tools.base import Tool
+    from raven.agent.tools.deliver import DeliverFilesTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.context_engine.segments import render
+
+    class _PlainTool(Tool):
+        """Channel-agnostic, so the IM leg's definitions stay non-empty and the
+        note is withheld by the membership check. Without it the filtered list is
+        empty, ``collect_tool_names`` collapses that to ``None``
+        (``return names or None``), and the leg would pass through the
+        no-tool-awareness branch instead -- proving nothing about the gate."""
+
+        @property
+        def name(self) -> str:
+            return "read_file"
+
+        @property
+        def description(self) -> str:
+            return "read a file"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs: Any) -> str:
+            return ""
+
+    workspace = tmp_path / "chanwork"
+    workspace.mkdir()
+    registry = ToolRegistry()
+    registry.register(_PlainTool())
+    registry.register(
+        DeliverFilesTool(
+            DeliverableStore(tmp_path / "deliverables.json"),
+            workspace=workspace,
+            allowed_dirs=(),
+        )
+    )
+
+    class _Loop:
+        tools = registry
+        _playbooks = None
+
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([_StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])]),
+        skill_top_k=1,
+        get_tool_definitions=registry.get_definitions,
+    )
+
+    AgentLoop._set_tool_context(_Loop(), "web", "default", None, session_key="web:s1")
+    assert "deliver_files" in (await builder.build(_ctx("deck"))).text
+
+    AgentLoop._set_tool_context(_Loop(), "telegram", "c1", None, session_key="telegram:c1")
+    assert render.collect_tool_names(registry.get_definitions) == ["read_file"]
+    assert "deliver_files" not in (await builder.build(_ctx("deck"))).text

@@ -231,6 +231,27 @@ def render_recalled_memory(memories: "list[Memory] | None") -> str:
     return wrap_untrusted("\n".join(lines), source="recalled memory")
 
 
+# One host-owned line appended to the ``# Skills`` block when this turn's tool
+# surface includes ``deliver_files``. Deliberately NOT a second resident copy of
+# the tool's own rule -- ``identity.py`` already deleted one duplicate resident
+# surface for drifting, and the rule does live in ``deliver.py``'s description.
+# This is placed against the instruction that overrides it: a hub skill is
+# written for another product, where saving a file and printing its path IS the
+# delivery (``openclaw_skills_claw-presentation-creator`` ends on
+# ``print(f"\u2713 Presentation created: {output_file}")``), and an injected body
+# of that shape beats one sentence in a tool description -- the observed turn
+# built a .pptx over 23 minutes and handed the web user a path under
+# ``/root/.raven/tmp/web/``, never calling the tool at all. So it names the
+# competing convention for the model to resolve rather than restating the rule
+# into the void, and it appears only on a turn that injected a skill body.
+SKILL_DELIVERY_NOTE = (
+    "Note: a skill body above may come from another product, where saving a file and "
+    "printing its path is how it reaches the user. That is not true on this channel -- "
+    "a path in the reply is not a delivery. Whatever a skill's own final step says, hand "
+    "a finished file over with `deliver_files`."
+)
+
+
 def render_router_skills(hits: list[Any]) -> str:
     """Render SkillForgeRouter hits into the ``# Skills`` body (segment 5).
 

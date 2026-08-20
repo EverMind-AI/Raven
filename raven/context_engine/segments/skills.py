@@ -175,6 +175,12 @@ class SkillsSegmentBuilder:
             },
         }
         text = f"# Skills\n\n{body}" if body else ""
+        if text and self._offers_deliver_files():
+            # Behind a rule so it cannot read as a continuation of the last
+            # skill's body -- bodies are joined with a blank line and start on a
+            # ``### Skill:`` header, so an unseparated trailing paragraph would
+            # look like it belongs to whichever skill happened to render last.
+            text += "\n\n---\n\n" + render.SKILL_DELIVERY_NOTE
         return Segment(text=text, meta=meta)
 
     async def _hydrate_bodies(
@@ -342,6 +348,24 @@ class SkillsSegmentBuilder:
             version=version,
             trigger="auto_inject",
         )
+
+    def _offers_deliver_files(self) -> bool:
+        """Whether ``deliver_files`` is in the definitions this turn carries.
+
+        Read off the definitions rather than compared against a channel name, so
+        the note appears exactly when the tool does: ``DeliverFilesTool.channels``
+        stays the one place that decides, and a change there cannot leave this
+        pointing at a tool the request never offered.
+
+        Unknowable (``None``) means no note. That inverts
+        :func:`render.collect_tool_names`'s "do not gate" convention on purpose --
+        that rule protects *content*, where showing too much beats suppressing it,
+        and a skill body is worth reading whatever the tools are. This line is
+        nothing but an instruction to call one named tool, and on every IM channel
+        that tool is absent, so a wiring gap has to degrade to silence.
+        """
+        names = render.collect_tool_names(self._get_tool_definitions)
+        return names is not None and "deliver_files" in names
 
     def _collect_tool_names(self) -> list[str] | None:
         """Tool names for the gate's hard-constraint block.
