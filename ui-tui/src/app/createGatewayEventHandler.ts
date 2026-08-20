@@ -78,17 +78,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       const label = top.length ? top.join(' · ') : `${subagents.length} subagents`
 
-      await rpc(
-        'spawn_tree.save',
-        {
-          finished_at: Date.now() / 1000,
-          label: label.slice(0, 120),
-          session_id: sessionId ?? 'default',
-          started_at: startedAt ? startedAt / 1000 : null,
-          subagents
-        },
-        { quiet: true }
-      )
+      await rpc('spawn_tree.save', {
+        finished_at: Date.now() / 1000,
+        label: label.slice(0, 120),
+        session_id: sessionId ?? 'default',
+        started_at: startedAt ? startedAt / 1000 : null,
+        subagents
+      })
     } catch {
       // Persistence is best-effort; in-memory history is the authoritative
       // same-session source.  A write failure doesn't block the turn.
@@ -107,7 +103,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     }
 
     lastDelegationFetchAt = now
-    rpc<DelegationStatusResponse>('delegation.status', {}, { quiet: true })
+    rpc<DelegationStatusResponse>('delegation.status', {})
       .then(r => applyDelegationStatus(r))
       .catch(() => {})
   }
@@ -164,7 +160,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       if (STARTUP_IMAGE) {
         try {
-          await rpc('image.attach', { path: STARTUP_IMAGE, session_id: sid }, { quiet: true })
+          await rpc('image.attach', { path: STARTUP_IMAGE, session_id: sid })
         } catch (e) {
           sys(`startup image attach failed: ${rpcErrorMessage(e)}`)
         }
@@ -186,7 +182,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       applySkinTheme(skin)
     }
 
-    rpc<CommandsCatalogResponse>('commands.catalog', {}, { quiet: true })
+    rpc<CommandsCatalogResponse>('commands.catalog', {})
       .then(r => {
         if (!r?.pairs) {
           return

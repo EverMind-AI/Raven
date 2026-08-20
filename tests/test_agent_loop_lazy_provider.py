@@ -56,11 +56,15 @@ def _make_loop(tmp_path: Path, provider) -> AgentLoop:
     )
 
 
-def test_construction_wires_on_built_to_refresh_context_window(tmp_path: Path) -> None:
+def test_construction_leaves_the_window_unresolved(tmp_path: Path) -> None:
+    """Nothing is asked about the model at construction: the window is the
+    binding's, resolved on the first read, which is inside a turn -- by then
+    the lazy provider has been built and LiteLLM's catalogue is loadable.
+    A window computed here would be the catalogue-miss default forever."""
     lazy = _make_lazy()
     agent = _make_loop(tmp_path, lazy)
 
-    assert lazy.on_built == agent.refresh_context_window
+    assert "_context_window" not in agent._default_binding.__dict__
 
 
 def test_construction_does_not_build_the_lazy_provider(tmp_path: Path) -> None:
@@ -75,17 +79,20 @@ def test_construction_with_a_plain_provider_skips_the_wiring(tmp_path: Path) -> 
     _make_loop(tmp_path, _StubProvider())  # must not raise
 
 
-def test_on_built_firing_after_construction_updates_the_window(tmp_path: Path, monkeypatch) -> None:
-    """End to end: once the real provider is built, the callback re-walks the
-    ladder and the corrected window lands on the loop."""
-    import raven.agent.loop.main as agent_loop_main
+def test_a_window_missed_while_cold_is_not_remembered(tmp_path: Path, monkeypatch) -> None:
+    """End to end for the lazy path: a read before the catalogue is loadable
+    answers with the default, and -- crucially -- does not cache it, so the
+    next read gets the real number instead of being wrong for the process."""
+    from raven.providers import rates
 
     lazy = _make_lazy(factory=lambda: _StubProvider())
     agent = _make_loop(tmp_path, lazy)
 
-    monkeypatch.setattr(agent_loop_main, "effective_context_window", lambda *a, **k: 4096)
-    lazy._built()  # simulates prewarm's background build completing
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: None)
+    assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
 
+    lazy._built()  # simulates prewarm's background build completing
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 4096)
     assert agent.context_window_tokens == 4096
 
 

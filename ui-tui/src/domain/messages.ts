@@ -6,7 +6,6 @@
 import type { Msg, SessionInfo } from '../types.js'
 
 import { LONG_MSG } from '../config/limits.js'
-import { t } from '../i18n/index.js'
 import { buildToolTrailLine, fmtK } from '../lib/text.js'
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
@@ -51,33 +50,10 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
       continue
     }
 
-    const { context, duration_ms: durationMs, name, origin, role, text } = row as TranscriptRow
-
-    if (role === 'user' && origin) {
-      /* A turn the runtime opened, not a person typing. Its text is internal
-         prose, so it is replaced rather than shown: the same sentence the live
-         trail prints when a delegated result rejoins the conversation, which is
-         also the row this replay was missing -- it arrives on an event, and an
-         event is not in the transcript. */
-      out.push({ role: 'system', text: `${origin} ${t('gui.deleg.delivered', 'delivered')}` })
-      pending = []
-
-      continue
-    }
+    const { context, name, role, text } = row as TranscriptRow
 
     if (role === 'tool') {
-      // The stored span, so a resumed trail line carries the same "(1.2s)" the
-      // live one did. Absent on an entry written before it was recorded --
-      // undefined, which prints no clock rather than a "(0.0s)" nothing ran in.
-      pending.push(
-        buildToolTrailLine(
-          name ?? 'tool',
-          context ?? '',
-          undefined,
-          undefined,
-          durationMs != null ? durationMs / 1000 : undefined
-        )
-      )
+      pending.push(buildToolTrailLine(name ?? 'tool', context ?? ''))
 
       continue
     }
@@ -115,10 +91,7 @@ interface ImageMeta {
 
 interface TranscriptRow {
   context?: string
-  duration_ms?: number
   name?: string
-  /** See `GatewayTranscriptMessage.origin`: set when the runtime opened the turn. */
-  origin?: string
   role?: string
   text?: string
 }

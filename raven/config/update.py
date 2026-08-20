@@ -392,33 +392,6 @@ def set_plugin_config_fields(
     )
 
 
-def set_playbook_disabled(
-    name: str,
-    disabled: bool,
-    *,
-    config_path: Path | None = None,
-) -> bool:
-    """Add/remove one playbook name on the ``playbooks.disabled`` deny list.
-
-    Returns True when the file changed (False = already in the desired
-    state). The list is the only per-machine playbook state: playbook.md is
-    the distribution unit and carries no switch, so disable adds the name
-    here and enable removes it — for builtin and user playbooks alike. The
-    runtime reads the list once at loop start; a change applies on the next
-    agent/gateway start.
-    """
-    path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
-    section = data.setdefault("playbooks", {})
-    deny = list(section.get("disabled") or [])
-    if disabled == (name in deny):
-        return False
-    section["disabled"] = sorted(set(deny) | {name}) if disabled else [n for n in deny if n != name]
-    _write_atomic(path, data)
-    logger.info("config/update: playbooks.disabled {} {!r}", "added" if disabled else "removed", name)
-    return True
-
-
 def set_memory_backend(
     backend: str | None,
     *,
@@ -451,6 +424,5 @@ __all__ = [
     "set_sandbox_backend",
     "set_memory_backend",
     "set_skill_blocked",
-    "set_playbook_disabled",
     "init_extension_block_defaults",
 ]

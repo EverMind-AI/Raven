@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
+import { argPreview } from '../lib/toolArgs.js'
 
 describe('argPreview', () => {
   it('prefers the query over a numeric flag (web_search), regardless of key order', () => {
@@ -33,45 +33,5 @@ describe('argPreview', () => {
     expect(argPreview({})).toBe('')
     // Falls back to the first reachable string when no preferred key matches.
     expect(argPreview({ misc: 'plain value' })).toBe('plain value')
-  })
-})
-
-describe('dagPromptTemplates', () => {
-  it('keys each node prompt by its node id', () => {
-    expect(
-      dagPromptTemplates({
-        nodes: [
-          { id: 'fetch', agent: 'Coder', prompt_template: 'read the i18n messages' },
-          { id: 'report', agent: 'Writer', prompt_template: 'summarise {{ fetch.output }}' }
-        ]
-      })
-    ).toEqual({ fetch: 'read the i18n messages', report: 'summarise {{ fetch.output }}' })
-  })
-
-  it('accepts the camelCase spelling humans write in a graph file', () => {
-    // The JSON Schema handed to the model is snake_case; the file form reviewed
-    // in git is camelCase, and both reach the client as authored.
-    expect(dagPromptTemplates({ nodes: [{ id: 'a', promptTemplate: 'do the thing' }] })).toEqual({
-      a: 'do the thing'
-    })
-  })
-
-  it('skips a node with no usable id or template', () => {
-    expect(
-      dagPromptTemplates({
-        nodes: [
-          { id: 'ok', prompt_template: 'yes' },
-          { prompt_template: 'no id' },
-          { id: 'blank', prompt_template: '  ' },
-          'junk',
-          null
-        ]
-      })
-    ).toEqual({ ok: 'yes' })
-  })
-
-  it('is empty for a call that carries no node list', () => {
-    expect(dagPromptTemplates({})).toEqual({})
-    expect(dagPromptTemplates({ nodes: 'not a list' })).toEqual({})
   })
 })

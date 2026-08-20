@@ -1,9 +1,8 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
@@ -17,23 +16,7 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
-class ChannelBase(Base):
-    """Fields every chat channel carries, whatever transport it speaks."""
-
-    # One directory per channel rather than per conversation: a channel is the
-    # unit the user configures, and its chats are the same kind of work.
-    # Declared once here so a newly added channel cannot forget it.
-    workspace: str = Field(
-        default="",
-        description=(
-            "Absolute path this channel's chats read and write files in. Leave empty for the default, "
-            "~/.raven/tmp/<channel>. Must not be the agent home directory or anything inside its "
-            "memory, skills or session trees."
-        ),
-    )
-
-
-class WhatsAppConfig(ChannelBase):
+class WhatsAppConfig(Base):
     """WhatsApp channel configuration."""
 
     enabled: bool = False
@@ -43,7 +26,7 @@ class WhatsAppConfig(ChannelBase):
     group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
 
 
-class TelegramConfig(ChannelBase):
+class TelegramConfig(Base):
     """Telegram channel configuration."""
 
     enabled: bool = False
@@ -56,7 +39,7 @@ class TelegramConfig(ChannelBase):
     )
 
 
-class FeishuConfig(ChannelBase):
+class FeishuConfig(Base):
     """Feishu/Lark channel configuration using WebSocket long connection."""
 
     enabled: bool = False
@@ -69,7 +52,7 @@ class FeishuConfig(ChannelBase):
     group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
 
 
-class DingTalkConfig(ChannelBase):
+class DingTalkConfig(Base):
     """DingTalk channel configuration using Stream mode."""
 
     enabled: bool = False
@@ -78,7 +61,7 @@ class DingTalkConfig(ChannelBase):
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
 
 
-class DiscordConfig(ChannelBase):
+class DiscordConfig(Base):
     """Discord channel configuration."""
 
     enabled: bool = False
@@ -89,7 +72,7 @@ class DiscordConfig(ChannelBase):
     group_policy: Literal["mention", "open"] = "mention"
 
 
-class MatrixConfig(ChannelBase):
+class MatrixConfig(Base):
     """Matrix (Element) channel configuration."""
 
     enabled: bool = False
@@ -110,7 +93,7 @@ class MatrixConfig(ChannelBase):
     allow_room_mentions: bool = False
 
 
-class EmailConfig(ChannelBase):
+class EmailConfig(Base):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
     enabled: bool = False
@@ -154,7 +137,7 @@ class MochatGroupRule(Base):
     require_mention: bool = False
 
 
-class MochatConfig(ChannelBase):
+class MochatConfig(Base):
     """Mochat channel configuration."""
 
     enabled: bool = False
@@ -189,7 +172,7 @@ class SlackDMConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
 
 
-class SlackConfig(ChannelBase):
+class SlackConfig(Base):
     """Slack channel configuration."""
 
     enabled: bool = False
@@ -208,7 +191,7 @@ class SlackConfig(ChannelBase):
     dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
 
 
-class QQConfig(ChannelBase):
+class QQConfig(Base):
     """QQ channel configuration using botpy SDK."""
 
     enabled: bool = False
@@ -217,7 +200,7 @@ class QQConfig(ChannelBase):
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
 
 
-class WecomConfig(ChannelBase):
+class WecomConfig(Base):
     """WeCom (Enterprise WeChat) AI Bot channel configuration."""
 
     enabled: bool = False
@@ -227,7 +210,7 @@ class WecomConfig(ChannelBase):
     welcome_message: str = ""  # Welcome message for enter_chat event
 
 
-class WeixinConfig(ChannelBase):
+class WeixinConfig(Base):
     """Personal WeChat channel configuration."""
 
     enabled: bool = False
@@ -270,7 +253,14 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
-    provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+    # The vendor whose credential serves ``model``. Required in practice: an id
+    # alone does not name a credential -- `openrouter` serving
+    # `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5`
+    # are both valid, name different keys and different bills, and the id does
+    # not distinguish them. Empty is what a config written before that rule
+    # carries; ``loader`` migrates those once, writing down whichever vendor
+    # they were in fact resolving to.
+    provider: str = ""
     # No maxTokens here on purpose. A number in a config file cannot be right
     # for every model -- too large is a 400, too small truncates silently --
     # so the ceiling is resolved per model from the catalogue
@@ -287,10 +277,9 @@ class AgentDefaults(Base):
     # finishing, which an httpx per-read timeout never catches.
     llm_call_timeout: int = 600
     max_tool_iterations: int = 40
-    # Cap on subagent VMs running at once, counting spawns and DAG nodes
-    # together (excess queues). ge=1: a 0/negative cap would deadlock every
-    # subagent (Semaphore(0)).
-    max_concurrent_subagents: int = Field(default=8, ge=1)
+    # Cap on subagent VMs running at once (excess spawns queue). ge=1: a
+    # 0/negative cap would deadlock every subagent (Semaphore(0)).
+    max_concurrent_subagents: int = Field(default=4, ge=1)
     # Spawn rate limit per session, per rolling hour — the concurrency gate
     # alone can't stop a prompt-injected agent from spawning indefinitely (each
     # finishes, freeing a slot for the next; the cross-turn re-injection loop
@@ -724,51 +713,6 @@ class GatewayLogConfig(Base):
     console_level: str = "INFO"
 
 
-class GatewayWebConfig(ChannelBase):
-    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint the
-    web backend connects to as a client (ui-webui P1).
-
-    Off by default. When enabled, the gateway hosts a ``web`` channel — its own
-    streaming spine (build_web) plus a WS server — alongside the IM channels,
-    reusing the TUI RPC wire protocol (token.delta / thinking.delta / tool.* /
-    message.complete). Single-user by design: bound to loopback, not exposed
-    off-box; ``auth_token`` (if set) is a shared secret the client sends as the
-    first line, mirroring the TUI RpcServer's trust gate.
-    """
-
-    enabled: bool = False
-    host: str = "127.0.0.1"
-    port: int = 8765
-    auth_token: str | None = None
-
-
-class GatewayPageConfig(Base):
-    """The served page (`raven serve`'s browser front end) hosted inside the
-    gateway process, on the gateway's own agent loop.
-
-    On by default: one engine then serves the page and the IM channels, so
-    what the browser sees is what the channels talk to. The page follows the
-    `raven serve` port policy (``port``, probing forward when taken), writes
-    ``~/.raven/serve.json``, and `raven web` attaches to it. Disable to keep
-    the gateway channel-only and run `raven serve` standalone instead.
-    """
-
-    enabled: bool = True
-    port: int = 18792
-
-
-class TuiConfig(Base):
-    """Terminal UI launcher behavior.
-
-    ``attach_gateway``: when a live ``raven gateway`` already hosts the page,
-    ``raven tui`` relays to that engine instead of building a second one, so
-    the terminal and the channels share one loop. Set false — or pass
-    ``--standalone`` for one launch — to always run the embedded engine.
-    """
-
-    attach_gateway: bool = True
-
-
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -779,8 +723,6 @@ class GatewayConfig(Base):
     send_max_retries: int = 3
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
-    web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)
-    page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
 class WebSearchConfig(Base):
@@ -851,40 +793,6 @@ class DeepResearchToolConfig(Base):
     model: str = ""  # defaults to mirothinker-1-7-deepresearch-mini
 
 
-class MCPOAuthConfig(Base):
-    """What an ``auth="oauth"`` server's authorization server already told us.
-
-    Every field restates something the OAuth handshake would otherwise learn
-    over the network: the RFC 8414 metadata document (``issuer`` through
-    ``scopes``), the RFC 9728 protected-resource document (``resource``,
-    ``scopes``), and an RFC 7591 registration's result (``client_id``). Filling
-    them in lets a connect go straight to the consent page; leaving them empty
-    is the discovery-and-register path, unchanged.
-
-    Written by a market install from the catalog entry, and hand-editable. Facts
-    only -- never a client secret: raven authorizes as a public client, and a
-    secret in ``config.json`` would be a secret in a world-readable file.
-    """
-
-    issuer: str = ""
-    authorization_endpoint: str = ""
-    token_endpoint: str = ""
-    registration_endpoint: str = ""
-    scopes: list[str] = Field(default_factory=list)
-    resource: str = ""
-    """The RFC 8707 audience the tokens are for. Seeding the protected-resource
-    document needs it, and it is checked against the server URL before use --
-    a value that moves the audience is refused rather than trusted."""
-    client_id: str = ""
-    """A client already registered with this service, so registration is skipped
-    and the consent page can name the service's own app instead of "Raven"."""
-    redirect_uri: str = ""
-    """The redirect ``client_id`` is registered under. Required with it, and
-    honoured exactly: raven's loopback port can move, and a pre-registered
-    client whose redirect no longer matches would send the browser to a port
-    nobody is listening on."""
-
-
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -895,15 +803,6 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
-    # Disabled keeps the stanza and any stored credentials but never connects, so
-    # turning a server off does not cost the user their re-authorisation.
-    enabled: bool = True
-    # How this server proves who it is. ``oauth`` means a browser flow whose
-    # tokens land under ~/.raven/credentials/mcp/, which is why the manager has
-    # to distinguish it: an apikey server that fails is broken, an oauth server
-    # that fails may just be waiting for a human.
-    auth: Literal["none", "apikey", "oauth"] = "none"
-    oauth: MCPOAuthConfig = Field(default_factory=MCPOAuthConfig)
 
 
 class ToolSearchConfig(Base):
@@ -939,613 +838,10 @@ class ToolsConfig(Base):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
     disabled_tools: list[str] = Field(default_factory=list)
-    """Tool names to withhold from the assembled tool array and refuse at dispatch.
-    The general off switch for a tool this deploy does not want, and the only one
-    that covers a tool with an unconfigured stand-in variant (``deep_research``),
-    where clearing the tool's own config only swaps which variant registers. Also
-    used by eval harnesses (e.g. BrowseComp-Plus) to constrain the agent to a
-    specific tool subset. Names match those in ``ToolRegistry`` (e.g.
-    ``read_file``, ``web_search``, or ``mcp_bcp-search_search``).
-
-    Re-read once per assembled array, so a change takes effect on the next turn
-    rather than the next restart. The tool stays registered either way: expressing
-    the preference by unregistering made it irreversible, because nothing
-    remembered what to put back.
-
-    The MCP meta-tools -- ``list_mcp_resources``, ``list_mcp_resource_templates``,
-    ``read_mcp_resource``, ``list_mcp_prompts``, ``get_mcp_prompt`` -- are the one
-    exception. Raven registers and withdraws them itself as MCP servers serving
-    those primitives come and go, so an entry naming one has no effect and is
-    logged as such rather than silently ignored."""
-
-
-def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
-    """Backfill or validate a third-party subagent's ``preset`` provenance.
-
-    Backfills ``preset`` to ``name`` only when the entry still carries a
-    preset's own default name -- an entry that was renamed (this machine's
-    config holds ``Coder``, ``Writer``, ``DeepResearcher``) has a genuinely
-    unknowable origin and must not be guessed from other fields such as
-    ``command`` or ``model``. An explicit, non-``None`` value is left alone
-    unless it names no built-in preset, in which case it is rejected -- a
-    hand-edited ``preset: "hermes"`` on an unrelated entry would otherwise
-    both dodge the reserved-name guard and hide the real Hermes preset from
-    the Presets group.
-
-    Matched on name alone, deliberately not on ``kind``. There is exactly one
-    preset per agent, and it already fixes that agent's transport, so a stored
-    entry on an older transport (a cli ``codex`` from before its preset moved to
-    acp) still belongs to that preset -- and saying so is what lets the UI offer
-    it an upgrade. Gating on kind would instead read it as hand-written, hide the
-    upgrade, and offer the preset again as unconfigured.
-
-    The preset name set is imported inside this function, not at module
-    level: ``raven.agent.subagent.presets`` imports ``SubagentsConfig`` from
-    this module (deferred inside ``_normalized``), and importing back here at
-    module level would put both sides of that cycle at module-init time.
-    """
-    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
-
-    presets = THIRD_PARTY_SUBAGENT_PRESETS
-    if preset is None:
-        return name if name in presets else None
-    if preset not in presets:
-        raise ValueError(f"preset {preset!r} is not a known built-in preset name")
-    return preset
-
-
-class ThirdPartyCliSubagentConfig(Base):
-    """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
-
-    ``command`` is an argv template: a ``{prompt}`` token is replaced by the task
-    text as a single argv token (injection-safe), ``{prompt_file}`` by a path to
-    a file holding the prompt. With neither placeholder, the prompt is delivered
-    on the child's stdin.
-
-    Setting ``resume_command`` makes the agent stateful: a caller-supplied
-    instance handle is bound to the CLI's own session id, substituted as
-    ``{agent_id}``. With ``id_source="provisioned"`` raven mints the id and
-    passes it on the create call; with ``"derived"`` the CLI mints it and raven
-    reads it back out of the transcript.
-
-    ``timeout`` is ``None`` by default, meaning no automatic limit: the run is
-    ended by hand (manual stop), not by a timer. Set it to opt into an
-    automatic backstop instead.
-    """
-
-    owns: str | None = None
-    """What kind of work this agent owns, as one clause completing "``<name>``
-    ...". Rendered into the identity prompt's Delegation section so the model is
-    told not to do that work itself; agents that declare nothing are absent from
-    it, which is what an install with no specialists reads as.
-
-    ``None`` is "not declared" and is filled in from the folder's manifest for a
-    vendored agent, so a config written before this field existed still gets one.
-    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
-    so that opting an agent out is possible and is not undone by that fill.
-    """
-
-    name: str
-    kind: Literal["cli"] = "cli"
-    description: str = ""
-    preset: str | None = None
-    """Which built-in preset this entry was created from, or ``None`` for a
-    hand-written one.
-
-    Provenance only - nothing in the runtime reads it. The web UI needs it
-    because ``name`` is user-editable: without it a renamed entry is
-    indistinguishable from a hand-written agent, so its preset would wrongly
-    reappear as unconfigured and could then be configured twice.
-    """
-    enabled: bool = True
-    """Whether the dispatching model is offered this agent at all.
-
-    Read only where the roster is built (see ``enabled_third_party``), never
-    derived from a probe: this records what the user wants, not whether the agent
-    currently works. Defaults to ``true`` so an entry written before this field
-    existed keeps being advertised exactly as it was.
-    """
-    command: str
-    resume_command: str | None = None
-    stateful: bool | None = None
-    """Declares whether reusing an instance handle continues this agent's
-    session. ``None`` derives it from ``resume_command``; an explicit value must
-    agree with that (``true`` needs ``resumeCommand`` set, ``false`` needs it
-    unset), so the declaration the roster advertises can never contradict the
-    mechanism that would have to deliver it."""
-    reads_local_files: bool = True
-    """Whether this agent can open paths on this machine. A CLI agent is a local
-    subprocess, so it can by default. Set ``false`` for one that runs elsewhere
-    (a container / remote host without the shared filesystem): DAG nodes then
-    have to pass file *contents* rather than paths."""
-    id_source: Literal["provisioned", "derived"] = "provisioned"
-    session_id_pattern: str | None = None
-    output_pattern: str | None = None
-    transcript_format: Literal["text", "codex_jsonl", "claude_stream_json", "openclaw_json", "opencode_json"] = "text"
-    cwd: str | None = None
-    env: dict[str, str] = Field(default_factory=dict)
-    timeout: int | None = None
-    max_output_chars: int = 30000
-
-    @model_validator(mode="after")
-    def _check_stateful_matches_resume(self) -> "ThirdPartyCliSubagentConfig":
-        if self.stateful is None:
-            return self
-        if self.stateful and not self.resume_command:
-            raise ValueError("stateful is true but resumeCommand is unset (nothing can resume a session)")
-        if not self.stateful and self.resume_command:
-            raise ValueError("stateful is false but resumeCommand is set (remove resumeCommand to make it stateless)")
-        return self
-
-    @model_validator(mode="after")
-    def _check_agent_id_placeholders(self) -> "ThirdPartyCliSubagentConfig":
-        # An {agent_id} left unsubstituted reaches the CLI as a literal string
-        # and the run fails obscurely, so reject the bad combinations at write time.
-        in_command = "{agent_id}" in self.command
-        if not self.resume_command:
-            if in_command:
-                raise ValueError("command uses {agent_id} but resumeCommand is unset (agent is stateless)")
-            return self
-        if "{agent_id}" not in self.resume_command:
-            raise ValueError("resumeCommand must contain {agent_id}")
-        if self.id_source == "provisioned" and not in_command:
-            raise ValueError("command must contain {agent_id} when idSource is 'provisioned'")
-        if self.id_source == "derived" and in_command:
-            raise ValueError("command must not contain {agent_id} when idSource is 'derived'")
-        return self
-
-    @model_validator(mode="after")
-    def _resolve_preset(self) -> "ThirdPartyCliSubagentConfig":
-        self.preset = _resolve_preset_provenance(self.name, self.preset)
-        return self
-
-
-class ThirdPartyOpenAISubagentConfig(Base):
-    """A third-party OpenAI-compatible HTTP agent (mirothinker, …) as a subagent.
-
-    ``timeout`` is ``None`` by default, meaning no automatic limit: the run is
-    ended by hand (manual stop), not by a timer. Set it to opt into an
-    automatic backstop instead.
-    """
-
-    owns: str | None = None
-    """What kind of work this agent owns, as one clause completing "``<name>``
-    ...". Rendered into the identity prompt's Delegation section so the model is
-    told not to do that work itself; agents that declare nothing are absent from
-    it, which is what an install with no specialists reads as.
-
-    ``None`` is "not declared" and is filled in from the folder's manifest for a
-    vendored agent, so a config written before this field existed still gets one.
-    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
-    so that opting an agent out is possible and is not undone by that fill.
-    """
-
-    name: str
-    kind: Literal["openai"] = "openai"
-    description: str = ""
-    preset: str | None = None
-    """Which built-in preset this entry was created from, or ``None`` for a
-    hand-written one.
-
-    Provenance only - nothing in the runtime reads it. The web UI needs it
-    because ``name`` is user-editable: without it a renamed entry is
-    indistinguishable from a hand-written agent, so its preset would wrongly
-    reappear as unconfigured and could then be configured twice.
-    """
-    enabled: bool = True
-    """Whether the dispatching model is offered this agent at all.
-
-    Read only where the roster is built (see ``enabled_third_party``), never
-    derived from a probe: this records what the user wants, not whether the agent
-    currently works. Defaults to ``true`` so an entry written before this field
-    existed keeps being advertised exactly as it was.
-    """
-    base_url: str
-    model: str
-    api_key: str = ""
-    stateful: bool = True
-    """Declares whether reusing an instance handle continues this agent's
-    conversation. An HTTP agent has no session of its own to resume, so a
-    ``true`` here opts into Raven replaying the message list itself (see
-    ``raven/agent/subagent/instance_state.py``) rather than agreeing with a
-    resume command the way the cli kind's ``stateful`` does.
-
-    Defaults to ``true``, unlike the cli kind, because the replay mechanism is
-    raven's own and works against any endpoint -- so the default describes the
-    mechanism that is actually there. What a ``false`` records is the opposite:
-    an endpoint replay is meaningless at (mirothinker ignores a system prompt
-    entirely, so a replayed transcript continues nothing). Only a preset, or the
-    person who chose a custom endpoint, can know that; no probe reaches it. No
-    UI surface writes this field, by decision -- a custom entry is stateful, and
-    an operator who knows better edits the config file.
-
-    A stored ``null`` reads as the default rather than as an error: the field
-    used to be ``bool | None`` and entries written then have one on disk. See
-    ``_null_stateful_is_the_default``."""
-
-    @field_validator("stateful", mode="before")
-    @classmethod
-    def _null_stateful_is_the_default(cls, value: Any) -> Any:
-        """Coerce a stored ``null`` to the default instead of rejecting it.
-
-        This field was optional until the default became ``true``, so every
-        entry written by the older form carries an explicit ``null``. Rejecting
-        it would fail validation of the whole top-level ``Config`` -- raven
-        would stop starting, with the config that could be fixed sitting behind
-        the loader that no longer reads it. Same reasoning, and the same shape,
-        as ``_drop_declared_local_file_access`` below.
-        """
-        return True if value is None else value
-
-    reads_local_files: bool = False
-    """Always ``false`` for this kind; ``true`` is coerced away below.
-
-    ``OpenAIApiBackend`` has no tools and no filesystem access of its own, so
-    no channel exists through which the endpoint could open a path -- being
-    served from this host does not change that. The value is not inert:
-    ``format_agent_listing`` renders it into the spawn / DAG tool descriptions
-    as a ``local-files`` tag, which is the dispatching model's licence to hand
-    this agent a path."""
-    system_prompt: str | None = None
-    temperature: float | None = None
-    max_tokens: int | None = None
-    timeout: int | None = None
-    max_output_chars: int = 128000
-
-    @model_validator(mode="after")
-    def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
-        """``stateful`` is honoured for this kind now.
-
-        It used to be rejected on the grounds that an HTTP agent has no
-        resumable session. It has one now, but Raven owns it: the message list
-        is replayed from ``raven/agent/subagent/instance_state.py`` rather than
-        resumed by the provider, so no ``resumeCommand`` is involved and there
-        is nothing for the cli-kind cross-check to verify here.
-        """
-        return self
-
-    @model_validator(mode="after")
-    def _drop_declared_local_file_access(self) -> "ThirdPartyOpenAISubagentConfig":
-        """Coerce rather than reject: this field is one an older form wrote.
-
-        The web form used to default ``readsLocalFiles`` to true and render its
-        checkbox for both kinds, so a user who created an openai sub-agent and
-        did not untick it has ``true`` on disk today. Raising here would surface
-        as a ``ValidationError`` on the whole top-level ``Config``: raven would
-        stop starting, and the UI that could fix the field is behind the config
-        that no longer loads. There is no way out of that from inside the
-        product.
-
-        A hard reject is still right where the caller can act on it -- see
-        ``reject_unsupported_openai_fields``, which the write path calls on an
-        incoming payload. The neighbouring ``_allow_replayed_state`` no longer
-        rejects ``stateful`` because Raven now replays the message list itself
-        for this kind.
-        """
-        if self.reads_local_files:
-            logger.warning(
-                "readsLocalFiles is not supported for kind 'openai' (sub-agent {!r}); treating it "
-                "as false -- the backend has no tools and no filesystem access, so nothing can "
-                "open a path here",
-                self.name,
-            )
-            self.reads_local_files = False
-        return self
-
-    @model_validator(mode="after")
-    def _resolve_preset(self) -> "ThirdPartyOpenAISubagentConfig":
-        self.preset = _resolve_preset_provenance(self.name, self.preset)
-        return self
-
-
-ACP_UNSUPPORTED_FIELDS: tuple[str, ...] = (
-    "resume_command",
-    "id_source",
-    "session_id_pattern",
-    "output_pattern",
-    "transcript_format",
-    "stateful",
-    "reads_local_files",
-)
-"""Fields a cli entry uses to *declare* behaviour, which an acp entry negotiates.
-
-Kept as data rather than inline so the write-path rejector
-(``raven.config.update_subagents.reject_unsupported_acp_fields``) and the
-load-path coercion below cannot drift onto different lists.
-"""
-
-ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent_id}")
-
-
-class ThirdPartyAcpSubagentConfig(Base):
-    """A third-party agent reached over ACP (Agent Client Protocol), e.g. ``hermes acp``.
-
-    ``command`` starts a *server* and is spawned once per connection, not once
-    per task: a task is delivered as a ``session/prompt`` request on the running
-    connection. So unlike a cli entry it carries no ``{prompt}`` placeholder,
-    and none of the fields listed in :data:`ACP_UNSUPPORTED_FIELDS`.
-
-    Those seven are absent by design rather than by omission. Each one is a cli
-    *declaration* about behaviour (can it resume, who mints the session id, how
-    is its transcript shaped) whose acp counterpart comes from the ``initialize``
-    handshake instead. Accepting both would make every one of them a second
-    source of truth, and the first time a declaration disagreed with the
-    handshake nothing in the code would know which to believe.
-    """
-
-    owns: str | None = None
-    """What kind of work this agent owns, as one clause completing "``<name>``
-    ...". Rendered into the identity prompt's Delegation section so the model is
-    told not to do that work itself; agents that declare nothing are absent from
-    it, which is what an install with no specialists reads as.
-
-    ``None`` is "not declared" and is filled in from the folder's manifest for a
-    vendored agent, so a config written before this field existed still gets one.
-    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
-    so that opting an agent out is possible and is not undone by that fill.
-    """
-
-    name: str
-    kind: Literal["acp"] = "acp"
-    description: str = ""
-    """Operator override for the roster line. Blank means "use what the handshake
-    reported" (``agentInfo.name`` plus version), which is the point of ACP: the
-    agent describes itself, so a human does not have to."""
-    preset: str | None = None
-    """Which built-in preset this entry was created from, or ``None`` for a
-    hand-written one. Provenance only -- see the cli config for why the web UI
-    needs it."""
-    enabled: bool = True
-    command: str
-    cwd: str | None = None
-    env: dict[str, str] = Field(default_factory=dict)
-    ready_timeout_ms: int = 30000
-    """How long the ``initialize`` handshake may take before the agent is
-    reported unreachable. Generous by default because a bridge-backed server can
-    be slow to come up: ``openclaw acp`` did not answer within 20s on the host
-    this was measured on, and a too-tight budget reports a working agent as
-    broken."""
-    timeout: int | None = None
-    """Per-task ceiling for one ``session/prompt``. ``None`` means no automatic
-    limit, matching the cli config: a long task is ended by hand, not a timer."""
-    max_output_chars: int = 30000
-
-    @model_validator(mode="before")
-    @classmethod
-    def _warn_on_declared_cli_fields(cls, data: Any) -> Any:
-        """Warn about, rather than reject, a cli-only field on an acp entry.
-
-        Warn-and-drop on load for the reason ``_drop_declared_local_file_access``
-        gives: a hard reject here surfaces as a ``ValidationError`` on the whole
-        top-level ``Config``, so raven would stop starting and the UI that could
-        fix the field would sit behind the config that no longer loads. Dropping
-        needs no code -- ``Base`` ignores unknown keys -- but the operator still
-        has to be told that the field they wrote is doing nothing.
-
-        Inspected here rather than in an ``after`` validator because by then the
-        unknown key is already gone: ``Base`` does not set ``extra="allow"``, so
-        ``model_extra`` is empty and there is nothing left to notice.
-
-        The hard reject lives at the write path instead
-        (``update_subagents.reject_unsupported_acp_fields``), where the caller owns
-        the value and can act on the error.
-        """
-        if not isinstance(data, dict):
-            return data
-        declared = [
-            spelling for field in ACP_UNSUPPORTED_FIELDS for spelling in (field, to_camel(field)) if spelling in data
-        ]
-        if declared:
-            logger.warning(
-                "{} not supported for kind 'acp' (sub-agent {!r}); ignoring -- an acp agent reports "
-                "these through the initialize handshake instead",
-                sorted(set(declared)),
-                data.get("name") or "<unnamed>",
-            )
-        return data
-
-    @model_validator(mode="after")
-    def _warn_on_prompt_placeholders(self) -> "ThirdPartyAcpSubagentConfig":
-        """Warn that a task placeholder in ``command`` cannot work here.
-
-        Not a reject, for the same startup reason as above, and not a coercion
-        either because there is no correct value to substitute. Left in place, the
-        placeholder reaches the child as a literal argv token, the handshake
-        fails, and the agent is reported ``unreachable`` with the launch error --
-        a degraded but self-explaining state, which beats not starting.
-        """
-        found = [p for p in ACP_PROMPT_PLACEHOLDERS if p in self.command]
-        if found:
-            logger.warning(
-                "acp sub-agent {!r} has task placeholder(s) {} in `command`, which starts a server "
-                "rather than one task; they will be passed through literally and the handshake will "
-                "fail",
-                self.name,
-                found,
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _resolve_preset(self) -> "ThirdPartyAcpSubagentConfig":
-        self.preset = _resolve_preset_provenance(self.name, self.preset)
-        return self
-
-
-class BuiltinAgentConfig(Base):
-    """An in-process raven agent loop, callable as a named sub-agent.
-
-    The same backend the main loop dispatches an unnamed spawn to
-    (:class:`RavenLoopBackend`), differing only in which skills and tools it may
-    reach. It is on the same table as the external agents so that ``spawn`` and a
-    DAG node pick from one roster: a built-in agent that is only reachable by
-    omitting the ``subagent`` argument is an agent the model cannot be told about.
-
-    A row here is an *override* of the package's own seed rows (see
-    ``raven.agent.subagent.builtin_agents``), matched by ``name`` -- writing one
-    is how a user retunes ``research-raven``'s skills, and writing a name the
-    package does not ship is how they add a fifth. There is no way to delete a
-    seed row, because not writing it is what "use the default" means; set
-    ``enabled: false`` to take one off the roster.
-
-    ``skills`` and ``tools`` are three-valued on purpose. ``null`` (the default)
-    means the full catalogue, an empty list means *no* menu at all, and a list
-    narrows to those entries -- the empty case has to be expressible because
-    "this agent gets no skills" is a real charter, and folding it into ``null``
-    would advertise the opposite of what was written.
-    """
-
-    owns: str | None = None
-    """What kind of work this agent owns, as one clause completing "``<name>``
-    ...". Rendered into the identity prompt's Delegation section so the model is
-    told not to do that work itself; agents that declare nothing are absent from
-    it, which is what an install with no specialists reads as.
-
-    ``None`` is "not declared" and inherits the seed's own value when this row
-    overrides one (``_overrides`` drops a field still holding its default), so a
-    row written to retune ``skills`` cannot silently strip a seed's ownership.
-    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
-    so that opting an agent out is possible and is not undone by that inherit.
-    """
-
-    name: str
-    kind: Literal["builtin"] = "builtin"
-    description: str = ""
-    enabled: bool = True
-    model: str | None = None
-    """Model override for this agent's loop; ``None`` inherits the main loop's."""
-    skills: list[str] | None = None
-    tools: list[str] | None = None
-    restrict_to_workspace: bool | None = None
-    """``None`` inherits the manager's own setting rather than forcing one, so a
-    row that says nothing about confinement cannot loosen it."""
-    timeout: int | None = None
-    max_output_chars: int = 30000
-
-
-AgentConfig = Annotated[
-    BuiltinAgentConfig | ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
-    Field(discriminator="kind"),
-]
-
-# The pre-``agents`` spelling of the union, kept as an alias because "third
-# party" is still the right name for the three external transports where a
-# caller genuinely means those (the probe, the acp snapshot store).
-ThirdPartySubagentConfig = Annotated[
-    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
-    Field(discriminator="kind"),
-]
-
-
-class PlaybookRouterConfig(Base):
-    """How far the per-turn playbook listing is narrowed.
-
-    Same two knobs as ``skillForge.router``, and for the same reason: the
-    expensive part of advertising a playbook is its description plus parameter
-    table, and a library of a hundred cannot spend that on every turn. Only the
-    *description* half is narrowed -- the ``name`` enum stays the whole library,
-    so a retrieval miss never makes a playbook unreachable.
-    """
-
-    top_k: int = Field(default=5, ge=1)
-    """How many playbooks get a full description in the tool this turn."""
-
-    over_fetch_factor: int = Field(default=2, ge=1)
-    """Rank this many times ``top_k`` before cutting back, mirroring the skill
-    router. One local source means there is nothing to fuse, so this only widens
-    the window the ranking is computed over."""
-
-
-class PlaybookConfig(Base):
-    """The stored playbook library, and how it is offered to the model.
-
-    ``enabled`` gates the library being loaded at all. There is no per-message
-    matching cost any more: the model decides whether to use a playbook, from the
-    same tool table it decides everything else from, so nothing runs ahead of the
-    turn and no gate call is spent on a message that mentions a trigger word.
-
-    On by default. What that costs is measurable and fixed: the two entry tools
-    add about 848 tokens of definition per request (``available_history`` on a
-    200k window moves from 130.0k to 129.2k), and nothing else -- no pre-turn
-    work, no LLM call, no matching. What it buys is that the builtin library is
-    reachable at all; ``load_playbook`` registers only when the library is
-    non-empty, and the builtin layer ships two playbooks, so in practice it is
-    always offered. Turn it off with ``playbooks.enabled: false``.
-    """
-
-    enabled: bool = True
-    dir: str | None = None
-    """Override for the user layer of the library; defaults to
-    ``<agent_home>/playbooks``. The builtin layer ships with the package and
-    is not configurable — a user playbook of the same name shadows it."""
-
-    model: str | None = None
-    """Model for composing a ``prompt``-mode graph on the CLI path, which has no
-    model of its own; defaults to the loop's own model. The in-conversation path
-    does not use it -- the main model composes from the guidance directly."""
-
-    disabled: list[str] = Field(default_factory=list)
-    """Deny list of playbook names not offered on this machine. Local state lives
-    here rather than in playbook.md (the distribution unit): enable/disable edit
-    this list, for builtin and user playbooks alike.
-
-    Disabled means *not listed*: the model cannot see it, so it cannot call it --
-    which is the whole of what disabling can mean now that there is no passive
-    matcher left to mute. An explicit ``raven playbook run`` still resolves one,
-    because that is the user's own hand."""
-
-    router: PlaybookRouterConfig = Field(default_factory=PlaybookRouterConfig)
-
-
-class SubagentsConfig(Base):
-    """The one table of agents raven can dispatch to.
-
-    ``agents`` holds every kind in one list -- ``builtin`` rows (an in-process
-    raven loop) beside the three external transports -- because ``spawn`` and a
-    DAG node have to pick from the same roster. Split across two lists, an agent
-    reachable from one entry point and not the other is a state neither the model
-    nor the user can see, which is what this list being single fixes.
-
-    Read under its old key ``thirdParty`` as well, so a config written before the
-    rename keeps loading; the write path emits ``agents``.
-    """
-
-    agents: list[AgentConfig] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
-    )
-
-    @model_validator(mode="after")
-    def _dedupe_names(self) -> "SubagentsConfig":
-        """Drop later rows that repeat a name, keeping the first, with a warning.
-
-        A hand-edited config with two rows of one name used to load fine and let
-        the second silently win whichever dict was built last, so which agent
-        answered depended on construction order.
-
-        Warn-and-drop rather than reject, on the same reasoning as
-        ``_warn_on_declared_cli_fields``: raising here surfaces as a
-        ``ValidationError`` on the whole top-level ``Config``, so raven would stop
-        starting and the UI that could fix the duplicate would sit behind the
-        config that no longer loads. Keeping the *first* row makes the outcome
-        deterministic, which is the property that was actually missing. The hard
-        reject lives at the write path (``update_subagents.set_agents``), where the
-        caller owns the value and can act on the error.
-        """
-        seen: set[str] = set()
-        kept: list[Any] = []
-        for cfg in self.agents:
-            if cfg.name in seen:
-                logger.warning(
-                    "sub-agent {!r} is declared more than once; ignoring the later row(s) -- "
-                    "remove the duplicate from subagents.agents",
-                    cfg.name,
-                )
-                continue
-            seen.add(cfg.name)
-            kept.append(cfg)
-        if len(kept) != len(self.agents):
-            self.agents = kept
-        return self
+    """Tool names to unregister after default-tool registration and MCP connect.
+    Used by eval harnesses (e.g. BrowseComp-Plus) that need to constrain the
+    agent to a specific tool subset. Names match those in ``ToolRegistry``
+    (e.g. ``read_file``, ``web_search``, or ``mcp_bcp-search_search``)."""
 
 
 class CliConfig(Base):
@@ -1566,49 +862,14 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
-    subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
-    playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
-    tui: TuiConfig = Field(default_factory=TuiConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"
 
     @property
     def workspace_path(self) -> Path:
-        """Get expanded workspace path.
-
-        The default follows ``RAVEN_HOME`` rather than being the literal it is
-        declared as. Sessions, uploads, exports and the skill pool all live here,
-        so an instance pointed at another home that kept this one would quietly
-        read and write the first installation's conversations -- which is what a
-        separate home exists to avoid. An explicitly configured workspace is
-        always used as written.
-        """
-        from raven.config.loader import raven_home
-
-        raw = self.agents.defaults.workspace
-        if raw == AgentDefaults.model_fields["workspace"].default:
-            return raven_home() / "workspace"
-        return Path(raw).expanduser()
-
-    def channel_workspaces(self) -> dict[str, str]:
-        """Every channel that names its own working directory.
-
-        Keyed by the channel name as it appears in a session key
-        (``web:<chat_id>``, ``qq:<open_id>``), which is the field name under
-        ``channels`` -- plus ``web``, whose config lives under ``gateway``
-        because the web channel is hosted by the gateway rather than dialled
-        out to. Channels that left ``workspace`` empty are omitted, so the
-        resolver falls back to ``<root>/<channel>`` for them.
-        """
-        found: dict[str, str] = {}
-        for name, channel in self.channels:
-            configured = getattr(channel, "workspace", "")
-            if isinstance(configured, str) and configured.strip():
-                found[name] = configured.strip()
-        if self.gateway.web.workspace.strip():
-            found["web"] = self.gateway.web.workspace.strip()
-        return found
+        """Get expanded workspace path."""
+        return Path(self.agents.defaults.workspace).expanduser()
 
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.
@@ -1633,7 +894,22 @@ class Config(BaseSettings):
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
+        """The section serving ``model`` and its registry name.
+
+        An explicit ``agents.defaults.provider`` answers outright -- which,
+        since the provider became required, is every config the loader has
+        migrated. The derivation below stays for exactly two callers: that
+        migration, which needs to know what a pre-rule config was in fact
+        resolving to before it writes the answer down, and a config the
+        migration could not write to.
+
+        The derivation is worth reading once, because it is why the field is
+        required now. A prefixed id is answered by the provider it names, but a
+        *bare* id falls to keyword matching in ``PROVIDERS`` order -- so with
+        both anthropic and openrouter configured, ``gpt-4.1`` resolved to
+        openrouter over openai for no better reason than a list index. That is
+        a guess about whose key pays for the call.
+        """
         from raven.providers.registry import (
             PROVIDERS,
             canonical_provider_name,
@@ -1643,7 +919,7 @@ class Config(BaseSettings):
         )
 
         forced = self.agents.defaults.provider
-        if forced != "auto":
+        if forced and forced != "auto":
             # Return the canonical name: callers look the spec up by it, and a
             # config still naming the provider the old way would find nothing.
             forced = canonical_provider_name(forced)
@@ -1652,18 +928,6 @@ class Config(BaseSettings):
 
         model_id = model or self.agents.defaults.model
         prefix, _ = split_model_id(model_id)
-
-        # A curated `models` entry is the user naming the vendor, so it outranks the
-        # prefix/keyword rule below: OpenRouter's catalog is full of names carrying
-        # another vendor's prefix (`openai/...`), which that rule attributes to that
-        # vendor -- or, when it has no key, to whatever the last rung falls back to.
-        # Must stay the same predicate as serving_provider_for_model, which gates what
-        # the model picker may store: disagreement means a model validates as servable
-        # and is then routed to a different vendor's api_base and api_key.
-        for spec in PROVIDERS:
-            p = self.providers.get(spec.name)
-            if p is not None and model_id in self._offered_models(spec):
-                return p, spec.name
 
         # `spec.claims` is the whole prefix-beats-keyword rule: a prefixed id is
         # answered only by the provider it names (so `github-copilot/...codex`
@@ -1742,74 +1006,12 @@ class Config(BaseSettings):
         p, name = self._match_provider(model)
         if p and p.api_base:
             return p.api_base
-        # Only gateways / local providers get a default api_base here. A
-        # standard provider (like Moonshot) reaches its base URL through the env
-        # vars LiteLLMProvider._setup_env writes; what is returned here travels
-        # as the per-call ``api_base`` kwarg, which would override LiteLLM's own
-        # routing for that vendor.
+        # Only gateways get a default api_base here. Standard providers
+        # (like Moonshot) set their base URL via env vars in _setup_env.
         if name:
             spec = find_by_name(name)
             if spec and spec.usable_default_api_base:
                 return spec.usable_default_api_base
-        return None
-
-    def _provider_is_configured(self, spec) -> bool:
-        """Whether ``spec``'s section carries enough config to be usable.
-
-        Deliberately the same predicate as the ``configured`` flag in
-        ``update_providers.list_providers``, which is what the web model picker
-        filters its options on: the picker's offer set and any accept/reject
-        check built on this must agree, or one offers what the other refuses.
-        Asking ``providers.auth`` is how they stay the same predicate rather than
-        two spellings of it -- reading the flat key here let it stand in for an
-        ``endpoints`` list whose entry carries none, and since
-        ``provider_endpoints`` ignores the flat field once ``endpoints`` is set,
-        the section read as configured while every request from it 401s.
-
-        ``include_external`` for the same reason display asks with it: this
-        reports on what is true now, and an OAuth provider's section is
-        legitimately empty until its token file exists.
-        """
-        p = self.providers.get(spec.name)
-        if p is None:
-            return False
-        from raven.providers.auth import credential_status
-
-        return credential_status(spec.name, p, spec=spec, include_external=True).ok
-
-    def _offered_models(self, spec) -> list[str]:
-        """Models ``spec`` serves, per the config -- empty when it is unconfigured.
-
-        Exactly what the web model picker lists for the provider: its curated
-        ``models``, or the registry default when that list is empty. Shared by
-        ``_match_provider`` (routing) and ``serving_provider_for_model`` (the
-        accept check) so the two cannot drift apart.
-        """
-        p = self.providers.get(spec.name)
-        if p is None or not self._provider_is_configured(spec):
-            return []
-        return list(p.models) or ([spec.default_model] if spec.default_model else [])
-
-    def serving_provider_for_model(self, model: str) -> str | None:
-        """Name of a configured provider that can actually serve ``model``, else ``None``.
-
-        The question ``get_provider_name`` answers is "which credentials would
-        this call use", and its last two ladder rungs fall back to any
-        configured provider, so it never reports a model as unservable. This
-        answers "can anything serve it at all": a model is servable when a
-        configured provider offers it (its curated ``models``, or the registry
-        default when that list is empty -- exactly what the picker lists) or
-        when the registry resolves the model name to a configured provider.
-        """
-        from raven.providers.registry import PROVIDERS, find_by_model
-
-        for spec in PROVIDERS:
-            if model in self._offered_models(spec):
-                return spec.name
-
-        spec = find_by_model(model)
-        if spec is not None and self._provider_is_configured(spec):
-            return spec.name
         return None
 
     @property

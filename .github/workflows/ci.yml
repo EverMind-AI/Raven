@@ -66,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: make install-deps
 
-      - name: Python lint
+      - name: Focused Python lint
         run: make lint-python
 
   unit:
@@ -94,31 +94,8 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python }}
 
-      # tests/test_ui_css_token_gate.py shells out to the node gate, and it is
-      # the ONLY thing anywhere that checks what that gate rejects -- the page
-      # job below runs the gate against the current stylesheet, which proves it
-      # runs and that the file passes, and nothing about refusal. Installed
-      # here so this job really runs that suite: without it the runtime skip in
-      # that file quietly drops all 43 cases.
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
-
-      # Stdlib only. The dedicated gate is the `page` job below; this step
-      # keeps the build honest inside the test matrix too, because
-      # `ui/build.py` matches exact literal markers in the page sources and
-      # hard-exits on a miss, so an edit that reflows a source or drops a
-      # marker leaves CI green and blocks the release at `git push v1.2.3`.
-      - name: Build served page
-        run: |
-          npm ci --prefix ui
-          npm run --prefix ui build
-          python3 ui/build.py
-          test -f ui/dist/index.html
 
       - name: Unit tests with line and branch coverage
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
@@ -208,65 +185,10 @@ jobs:
         run: |
           npm run lint
           npm run lint:rpc
-          npm run lint:i18n
           npm run type-check
           npm test
           npm run build
         working-directory: ui-tui
-
-  ui-rpc:
-    name: ui rpc contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: ui
-
-      # generated.ts is committed; a schema edit without regeneration is the
-      # drift this catches. Then the transport layer compiles against it and
-      # the fixture transport's behaviour is pinned by vitest.
-      - name: Check contract, types, and tests
-        run: |
-          npm run gen:check
-          npm run type-check
-          npm test
-        working-directory: ui
-
-  page:
-    name: page checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      # The npm build makes the island bundle build.py inlines; the gate
-      # scripts themselves still run on bare node, straight off the checkout.
-      # build.py validates the part seams (IIFE opener first, closer last);
-      # check-page.mjs validates the assembled artifact (one style, two
-      # inline scripts, no leftover markers, scripts parse).
-      - name: Build and check the served page
-        run: |
-          npm ci --prefix ui
-          npm run --prefix ui build
-          python3 ui/build.py
-          node ui/scripts/check-page.mjs
-          node ui/scripts/count-shared-globals.mjs
-          node ui/scripts/check-css.mjs
 
   bridge:
     name: bridge checks

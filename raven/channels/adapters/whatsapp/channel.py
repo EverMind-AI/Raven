@@ -40,14 +40,6 @@ class WhatsAppChannel(ChannelBase):
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
         self._bridge_token: str | None = None
-        # Login QR (when the bridge emits one) exposed for the web UI to render.
-        self.pending_qr: str | None = None
-
-    @property
-    def connected(self) -> bool:
-        """Whether the bridge reports a paired session, as opposed to the
-        channel task merely running (which is true before the QR is scanned)."""
-        return self._connected
 
     def _effective_bridge_token(self) -> str:
         """Resolve the bridge token, minting a local secret on first use."""
@@ -149,12 +141,10 @@ class WhatsAppChannel(ChannelBase):
             logger.info("WhatsApp status: {}", status)
             if status == "connected":
                 self._connected = True
-                self.pending_qr = None
             elif status == "disconnected":
                 self._connected = False
         elif msg_type == "qr":
-            self.pending_qr = data.get("qr") or data.get("code")
-            logger.info("Scan the QR code (shown in the web UI or the bridge terminal) to connect WhatsApp")
+            logger.info("Scan QR code in the bridge terminal to connect WhatsApp")
         elif msg_type == "error":
             logger.error("WhatsApp bridge error: {}", data.get("error"))
 

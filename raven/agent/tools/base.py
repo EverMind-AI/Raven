@@ -30,11 +30,6 @@ class ToolResult:
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
-
-    ``diff`` is a unified diff of what the call changed on disk, for a UI that
-    renders the change itself. Only a writing tool can produce it -- by the time
-    anyone else looks, the content it replaced is gone -- and it never reaches
-    the model, so ``model_text`` still has to say what happened on its own.
     """
 
     model_text: str
@@ -42,7 +37,6 @@ class ToolResult:
     retryable: bool = True
     abort_action: bool = False
     blocks: list[ContentPart] | None = None
-    diff: str | None = None
 
 
 class ToolOutput(str):
@@ -63,7 +57,6 @@ class ToolOutput(str):
     retryable: bool
     abort_action: bool
     blocks: list[ContentPart] | None
-    diff: str | None
 
     def __new__(
         cls,
@@ -73,14 +66,12 @@ class ToolOutput(str):
         retryable: bool = True,
         abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
-        diff: str | None = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
         out.abort_action = abort_action
         out.blocks = blocks
-        out.diff = diff
         return out
 
 
@@ -103,43 +94,6 @@ class Tool(ABC):
     # registry does NOT wrap them in a timeout — they manage their own
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
-
-    # Channels this tool works on; None means every channel. One gateway process
-    # serves the web channel and every enabled IM channel from a single registry,
-    # so a tool whose effect exists on only one of them (deliver_files needs the
-    # web UI's download box) would otherwise be advertised everywhere and refuse
-    # only once called. Declaring the set withholds it from the schema instead,
-    # per turn -- see ToolRegistry.set_channel.
-    channels: frozenset[str] | None = None
-
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        """This call's blocking verdict. Defaults to the class flag.
-
-        Overridden by a tool that forwards to another tool (``tool_call``), where
-        the verdict belongs to the target named in ``params`` — reading the
-        forwarder's own flag would both double-wrap the target in a ceiling it
-        opted out of and misreport the call to a turn stream.
-        """
-        return self.blocking_interaction
-
-    def metadata_owner(self, params: dict[str, Any]) -> "Tool":
-        """The tool holding this call's metadata. Defaults to self.
-
-        Overridden by a tool that forwards to another tool (``tool_call``), where
-        the result — and so the metadata — is produced by the target named in
-        ``params``. Without this the forwarded tool's payload is stranded and the
-        UI silently renders nothing.
-        """
-        return self
-
-    def take_metadata(self) -> dict[str, Any] | None:
-        """Structured payload for this call's turn-stream event, consumed once.
-
-        Opt-in: ``execute`` returns only a string, so a tool whose result also
-        has to reach a UI (rather than the model) hands it back here and the loop
-        attaches it to the emitted ToolEvent.
-        """
-        return None
 
     _TYPE_MAP = {
         "string": str,

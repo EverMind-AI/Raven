@@ -1037,16 +1037,47 @@ class TestIdentityFromServices:
         assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
     @pytest.mark.parametrize("bad", ["agent:default", "a/b", "..", "."])
-    async def test_illegal_identity_rejected_on_start(self, tmp_path: Path, bad: str) -> None:
+    async def test_illegal_identity_is_reported_as_a_config_error(
+        self, tmp_path: Path, bad: str, capsys: pytest.CaptureFixture
+    ) -> None:
+        from raven.plugin.memory.everos.backend import ServiceState
+
         ctx = PluginContext(
             config={},
             services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
         )
         backend = make_backend(ctx)
+        await backend.start()
+
         # The message must name the on-disk camelCase key so the user can grep
-        # for it in config.json.
-        with pytest.raises(ValueError, match="memory.userId"):
-            await backend.start()
+        # for it in config.json, and it must reach the terminal: the callers all
+        # swallow a raise into logger.exception, and a one-shot CLI run writes no
+        # log file for it to land in.
+        err = " ".join(capsys.readouterr().err.split())
+        assert "memory.userId" in err
+        # The accepted-character class must survive rich's markup parser: it
+        # looks exactly like a tag, and a swallowed one leaves the user matching
+        # their id against "^+$".
+        assert "[a-zA-Z0-9_.@+-]" in err
+        assert backend._state is ServiceState.BAD_IDENTITY
+
+    async def test_illegal_identity_does_not_report_a_service_outage(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The service is fine; the config is not. Counting the turn as a dropped
+        write sends the user to look at a server that never broke."""
+        ctx = PluginContext(
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id="a/b", agent_id="default"),
+        )
+        backend = make_backend(ctx)
+        await backend.start()
+        capsys.readouterr()
+
+        assert await backend.store("s1", [{"role": "user", "content": "hi"}]) is False
+        assert backend._dropped_writes == 0
+        await backend.stop()
+        assert "unavailable" not in capsys.readouterr().err
 
 
 class TestServiceStateMachine:
@@ -1158,12 +1189,13 @@ class TestServiceStateMachine:
             assert b._state is ServiceState.READY, start
 
     def test_terminal_states_ignore_probes(self) -> None:
-        """UNCONFIGURED and NO_BINARY describe the install, not the process.
-        Probing cannot fix either, so a stray OK must not paper over them."""
+        """UNCONFIGURED, NO_BINARY and BAD_IDENTITY describe the install and its
+        config, not the process. Probing cannot fix any of them, so a stray OK
+        must not paper over them."""
         from raven.plugin.memory.everos._server import ProbeResult
         from raven.plugin.memory.everos.backend import ServiceState
 
-        for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY):
+        for terminal in (ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY):
             b = self._backend()
             b._state = terminal
             b._apply_probe(ProbeResult.OK)

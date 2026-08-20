@@ -8,7 +8,6 @@ arithmetic on top of it stays with the module that does the arithmetic.
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 
@@ -40,23 +39,6 @@ def _reset_catalog_state():
     rates._OPENROUTER_CACHE.clear()
     yield
     rates._OPENROUTER_CACHE.clear()
-
-
-@pytest.fixture
-def minimax_row(monkeypatch):
-    """Pin the one row the assertions below need and the offline table lacks.
-
-    LiteLLM's bundled table carries no `minimax/MiniMax-M3` -- only the
-    bedrock-prefixed MiniMax models -- so the figure these two read was coming
-    from the table LiteLLM fetches remotely. Pinned here, what they exercise is
-    the resolution ladder rather than what MiniMax published this morning.
-    `minimax/` and not `minimax-global/`: `_candidates` maps the plan-billed
-    prefix onto the direct one before the table is consulted.
-    """
-    litellm = import_litellm()
-    monkeypatch.setattr(
-        litellm, "model_cost", {**litellm.model_cost, "minimax/MiniMax-M3": {"max_input_tokens": 1_000_000}}
-    )
 
 
 def _patch_openrouter(monkeypatch, handler):
@@ -105,18 +87,6 @@ _DEEPSEEK_MODELS = [
 
 
 # --- The tier LiteLLM answers (see `rates.token_rates` for the order) ---
-
-
-def test_the_suite_reads_litellms_table_offline():
-    """The table has to be a fixed input, not whatever a vendor published today.
-
-    LiteLLM fetches it at import unless this is set, and setting it after the
-    import is too late, so the value is published from `conftest` before any test
-    module loads. Asserted rather than assumed: without it a row appearing
-    upstream answers a lookup the tests below arrange to miss, and they fail on
-    numbers no commit here touched.
-    """
-    assert os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP") == "True"
 
 
 def test_a_litellm_mapped_model_is_priced_without_touching_the_network(monkeypatch):
@@ -205,6 +175,68 @@ def test_a_network_failure_falls_through_to_the_bundled_copy(monkeypatch):
             published["output"] / 1e6,
         )
     assert token_rates("openrouter/nobody/has-heard-of-this", 1000, 500) is None
+
+
+def test_the_gateway_price_wins_over_the_routers_copy(monkeypatch):
+    """Who sends the request is not who bills for it.
+
+    LiteLLM routes an ``openrouter/`` id and also carries a row for it, so its
+    answer used to win -- but OpenRouter is the party charging, and the two
+    disagree. Measured on the pinned LiteLLM: ``openrouter/z-ai/glm-4.6`` is
+    filed at 0.40/1.75 per million where OpenRouter's own table says 0.50/2.00,
+    so every such call was under-reported by a fifth.
+
+    A model LiteLLM knows is used deliberately: with one it does not, tier 1
+    misses and the old order would pass this too.
+    """
+    router = rates._try_litellm_rates("openrouter/openai/gpt-4.1", 1000, 500)
+    assert router, "fixture needs a model LiteLLM prices under its openrouter id"
+
+    gateway_prompt, gateway_completion = router[0] * 2, router[1] * 2
+    _patch_openrouter(
+        monkeypatch,
+        lambda req: _models_response(
+            [
+                {
+                    "id": "openai/gpt-4.1",
+                    "pricing": {"prompt": str(gateway_prompt), "completion": str(gateway_completion)},
+                }
+            ]
+        ),
+    )
+    rates._fetch_openrouter_models()  # tier 0 is cache-only; warm it as a real run does
+
+    assert token_rates("openrouter/openai/gpt-4.1", 1000, 500) == (gateway_prompt, gateway_completion)
+
+
+def test_a_direct_id_is_never_priced_from_the_gateways_table(monkeypatch):
+    """The other half. Reading OpenRouter's row for an id that does not name it
+    is what priced a self-hosted deployment at a hosted model's rate, and tier 0
+    must not reintroduce it.
+    """
+    _patch_openrouter(
+        monkeypatch,
+        lambda req: _models_response([{"id": "openai/gpt-4.1", "pricing": {"prompt": "999", "completion": "999"}}]),
+    )
+    rates._fetch_openrouter_models()
+
+    direct = token_rates("openai/gpt-4.1", 1000, 500)
+
+    assert direct is not None
+    assert direct != (999.0, 999.0)
+
+
+def test_the_price_ladder_never_fetches_on_its_first_tier(monkeypatch):
+    """Pricing runs after every call, inside the turn. Tier 0 reads a catalogue
+    already in hand; making it fetch would put an HTTP round-trip on the path of
+    every completion.
+    """
+    counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    # A model LiteLLM knows, so tier 1 answers and tiers 2+ never run.
+    assert token_rates("openrouter/openai/gpt-4.1", 1000, 500) is not None
+
+    assert counter["calls"] == 0
 
 
 def test_the_live_table_is_fetched_once_and_reused(monkeypatch):
@@ -556,7 +588,7 @@ def test_plan_billing_is_declared_not_inferred_from_oauth():
     assert plan_billed == {"openai_codex", "github_copilot", "minimax_global", "minimax_cn"}
 
 
-def test_a_plan_billed_provider_still_reports_a_window(minimax_row):
+def test_a_plan_billed_provider_still_reports_a_window():
     """Occupancy is the measure that means something on a subscription, so the
     window resolves even where no per-token figure describes the call."""
     for model in ("github_copilot/gpt-4o", "openai-codex/gpt-5.3-codex", "minimax-global/MiniMax-M3"):
@@ -574,7 +606,7 @@ def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it():
     assert resolve_context_window("openrouter/deepseek/deepseek-chat") == 65_536
 
 
-def test_the_window_those_families_report_is_the_vendors_own(minimax_row):
+def test_the_window_those_families_report_is_the_vendors_own():
     """Read from LiteLLM's table offline, so this is the number, not a default."""
     assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex") == 128_000
     assert rates._try_litellm_context_window("minimax-global/MiniMax-M3") == 1_000_000

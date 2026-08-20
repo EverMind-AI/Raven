@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.checkpoint import CheckpointService
 from raven.config.raven import CheckpointConfig, RuntimeConfig
@@ -28,15 +27,6 @@ from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
-
-
-async def _run_turn_body(agent: AgentLoop, workspace: Path):
-    """Drive ``_run_agent_loop`` the way ``run_turn`` does: inside the
-    working-directory binding. The per-turn checkpoint reads that binding, so
-    an unbound call would snapshot nothing at all.
-    """
-    with workdir.bind(workspace):
-        return await agent._run_agent_loop([{"role": "user", "content": "go"}])
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +140,9 @@ def _loop_agent(workspace: Path, *, checkpoint_enabled: bool) -> AgentLoop:
 
 async def test_max_iter_interrupted_with_checkpoint(workspace):
     agent = _loop_agent(workspace, checkpoint_enabled=True)
-    final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
+    final, _used, _msgs, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "interrupted"
     # Checkpoint-on no longer short-circuits to a fixed "iteration limit"
     # notice: exhaustion always runs the synthesis wrap-up (here the stub
@@ -165,7 +157,9 @@ async def test_max_iter_interrupted_with_checkpoint(workspace):
 
 async def test_max_iter_baseline_preserved_when_disabled(workspace):
     agent = _loop_agent(workspace, checkpoint_enabled=False)
-    final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
+    final, _used, _msgs, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     # Status is reported (harmless metadata) but behavior is baseline:
     # original message text, no checkpoint.
     assert outcome.status == "interrupted"
@@ -254,7 +248,9 @@ async def test_completed_status_and_snapshot(workspace):
         restrict_to_workspace=True,
         runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
-    final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
+    final, _used, _msgs, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "completed"
     assert "all done" in (final or "")
     # The completed turn's edit was snapshotted...
@@ -272,7 +268,9 @@ async def test_error_status(workspace):
         restrict_to_workspace=True,
         runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
-    _final, _used, _msgs, outcome = await _run_turn_body(agent, workspace)
+    _final, _used, _msgs, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "error"
 
 
@@ -364,10 +362,11 @@ async def test_recovery_flows_interrupt_to_next_assembly(workspace):
     key = "tui:default"
 
     # Turn 1 — force a max-iter interruption, then stash like the caller.
-    _f, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    _f, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "interrupted"
-    with workdir.bind(workspace):
-        agent._stash_recovery(key, outcome)
+    agent._stash_recovery(key, outcome)
     assert key in agent._pending_recovery
 
     # Turn 2 — real assembly must carry the recovery notice.
@@ -440,72 +439,8 @@ async def test_loop_survives_checkpoint_failure(workspace, monkeypatch):
 
     monkeypatch.setattr(ckpt_mod.asyncio, "create_subprocess_exec", _boom)
     agent = _loop_agent(workspace, checkpoint_enabled=True)
-    final, _u, _m, outcome = await _run_turn_body(agent, workspace)
+    final, _u, _m, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "go"}],
+    )
     assert outcome.status == "interrupted"
     assert outcome.checkpoint_id is None  # commit failed, but no crash
-
-
-# ---------------------------------------------------------------------------
-# Scope of what gets snapshotted
-#
-# The working directory is the launch directory now, so `cd ~ && raven tui`
-# would aim the shadow repo at a whole home. These pin both halves of the
-# answer: refuse that root outright, and keep private keys out of the roots
-# that are accepted.
-# ---------------------------------------------------------------------------
-
-
-def test_checkpoint_refuses_a_home_or_wider_root(tmp_path, monkeypatch):
-    """A home directory is not a workspace. `add -A` over one copies whatever
-    the user keeps there into a repo with history, every turn, and an
-    interrupted turn edits a project rather than a home -- so there is nothing
-    to recover in exchange."""
-    home = tmp_path / "home"
-    (home / "proj").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
-
-    for refused in (home, tmp_path, Path(tmp_path.anchor)):
-        with pytest.raises(ValueError, match="home directory"):
-            CheckpointService(refused)
-
-    CheckpointService(home / "proj")  # a project under home is still fine
-
-
-async def test_checkpoint_excludes_private_keys(tmp_path, monkeypatch):
-    """``*.key`` / ``*.pem`` never match ``id_ed25519``: private keys are
-    conventionally extensionless, so the credential patterns that look
-    exhaustive miss the most common secret on the machine."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    proj = home / "proj"
-    (proj / ".ssh").mkdir(parents=True)
-    (proj / ".ssh" / "id_ed25519").write_text("PRIVATE\n", encoding="utf-8")
-    (proj / "id_rsa").write_text("PRIVATE\n", encoding="utf-8")
-    (proj / "deploy.pem").write_text("PRIVATE\n", encoding="utf-8")
-    (proj / "main.py").write_text("print(1)\n", encoding="utf-8")
-
-    svc = CheckpointService(proj)
-    await svc.commit_turn("t1")
-    _rc, out, _err = await svc._git("ls-tree", "-r", "--name-only", "HEAD")
-
-    assert sorted(out.split()) == ["main.py"]
-
-
-async def test_loop_runs_the_turn_when_the_root_is_refused(tmp_path, monkeypatch):
-    """A refused root disables the safety net, it does not break the turn.
-
-    `raven tui` from a home directory is an ordinary thing to do, so the guard
-    has to degrade the way a bad `shadow_dir` already does -- one warning, and
-    the work still happens.
-    """
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    agent = _loop_agent(home, checkpoint_enabled=True)
-    final, _used, _msgs, outcome = await _run_turn_body(agent, home)
-
-    assert outcome.status == "interrupted"  # max-iter, as in the sibling tests
-    assert outcome.checkpoint_id is None  # refused, so nothing was snapshotted
-    assert (home / "a.py").exists()  # the turn's edit still landed

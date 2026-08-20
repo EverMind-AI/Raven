@@ -6,7 +6,6 @@ without its own timeout can't wedge the agent loop. Covers:
 - a fast tool returns its result normally
 - ``timeout_seconds`` overrides the registry default
 - ``blocking_interaction`` tools are NOT wrapped (run past the ceiling)
-- ``is_blocking`` reports that flag (the fact source the web channel mirrors)
 - a CancelledError (e.g. /stop) is not swallowed as a tool error
 """
 
@@ -80,31 +79,6 @@ async def test_blocking_interaction_tool_is_not_wrapped():
     # Sleeps well past the ceiling, but blocking tools are never timer-killed.
     reg = _registry(_SleepTool(0.2, blocking=True), default_timeout=0.05)
     assert await reg.execute("sleeper", {}) == "done"
-
-
-def test_is_blocking_mirrors_the_tool_flag():
-    assert _registry(_SleepTool(0.0, blocking=True)).is_blocking("sleeper") is True
-    assert _registry(_SleepTool(0.0)).is_blocking("sleeper") is False
-
-
-def test_is_blocking_unknown_tool_is_false():
-    assert ToolRegistry().is_blocking("no-such-tool") is False
-
-
-def test_every_subagent_invoking_tool_is_blocking():
-    """A tool that runs a sub-agent must declare ``blocking_interaction``.
-
-    The flag is the single fact source the web channel mirrors onto
-    ``tool.start`` to suspend its turn-stream idle clock. A sub-agent run stays
-    silent for far longer than that clock, so a tool missing the flag ends the
-    turn in the web UI while the run is still going.
-    """
-    from raven.agent.subagent_dag.tool import SubAgentDagTool
-    from raven.agent.tools.deep_research import DeepResearchOfferTool, DeepResearchTool
-    from raven.agent.tools.spawn import SpawnTool
-
-    for cls in (SpawnTool, SubAgentDagTool, DeepResearchTool, DeepResearchOfferTool):
-        assert cls.blocking_interaction is True, cls.__name__
 
 
 @pytest.mark.asyncio

@@ -281,11 +281,6 @@ def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def channel_names() -> list[str]:
-    """Public: the channel field names defined on ChannelsConfig (sorted)."""
-    return sorted(_channel_names())
-
-
 def channel_field_specs(name: str) -> dict[str, dict[str, Any]]:
     """Reflect a channel schema into a flat ``dotted-path -> spec`` map.
 
@@ -447,7 +442,6 @@ def _patch_channel(
 
 
 __all__ = [
-    "channel_names",
     "channel_field_specs",
     "enable_channel",
     "disable_channel",

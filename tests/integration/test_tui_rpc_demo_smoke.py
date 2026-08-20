@@ -9,7 +9,7 @@ handler.
 Why pytest integration (subprocess) rather than direct dispatcher unit
 tests: v0.0.2 proves the **end-to-end** wire path
 ``Ink → unix socket → Python handler → JSON-RPC response → Ink render`` still
-works for every P5-aligned method. Unit tests under ``tests/test_rpc_*.py``
+works for every P5-aligned method. Unit tests under ``tests/test_tui_rpc_*.py``
 already cover handler correctness in isolation; this file guarantees the
 *wiring* doesn't regress.
 

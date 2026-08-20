@@ -36,17 +36,8 @@ import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } from './chatStream.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
-import {
-  $directChat,
-  bindScrollReader,
-  isViewWorking,
-  recallScroll,
-  viewKeyOf,
-  visibleRows
-} from './directChatStore.js'
-import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './directChatSync.js'
 import { getInputSelection } from './inputSelectionStore.js'
-import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
+import { type GatewayRpc, type TranscriptRow } from './interfaces.js'
 import { $overlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
 import { turnController } from './turnController.js'
@@ -54,7 +45,6 @@ import { patchTurnState, useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
-import { useDirectStepPoll } from './useDirectStepPoll.js'
 import { useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
 import { useSessionLifecycle } from './useSessionLifecycle.js'
@@ -100,6 +90,17 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
   return t.muted
 }
 
+/** What a picker selection becomes on the command line.
+ *
+ * Its own function because the scope has to survive the trip: `/model --default`
+ * opens the picker, and a callback that dropped the flag here sent a
+ * session-scoped switch that looked like it had changed the default. The
+ * overlay value is passed in rather than read, so the rule can be pinned
+ * without mounting the app.
+ */
+export const modelSelectCommand = (model: string, providerSlug: string, pending: boolean | 'default'): string =>
+  `/model ${model} --provider ${providerSlug}${pending === 'default' ? ' --default' : ''}`
+
 export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -141,7 +142,6 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const [bellOnComplete, setBellOnComplete] = useState(false)
 
   const ui = useStore($uiState)
-  const directChat = useStore($directChat)
   const overlay = useStore($overlayState)
 
   const turnLiveTailActive = useTurnSelector(state =>
@@ -264,38 +264,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     return next
   }, [])
 
-  // Which transcript the chat view is showing. A direct chat takes the view
-  // over rather than mounting a second transcript component: useVirtualHistory
-  // measures by row key, so a wholesale source swap needs no other change.
-  // `historyItems` stays the main conversation's throughout -- session save,
-  // /export and the slash handlers all read it, and none of them mean "whatever
-  // is on screen".
-  const visibleItems = useMemo(() => visibleRows(directChat, historyItems), [directChat, historyItems])
-
   const virtualRows = useMemo<TranscriptRow[]>(
-    () => visibleItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
-    [messageId, visibleItems]
+    () => historyItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
+    [historyItems, messageId]
   )
-
-  // Stable, so the poll's effect is not torn down and re-armed on every render.
-  const sidRef = useCallback(() => getUiState().sid, [])
-
-  const viewKey = viewKeyOf(directChat.active)
-  const directChatRef = useRef(directChat.active)
-  directChatRef.current = directChat.active
-
-  // Restoring runs here, after the swap has been laid out; remembering happens
-  // at switch time inside the store (see bindScrollReader), because by now the
-  // offset already belongs to the incoming view.
-  useEffect(() => {
-    bindScrollReader(() => scrollRef.current?.getScrollTop() ?? 0)
-
-    return () => bindScrollReader(null)
-  }, [])
-
-  useEffect(() => {
-    scrollRef.current?.scrollTo(recallScroll(viewKey))
-  }, [viewKey])
 
   const detailsLayoutKey = useMemo(() => {
     const thinking = sectionMode('thinking', ui.detailsMode, ui.sections, ui.detailsModeCommandOverride)
@@ -401,11 +373,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   }, [])
 
   const rpc: GatewayRpc = useCallback(
-    async <T extends object = Record<string, unknown>>(
-      method: string,
-      params: Record<string, unknown> = {},
-      opts: RpcOptions = {}
-    ) => {
+    async <T extends object = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}) => {
       try {
         const result = asRpcResult<T>(await gw.request<T>(method, params))
 
@@ -413,19 +381,8 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
           return result
         }
 
-        // `quiet` rethrows rather than returning null so the caller's own
-        // handler runs at all: reporting here *and* swallowing is what made
-        // every `.catch(() => {})` at a call site dead code.
-        if (opts.quiet) {
-          throw new Error(`invalid response: ${method}`)
-        }
-
         sys(`error: invalid response: ${method}`)
       } catch (e) {
-        if (opts.quiet) {
-          throw e
-        }
-
         sys(`error: ${rpcErrorMessage(e)}`)
       }
 
@@ -542,32 +499,6 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       stdout.off('resize', onResize)
     }
   }, [rpc, stdout, ui.sid])
-
-  // One place rather than at each session bind point: startup, a new session and
-  // a resume all land on a new `sid`, and a fetch hung off each of them would be
-  // three chances to forget the fourth.
-  useEffect(() => {
-    void fetchInstances(rpc, ui.sid)
-  }, [rpc, ui.sid])
-
-  // Both event paths refresh the strip through this binding: `subagent.*`
-  // arrives on the legacy gateway bus, `dag.*` only on the typed chat stream,
-  // and neither owns a gateway rpc.
-  useEffect(() => bindInstanceRefresh(rpc, () => getUiState().sid), [rpc])
-
-  // Entering an instance loads its past turns. The record directories are the
-  // only memory of a direct chat that survives a restart -- they are absent
-  // from the session transcript by design. Keyed on the view rather than on the
-  // whole store, so a delta arriving mid-load cannot re-enter this.
-  useEffect(() => {
-    if (directChatRef.current !== null) {
-      void fetchDirectHistory(rpc, getUiState().sid, directChatRef.current)
-    }
-  }, [rpc, viewKey])
-
-  // The instance on screen is re-read while it works; see `useDirectStepPoll`
-  // for why that is a read rather than a stream.
-  useDirectStepPoll(rpc, sidRef, directChat.active, isViewWorking(directChat))
 
   const answerClarify = useCallback(
     (answer: string) => {
@@ -904,10 +835,16 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [overlay.confirm, respondWith]
   )
 
-  const onModelSelect = useCallback((model: string, providerSlug: string) => {
-    patchOverlayState({ modelPicker: false })
-    slashRef.current(`/model ${model} --provider ${providerSlug}`)
-  }, [])
+  const onModelSelect = useCallback(
+    (model: string, providerSlug: string) => {
+      // Read the pending scope before clearing it -- clearing first would make
+      // every selection session-scoped.
+      const command = modelSelectCommand(model, providerSlug, overlay.modelPicker)
+      patchOverlayState({ modelPicker: false })
+      slashRef.current(command)
+    },
+    [overlay.modelPicker]
+  )
 
   const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))
 
@@ -1041,11 +978,8 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const appTranscript = useMemo(
-    // `visibleItems`, not `historyItems`: every consumer of this prop indexes
-    // into the rendered rows (first/last user row, sticky-prompt tracking), so
-    // in direct mode it has to be the transcript actually on screen.
-    () => ({ historyItems: visibleItems, scrollRef, virtualHistory, virtualRows }),
-    [virtualHistory, virtualRows, visibleItems]
+    () => ({ historyItems, scrollRef, virtualHistory, virtualRows }),
+    [historyItems, virtualHistory, virtualRows]
   )
 
   return { appActions, appComposer, appProgress, appStatus, appTranscript, gateway }

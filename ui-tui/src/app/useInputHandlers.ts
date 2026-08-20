@@ -16,13 +16,11 @@ import type {
 } from '../gatewayTypes.js'
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
-import { chipsForWidth, cycleTarget } from '../components/instanceChips.js'
 import { TYPING_IDLE_MS } from '../config/timing.js'
 import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
-import { enterDirect, getDirectChat, leaveDirect } from './directChatStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { $isBlocked, $overlayState, patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
@@ -264,7 +262,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     gateway
-      .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid }, { quiet: true })
+      .rpc<VoiceRecordResponse>('voice.record', { action, session_id: getUiState().sid })
       .then(r => applyVoiceRecordResponse(r, starting, voice, actions.sys))
       .catch((e: Error) => {
         // Revert optimistic UI on failure.
@@ -432,31 +430,6 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
     if (key.escape && terminal.hasSelection) {
       return clearSelection()
-    }
-
-    // Direct mode: Esc returns to the main agent, in flight or not. One meaning,
-    // no branch -- there is no way to abort a sub-agent mid-turn, so a
-    // conditional Esc could only mean "I thought I was leaving and it cancelled
-    // the run". Placed after selection / queue-edit / voice, which keep their
-    // existing priority, and before the cancel-turn path below.
-    if (key.escape && getDirectChat().active !== null) {
-      return leaveDirect()
-    }
-
-    // Cycle the chip strip. Left/Right are otherwise the input cursor's, so
-    // these are the Ctrl chords, and only while at least one instance exists.
-    if (key.ctrl && (key.leftArrow || key.rightArrow)) {
-      const direct = getDirectChat()
-
-      if (direct.instances.length > 0) {
-        // Unbounded width on purpose: cycling walks every instance, including
-        // the ones truncated off the visible strip. Keyboard reach must not
-        // depend on how wide the terminal happens to be.
-        const { chips } = chipsForWidth(direct.instances, direct.active, Number.MAX_SAFE_INTEGER)
-        const next = cycleTarget(chips, key.rightArrow ? 1 : -1)
-
-        return next === null ? leaveDirect() : enterDirect(next.agent, next.handle)
-      }
     }
 
     if (key.upArrow && !cState.inputBuf.length) {
