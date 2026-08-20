@@ -84,7 +84,7 @@ class _FakeManager:
 
 def _patch_manager(monkeypatch: pytest.MonkeyPatch, snapshot: dict) -> list:
     made: list = []
-    import raven.agent.tools.mcp_manager as mgr_mod
+    import raven.mcp.manager as mgr_mod
 
     def _factory(registry):
         m = _FakeManager(snapshot)

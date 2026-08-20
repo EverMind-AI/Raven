@@ -7,8 +7,8 @@ import asyncio
 import httpx
 import pytest
 
-from raven.agent.tools import mcp_oauth
-from raven.agent.tools.mcp_oauth import (
+from raven.mcp import oauth as mcp_oauth
+from raven.mcp.oauth import (
     FileTokenStorage,
     OAuthWaitTimeoutError,
     _Flow,

@@ -19,6 +19,7 @@ from raven.config import (
     update_tools,
 )
 from raven.rpc.dispatcher import Dispatcher
+from raven.web_rpc import methods_config
 from raven.web_rpc.methods_config import register_config_methods
 
 
@@ -2083,9 +2084,51 @@ async def test_subagents_test_records_a_verdict_the_probe_then_returns(
     assert row["lastTest"]["testedAtMs"] > 0
 
 
+class _FakeMCPManager:
+    """The two methods the panel reads: per-server state, and its tools.
+
+    Stands in for ``MCPConnectionManager``. The panel used to derive both from
+    the registry -- a process-wide "MCP came up once" flag for state, and a
+    prefix match for ownership -- and both were wrong once a server could be
+    attached or detached while raven runs.
+
+    ``tools`` maps a registered name to its ``(server, bare tool name)``, which
+    is what the origin index holds. The bare name is carried rather than
+    recomputed because it cannot be recomputed: the registered name is
+    sanitised, capped and possibly hash-suffixed.
+    """
+
+    def __init__(self, states: dict[str, str], tools: dict[str, tuple[str, str]]) -> None:
+        self._states = states
+        self._tools = tools
+
+    def status(self) -> list[dict]:
+        return [
+            {"name": n, "state": st, "connected": st == "connected", "error": None} for n, st in self._states.items()
+        ]
+
+    def tools_of(self, server: str) -> dict[str, str]:
+        return {n: bare for n, (srv, bare) in self._tools.items() if srv == server}
+
+    def tools_by_server(self) -> dict[str, dict[str, str]]:
+        """Absent, not empty, for a server with no tools -- like the real one.
+
+        The call site reads it with ``.get(name, {})``, so a fake that returned
+        an empty dict per configured server would hide a caller that indexed it
+        directly.
+        """
+        out: dict[str, dict[str, str]] = {}
+        for n, (srv, bare) in self._tools.items():
+            out.setdefault(srv, {})[n] = bare
+        return out
+
+    def tool_map(self) -> dict[str, str]:
+        return {n: srv for n, (srv, _bare) in self._tools.items()}
+
+
 async def test_mcp_list_reports_config_plus_live_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The panel needs both halves: what is configured, and whether the agent
-    actually connected it (MCP connects lazily, on the first turn that needs it)."""
+    """The panel needs both halves: what is configured, and what the connection
+    manager says is live right now."""
     monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
     p = tmp_path / "config.json"
     p.write_text(
@@ -2093,12 +2136,11 @@ async def test_mcp_list_reports_config_plus_live_state(tmp_path: Path, monkeypat
         encoding="utf-8",
     )
 
-    class _Tools:
-        tool_names = ["mcp_browser_click", "mcp_browser_navigate", "read_file"]
-
     class _Agent:
-        tools = _Tools()
-        _mcp_connected = True
+        _mcp_manager = _FakeMCPManager(
+            {"browser": "connected", "api": "error"},
+            {"mcp_browser_click": ("browser", "click"), "mcp_browser_navigate": ("browser", "navigate")},
+        )
 
     d = Dispatcher()
     register_config_methods(d, agent=_Agent())
@@ -2110,9 +2152,31 @@ async def test_mcp_list_reports_config_plus_live_state(tmp_path: Path, monkeypat
     assert servers["browser"]["connected"] is True
     # Reported without the mcp_<server>_ prefix the registry adds.
     assert servers["browser"]["tools"] == ["click", "navigate"]
-    # Configured but contributed no tools: not connected, not an error either.
+    # Configured, reached, and failed -- reported as its own state, not folded
+    # into "not connected" the way a tools-only check had to.
     assert servers["api"]["connected"] is False
+    assert servers["api"]["state"] == "error"
     assert servers["api"]["tools"] == []
+
+
+async def test_mcp_list_without_a_live_manager_reports_nothing_connected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read-only status call must not build the manager just to answer."""
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(
+        '{"tools": {"mcpServers": {"browser": {"command": "npx"}}}}', encoding="utf-8"
+    )
+
+    class _Agent:
+        _mcp_manager = None
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert res["result"]["connected"] is False
+    assert res["result"]["servers"][0]["connected"] is False
 
 
 async def test_mcp_list_adds_no_live_key_the_write_path_would_persist(
@@ -2127,9 +2191,10 @@ async def test_mcp_list_adds_no_live_key_the_write_path_would_persist(
         '{"tools": {"mcpServers": {"browser": {"command": "npx"}}}}', encoding="utf-8"
     )
 
+    # A manager-backed agent on purpose: with no manager the live half returns
+    # its fallback and the guard stops exercising the keys it exists to guard.
     class _Agent:
-        tools = type("_Tools", (), {"tool_names": ["mcp_browser_click"]})()
-        _mcp_connected = True
+        _mcp_manager = _FakeMCPManager({"browser": "connected"}, {"mcp_browser_click": ("browser", "click")})
 
     d = Dispatcher()
     register_config_methods(d, agent=_Agent())
@@ -2137,6 +2202,7 @@ async def test_mcp_list_adds_no_live_key_the_write_path_would_persist(
     res = await _dispatch(d, "raven.mcp.list", {})
     listed = set(res["result"]["servers"][0])
     configured = set(update_mcp.get_mcp_servers(config_path=tmp_path / "config.json")[0])
+    assert listed - configured, "the live half contributed no keys; the guard is not guarding"
     assert listed - configured <= update_mcp.MCP_RUNTIME_KEYS
 
 
@@ -2151,7 +2217,13 @@ async def test_mcp_list_without_an_agent_reports_nothing_live(tmp_path: Path, mo
     assert res["result"]["servers"][0]["connected"] is False
 
 
-async def test_mcp_set_writes_and_asks_for_a_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mcp_set_writes_without_asking_for_a_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No live loop to reconcile, so the write lands and ``applied`` says so.
+
+    ``restart_required`` is False either way now: the connection manager
+    attaches and detaches per server, so the next loop reads what was written
+    and nothing has to be restarted to pick it up.
+    """
     monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
     p = tmp_path / "config.json"
     p.write_text('{"tools": {}}', encoding="utf-8")
@@ -2159,11 +2231,107 @@ async def test_mcp_set_writes_and_asks_for_a_restart(tmp_path: Path, monkeypatch
     register_config_methods(d)
 
     res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "browser", "command": "npx"}]})
-    assert res["result"] == {"ok": True, "restart_required": True}
+    assert res["result"] == {"ok": True, "applied": False, "restart_required": False}
     assert "browser" in p.read_text(encoding="utf-8")
 
     res = await _dispatch(d, "raven.mcp.list", {})
     assert [s["name"] for s in res["result"]["servers"]] == ["browser"]
+
+
+async def test_mcp_set_reconciles_the_live_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The write is only half the job -- the running loop has to be moved to it."""
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {}}', encoding="utf-8")
+
+    applied: list[dict] = []
+
+    class _Agent:
+        _mcp_manager = None
+
+        async def apply_mcp_config(self, servers: dict) -> object:
+            applied.append(servers)
+            from raven.mcp.report import ApplyReport
+
+            return ApplyReport(reloaded=1, tools_changed=True)
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "browser", "command": "npx"}]})
+    assert res["result"]["applied"] is True
+    assert len(applied) == 1
+
+
+async def test_mcp_set_keeps_the_write_when_the_reconcile_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server that will not connect must not lose the user's edit.
+
+    ``applied`` is True even so: it reports that a live loop was there and was
+    handed the new set, not that every handshake in it succeeded. Which server
+    came up is per-server state, and the panel reads that from ``state`` on its
+    next list.
+    """
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    p = tmp_path / "config.json"
+    p.write_text('{"tools": {}}', encoding="utf-8")
+
+    class _Agent:
+        _mcp_manager = None
+
+        async def apply_mcp_config(self, servers: dict) -> object:
+            raise RuntimeError("transport refused")
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "browser", "command": "npx"}]})
+    assert res["result"] == {"ok": True, "applied": True, "restart_required": False}
+    assert "browser" in p.read_text(encoding="utf-8")
+
+
+async def test_mcp_set_answers_without_waiting_out_a_slow_reconcile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The write must not hold the HTTP request open for the length of a handshake.
+
+    A connect parked at the browser-authorization step is exempt from the
+    manager's 90s progress bound for as long as it stays parked, up to
+    ``OAUTH_FLOW_TIMEOUT + _AUTH_PARK_GRACE`` -- 17 minutes. Awaiting that here
+    means the settings panel hangs on someone else's consent page, so the wait
+    is bounded and the reconcile keeps running behind it.
+    """
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {}}', encoding="utf-8")
+    monkeypatch.setattr(methods_config, "_MCP_APPLY_WAIT", 0.05)
+
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    class _Agent:
+        _mcp_manager = None
+
+        async def apply_mcp_config(self, servers: dict) -> object:
+            await release.wait()
+            finished.set()
+            return object()
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    # Bounded here too, so a handler that goes back to awaiting the reconcile
+    # fails this test instead of hanging it.
+    res = await asyncio.wait_for(
+        _dispatch(d, "raven.mcp.set", {"servers": [{"name": "slow", "command": "npx"}]}), timeout=2
+    )
+    assert res["result"] == {"ok": True, "applied": True, "restart_required": False}
+    # Answered while the reconcile is still in flight -- that is the whole point.
+    assert not finished.is_set()
+
+    # And the timeout gave up waiting rather than cancelling it: released now,
+    # it still runs to completion.
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=1)
 
 
 async def test_mcp_set_surfaces_a_rejected_server_as_an_rpc_error(
@@ -2178,11 +2346,16 @@ async def test_mcp_set_surfaces_a_rejected_server_as_an_rpc_error(
     assert "error" in res
 
 
-async def test_mcp_list_attributes_a_tool_to_the_longest_matching_server(
+async def test_mcp_list_attributes_a_tool_to_the_server_that_registered_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``mcp_<server>_<tool>`` puts no reserved character between the two, so a
-    plain prefix match lets a short server name claim a longer one's tools."""
+    """``mcp_<server>_<tool>`` puts no reserved character between the two, so the
+    name alone cannot say which server owns a tool.
+
+    The pathological pair: ``foo`` and ``foo_bar`` both prefix
+    ``mcp_foo_bar_query``. Ownership comes from the manager, which knows,
+    instead of from a longest-prefix guess that only happened to be right.
+    """
     monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
     p = tmp_path / "config.json"
     p.write_text(
@@ -2190,12 +2363,11 @@ async def test_mcp_list_attributes_a_tool_to_the_longest_matching_server(
         encoding="utf-8",
     )
 
-    class _Tools:
-        tool_names = ["mcp_foo_ping", "mcp_foo_bar_query", "read_file"]
-
     class _Agent:
-        tools = _Tools()
-        _mcp_connected = True
+        _mcp_manager = _FakeMCPManager(
+            {"foo": "connected", "foo_bar": "connected"},
+            {"mcp_foo_ping": ("foo", "ping"), "mcp_foo_bar_query": ("foo_bar", "query")},
+        )
 
     d = Dispatcher()
     register_config_methods(d, agent=_Agent())
@@ -2204,6 +2376,28 @@ async def test_mcp_list_attributes_a_tool_to_the_longest_matching_server(
     servers = {s["name"]: s for s in res["result"]["servers"]}
     assert servers["foo"]["tools"] == ["ping"]
     assert servers["foo_bar"]["tools"] == ["query"]
+
+
+async def test_mcp_list_believes_the_manager_over_the_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool whose registered name says nothing useful still displays properly.
+
+    Sanitising and the 64-char cap rewrite the tail of a name and a collision
+    appends a hash, so the registered name is not parseable back into the pair.
+    Stripping a prefix off it therefore leaked the machinery into the panel --
+    the user saw ``query_9f8e7d6c5b4a`` where the server calls the tool
+    ``query``. The bare name comes from the origin index, which has it.
+    """
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {"mcpServers": {"foo": {"command": "a"}}}}', encoding="utf-8")
+
+    class _Agent:
+        _mcp_manager = _FakeMCPManager({"foo": "connected"}, {"mcp_foo_query_9f8e7d6c5b4a": ("foo", "query")})
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert res["result"]["servers"][0]["tools"] == ["query"]
 
 
 async def test_mcp_list_still_lists_the_good_servers_beside_a_broken_one(

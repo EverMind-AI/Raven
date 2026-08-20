@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from raven.agent.tools.base import Tool
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 
@@ -294,6 +295,9 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
                 # tool begins, and both halves may contain one.
                 "github_enterprise": _server("https://example.invalid/mcp"),
                 "brave-search": _server("https://example.invalid/mcp"),
+                # A character the sanitiser rewrites: the registered name is
+                # mcp_data_warehouse_query, which no configured key prefixes.
+                "data.warehouse": _server("https://example.invalid/mcp"),
             }
         )
     )
@@ -319,17 +323,47 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
         def gather_all_skills(self):
             return []
 
-    names = [
-        "read_file",
-        "mcp_ctx7_get_docs",
-        "mcp_ctx7_resolve_id",
-        "mcp_github_enterprise_list_repos",
-        "mcp_brave-search_query",
-    ]
-    loop = SimpleNamespace(
-        context=SimpleNamespace(skills=_Catalog()),
-        tools=SimpleNamespace(tool_names=names, get=lambda _name: None),
-    )
+    # A real registry, not a names-only stub: ownership now comes from the
+    # origin index it holds, and a stub that only lists names cannot show
+    # whether the index is being consulted at all.
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.mcp.naming import MCPToolRef, tool_name
+
+    class _Stub(Tool):
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        @property
+        def name(self) -> str:
+            return self._name
+
+        @property
+        def description(self) -> str:
+            return "stub"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return ""
+
+    registry = ToolRegistry()
+    registry.register(_Stub("read_file"))
+    for server, tool in [
+        ("ctx7", "get_docs"),
+        ("ctx7", "resolve_id"),
+        ("github_enterprise", "list_repos"),
+        ("brave-search", "query"),
+        # The case the old prefix match got wrong: the dot is sanitised out of
+        # the registered name, so no configured key prefixes it and the server
+        # reported as connected with zero tools while the agent called them.
+        ("data.warehouse", "query"),
+    ]:
+        registered = tool_name(server, tool, taken=registry)
+        registry.register(_Stub(registered), origin=MCPToolRef(name=registered, server=server, tool=tool))
+
+    loop = SimpleNamespace(context=SimpleNamespace(skills=_Catalog()), tools=registry)
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
 
@@ -346,6 +380,8 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     assert by_name["github_enterprise"]["connected"] is True
     assert by_name["github_enterprise"]["tool_count"] == 1
     assert by_name["brave-search"]["tool_count"] == 1
+    assert by_name["data.warehouse"]["tool_count"] == 1, "a sanitised server name lost its tools"
+    assert by_name["data.warehouse"]["connected"] is True
 
     # Non-empty is the load-bearing half. `plugin_discovery_sources()` points its
     # bundled_dir at `raven/plugin/memory/`, which is in this tree, so discovery
@@ -361,6 +397,7 @@ async def test_ext_list_reports_a_server_by_the_tools_it_registered(
     assert owners["mcp_ctx7_get_docs"] == "ctx7"
     assert owners["mcp_github_enterprise_list_repos"] == "github_enterprise"
     assert owners["mcp_brave-search_query"] == "brave-search"
+    assert owners["mcp_data_warehouse_query"] == "data.warehouse"
     assert owners["read_file"] is None
 
 

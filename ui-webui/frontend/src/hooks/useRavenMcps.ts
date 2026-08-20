@@ -11,9 +11,15 @@ import type { RavenMcpServer } from '@/api';
  * wired to the gateway agent, so it describes servers this chat can never use
  * and swallows anything added through it.
  *
- * Writes replace the whole list and take effect on the next gateway restart
- * (MCP tools are registered once, at connect time), which the callbacks
- * surface rather than pretending the change is live.
+ * Writes replace the whole list and are handed to the running agent: each
+ * server owns its own transport, so one can be attached or detached without a
+ * restart. The write result carries `applied` — false when no live agent was
+ * reachable, in which case the config is still saved and the next agent picks
+ * it up. The callbacks return it rather than claiming either outcome.
+ *
+ * `applied: true` means the reconcile started, not that it finished; the reload
+ * below picks up whatever has settled by then, and anything slower shows as
+ * `connecting` until the panel is reopened.
  */
 export function useRavenMcps() {
 	const [mcps, setMcps] = useState<RavenMcpServer[]>([]);
@@ -21,7 +27,7 @@ export function useRavenMcps() {
 	/** Why the last load failed, or null. Distinct from an empty list: the
 	 *  panel must not present "we could not find out" as "nothing configured". */
 	const [loadError, setLoadError] = useState<string | null>(null);
-	/** True once the agent has connected its MCP servers this run. */
+	/** True while at least one MCP server is connected right now. */
 	const [connected, setConnected] = useState(false);
 
 	const reload = useCallback(async () => {
@@ -81,10 +87,9 @@ export function useRavenMcps() {
 	);
 
 	const remove = useCallback(
-		// Returns the write result like `add` does: a removal is not live either
-		// (nothing unregisters an MCP server's tools), and a delete that reports
-		// nothing reads as "the agent can no longer reach it" — false until the
-		// gateway restarts.
+		// Returns the write result like `add` does: the caller needs `applied` to
+		// know whether the running agent actually dropped the server, or only the
+		// config did.
 		async (name: string) => mutate((current) => current.filter((m) => m.name !== name)),
 		[mutate],
 	);

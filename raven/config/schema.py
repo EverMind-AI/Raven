@@ -946,7 +946,13 @@ class ToolsConfig(Base):
     used by eval harnesses (e.g. BrowseComp-Plus) to constrain the agent to a
     specific tool subset. Names match those in ``ToolRegistry`` (e.g.
     ``read_file``, ``web_search``, or ``mcp_bcp-search_search``). Read at startup,
-    so a change needs a restart."""
+    so a change needs a restart.
+
+    The MCP meta-tools -- ``list_mcp_resources``, ``list_mcp_resource_templates``,
+    ``read_mcp_resource``, ``list_mcp_prompts``, ``get_mcp_prompt`` -- are the one
+    exception. Raven registers and withdraws them itself as MCP servers serving
+    those primitives come and go, so an entry naming one has no effect and is
+    logged as such rather than silently ignored."""
 
 
 def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:

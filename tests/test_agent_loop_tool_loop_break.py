@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.failure_streak import is_hard_tool_failure
+from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -33,7 +33,7 @@ def workspace():
 @pytest.mark.parametrize(
     "result,expected",
     [
-        ("Error: Tool 'x' not found. Available: a, b", True),
+        ("Error: Tool 'x' is not available. It may have been unloaded, or the name may be wrong.", True),
         ("Error: file does not exist", True),
         ("No matches found.", False),  # empty search = success, not a failure
         ("No files found", False),  # find empty result
@@ -47,6 +47,24 @@ def workspace():
 )
 def test_is_hard_tool_failure(result, expected):
     assert is_hard_tool_failure(result) is expected
+
+
+@pytest.mark.parametrize(
+    "result,expected",
+    [
+        # The registry's own wording for a name that did not resolve. It says
+        # "is not available" rather than "not found" because it cannot tell a
+        # hallucinated name from a tool unloaded mid-turn -- but it is the same
+        # failure, and the streak must not file it under the catch-all.
+        ("Error: Tool 'x' is not available. It may have been unloaded, or the name may be wrong.", "not_found"),
+        ("Error: tool 'x' is not available. It may have been unloaded, or the name may be wrong.", "not_found"),
+        ("Error: Invalid parameters for tool 'x': missing 'path'", "schema"),
+        ("Error: Tool 'x' timed out after 300s.", "timeout"),
+        ("Error: something else entirely", "other"),
+    ],
+)
+def test_failure_class(result, expected):
+    assert failure_class(result) == expected
 
 
 # --------------------------------------------------------------------------- #

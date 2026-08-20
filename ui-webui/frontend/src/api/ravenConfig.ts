@@ -260,10 +260,17 @@ export interface RavenMcpServer {
 	headers?: Record<string, string>;
 	toolTimeout?: number;
 	connected?: boolean;
+	/** Live connection state from the connection manager: `connected`,
+	 *  `connecting`, `disconnected`, `auth_required` or `error`. Finer than
+	 *  `connected`, which cannot tell "never reached" from "handshake failed"
+	 *  from "waiting for the user to authorize in the browser". */
+	state?: 'auth_required' | 'connected' | 'connecting' | 'disconnected' | 'error';
 	tools?: string[];
-	/** Set when the config entry does not validate. The server is still listed
-	 *  — a hand-broken entry has to stay visible to be fixable — but its fields
-	 *  come back empty, and saving over it is refused until the config is fixed. */
+	/** Set when the config ENTRY does not validate — not when the connection
+	 *  failed. The server is still listed — a hand-broken entry has to stay
+	 *  visible to be fixable — but its fields come back empty, and saving over
+	 *  it is refused until the config is fixed. A failed handshake shows up in
+	 *  `state`, which is why the connection's own error is not folded in here. */
 	error?: string;
 }
 
@@ -501,10 +508,21 @@ export const ravenConfigApi = {
 	 *  has no effect on the gateway agent. */
 	mcp: {
 		list: () => client.get<{ servers: RavenMcpServer[]; connected: boolean }>('/raven/mcp'),
-		/** Replaces the whole list. ``restart_required`` is always true: MCP
-		 *  tools are registered once, at connect time. */
+		/** Replaces the whole list, then hands it to the live agent to reconcile —
+		 *  each server has its own transport, so no restart is needed and
+		 *  ``restart_required`` is always false. ``applied`` says whether a live
+		 *  agent was there to be handed it; when it is false the config is still
+		 *  written and the next agent reads it.
+		 *
+		 *  The reconcile is not awaited to completion: a handshake parked at a
+		 *  browser-authorization step can hold its transport for a quarter of an
+		 *  hour, and this is an HTTP PUT. So ``applied: true`` means "started",
+		 *  not "finished" — the outcome per server arrives as `state` on the next
+		 *  `list`, which the panel calls right after this resolves. */
 		set: (servers: RavenMcpServer[]) =>
-			client.put<{ ok: boolean; restart_required: boolean }>('/raven/mcp', { servers }),
+			client.put<{ ok: boolean; applied: boolean; restart_required: boolean }>('/raven/mcp', {
+				servers,
+			}),
 	},
 
 	skills: {

@@ -26,7 +26,7 @@ pre-registered ``client_id``, without the registration round trip either. An
 endpoint the server answers as not being there is disarmed and the next connect
 discovers; see :class:`_CatalogSeed` and :data:`NO_SEED_ENV`.
 
-The consumer is :class:`~raven.agent.tools.mcp_manager.MCPConnectionManager`:
+The consumer is :class:`~raven.mcp.manager.MCPConnectionManager`:
 for a server configured ``auth="oauth"`` it builds a provider through
 :func:`provider_for` and hands it to the transport as an ``httpx.Auth``, so the
 SDK runs the browser flow *inside* the connect. A connect that still fails is

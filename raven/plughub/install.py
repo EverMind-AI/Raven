@@ -123,7 +123,7 @@ def _install_mcp_piece(entry_id: str, contrib: dict, form: dict) -> tuple[dict, 
 
 
 def _undo_mcp_piece(piece: dict) -> None:
-    from raven.agent.tools.mcp_oauth import delete_credentials
+    from raven.mcp.oauth import delete_credentials
 
     server = piece["server"]
     payload = _read_config_raw()

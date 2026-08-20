@@ -50,7 +50,11 @@ def failure_class(model_text: str) -> str:
         return "invalid_arguments"
     if "invalid parameters" in low:
         return "schema"
-    if "not found" in low:
+    if "not found" in low or "is not available" in low:
+        # Both spellings of a name that did not resolve. ``ToolRegistry``
+        # answers a miss with "is not available", because it cannot tell a
+        # hallucinated name from a tool whose MCP server was unloaded mid-turn
+        # and will not accuse the model of either.
         return "not_found"
     if "permission" in low or "denied" in low:
         return "denied"

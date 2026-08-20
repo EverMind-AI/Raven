@@ -5,10 +5,11 @@ the live agent loop: each server owns a private ``AsyncExitStack`` so it can
 be attached, detached, and reconnected independently while the loop runs
 (plugin install/uninstall, re-auth, config edits — no restart).
 
-Ordering constraint worth flagging: ``disconnect`` unregisters the server's
-tools *before* closing its stack, so the agent never sees a tool whose
-session is already gone. In-flight calls on a closing session are covered by
-``MCPToolWrapper``'s existing timeout/exception handling.
+Ordering constraint worth flagging: ``disconnect`` withdraws the server's
+tools *before* closing its stack, so the agent never sees a tool whose session
+is already gone. A turn already in flight had those tools in its prompt, so its
+next call lands on the registry's not-found answer, which names both readings
+("unloaded, or the name is wrong") rather than accusing the model of guessing.
 
 Locking model: the manager lock guards only the connection map and the
 begin/commit edges of a connect. The transport handshake itself runs
@@ -19,7 +20,7 @@ verifies the record still wants this attempt (same epoch, still
 ``connecting``) and rolls the attempt back otherwise, so a concurrent
 disconnect/config-change during the handshake wins cleanly.
 
-State transitions (``sync``/``connect`` drive them):
+State transitions (``apply_config``/``connect`` drive them):
 
     disconnected -> connecting -> connected
                         |-> auth_required   (OAuth needed / token expired /
@@ -43,14 +44,15 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AsyncExitStack, suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from loguru import logger
 
-from raven.agent.tools.mcp import connect_mcp_server, resolve_transport
-from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT
 from raven.agent.tools.registry import ToolRegistry
+from raven.mcp.client import Connected, connect_mcp_server, resolve_transport
+from raven.mcp.oauth import OAUTH_FLOW_TIMEOUT
+from raven.mcp.report import ApplyReport
 from raven.sandbox import SandboxInitError
 
 MCPState = str  # "disconnected" | "connecting" | "connected" | "auth_required" | "error"
@@ -92,7 +94,6 @@ class MCPConnection:
     name: str
     config: Any
     stack: AsyncExitStack | None = None
-    tool_names: set[str] = field(default_factory=set)
     state: MCPState = "disconnected"
     error: str | None = None
     epoch: object | None = None
@@ -101,10 +102,22 @@ class MCPConnection:
     auth_parked: asyncio.Event | None = None
     """Set when the current attempt reaches the browser-authorization step,
     so a caller that must not wait on a person can stop awaiting it."""
+    session: Any = None
+    """The live ``mcp.ClientSession``, for callers that address a server by name
+    rather than through one of its tool wrappers.
+
+    Written only at commit, under the same epoch check that accepts the tool
+    registrations, and cleared the moment the stack closes. That is what makes
+    ``session_of`` safe without a generation of its own: a losing attempt never
+    stores its session, so nobody can be handed one whose stack is gone."""
+    capabilities: Any = None
+    """``ServerCapabilities`` from this server's handshake, or None until it
+    connects. Which primitives it offers is stated once, at initialize, and
+    cannot be asked again."""
 
 
 def _cfg_fingerprint(cfg: Any) -> Any:
-    """Comparable view of a server config, for change detection in sync()."""
+    """Comparable view of a server config, for change detection."""
     dump = getattr(cfg, "model_dump", None)
     return dump() if callable(dump) else cfg
 
@@ -121,7 +134,7 @@ class MCPConnectionManager:
 
     ``executor_provider`` is an async callable resolving to the sandbox
     executor; it is awaited only when a connect actually happens, so a
-    no-op ``sync`` never has to spin up the executor.
+    no-op ``apply_config`` never has to spin up the executor.
     """
 
     def __init__(
@@ -138,6 +151,8 @@ class MCPConnectionManager:
         self.on_oauth_event = on_oauth_event
         self._conns: dict[str, MCPConnection] = {}
         self._lock = asyncio.Lock()
+        # Names already warned about, so a config poll does not repeat itself.
+        self._warned_names: set[str] = set()
 
     # ── Introspection ──────────────────────────────────────────────
 
@@ -145,9 +160,83 @@ class MCPConnectionManager:
         """Snapshot of every known server, stable-ordered by name."""
         return [self._snapshot(c) for c in sorted(self._conns.values(), key=lambda c: c.name)]
 
+    def session_of(self, server: str) -> Any:
+        """The live session for one server, or None when it has none right now.
+
+        The seam a caller uses when it holds a server *name* and nothing else --
+        the resource and prompt meta-tools, which take ``server`` as an argument
+        and so have no tool wrapper to borrow a session from.
+
+        Safe without a generation of its own, because of where the session is
+        written rather than what is checked here: only a committing attempt
+        stores one, under the epoch check, and ``_disconnect_locked`` clears it
+        in the same breath as closing the stack. A losing attempt therefore
+        never publishes its session, so there is no way to be handed one whose
+        stack is gone.
+
+        ``connected`` is required on top of that: a record parked in
+        ``auth_required`` may still have a live attempt behind it, and handing
+        out its half-built session would let a caller talk to a server the user
+        has not finished authorizing.
+        """
+        conn = self._conns.get(server)
+        if conn is None or conn.state != "connected":
+            return None
+        return conn.session
+
+    def servers_offering(self, primitive: str) -> list[str]:
+        """Connected servers whose handshake declared ``primitive``, sorted.
+
+        ``primitive`` is a field name on the SDK's ``ServerCapabilities`` --
+        ``resources`` or ``prompts``. A server states what it offers once, at
+        initialize, and cannot be asked again, so this reads what was captured
+        then.
+
+        The gate for whether the meta-tools exist at all. Most MCP servers offer
+        only tools; advertising ``read_mcp_resource`` to a deploy where nothing
+        serves resources spends schema on five calls that can only fail. This
+        moves the tool list when a server connects or disconnects, which costs
+        the prompt-cache prefix -- but that list was already moving at exactly
+        those moments, because the server's own tools appear and disappear with
+        it.
+        """
+        out = []
+        for name, conn in self._conns.items():
+            if conn.state != "connected" or conn.capabilities is None:
+                continue
+            if getattr(conn.capabilities, primitive, None) is not None:
+                out.append(name)
+        return sorted(out)
+
+    def tools_of(self, server: str) -> dict[str, str]:
+        """Registered name -> the tool's own name, for one server.
+
+        Both halves come from the registry's origin index, which is the only
+        record of them. A caller that wants to show a bare tool name takes it
+        from here rather than stripping a prefix off the registered name: the
+        name is sanitised, capped and possibly hash-suffixed, so the prefix it
+        appears to carry is not reliably the server's.
+        """
+        return {n: ref.tool for n in self._registry.names_from(server) if (ref := self._registry.origin_of(n))}
+
+    def tools_by_server(self) -> dict[str, dict[str, str]]:
+        """:meth:`tools_of` for every server at once, in one pass.
+
+        A caller listing N servers reads this instead of calling ``tools_of``
+        N times: that method scans the whole origin index per server, so the
+        per-server form costs N passes where this costs one. Servers with no
+        registered tools are absent rather than empty, which is what
+        ``dict.get(name, {})`` at the call site wants.
+        """
+        out: dict[str, dict[str, str]] = {}
+        for name in self._registry.names():
+            if (ref := self._registry.origin_of(name)) is not None:
+                out.setdefault(ref.server, {})[name] = ref.tool
+        return out
+
     def tool_map(self) -> dict[str, str]:
         """Registered tool name -> owning server name."""
-        return {t: c.name for c in self._conns.values() for t in c.tool_names}
+        return {n: ref.server for n in self._registry.names() if (ref := self._registry.origin_of(n))}
 
     def _snapshot(self, conn: MCPConnection) -> dict:
         return {
@@ -155,7 +244,7 @@ class MCPConnectionManager:
             "transport": resolve_transport(conn.config) or "unknown",
             "state": conn.state,
             "connected": conn.state == "connected",
-            "tool_count": len(conn.tool_names),
+            "tool_count": len(self._registry.names_from(conn.name)),
             "error": conn.error,
             "enabled": bool(getattr(conn.config, "enabled", True)),
         }
@@ -206,27 +295,108 @@ class MCPConnectionManager:
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         """Detach one server. ``drop=True`` forgets the record entirely
         (server removed from config); ``drop=False`` keeps it visible as
-        ``disconnected`` (server merely disabled)."""
+        ``disconnected`` (server merely disabled).
+
+        """
         async with self._lock:
             await self._disconnect_locked(name, drop=drop)
 
-    async def sync(self, cfg_servers: dict, *, executor_provider=None) -> dict:
+    def config_changed(self, cfg_servers: dict) -> bool:
+        """Whether :meth:`apply_config` would do anything -- without doing it.
+
+        This and :meth:`apply_config` are a pair, split because their costs
+        differ by kind, not by degree: this one compares config in memory and
+        is safe to call on a timer, that one talks to transports. Anything that
+        can fire often asks here first. (An earlier revision declared the pair
+        as two ``Protocol``
+        classes; nothing referenced them, this repo runs no type checker, so
+        they asserted a contract that nothing could check. The contract is
+        stated here instead, where a reader of the implementation sees it.)
+
+        The cheap gate in front of the expensive path: no connect, no
+        subprocess, no network. Everything that can fire often (the reload RPC,
+        a file-watch tick) asks this first, so a poll against unchanged config
+        costs one ``model_dump`` per configured server instead of a reconnect
+        storm. Cheap, not free -- worth knowing before putting it on a tight
+        timer with a large server set.
+
+        A server parked in ``error``/``auth_required`` with unchanged config
+        reads as unchanged on purpose, matching what ``apply_config`` does with
+        it: retrying a dead server on every poll is the storm this gate exists
+        to prevent, and ``connect()`` is the explicit retry.
+        """
+        desired = {n: c for n, c in cfg_servers.items() if getattr(c, "enabled", True)}
+        if set(desired) - set(self._conns):
+            return True
+        for name, conn in self._conns.items():
+            if name not in desired:
+                # A record config no longer wants. Only counts as work if there
+                # is something to take away -- a record already down with no
+                # tools is what a previous apply left behind. Note this must
+                # not return the negative case: another record further along
+                # may still have changed.
+                if self._registry.names_from(name) or conn.state != "disconnected":
+                    return True
+            elif _cfg_fingerprint(conn.config) != _cfg_fingerprint(desired[name]):
+                return True
+            elif conn.state == "disconnected":
+                return True
+        return False
+
+    def _warn_unsanitary_names(self, cfg_servers: dict) -> None:
+        """Say so when a server name will not survive into its tools' names.
+
+        Not a rejection. A config file that this build refuses costs the user a
+        raven that will not start, over a character -- too steep for a problem
+        whose whole effect is that some names get rewritten. What is worth a
+        line is that the rewriting is otherwise silent: the names the model
+        sees, and the ones ``ext.list`` and the web panel show, are not the ones
+        the config file spells, and nothing else says so.
+
+        Deliberately *not* claimed here: that a ``disabled_tools`` entry stops
+        matching. It does not. ``spellings`` generates the pre-sanitising form
+        for every origin and ``resolve_configured`` tests an entry against them,
+        which is what :func:`raven.mcp.naming.legacy_tool_name` exists for.
+
+        Measured before choosing this: all 40 MCP servers in the shipped
+        catalogue are already clean, and dashes survive sanitising, so the
+        warning should be rare in practice.
+        """
+        from raven.mcp.naming import PREFIX, SEPARATOR, is_sanitary, sanitary_form
+
+        for name in cfg_servers:
+            if name in self._warned_names or is_sanitary(name):
+                continue
+            self._warned_names.add(name)
+            logger.warning(
+                "MCP server '{}' has characters no provider accepts in a tool name; its tools "
+                "register under '{}' instead, which is the name the model and the panels see. "
+                "Existing tools.disabled_tools entries keep matching either spelling.",
+                name,
+                f"{PREFIX}{SEPARATOR}{sanitary_form(name)}{SEPARATOR}<tool>",
+            )
+
+    async def apply_config(self, cfg_servers: dict, *, executor_provider=None) -> ApplyReport:
         """Reconcile live connections with the desired config.
 
-        Returns ``{"reloaded": <servers touched>, "tools_changed": bool}``.
+        Reconciling, not restarting: a server whose config is unchanged and
+        whose connection is live is not touched at all, so applying config
+        while turns are running costs nothing for the servers nobody edited.
         Servers in ``error``/``auth_required`` with unchanged config are NOT
         retried here (see module docstring); ``connect()`` retries them.
+
         """
         reloaded = 0
         tools_changed = False
         pending: list[tuple[MCPConnection, object]] = []
 
+        self._warn_unsanitary_names(cfg_servers)
         async with self._lock:
             desired = {n: c for n, c in cfg_servers.items() if getattr(c, "enabled", True)}
 
             for name in [n for n in self._conns if n not in desired]:
                 conn = self._conns[name]
-                had_tools = bool(conn.tool_names)
+                had_tools = bool(self._registry.names_from(name))
                 was_live = conn.state != "disconnected"
                 if name in cfg_servers:
                     # Merely disabled: keep the record visible, but track the
@@ -244,14 +414,20 @@ class MCPConnectionManager:
                         if conn.state != "disconnected":
                             continue  # connected / connecting / parked in error
                     else:
+                        # Recorded before the teardown, like the removal branch
+                        # above: withdrawing a server's tools moves the
+                        # model-facing surface whether or not the reconnect puts
+                        # anything back, and a reconnect that fails or comes
+                        # back empty otherwise reported the surface unchanged.
+                        tools_changed = tools_changed or bool(self._registry.names_from(name))
                         await self._disconnect_locked(name, drop=True)
                 pending.append(await self._begin_connect_locked(name, cfg))
 
         # Every pending server gets its attempt before anything is re-raised.
-        # _begin_connect_locked already marked them all `connecting`, and sync's
-        # own guard skips a record that is not `disconnected` -- so abandoning the
-        # tail on the first failure would park those servers in `connecting`
-        # permanently, which no later sync would retry.
+        # _begin_connect_locked already marked them all `connecting`, and the
+        # guard above skips a record that is not `disconnected` -- so abandoning
+        # the tail on the first failure would park those servers in `connecting`
+        # permanently, which no later apply would retry.
         #
         # The attempts run concurrently: they share no state but the registry
         # (single-threaded asyncio dict ops) and the commit lock, and connecting
@@ -266,6 +442,9 @@ class MCPConnectionManager:
             return_exceptions=True,
         )
         for res in results:
+            # ``reloaded`` counts records touched, not connections that came up:
+            # the detach branch above counts too, and a detach is not a connect.
+            # A caller wanting "did it work" reads the per-server states.
             reloaded += 1
             if isinstance(res, SandboxInitError):
                 first_error = first_error or res
@@ -276,7 +455,7 @@ class MCPConnectionManager:
         if first_error is not None:
             raise first_error
 
-        return {"reloaded": reloaded, "tools_changed": tools_changed}
+        return ApplyReport(reloaded=reloaded, tools_changed=tools_changed)
 
     @staticmethod
     def _shared_executor_provider(executor_provider):
@@ -328,10 +507,15 @@ class MCPConnectionManager:
     # ── Connect machinery ──────────────────────────────────────────
 
     async def _begin_connect_locked(self, name: str, cfg: Any) -> tuple[MCPConnection, object]:
-        from raven.agent.tools.mcp_oauth import cancel_pending
+        from raven.mcp.oauth import cancel_pending
 
         existing = self._conns.get(name)
         if existing is not None and existing.state == "connected":
+            # Withdrawn before the new attempt starts rather than after it
+            # fails: a reconnect that does not come back would otherwise leave
+            # the model holding tools whose session is gone. What a turn already
+            # in flight sees instead is the registry's miss, which names both
+            # readings (see ``ToolRegistry.execute``).
             await self._disconnect_locked(name, drop=False)
 
         # A superseded attempt's authorization link must go stale NOW, not when
@@ -366,7 +550,7 @@ class MCPConnectionManager:
         before_names = set(self._registry.names())
         try:
             executor = await executor_provider() if executor_provider is not None else None
-            registered = await self._handshake_watchdog(
+            result = await self._handshake_watchdog(
                 name,
                 connect_mcp_server(
                     name,
@@ -392,9 +576,9 @@ class MCPConnectionManager:
                 #   to come back out -- its session is inside that stack, so the
                 #   agent would otherwise hold a tool it cannot call, owned by no
                 #   connection and therefore unreachable by disconnect;
-                # * the record must leave `connecting`. `sync` skips anything that
-                #   is not `disconnected`, so a record left mid-connect is never
-                #   retried again for the life of the process.
+                # * the record must leave `connecting`. `apply_config` skips a
+                #   record that is not `disconnected`, so one left mid-connect is
+                #   never retried again for the life of the process.
                 added = [t for t in self._registry.names() if t not in before_names]
                 async with self._lock:
                     await self._abort_attempt_locked(conn, epoch, stack, added, "disconnected", "")
@@ -429,21 +613,22 @@ class MCPConnectionManager:
                 # unregistering ours would strip the identically-named tool the
                 # winner just registered and leave it reporting a tool count the
                 # registry cannot dispatch.
-                self._unregister_unclaimed(registered)
+                self._take_back(conn, epoch, result.names)
                 await self._close_stack(stack)
                 return self._snapshot(conn)
             conn.stack = stack
-            conn.tool_names = set(registered)
+            conn.session = result.session
+            conn.capabilities = result.capabilities
             if self._post_connect is not None:
                 self._post_connect()
-            # The blacklist may have unregistered some of the fresh names;
-            # track only what survived so disconnect stays precise.
-            conn.tool_names = {t for t in conn.tool_names if self._registry.has(t)}
+            # No local copy of ``registered``: the blacklist may have just
+            # unregistered some of those names, and the registry is what knows.
+            live = self._registry.names_from(name)
             self._set_state(conn, "connected")
-            logger.info("MCP server '{}': connected, {} tools registered", name, len(conn.tool_names))
+            logger.info("MCP server '{}': connected, {} tools registered", name, len(live))
             return self._snapshot(conn)
 
-    async def _handshake_watchdog(self, name: str, coro) -> list[str]:
+    async def _handshake_watchdog(self, name: str, coro) -> "Connected":
         """Await the handshake, but never forever.
 
         The MCP SDK's streamable-http transport can wedge: an exception in
@@ -462,7 +647,7 @@ class MCPConnectionManager:
             try:
                 return await asyncio.wait_for(asyncio.shield(task), timeout=_HANDSHAKE_TIMEOUT)
             except asyncio.TimeoutError:
-                from raven.agent.tools.mcp_oauth import auth_wait_servers
+                from raven.mcp.oauth import auth_wait_servers
 
                 # The exemption is bounded. A flow whose redirect registered but
                 # whose callback never arrives (the transport dying inside the
@@ -498,12 +683,38 @@ class MCPConnectionManager:
                     "authorization flow (see the OAuth error above in the logs)"
                 ) from None
 
-    def _unregister_unclaimed(self, names: list[str]) -> None:
-        """Unregister only the names no live connection claims."""
-        claimed = {t for c in self._conns.values() for t in c.tool_names}
+    def _take_back(self, conn: MCPConnection, epoch: object, names: list[str]) -> None:
+        """Unregister what a dead attempt added, unless a newer one owns it now.
+
+        Ownership is the epoch, not a stored list of names. Two attempts on one
+        server register the *same* names -- the registry keys by name, so the
+        second registration replaces the first and no name-keyed record can say
+        which attempt a name belongs to. The record's epoch can: it names the
+        attempt the record currently wants.
+
+        Three states, not two, and collapsing the last two was a bug. A record
+        whose epoch is ``None`` wants *no* attempt -- ``_disconnect_locked``
+        clears it as its first act -- which is not the same as a newer attempt
+        having taken over, and reading it as one left a disabled server
+        advertising a tool whose stack had already been closed. The change probe
+        then read that orphan through ``names_from`` and answered "still work to
+        do" on every poll, forever.
+
+        | ``current.epoch``    | Means                     | These names       |
+        | -------------------- | ------------------------- | ----------------- |
+        | this ``epoch``       | the record still wants us | come back out     |
+        | ``None``             | the record wants nobody   | come back out     |
+        | another epoch        | a newer attempt owns them | are left alone    |
+        | record gone entirely | nobody will ever reap it  | come back out     |
+
+        Only the third may be left: stripping those would leave the winner
+        advertising tools the registry can no longer dispatch.
+        """
+        current = self._conns.get(conn.name)
+        if current is not None and current.epoch is not None and current.epoch is not epoch:
+            return
         for t in names:
-            if t not in claimed:
-                self._registry.unregister(t)
+            self._registry.unregister(t)
 
     async def _abort_attempt_locked(
         self,
@@ -514,25 +725,30 @@ class MCPConnectionManager:
         state: MCPState,
         error: str,
     ) -> None:
-        self._unregister_unclaimed(registered)
+        self._take_back(conn, epoch, registered)
         await self._close_stack(stack)
         if self._conns.get(conn.name) is conn and conn.epoch is epoch and conn.state in ("connecting", "auth_required"):
             self._set_state(conn, state, error or None)
 
     async def _disconnect_locked(self, name: str, *, drop: bool) -> None:
-        from raven.agent.tools.mcp_oauth import cancel_pending
+        """Detach one server's transport and withdraw its tools."""
+        from raven.mcp.oauth import cancel_pending
 
         conn = self._conns.get(name)
         if conn is None:
             return
         conn.epoch = None  # invalidates any in-flight attempt
         cancel_pending(name)
-        for t in conn.tool_names:
+        for t in self._registry.names_from(name):
             self._registry.unregister(t)
-        conn.tool_names = set()
         if conn.stack is not None:
             await self._close_stack(conn.stack)
             conn.stack = None
+        # Dropped with the stack that owns them: the session is dead the moment
+        # the stack closes, and the capabilities describe a connection that no
+        # longer exists.
+        conn.session = None
+        conn.capabilities = None
         if drop:
             del self._conns[name]
         else:
@@ -552,7 +768,7 @@ class MCPConnectionManager:
         cfg = conn.config
         if getattr(cfg, "auth", "none") != "oauth":
             return None
-        from raven.agent.tools.mcp_oauth import provider_for
+        from raven.mcp.oauth import provider_for
 
         parked = conn.auth_parked
 
@@ -577,7 +793,7 @@ class MCPConnectionManager:
     @staticmethod
     def _is_auth_error(exc: BaseException) -> bool:
         """Whether a connect failure means "user must (re)authorize"."""
-        from raven.agent.tools.mcp_oauth import is_auth_error
+        from raven.mcp.oauth import is_auth_error
 
         return is_auth_error(exc)
 

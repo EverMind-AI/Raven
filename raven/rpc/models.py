@@ -1149,13 +1149,33 @@ class SetupStatusResult(_Strict):
 
 
 class ReloadMcpParams(_Strict):
-    pass
+    """``confirm`` skips the confirmation gate for this call, and only this one.
+
+    There is deliberately no "and stop asking": storing that needs a settings
+    section this config does not have, and the flag that used to claim it
+    (``always``) was never persisted -- the TUI announced it had been while the
+    server logged that it had not.
+    """
+
+    session_id: str | None = None
+    confirm: bool | None = None
 
 
 class ReloadMcpResult(_Strict):
+    """Every branch fills all five fields.
+
+    ``status`` is what the caller acts on -- hermes ``ops.ts`` picks its line
+    from it -- so a branch that omitted it would leave that client reading
+    undefined and printing the fall-through text for a reload that failed. That
+    was the shipped behaviour while this method was a stub: it never sent a
+    status at all.
+    """
+
     ok: bool
-    reloaded: int | None = None
-    tools_changed: bool | None = None
+    status: Literal["reloaded", "noop", "confirm_required"]
+    message: str
+    reloaded: int
+    tools_changed: bool
 
 
 # ---------------------------------------------------------------------------
