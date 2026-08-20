@@ -4150,7 +4150,7 @@ def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> N
     re-deriving it.
     """
     from raven.providers.registry import CRED_ENDPOINT, CRED_LOCAL, PROVIDERS, credential_kind
-    from raven.tui_rpc.methods.model import _build_provider_entry
+    from raven.rpc.methods.model import _build_provider_entry
 
     for spec in PROVIDERS:
         entry = _build_provider_entry(spec.name, current_provider=None)

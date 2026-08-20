@@ -2984,6 +2984,238 @@
       "line_percent": 100.0,
       "statements": 40
     },
+    "raven/rpc/_ansi_filter.py": {
+      "branch_percent": 100.0,
+      "branches": 2,
+      "covered_branches": 2,
+      "covered_lines": 15,
+      "line_percent": 100.0,
+      "statements": 15
+    },
+    "raven/rpc/_confirm_injection.py": {
+      "branch_percent": 50.0,
+      "branches": 2,
+      "covered_branches": 1,
+      "covered_lines": 23,
+      "line_percent": 95.833333,
+      "statements": 24
+    },
+    "raven/rpc/_console_injection.py": {
+      "branch_percent": 100.0,
+      "branches": 4,
+      "covered_branches": 4,
+      "covered_lines": 27,
+      "line_percent": 100.0,
+      "statements": 27
+    },
+    "raven/rpc/approval_broker.py": {
+      "branch_percent": 80.0,
+      "branches": 10,
+      "covered_branches": 8,
+      "covered_lines": 57,
+      "line_percent": 95.0,
+      "statements": 60
+    },
+    "raven/rpc/confirm_broker.py": {
+      "branch_percent": 83.333333,
+      "branches": 6,
+      "covered_branches": 5,
+      "covered_lines": 39,
+      "line_percent": 92.857143,
+      "statements": 42
+    },
+    "raven/rpc/dispatcher.py": {
+      "branch_percent": 65.384615,
+      "branches": 26,
+      "covered_branches": 17,
+      "covered_lines": 57,
+      "line_percent": 83.823529,
+      "statements": 68
+    },
+    "raven/rpc/errors.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 73,
+      "line_percent": 100.0,
+      "statements": 73
+    },
+    "raven/rpc/methods/__init__.py": {
+      "branch_percent": 100.0,
+      "branches": 8,
+      "covered_branches": 8,
+      "covered_lines": 40,
+      "line_percent": 100.0,
+      "statements": 40
+    },
+    "raven/rpc/methods/_stubs.py": {
+      "branch_percent": 100.0,
+      "branches": 2,
+      "covered_branches": 2,
+      "covered_lines": 11,
+      "line_percent": 100.0,
+      "statements": 11
+    },
+    "raven/rpc/methods/_typer_reflect.py": {
+      "branch_percent": 70.0,
+      "branches": 10,
+      "covered_branches": 7,
+      "covered_lines": 16,
+      "line_percent": 88.888889,
+      "statements": 18
+    },
+    "raven/rpc/methods/approval.py": {
+      "branch_percent": 100.0,
+      "branches": 2,
+      "covered_branches": 2,
+      "covered_lines": 13,
+      "line_percent": 92.857143,
+      "statements": 14
+    },
+    "raven/rpc/methods/cli_dispatch.py": {
+      "branch_percent": 96.153846,
+      "branches": 26,
+      "covered_branches": 25,
+      "covered_lines": 103,
+      "line_percent": 95.37037,
+      "statements": 108
+    },
+    "raven/rpc/methods/commands.py": {
+      "branch_percent": 78.26087,
+      "branches": 46,
+      "covered_branches": 36,
+      "covered_lines": 107,
+      "line_percent": 87.704918,
+      "statements": 122
+    },
+    "raven/rpc/methods/config.py": {
+      "branch_percent": 77.419355,
+      "branches": 62,
+      "covered_branches": 48,
+      "covered_lines": 134,
+      "line_percent": 90.540541,
+      "statements": 148
+    },
+    "raven/rpc/methods/confirm.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 11,
+      "line_percent": 91.666667,
+      "statements": 12
+    },
+    "raven/rpc/methods/model.py": {
+      "branch_percent": 96.666667,
+      "branches": 30,
+      "covered_branches": 29,
+      "covered_lines": 175,
+      "line_percent": 91.623037,
+      "statements": 191
+    },
+    "raven/rpc/methods/question.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 11,
+      "line_percent": 91.666667,
+      "statements": 12
+    },
+    "raven/rpc/methods/reload.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 7,
+      "line_percent": 100.0,
+      "statements": 7
+    },
+    "raven/rpc/methods/session.py": {
+      "branch_percent": 87.837838,
+      "branches": 74,
+      "covered_branches": 65,
+      "covered_lines": 247,
+      "line_percent": 90.145985,
+      "statements": 274
+    },
+    "raven/rpc/methods/setup.py": {
+      "branch_percent": 75.0,
+      "branches": 16,
+      "covered_branches": 12,
+      "covered_lines": 55,
+      "line_percent": 87.301587,
+      "statements": 63
+    },
+    "raven/rpc/methods/slash_routing.py": {
+      "branch_percent": 85.714286,
+      "branches": 14,
+      "covered_branches": 12,
+      "covered_lines": 55,
+      "line_percent": 84.615385,
+      "statements": 65
+    },
+    "raven/rpc/methods/system.py": {
+      "branch_percent": 100.0,
+      "branches": 4,
+      "covered_branches": 4,
+      "covered_lines": 33,
+      "line_percent": 94.285714,
+      "statements": 35
+    },
+    "raven/rpc/methods/terminal.py": {
+      "branch_percent": 90.0,
+      "branches": 10,
+      "covered_branches": 9,
+      "covered_lines": 26,
+      "line_percent": 100.0,
+      "statements": 26
+    },
+    "raven/rpc/methods/turn.py": {
+      "branch_percent": 76.666667,
+      "branches": 30,
+      "covered_branches": 23,
+      "covered_lines": 108,
+      "line_percent": 96.428571,
+      "statements": 112
+    },
+    "raven/rpc/models.py": {
+      "branch_percent": 100.0,
+      "branches": 0,
+      "covered_branches": 0,
+      "covered_lines": 389,
+      "line_percent": 100.0,
+      "statements": 389
+    },
+    "raven/rpc/question_broker.py": {
+      "branch_percent": 78.571429,
+      "branches": 14,
+      "covered_branches": 11,
+      "covered_lines": 55,
+      "line_percent": 93.220339,
+      "statements": 59
+    },
+    "raven/rpc/server.py": {
+      "branch_percent": 60.714286,
+      "branches": 28,
+      "covered_branches": 17,
+      "covered_lines": 96,
+      "line_percent": 76.190476,
+      "statements": 126
+    },
+    "raven/rpc/spine.py": {
+      "branch_percent": 92.5,
+      "branches": 40,
+      "covered_branches": 37,
+      "covered_lines": 112,
+      "line_percent": 99.115044,
+      "statements": 113
+    },
+    "raven/rpc/subscriptions.py": {
+      "branch_percent": 82.352941,
+      "branches": 34,
+      "covered_branches": 28,
+      "covered_lines": 90,
+      "line_percent": 92.783505,
+      "statements": 97
+    },
     "raven/sandbox/__init__.py": {
       "branch_percent": 100.0,
       "branches": 6,
@@ -3279,238 +3511,6 @@
       "covered_lines": 17,
       "line_percent": 80.952381,
       "statements": 21
-    },
-    "raven/tui_rpc/_ansi_filter.py": {
-      "branch_percent": 100.0,
-      "branches": 2,
-      "covered_branches": 2,
-      "covered_lines": 15,
-      "line_percent": 100.0,
-      "statements": 15
-    },
-    "raven/tui_rpc/_confirm_injection.py": {
-      "branch_percent": 50.0,
-      "branches": 2,
-      "covered_branches": 1,
-      "covered_lines": 23,
-      "line_percent": 95.833333,
-      "statements": 24
-    },
-    "raven/tui_rpc/_console_injection.py": {
-      "branch_percent": 100.0,
-      "branches": 4,
-      "covered_branches": 4,
-      "covered_lines": 27,
-      "line_percent": 100.0,
-      "statements": 27
-    },
-    "raven/tui_rpc/approval_broker.py": {
-      "branch_percent": 80.0,
-      "branches": 10,
-      "covered_branches": 8,
-      "covered_lines": 57,
-      "line_percent": 95.0,
-      "statements": 60
-    },
-    "raven/tui_rpc/confirm_broker.py": {
-      "branch_percent": 83.333333,
-      "branches": 6,
-      "covered_branches": 5,
-      "covered_lines": 39,
-      "line_percent": 92.857143,
-      "statements": 42
-    },
-    "raven/tui_rpc/dispatcher.py": {
-      "branch_percent": 65.384615,
-      "branches": 26,
-      "covered_branches": 17,
-      "covered_lines": 57,
-      "line_percent": 83.823529,
-      "statements": 68
-    },
-    "raven/tui_rpc/errors.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 73,
-      "line_percent": 100.0,
-      "statements": 73
-    },
-    "raven/tui_rpc/methods/__init__.py": {
-      "branch_percent": 100.0,
-      "branches": 8,
-      "covered_branches": 8,
-      "covered_lines": 40,
-      "line_percent": 100.0,
-      "statements": 40
-    },
-    "raven/tui_rpc/methods/_stubs.py": {
-      "branch_percent": 100.0,
-      "branches": 2,
-      "covered_branches": 2,
-      "covered_lines": 11,
-      "line_percent": 100.0,
-      "statements": 11
-    },
-    "raven/tui_rpc/methods/_typer_reflect.py": {
-      "branch_percent": 70.0,
-      "branches": 10,
-      "covered_branches": 7,
-      "covered_lines": 16,
-      "line_percent": 88.888889,
-      "statements": 18
-    },
-    "raven/tui_rpc/methods/approval.py": {
-      "branch_percent": 100.0,
-      "branches": 2,
-      "covered_branches": 2,
-      "covered_lines": 13,
-      "line_percent": 92.857143,
-      "statements": 14
-    },
-    "raven/tui_rpc/methods/cli_dispatch.py": {
-      "branch_percent": 96.153846,
-      "branches": 26,
-      "covered_branches": 25,
-      "covered_lines": 103,
-      "line_percent": 95.37037,
-      "statements": 108
-    },
-    "raven/tui_rpc/methods/commands.py": {
-      "branch_percent": 78.26087,
-      "branches": 46,
-      "covered_branches": 36,
-      "covered_lines": 107,
-      "line_percent": 87.704918,
-      "statements": 122
-    },
-    "raven/tui_rpc/methods/config.py": {
-      "branch_percent": 77.419355,
-      "branches": 62,
-      "covered_branches": 48,
-      "covered_lines": 134,
-      "line_percent": 90.540541,
-      "statements": 148
-    },
-    "raven/tui_rpc/methods/confirm.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 11,
-      "line_percent": 91.666667,
-      "statements": 12
-    },
-    "raven/tui_rpc/methods/model.py": {
-      "branch_percent": 96.666667,
-      "branches": 30,
-      "covered_branches": 29,
-      "covered_lines": 175,
-      "line_percent": 91.623037,
-      "statements": 191
-    },
-    "raven/tui_rpc/methods/question.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 11,
-      "line_percent": 91.666667,
-      "statements": 12
-    },
-    "raven/tui_rpc/methods/reload.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 7,
-      "line_percent": 100.0,
-      "statements": 7
-    },
-    "raven/tui_rpc/methods/session.py": {
-      "branch_percent": 87.837838,
-      "branches": 74,
-      "covered_branches": 65,
-      "covered_lines": 247,
-      "line_percent": 90.145985,
-      "statements": 274
-    },
-    "raven/tui_rpc/methods/setup.py": {
-      "branch_percent": 75.0,
-      "branches": 16,
-      "covered_branches": 12,
-      "covered_lines": 55,
-      "line_percent": 87.301587,
-      "statements": 63
-    },
-    "raven/tui_rpc/methods/slash_routing.py": {
-      "branch_percent": 85.714286,
-      "branches": 14,
-      "covered_branches": 12,
-      "covered_lines": 55,
-      "line_percent": 84.615385,
-      "statements": 65
-    },
-    "raven/tui_rpc/methods/system.py": {
-      "branch_percent": 100.0,
-      "branches": 4,
-      "covered_branches": 4,
-      "covered_lines": 33,
-      "line_percent": 94.285714,
-      "statements": 35
-    },
-    "raven/tui_rpc/methods/terminal.py": {
-      "branch_percent": 90.0,
-      "branches": 10,
-      "covered_branches": 9,
-      "covered_lines": 26,
-      "line_percent": 100.0,
-      "statements": 26
-    },
-    "raven/tui_rpc/methods/turn.py": {
-      "branch_percent": 76.666667,
-      "branches": 30,
-      "covered_branches": 23,
-      "covered_lines": 108,
-      "line_percent": 96.428571,
-      "statements": 112
-    },
-    "raven/tui_rpc/models.py": {
-      "branch_percent": 100.0,
-      "branches": 0,
-      "covered_branches": 0,
-      "covered_lines": 389,
-      "line_percent": 100.0,
-      "statements": 389
-    },
-    "raven/tui_rpc/question_broker.py": {
-      "branch_percent": 78.571429,
-      "branches": 14,
-      "covered_branches": 11,
-      "covered_lines": 55,
-      "line_percent": 93.220339,
-      "statements": 59
-    },
-    "raven/tui_rpc/server.py": {
-      "branch_percent": 60.714286,
-      "branches": 28,
-      "covered_branches": 17,
-      "covered_lines": 96,
-      "line_percent": 76.190476,
-      "statements": 126
-    },
-    "raven/tui_rpc/spine.py": {
-      "branch_percent": 92.5,
-      "branches": 40,
-      "covered_branches": 37,
-      "covered_lines": 112,
-      "line_percent": 99.115044,
-      "statements": 113
-    },
-    "raven/tui_rpc/subscriptions.py": {
-      "branch_percent": 82.352941,
-      "branches": 34,
-      "covered_branches": 28,
-      "covered_lines": 90,
-      "line_percent": 92.783505,
-      "statements": 97
     },
     "raven/utils/__init__.py": {
       "branch_percent": 100.0,

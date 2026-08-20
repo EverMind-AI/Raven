@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import TypeAdapter
 
+from raven.rpc.methods.turn import turn_cancel, turn_send, turn_subscribe
+from raven.rpc.models import TurnEvent
+from raven.rpc.spine import build_tui
+from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import ChatType, Origin, Source, TurnRequest
-from raven.tui_rpc.methods.turn import turn_cancel, turn_send, turn_subscribe
-from raven.tui_rpc.models import TurnEvent
-from raven.tui_rpc.spine import build_tui
-from raven.tui_rpc.subscriptions import SubscriptionEmitter
 
 _turn_event_adapter: TypeAdapter[TurnEvent] = TypeAdapter(TurnEvent)
 
@@ -41,7 +41,7 @@ class FakeScheduler:
 
 @pytest.fixture(autouse=True)
 def _clear_active_turns():
-    from raven.tui_rpc.methods import turn as _turn_mod
+    from raven.rpc.methods import turn as _turn_mod
 
     _turn_mod._active_turns.clear()
     yield
@@ -125,7 +125,7 @@ async def test_overflow_error_event_payload_shape() -> None:
 
     sub_id = await emitter.register("tui:default")
     # Force overflow by pushing beyond queue capacity without yielding.
-    from raven.tui_rpc.subscriptions import QUEUE_CAPACITY
+    from raven.rpc.subscriptions import QUEUE_CAPACITY
 
     for i in range(QUEUE_CAPACITY + 50):
         await emitter.emit(

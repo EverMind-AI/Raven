@@ -26,7 +26,7 @@ It is a smoke tier, not a safety net:
   restore) is out of reach by construction.
 
 Behaviour coverage belongs one layer down: `ui-tui/src/__tests__/` for TUI logic
-(mock the gateway, render with `ink-testing-library`), `tests/test_tui_rpc_*.py`
+(mock the gateway, render with `ink-testing-library`), `tests/test_rpc_*.py`
 for the RPC and dispatch layers.
 
 ## Prerequisites

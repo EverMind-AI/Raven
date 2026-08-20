@@ -12,7 +12,7 @@
 
 ## Relationships
 
-- **TUI ↔ Runtime**: communicate exclusively over the TUI-RPC protocol (`raven/tui_rpc/`); the TUI never imports Runtime internals
+- **TUI ↔ Runtime**: communicate exclusively over the TUI-RPC protocol (`raven/rpc/`); the TUI never imports Runtime internals
 - **bridge/ (WhatsApp TS)**: part of the Runtime context's channel boundary, not a separate context
 
 ## Terms under review

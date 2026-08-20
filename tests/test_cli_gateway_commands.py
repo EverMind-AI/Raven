@@ -361,7 +361,7 @@ async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> N
     """Swallowing the drop left the broker waiting out its whole budget on a
     question nobody would ever see."""
     from raven.cli.gateway_commands import _deliver_question_to_channel
-    from raven.tui_rpc.question_broker import QuestionUndeliverableError
+    from raven.rpc.question_broker import QuestionUndeliverableError
 
     with pytest.raises(QuestionUndeliverableError):
         await _deliver_question_to_channel({"params": {"conversation_id": "gone"}}, sources={}, hub=None)

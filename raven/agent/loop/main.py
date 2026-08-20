@@ -106,13 +106,13 @@ if TYPE_CHECKING:
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
+    from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
-    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass

@@ -237,7 +237,7 @@ raven/proactive_engine/  sentinel, scheduling, and nudges
 raven/providers/         model providers and routing
 raven/skill_hub/         external skill retrieval
 raven/tracing/           instrumentation, storage, and viewer
-raven/tui_rpc/           typed runtime-to-TUI boundary
+raven/rpc/           typed runtime-to-TUI boundary
 ui-tui/                  React/Ink terminal interface
 ```
 
