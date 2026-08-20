@@ -46,7 +46,7 @@ rpc.onReconnect = async () => {
 let draft = false;
 
 function resetView() {
-  stop_(); busy = false; q = []; use = null; tl = [];
+  stop_(); busy = false; q = [];
   resetTurnState();
   wsReset();
   setWs(false);
@@ -86,7 +86,7 @@ openSession = async function (s) {
   const row = sess(s.id);
   if (row && row.status === 'done') row.status = null;
   markNewCurrent();
-  stop_(); busy = false; q = []; use = null; tl = [];
+  stop_(); busy = false; q = [];
   resetTurnState();
   wsReset();
   setWs(false);
@@ -167,7 +167,7 @@ send = function (text) {
      the second attempt carries the same message as the first. */
   lastAsk = text;
   ask(text);
-  busy = true; use = null; tl = [];
+  busy = true;
   resetTurnState();
   drawMeter(); goState(); drawList();
   const failed = (e) => {

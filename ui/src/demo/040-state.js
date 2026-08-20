@@ -1,5 +1,5 @@
 /* ══ app state ════════════════════════════════════════════════════ */
-let cur = 'a', busy = false, timers = [], q = [], use = null, tl = [];
+let cur = 'a', busy = false, timers = [], q = [], use = null;
 let rt = 'local', model = 'minimax-m3', undoBin = null;
 const CFG = {
   /* Light until the reader says otherwise: a fresh install has no stored

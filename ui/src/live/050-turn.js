@@ -209,7 +209,6 @@ function finishTurn(usage) {
   busy = false;
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   const outTok = usage.output_tokens || usage.completion_tokens || 0;
-  use = { calls: tl.length, in: inTok, out: outTok, cost: usage.cost || 0 };
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);
   const s = sess(cur);

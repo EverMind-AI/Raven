@@ -23,7 +23,7 @@ DS.composer.slash.forEach((x) => {
         .then(() => {
           $('#stage').innerHTML = ''; pitch();
           const s = sess(cur); if (s) s.last = T('gui.sess.cleared');
-          use = null; drawMeter(); drawList();
+          drawMeter(); drawList();
         })
         .catch((e) => noteRow(T('gui.clear_title'), (e.data && e.data.detail) || e.message || String(e)));
     });

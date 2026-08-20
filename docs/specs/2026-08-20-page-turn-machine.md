@@ -1,6 +1,6 @@
 # The page's turn machine
 
-Status: proposed
+Status: accepted. Steps 1 and 2 are done (this commit is step 2); 3 to 6 open.
 Scope: `ui/` only. No wire-protocol change, no server change.
 Follows: `2026-08-19-page-datasource-seam.md`
 
@@ -31,12 +31,17 @@ sorts every occurrence into a reset (`x = []` / `x = null`), a write, a push,
 or a read, and skips comment lines. Counts below are from that run; where a
 name is also a common local variable the raw count is noted as inflated.
 
-### Group A -- dead state (4 names)
+### Group A -- dead state (5 names)
 
-`kids`, `lastRun`, `raw`, and (in live mode) `use`. No surface in the page ever
-renders any of them. `kids` is the strict case -- written and read nowhere at
-all; the other three are read only to be carried across a session switch and
-put back, which is the same thing one indirection out. The table is exact:
+`kids`, `lastRun`, `raw`, `tl`, and (in live mode) `use`. No surface in the
+page ever renders any of them. `kids` is the strict case -- written and read
+nowhere at all; `lastRun` and `raw` are read only to be carried across a
+session switch and put back, which is the same thing one indirection out; and
+`tl` is read only to compute a `use` that live mode does not draw. The table is
+exact, and its `file:line` references are the inventory as measured on
+`0dbad1a7`, before any step below had landed -- steps 1 and 2 delete most of
+the lines it cites, so read it as the case for the deletions rather than as a
+map of the current tree:
 
 | name | written | read |
 |---|---|---|
@@ -44,6 +49,7 @@ put back, which is the same thing one indirection out. The table is exact:
 | `lastRun` | `demo/060-conversation.js:17`, `demo/090-composer.js:61`; reset in `live/080-overrides.js:49,89` | only by the park snapshot, `live/060-parked.js:32` (restored at `:61`). Never displayed. |
 | `raw` | pushed 3x in `demo/080-replay.js`, 3x in `live/050-turn.js`, once in `finishTurn`, and by the `rawPush` shell verb from `features/transcript/store.ts:496` | only by the park snapshot, `live/060-parked.js:32` (restored at `:61`). Never displayed. |
 | `use` | 12 write sites across both layers | `DS.composer.meter` in `demo/090-composer.js:45-46`, which live replaces with `() => ''` in `live/050-turn.js:199`; and the park snapshot |
+| `tl` | pushed only by the `tlPush` shell verb, from `features/transcript/store.ts:495` | `tl.length` at `live/050-turn.js:209`, to fill a `use` live never draws; and the park snapshot. Not read at all in demo. |
 
 "Read only to be saved and put back" is still dead, and it is worth being exact
 about why, because it is the one place where deleting these is not obviously
@@ -57,16 +63,26 @@ append to, and that nothing displays. `use` is the same story restricted to
 live mode: the numbers are computed on every `message.complete` and the only
 reader of them is a meter that live mode has already emptied.
 
-`tl` belongs here in spirit and does not qualify: it is pushed only by the
-`tlPush` shell verb (`features/transcript/store.ts:495`) and read twice -- as
-`tl.length`, to fill `use.calls` (`live/050-turn.js:209`), and by the park
-snapshot (`live/060-parked.js:32`, restored at `:61`). The first of those is a
-real reader, which is what disqualifies it. It dies with `use` and not before,
-and it leaves the snapshot through the same accessor `use` does.
+`tl` belongs here and the first draft of this document said it did not, on the
+grounds that `tl.length` fills `use.calls` (`live/050-turn.js:209`) and that
+counts as a reader. It does not, and the analysis stopped one level short: the
+`use` that read fills is the LIVE one, and live mode never displays `use` --
+`DS.composer.meter` is `() => ''` there. So the chain is
+`tlPush` -> `tl` -> `use.calls` -> a meter that draws nothing. `tl` is dead two
+levels deep, and in demo mode it is not read at all: demo's `use` comes from
+fixture data (`demo/030-fixtures.js`), never from `tl`.
 
-**These do not need migrating. They need deleting.** Four strands leave the
+`use` is the one with a real reader, and only in demo:
+`demo/090-composer.js:46` formats the token readout under the composer from it.
+Every live write of it is inert. So the split is not "both migrate" but **`tl`
+is deleted outright and `use` becomes the demo layer's own** -- live stops
+writing it, and the name leaves the coupling count without moving anywhere.
+
+**These do not need migrating. They need deleting.** Five strands leave the
 gate for the cost of removing write sites, two shell verbs (`tlPush`,
-`rawPush`), and their island call sites.
+`rawPush`), and their island call sites. `use` is the one that is deleted from
+the live layer rather than from the page: the demo keeps it, because the demo
+reads it.
 
 ### Group B -- the session pointer (1 name)
 
@@ -129,33 +145,45 @@ detached DOM plus a snapshot of the turn's state, and returning puts both back.
 Its own header says the detached nodes are "persisted nowhere else until the
 turn ends", so this is a data path, not a convenience.
 
-It holds six of the ten. `busy` gates the whole thing (`:24`,
-`if (!turnOwner || !busy) return;`), and `busy, use, tl, raw, lastRun, q` are
-saved as shorthand properties at `:32` -- which makes all six of them **reads**
--- and restored at `:61`.
+It held six of the ten when this document was written -- `busy` gates the whole
+thing (`:24`, `if (!turnOwner || !busy) return;`), and
+`busy, use, tl, raw, lastRun, q` were saved as shorthand properties at `:32`,
+which makes all six of them reads, and restored at `:61`. Steps 1 and 2 took
+four of those out (`raw` and `lastRun` because nothing reads them, `use` and
+`tl` because live never drew them), so **the snapshot holds `busy` and `q`**,
+and those two are the ones steps 4 and 6 have to move.
 
-**For steps 2, 4 and 6 the snapshot must move, not disappear.** Once `use`, `q`
-and `busy` are island state, `parkTurn` and `restoreTurn` have to round-trip
-them through island accessors. That pattern is already in this file, one field
-over, and it exists for exactly this reason: `liveT0` is the composer island's
-live-clock anchor, parked via `RavenIslands.composer.liveAnchor()` at `:37` and
-restored via `setLiveAnchor()` at `:64`
+**For steps 4 and 6 the snapshot must move, not disappear.** Once `q` and `busy`
+are island state, `parkTurn` and `restoreTurn` have to round-trip them through
+island accessors. That pattern is already in this file, one field over, and it
+exists for exactly this reason: `liveT0` is the composer island's live-clock
+anchor, parked via `RavenIslands.composer.liveAnchor()` at `:37` and restored
+via `setLiveAnchor()` at `:64`
 (`features/composer/store.ts:225-226`, published at `main.tsx:296-297`,
 exercised at `features/composer/ComposerPage.test.tsx:309-314`). The comment at
 `:33-36` records the bug that accessor was added to fix: without carrying the
 anchor, a turn ten minutes in read "2s" after a round trip through another
-session. Same shape, three more fields.
+session. Same shape, two more fields.
 
 ### The incentive this document has to argue against
 
 The coupling gate rewards removing live writes. So the cheapest way to make the
-`use`, `q` and `busy` strands disappear is to delete lines `:32` and `:61` and
-watch the number fall. **That is a data-loss change and nothing in the repo
-would stop it.**
+`q` and `busy` strands disappear is to delete lines `:32` and `:61` and watch
+the number fall. **That is a data-loss change and nothing in the repo would
+stop it.**
 
-What would break: come back to a parked turn and the queue is empty, the token
-readout is gone, and -- worst -- the phase is unset, so a turn that is still
-streaming does not know it is running.
+What would break: come back to a parked turn and the queue is empty, and --
+worst -- the phase is unset, so a turn that is still streaming does not know it
+is running.
+
+An earlier revision of this paragraph also listed "the token readout is gone",
+which was wrong and is worth keeping as a warning about how to read the rule:
+live mode never drew `use`, which is exactly why that field could leave `:32`
+and `:61` in step 2 with no accessor at all. **A field in this snapshot is not
+automatically load-bearing.** The rule is that a field WHOSE STATE AN ISLAND
+OWNS must leave through an accessor; a field nothing renders should simply go.
+Deciding which one you have in front of you is the work, and the answer for `q`
+and `busy` is the first kind.
 
 What would not catch it:
 
@@ -167,32 +195,37 @@ What would not catch it:
   (`features/transcript/TranscriptPage.test.tsx:490`) stubs
   `DS.transcript.parked` and never touches these bindings.
 
-So the rule for steps 2, 4 and 6 is stated here rather than left to be
-rediscovered: **a strand retired out of the park snapshot must leave through an
-accessor.** A step whose diff deletes a line from `parkTurn` without adding the
-matching call is wrong even when every gate is green.
+So the rule for steps 4 and 6 is stated here rather than left to be
+rediscovered: **a strand whose state an island owns must leave the park snapshot
+through an accessor.** A step whose diff deletes such a line from `parkTurn`
+without adding the matching call is wrong even when every gate is green.
 
 ## The design
 
 ### Group A: delete
 
-One MR, no seam, no new mechanism. Remove the write sites for `kids`,
-`lastRun` and `raw`; remove `use` and `tl` with the meter they feed; remove the
-`tlPush` and `rawPush` verbs from `shell/bridge.ts` and their two call sites in
-`features/transcript/store.ts`.
+Two MRs, no seam, no new mechanism. Remove the write sites for `kids`,
+`lastRun` and `raw`; remove `tl` outright and stop the live layer writing `use`;
+remove the `tlPush` and `rawPush` verbs from `shell/bridge.ts` and their two
+call sites in `features/transcript/store.ts`.
 
 `lastRun` and `raw` also leave the park snapshot (`live/060-parked.js:32`
 and `:61`). This is the one place where the gate does the checking for us:
 deleting the declarations while the snapshot still names them leaves both
 strands counted, so lowering `EXPECTED` fails with "the coupling GREW" and
 `--list` names them. Noisy and self-revealing, which is the opposite of the
-hazard steps 2, 4 and 6 carry.
+hazard steps 4 and 6 carry.
 
-The one judgement call is `use`: deleting it removes the per-turn token
-readout from demo mode as well, where it does work. So `use` moves into the
-composer island's own store instead -- it is the only reader, and the numbers
-arrive from one event (`message.complete`) -- and `kids`, `lastRun` and `raw`
-are deleted outright.
+`use` needs no island store, which is what the first draft of this document
+proposed. Its only reader is the demo meter, so it simply stops being shared:
+the live layer drops its five inert writes (`live/050-turn.js`,
+`live/080-overrides.js` x3, `live/190-session-actions.js:26`) and the park
+snapshot's field, and `use` stays a demo-layer binding that the demo alone
+declares, writes and reads. `tl` goes with the `tlPush` verb that feeds it.
+
+That also means neither of them needs the park accessor: an accessor is for
+state an island owns, and `use` ends up owned by the demo layer rather than by
+the composer island. The accessor rule still governs steps 4 and 6.
 
 ### Group B: `cur` becomes `shell/session.ts`
 
@@ -260,14 +293,16 @@ more types.
 | step | group | strands retired | notes |
 |---|---|---|---|
 | 1 | A (minus `use`) | `kids`, `lastRun`, `raw` | deletions only; drops 2 park fields, gate checks it |
-| 2 | A (`use`) | `use`, `tl` | `use` to the composer store; **park via accessor** |
+| 2 | A (`use`, `tl`) | `use`, `tl` | deletions again; `use` becomes demo-layer-only |
 | 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins |
 | 4 | D (queue) | `q` | composer store owns the queue; **park via accessor** |
 | 5 | B | `cur` | widest diff; alone in its MR |
 | 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** |
 
-The three bold notes are the ones no gate enforces -- see "the incentive this
-document has to argue against" above.
+The two bold notes are the ones no gate enforces -- see "the incentive this
+document has to argue against" above. Step 2 lost its bold note when the
+analysis was corrected: `use` ends up owned by the demo layer rather than by an
+island, so there is no accessor for it to leave through.
 
 All ten, in six shippable steps, none of which needs a mechanism this codebase
 does not already have. After step 6 the two files are the wire's event
