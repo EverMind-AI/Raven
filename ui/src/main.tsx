@@ -21,7 +21,12 @@ import * as subagentsStore from './features/subagents/store'
 import * as transcript from './features/transcript/mount'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
+import * as foot from './shell/foot'
+import * as navfly from './shell/navfly'
+import * as panes from './shell/panes'
 import { md } from './shell/prose'
+import * as scrollbars from './shell/scrollbars'
+import { toggle as toggleTheme } from './shell/theme'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -36,6 +41,9 @@ declare global {
     md?: typeof md
     workGlyphSvg?: typeof composer.workGlyphSvg
     plainTitle?: typeof plainTitle
+    toggleTheme?: typeof toggleTheme
+    paneLoad?: typeof panes.load
+    drawFoot?: typeof foot.draw
   }
 }
 
@@ -50,6 +58,13 @@ window.workGlyphSvg = composer.workGlyphSvg
 /* Same arrangement: the conversation header, the transcript's fork toast,
    the subagents panel and the live overrides all strip titles through it. */
 window.plainTitle = plainTitle
+/* The shell chrome's own names, called from the boot sequence (paneLoad) and
+   from the live layer (drawFoot, on a language flip and once the running
+   version has landed). toggleTheme has no caller in the page today; it stays
+   published because the name is the shell's one door between the two themes. */
+window.toggleTheme = toggleTheme
+window.paneLoad = panes.load
+window.drawFoot = foot.draw
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -122,6 +137,13 @@ window.RavenIslands = {
     remove: rail.remove,
     rename: rail.rename,
   },
+  /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
+     rides the same bag because the bag is simply what the legacy shell reaches
+     the bundle through, island or not. */
+  nav: {
+    draw: navfly.draw,
+    toggle: navfly.toggle,
+  },
 }
 
 /* The transcript's link handler lives with the island now; it arms itself
@@ -133,6 +155,13 @@ installLinkTrap()
    because the markup is already in the document; the handlers read the shell
    and DS.composer lazily, which is what makes that safe this early. */
 composer.install()
+/* The chrome that installs itself. All three wire listeners over the static
+   markup, which is already parsed by the time this bundle runs: the page script
+   below is the LAST thing in the body. Installing here rather than from the
+   shell keeps each module's wiring next to the behaviour it belongs to. */
+scrollbars.install()
+panes.install()
+navfly.install()
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)

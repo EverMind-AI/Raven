@@ -1,4 +1,5 @@
 import { ds, shell } from '../../shell/bridge'
+import { mark as navMark } from '../../shell/navfly'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -131,16 +132,10 @@ export function markNew(): void {
   let top: string | null | undefined = pageUp ? nav.btnOf(pageUp) : !curId() ? 'newBtn' : null
   /* While the More group stands open its rows are rail rows, and the current
      one wears the mark itself; the parent lights up only when the group is
-     folded and has to stand in for whichever of its pages is open. */
-  const fly = el('moreFly')
-  if (fly && fly.dataset.open === 'true') {
-    fly.querySelectorAll('.mrow').forEach((b, i) => {
-      const page = nav.morePages[i]
-      const pn = page ? el(page) : null
-      b.setAttribute('aria-current', String(!!pn && pn.dataset.open === 'true'))
-    })
-    if (top === 'moreBtn') top = null
-  }
+     folded and has to stand in for whichever of its pages is open. The rows
+     are the flyout module's to write -- it is asked, not reached into, and it
+     answers whether the group stood open. */
+  if (navMark() && top === 'moreBtn') top = null
   for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'memBtn', 'moreBtn']) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))

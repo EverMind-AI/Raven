@@ -51,7 +51,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     dropDraft: (id) => calls.push(['dropDraft', id]),
     pinPersist: (id, pinned) => calls.push(['pinPersist', { id, pinned }]),
     openCron: () => calls.push(['openCron', null]),
-    navState: () => ({ pages: [], btnOf: () => undefined, morePages: [] }),
+    navState: () => ({ pages: [], btnOf: () => undefined }),
   }
   window.RavenShell = fakeShell
   window.DS = { sessions: { snapshot: () => state } }
