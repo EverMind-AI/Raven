@@ -493,7 +493,6 @@ function callDone(lane: Lane, seg: StepData, c: CallData,
   }
   const sh = bridge()
   sh.tlPush?.({ name: c.name, arg: c.label, ms: c.ms, ok })
-  sh.rawPush?.(`tool.complete  ${c.name}  ok=${ok}  ${c.ms}ms`)
   if (!ok) seg.failed = true
   poke(lane)
   bump(lane, c)

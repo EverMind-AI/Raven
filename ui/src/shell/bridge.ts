@@ -79,9 +79,8 @@ export interface Shell {
   hunkFromWrite?(content: string): unknown
   hunkFromUnified?(lines: string | string[]): unknown
   tlPush?(entry: { name: string; arg: string; ms: number; ok: boolean }): void
-  rawPush?(line: string): void
   /* Composer island verbs. `send`/`halt` stay with the shell on purpose: they
-     mutate the turn globals (busy, use, tl, raw) and diverge between the demo
+     mutate the turn globals (busy, use, tl) and diverge between the demo
      replay and the live rpc, so the dock asks for the action and the page
      decides what it means. The rest are the draft store, the tail anchor and
      the two catalogues the palette renders from. */

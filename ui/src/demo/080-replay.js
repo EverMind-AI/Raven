@@ -15,7 +15,7 @@ function replay(run, instant) {
   eventsFor(run).forEach((e) => {
     if (e.t === 'ep') fire(() => {
       if (st) st.seal();
-      st = newStep(); steps.push(st); raw.push('episode.start');
+      st = newStep(); steps.push(st);
     }, e.d);
     else if (e.t === 'think') fire(() => {
       st.hasThink = true;
@@ -26,7 +26,7 @@ function replay(run, instant) {
     }, e.d);
     else if (e.t === 'say') fire(() => { st.setSay(e.x); }, e.d);
     else if (e.t === 't+') fire(() => {
-      open_[e.id] = st.tool(e.n, e.a); raw.push(`tool.start     ${e.n}`);
+      open_[e.id] = st.tool(e.n, e.a);
       open_[e.id].meta = { n: e.n, a: e.a, st };
       wsOnTool(e.n, e.a, instant);
     }, e.d);
@@ -55,9 +55,8 @@ function replay(run, instant) {
       if (st) st.seal();
       foldSilentRuns(steps);
       collapseTurn(null);
-      busy = false; use = run.use; kids = run.kids;
+      busy = false; use = run.use;
       setCtx(((run.use && run.use.in) || 0) + ((run.use && run.use.out) || 0), 200000);
-      raw.push('message.complete');
       const s = sess(cur);
       if (s) { s.last = run.key === 'gtm' ? '抓取了官网，出了对比表' : '3 runs, 0 failures'; s.status = null; }
       drawMeter(); goState(); drawList();

@@ -49,7 +49,6 @@ function onEvent(ev) {
     if (live.st) { live.st.seal(); }
     flushSay();
     live.st = newStep(); live.steps.push(live.st); live.sawEpisode = true;
-    raw.push('episode.start');
   } else if (ev.type === 'notice') {
     killStatus();
     /* Seals the open step first: this ends the turn, so the streamed prose
@@ -72,7 +71,6 @@ function onEvent(ev) {
     const st = ensureStep();
     const h = st.tool(p.name || 'tool', p.arguments, p.display);
     live.open.set(p.tool_call_id, { h, st, t0: Date.now(), name: p.name, args: p.arguments });
-    raw.push(`tool.start     ${p.name}`);
     /* The workspace panel gets the WHOLE argument object, not the one-line
        display string: edit_file's old_text/new_text is the diff. */
     if (typeof wsOnTool === 'function') wsOnTool(p.name, p.arguments, false);
@@ -209,7 +207,6 @@ function finishTurn(usage) {
   use = { calls: tl.length, in: inTok, out: outTok, cost: usage.cost || 0 };
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);
-  raw.push('message.complete');
   const s = sess(cur);
   if (s && live.say.trim()) s.last = live.say.trim().split('\n')[0].slice(0, 60);
   touchSession(cur);

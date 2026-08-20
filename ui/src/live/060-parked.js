@@ -29,7 +29,7 @@ function parkTurn() {
     nodes: [...$('#stage').childNodes],
     turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
       sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
-    busy, use, tl, raw, lastRun, q,
+    busy, use, tl, q,
     /* The live clock's anchor. It is the composer island's own state, and the
        away session's idle turn-live paint zeroes it -- without carrying it
        here, a turn ten minutes in read "2s" after a round trip through
@@ -58,7 +58,7 @@ function restoreTurn(pk) {
   stage.innerHTML = '';
   pk.nodes.forEach((n) => stage.appendChild(n));
   Object.assign(live, pk.turn);
-  busy = pk.busy; use = pk.use; tl = pk.tl; raw = pk.raw; lastRun = pk.lastRun; q = pk.q;
+  busy = pk.busy; use = pk.use; tl = pk.tl; q = pk.q;
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
   RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
