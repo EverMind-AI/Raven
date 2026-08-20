@@ -96,13 +96,6 @@ const dur = (ms) => {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : `${t}s`;
 };
 
-const ICON_CP = '<svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none"'
-  + ' stroke="currentColor" stroke-width="1.7" aria-hidden="true">'
-  + '<rect x="9" y="9" width="11" height="11" rx="2.4"/>'
-  + '<path d="M15 5.5A1.5 1.5 0 0 0 13.5 4H6a2 2 0 0 0-2 2v7.5A1.5 1.5 0 0 0 5.5 15"/></svg>'
-  + '<svg class="ck" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"'
-  + ' stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
-
 /* An icon-only button whose verb lives in the hover pill ([data-tip]). */
 /* One copy glyph for every footer that offers to copy something. */
 const COPY_ICO = '<rect x="9" y="9" width="11" height="11" rx="2.5"/>'

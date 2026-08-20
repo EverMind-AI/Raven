@@ -9,6 +9,7 @@ import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
 import { SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
+import { md } from './shell/prose'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -20,6 +21,7 @@ declare global {
   interface Window {
     cronExprHuman?: typeof cronExprHuman
     cronWhen?: typeof cronWhen
+    md?: typeof md
   }
 }
 
@@ -27,6 +29,15 @@ declare global {
    and the fixture source's save build their `when` prose through these. */
 window.cronExprHuman = cronExprHuman
 window.cronWhen = cronWhen
+
+/* The prose renderer, called by name from nine legacy render sites: the
+   replay (demo/080 x3), history restore (live/040 x3), the turn machine
+   (live/050 x2) and the file viewer (live/170). Nothing reaches it through
+   RavenShell -- there is no md verb on that bridge -- so those nine are the
+   whole list to audit before this republish can go. Same mechanism as
+   cronExprHuman and cronWhen above: the bundle owns the function, the legacy
+   layers keep calling md(). */
+window.md = md
 
 /* The skills island renders into a host node the legacy shim re-attaches
    under #capsBody on every skill-tab draw: the plugin tab clears that box
