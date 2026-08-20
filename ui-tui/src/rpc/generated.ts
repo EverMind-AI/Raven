@@ -2273,15 +2273,20 @@ export interface SetupStatusResult {
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ReloadMcpParams".
  */
-export interface ReloadMcpParams {}
+export interface ReloadMcpParams {
+  session_id?: string;
+  confirm?: boolean;
+}
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ReloadMcpResult".
  */
 export interface ReloadMcpResult {
   ok: boolean;
-  reloaded?: number;
-  tools_changed?: boolean;
+  status: 'reloaded' | 'noop' | 'confirm_required';
+  message: string;
+  reloaded: number;
+  tools_changed: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
