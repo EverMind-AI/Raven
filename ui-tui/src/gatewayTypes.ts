@@ -22,6 +22,7 @@ export interface GatewayCompletionItem {
 
 export interface GatewayTranscriptMessage {
   context?: string
+  duration_ms?: number
   name?: string
   role: 'assistant' | 'system' | 'tool' | 'user'
   text?: string
@@ -102,16 +103,10 @@ export interface ConfigGetValueResponse {
 
 export interface ConfigSetResponse {
   applied?: boolean
-  // Does the asking conversation now run this model? A default-scoped switch
-  // moves the sessions that never chose one, so the scope alone cannot answer
-  // it and a client that guesses paints a model the conversation is not on.
-  applies_to_session?: boolean
   credential_warning?: string
   history_reset?: boolean
   info?: SessionInfo
   previous?: null | string
-  scope?: 'default' | 'session'
-  session_id?: string
   value?: string
   warning?: string
 }

@@ -17,6 +17,15 @@ import type { TurnEvent, TurnSendResult } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
+import {
+  directKey,
+  enterDirect,
+  getDirectChat,
+  getDirectTranscript,
+  leaveDirect,
+  resetDirectChat
+} from '../app/directChatStore.js'
+import { bindInstanceRefresh, resetInstanceRefresh, scheduleInstanceRefresh } from '../app/directChatSync.js'
 import { turnController } from '../app/turnController.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
@@ -408,6 +417,372 @@ describe('createChatStream — cancel preserves streamed content', () => {
 
     expect(appended.some(m => m.role === 'assistant')).toBe(false)
     expect(sysCalls).toContain('interrupted')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Direct chat: routing by the event's own tag
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — direct-chat routing', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  const attached = async (appended?: Msg[]) => {
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended?.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+    return { fake, stream }
+  }
+
+  it('routes a tagged delta to the instance transcript, not the main one', async () => {
+    const appended: Msg[] = []
+    const { fake } = await attached(appended)
+    enterDirect('Raven-Code', 'refactor-auth')
+
+    fake.__pushEvent({
+      type: 'token.delta',
+      payload: { target: { agent: 'Raven-Code', handle: 'refactor-auth' }, text: 'from the subagent' }
+    })
+
+    expect(getDirectTranscript(directKey('Raven-Code', 'refactor-auth'))).toHaveLength(1)
+    expect(turnController.bufRef).toBe('')
+    expect(appended).toHaveLength(0)
+  })
+
+  it('routes an untagged delta to the main transcript even while in direct mode', async () => {
+    const { fake } = await attached()
+    enterDirect('Raven-Code', 'refactor-auth')
+
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'from raven' } })
+
+    expect(getDirectTranscript(directKey('Raven-Code', 'refactor-auth'))).toHaveLength(0)
+    expect(turnController.bufRef).toBe('from raven')
+  })
+
+  it('routes a delta for a non-active instance to that instance, not the visible one', async () => {
+    // The Esc case: an in-flight direct turn keeps streaming while the user is
+    // back on the main conversation. Routing by "what is visible" rather than
+    // by the tag would corrupt both transcripts.
+    const { fake } = await attached()
+    enterDirect('A', 'one')
+
+    fake.__pushEvent({ type: 'token.delta', payload: { target: { agent: 'B', handle: 'two' }, text: 'late reply' } })
+
+    expect(getDirectTranscript(directKey('B', 'two'))).toHaveLength(1)
+    expect(getDirectTranscript(directKey('A', 'one'))).toHaveLength(0)
+  })
+
+  it('merges a tagged run into one assistant message', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'he' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'llo' } })
+
+    expect(getDirectTranscript(directKey('A', 'one'))).toHaveLength(1)
+    expect(getDirectTranscript(directKey('A', 'one'))[0]?.text).toBe('hello')
+  })
+
+  it('does not commit an empty assistant message to the main transcript on a direct complete', async () => {
+    // recordMessageComplete would flush turnController's buffer into history;
+    // a direct turn never filled it, so calling it appends an empty reply.
+    const appended: Msg[] = []
+    const { fake } = await attached(appended)
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'done' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        target,
+        turn_id: 't1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+
+    expect(appended).toHaveLength(0)
+    expect(getDirectTranscript(directKey('A', 'one')).map(m => m.text)).toEqual(['done'])
+  })
+
+  it('records the in-flight owner from the event, so the other view pauses', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+
+    expect(getDirectChat().running).toEqual([directKey(target.agent, target.handle)])
+  })
+
+  it('releases the slot when a direct turn fails', async () => {
+    const { fake } = await attached()
+    const target = { agent: 'A', handle: 'one' }
+
+    fake.__pushEvent({ type: 'message.start', payload: { target, turn_id: 't1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', target }
+    })
+
+    expect(getDirectChat().running).toEqual([])
+    expect(getDirectTranscript(directKey('A', 'one')).map(m => m.role)).toEqual(['system'])
+  })
+
+  it('sends the active target with the turn, and omits the key on the main conversation', async () => {
+    const sent: unknown[] = []
+    const fake = makeFakeRpc()
+    const origRpc = fake.rpc.bind(fake)
+    fake.rpc = async <R, P>(method: string, params: P): Promise<R> => {
+      sent.push([method, params])
+      return origRpc<R, P>(method, params)
+    }
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect('Raven-Code', 'refactor-auth')
+    await stream.send('fix it')
+    // The turn has to land before the next send: one slot per session.
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        target: { agent: 'Raven-Code', handle: 'refactor-auth' },
+        turn_id: 'turn-1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+    leaveDirect()
+    await stream.send('hi')
+
+    const [, direct] = sent[0] as [string, Record<string, unknown>]
+    const [, main] = sent[1] as [string, Record<string, unknown>]
+    expect(direct.target).toEqual({ agent: 'Raven-Code', handle: 'refactor-auth' })
+    expect('target' in main).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The chip strip's refresh signal
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — instance refresh', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+    patchUiState({ sid: 'tui:s1' })
+  })
+
+  afterEach(() => {
+    resetInstanceRefresh()
+    vi.useRealTimers()
+  })
+
+  const withRefresh = async () => {
+    const asked: string[] = []
+    bindInstanceRefresh(
+      (async (method: string) => {
+        asked.push(method)
+        return { instances: [], pending_handoff_count: 0 }
+      }) as never,
+      () => 'tui:s1'
+    )
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:s1' })
+    await stream.attach()
+    return { asked, fake }
+  }
+
+  it('refreshes when a spawn starts', async () => {
+    // Nothing in the runtime emits a subagent.* event, so this is the earliest
+    // signal that an instance is about to exist.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { arguments: {}, name: 'spawn', tool_call_id: 'c1' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('refreshes when a dag run starts', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { arguments: {}, name: 'run_subagent_dag', tool_call_id: 'c1' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('does not refresh for an ordinary tool', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({ type: 'tool.start', payload: { arguments: {}, name: 'read_file', tool_call_id: 'c1' } })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual([])
+  })
+
+  it('refreshes at the end of every turn, whatever ran in it', async () => {
+    // The backstop: a status only reaches its terminal value at turn end.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: { turn_id: 't1', usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 } }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('coalesces a burst into one fetch', async () => {
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    for (const id of ['c1', 'c2', 'c3']) {
+      fake.__pushEvent({ type: 'tool.start', payload: { arguments: {}, name: 'spawn', tool_call_id: id } })
+    }
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+})
+
+describe('bindInstanceRefresh', () => {
+  afterEach(() => {
+    resetInstanceRefresh()
+    vi.useRealTimers()
+  })
+
+  it('survives an effect re-run that cleans up after its replacement bound', async () => {
+    // React runs the old cleanup after the new effect body. An unconditional
+    // unbind there drops every refresh until something re-binds.
+    vi.useFakeTimers()
+    const asked: string[] = []
+    const rpc = (async (method: string) => {
+      asked.push(method)
+      return { instances: [], pending_handoff_count: 0 }
+    }) as never
+
+    const stale = bindInstanceRefresh(rpc, () => 'tui:s1')
+    bindInstanceRefresh(rpc, () => 'tui:s1') // the effect re-runs...
+    stale() // ...and only then does the previous cleanup arrive
+
+    scheduleInstanceRefresh()
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('createChatStream — concurrent turns', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  /** A client whose `turn.send` records the target it was called with. */
+  const recording = () => {
+    let handler: ((event: TurnEvent) => void) | null = null
+    const sent: (undefined | { agent: string; handle: string })[] = []
+    const client = {
+      async rpc<R, P>(method: string, params: P): Promise<R> {
+        if (method === 'turn.send') {
+          sent.push((params as { target?: { agent: string; handle: string } }).target)
+          return { turn_id: `turn-${sent.length}`, accepted: true } as unknown as R
+        }
+        return {} as R
+      },
+      async subscribe<E, P>(_method: string, _params: P, h: (event: E) => void) {
+        handler = h as unknown as (event: TurnEvent) => void
+        return { subscription_id: 'sub-1', unsubscribe: async () => {} }
+      }
+    }
+    return { client, push: (e: TurnEvent) => handler?.(e), sent }
+  }
+
+  it('sends to a second instance while the first is still answering', async () => {
+    // The regression this pins: the client held one turn slot for the whole
+    // session, so the second send threw locally and never reached the server --
+    // which reads as the second instance simply never answering.
+    const a = { agent: 'Coder', handle: 'h1' }
+    const b = { agent: 'Writer', handle: 'h2' }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+
+    enterDirect(b.agent, b.handle)
+    await expect(stream.send('second')).resolves.toMatchObject({ accepted: true })
+
+    expect(rec.sent).toEqual([a, b])
+  })
+
+  it('still refuses a second prompt to the instance that is mid-reply', async () => {
+    const a = { agent: 'Coder', handle: 'h1' }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+
+    await expect(stream.send('again')).rejects.toThrow(/already in progress/)
+    expect(rec.sent).toEqual([a])
+  })
+
+  it('one instance landing leaves the other turn alone', async () => {
+    const a = { agent: 'Coder', handle: 'h1' }
+    const b = { agent: 'Writer', handle: 'h2' }
+    const usage = { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+    const rec = recording()
+    const stream = createChatStream({ rpcClient: rec.client, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    enterDirect(a.agent, a.handle)
+    await stream.send('first')
+    rec.push({ type: 'message.start', payload: { target: a, turn_id: 'turn-1' } })
+    enterDirect(b.agent, b.handle)
+    await stream.send('second')
+    rec.push({ type: 'message.start', payload: { target: b, turn_id: 'turn-2' } })
+
+    // A lands; B is still writing, so B's view stays busy and B still refuses.
+    rec.push({ type: 'message.complete', payload: { target: a, turn_id: 'turn-1', usage } })
+
+    expect(getUiState().busy).toBe(true)
+    await expect(stream.send('again to b')).rejects.toThrow(/already in progress/)
+
+    // And A is free to take a new prompt.
+    enterDirect(a.agent, a.handle)
+    expect(getUiState().busy).toBe(false)
+    await expect(stream.send('again to a')).resolves.toMatchObject({ accepted: true })
   })
 })
 

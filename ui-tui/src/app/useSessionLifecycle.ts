@@ -25,6 +25,7 @@ import { introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { resetDirectChat } from './directChatStore.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -130,6 +131,10 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     setVoiceRecording(false)
     setVoiceProcessing(false)
     patchUiState({ bgTasks: new Set(), info: null, sid: null, usage: ZERO })
+    // Instances, their transcripts and the active target all belong to the
+    // session being left; carrying them over would show the new session chips
+    // it never used.
+    resetDirectChat()
     setHistoryItems([])
     setLastUserMsg('')
     setStickyPrompt('')

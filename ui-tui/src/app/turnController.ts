@@ -3,7 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { DagEvent } from '../domain/dagRun.js'
 import type { SessionInterruptResponse, SubagentEventPayload } from '../gatewayTypes.js'
+import type { DagRunSnapshot } from '../rpc/index.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import {
@@ -13,6 +15,7 @@ import {
   STREAM_SCROLL_BATCH_MS,
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
+import { foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
@@ -21,6 +24,7 @@ import {
   estimateTokensRough,
   isTransientTrailLine,
   sameToolTrailGroup,
+  toolResultPreview,
   toolTrailLabel
 } from '../lib/text.js'
 import { resetFlowOverlays } from './overlayStore.js'
@@ -201,6 +205,9 @@ class TurnController {
     this.lastEpisodeStartMs = 0
 
     patchTurnState({
+      // The live graphs go with the turn; a finished one is already pinned onto
+      // its tool row by recordDagEvent, which is what the transcript renders.
+      dagRuns: [],
       episodes: [],
       streamPendingTools: [],
       streamSegments: [],
@@ -806,7 +813,7 @@ class TurnController {
       if (et) {
         et.ok = !error
         et.done = true
-        et.resultPreview = (error || summary || '').slice(0, 200) || undefined
+        et.resultPreview = toolResultPreview(error || summary || '') || undefined
         // Fall back to the client-measured span: the typed RPC path does not
         // carry a duration, and leaving it unset made the row's live timer keep
         // ticking after the step had moved on.
@@ -1003,6 +1010,74 @@ class TurnController {
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
     patchTurnState({ activity: [], outcome: '', subagents: [], toolTokens: 0, tools: [], turnTrail: [] })
+  }
+
+  /**
+   * Fold one `run_subagent_dag` progress frame into the turn's graphs.
+   *
+   * The graph is written twice on purpose: into the live store, which drives the
+   * in-flight panel and is cleared at turn end, and onto the tool row that
+   * produced it, which is what survives into the transcript. Pinning it here
+   * rather than at tool-complete keeps the two from diverging if the run's last
+   * frame and the tool result arrive out of order.
+   */
+  recordDagEvent(event: DagEvent) {
+    patchTurnState(state => {
+      const at = state.dagRuns.findIndex(run => run.runId === event.payload.run_id)
+      const folded = foldDagEvent(at === -1 ? null : state.dagRuns[at]!, event)
+
+      // A frame for a run we never saw start: nothing to draw (see foldDagEvent).
+      if (folded === null) {
+        return state
+      }
+
+      return {
+        ...state,
+        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
+      }
+    })
+    this.pinDagToEpisodeTool(event.payload.run_id)
+  }
+
+  /**
+   * Replace a run with a snapshot read back off disk (`dag.get`).
+   *
+   * The repair path for a graph whose live frames were lost -- a gateway that
+   * restarted mid-run leaves its nodes pinned to `running` forever. A run the
+   * client never saw start is appended rather than dropped: the snapshot carries
+   * the topology, so it is drawable on its own.
+   */
+  applyDagSnapshot(snapshot: DagRunSnapshot) {
+    patchTurnState(state => {
+      const at = state.dagRuns.findIndex(run => run.runId === snapshot.run_id)
+      const folded = foldDagSnapshot(at === -1 ? null : state.dagRuns[at]!, snapshot)
+
+      return {
+        ...state,
+        dagRuns: at === -1 ? [...state.dagRuns, folded] : state.dagRuns.map((run, i) => (i === at ? folded : run))
+      }
+    })
+    this.pinDagToEpisodeTool(snapshot.run_id)
+  }
+
+  private pinDagToEpisodeTool(runId: string) {
+    const run = getTurnState().dagRuns.find(item => item.runId === runId)
+
+    // No tool_call_id means the host does not correlate progress with a row, so
+    // there is no row to pin to -- the live panel is all this run ever gets.
+    if (!this.episodes.length || !run?.toolCallId) {
+      return
+    }
+
+    for (const ep of this.episodes) {
+      const et = ep.tools.find(tool => tool.id === run.toolCallId)
+
+      if (et) {
+        et.dag = run
+        this.publishEpisodes()
+        break
+      }
+    }
   }
 
   upsertSubagent(

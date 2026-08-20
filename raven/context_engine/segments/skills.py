@@ -164,6 +164,15 @@ class SkillsSegmentBuilder:
         meta: dict[str, Any] = {
             "injected_skill_ids": [h.qualified_id for h in gated if getattr(h, "qualified_id", None)],
             "skill_hits_by_source": dict(Counter((h.meta.get("source") or "?") for h in gated)),
+            # ``qualified_id`` carries the *addressing* namespace, which is
+            # ``local`` for every on-disk skill regardless of where it came
+            # from, so the id alone cannot say "builtin" / "workspace" / "hub".
+            # Ship the registry source per id for surfaces that report origin.
+            "injected_skill_sources": {
+                h.qualified_id: (h.meta.get("source") or "")
+                for h in gated
+                if getattr(h, "qualified_id", None) and h.meta.get("source")
+            },
         }
         text = f"# Skills\n\n{body}" if body else ""
         return Segment(text=text, meta=meta)
@@ -335,26 +344,10 @@ class SkillsSegmentBuilder:
         )
 
     def _collect_tool_names(self) -> list[str] | None:
-        """Return tool names for the gate's hard-constraint block.
+        """Tool names for the gate's hard-constraint block.
 
-        ``get_tool_definitions`` is a callable injected at construction; when
-        absent the gate runs without the tool-constraint hint (still
-        works, just less aggressive at culling env-mismatched skills).
+        ``None`` (no callable wired, or the lookup raised) means the gate runs
+        without the tool-constraint hint — still works, just less aggressive
+        at culling env-mismatched skills.
         """
-        if self._get_tool_definitions is None:
-            return None
-        try:
-            defs = self._get_tool_definitions()
-        except Exception:
-            return None
-        names: list[str] = []
-        for d in defs or []:
-            if isinstance(d, dict):
-                # OpenAI function-call schema → name lives under
-                # ``function.name``; also accept a flat ``name``.
-                fn = d.get("function") if isinstance(d.get("function"), dict) else None
-                if fn and isinstance(fn.get("name"), str):
-                    names.append(fn["name"])
-                elif isinstance(d.get("name"), str):
-                    names.append(d["name"])
-        return names or None
+        return render.collect_tool_names(self._get_tool_definitions)

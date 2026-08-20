@@ -7,19 +7,19 @@ return success.
 
 Why pytest integration (subprocess): an umbrella registration drift bug
 once let umbrella methods route correctly in dispatcher unit tests but fail
-in production-path wiring. Unit tests under ``tests/test_tui_rpc_*.py`` cover
+in production-path wiring. Unit tests under ``tests/test_rpc_*.py`` cover
 handler correctness; this file guarantees the *wiring* doesn't regress
 (handshake latched + every P5-aligned method returns ``result`` not ``error``).
 
-Sibling: ``test_tui_rpc_demo_smoke.py`` (demo-runner end-to-end smoke).
+Sibling: ``test_rpc_demo_smoke.py`` (demo-runner end-to-end smoke).
 
 Run via pytest::
 
-    uv run pytest tests/integration/test_tui_rpc_production_smoke.py -v
+    uv run pytest tests/integration/test_rpc_production_smoke.py -v
 
 Or directly as a script (legacy invocation; same logic)::
 
-    uv run python tests/integration/test_tui_rpc_production_smoke.py
+    uv run python tests/integration/test_rpc_production_smoke.py
 """
 
 from __future__ import annotations

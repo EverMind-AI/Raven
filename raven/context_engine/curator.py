@@ -24,7 +24,6 @@ from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
-from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -65,6 +64,7 @@ class ManifestItem:
     keywords: list[str] = field(default_factory=list)
     relevance: float = 0.5
     protected: bool = False
+    pinned: bool = False
     archived: bool = False
     archive_ref: str | None = None
 
@@ -171,6 +171,10 @@ class CuratorArchiveStore:
 
     def build_manifest(self, session_key: str, messages: list[dict[str, Any]]) -> list[ManifestItem]:
         previous = self.load_relevance(session_key)
+        # Recomputed from the messages every turn rather than read back from the
+        # saved manifest: ids are positional, and a later fetch of the same skill
+        # has to move the pin rather than add a second one.
+        pinned = pinned_message_ids(messages, getattr(self.config, "pinned_skill_ids", None))
         manifest: list[ManifestItem] = []
         turn_id = 0
         tool_parent: dict[str, int] = {}
@@ -198,6 +202,8 @@ class CuratorArchiveStore:
                 relevance = max(relevance, 0.75)
             if idx < self.config.protect_first_n * 2:
                 relevance = max(relevance, 0.8)
+            if idx in pinned:
+                relevance = max(relevance, 0.9)
 
             manifest.append(
                 ManifestItem(
@@ -212,6 +218,7 @@ class CuratorArchiveStore:
                     keywords=_keywords(content_text),
                     relevance=min(1.0, max(0.0, relevance)),
                     protected=idx < self.config.protect_first_n * 2,
+                    pinned=idx in pinned,
                     archived=archived,
                     archive_ref=archive_ref,
                 )
@@ -229,9 +236,17 @@ class CuratorArchiveStore:
         tags: list[str] | None = None,
         summary: str = "",
     ) -> dict[str, Any]:
-        valid_ids = sorted({mid for mid in message_ids if 0 <= mid < len(messages)})
+        pinned_ids = {item.id for item in manifest if item.pinned}
+        refused = sorted({mid for mid in message_ids if mid in pinned_ids})
+        valid_ids = sorted({mid for mid in message_ids if 0 <= mid < len(messages) and mid not in pinned_ids})
         if not valid_ids:
-            return {"archived_message_ids": [], "archive_refs": [], "bytes_written": 0, "manifest_updated": False}
+            return {
+                "archived_message_ids": [],
+                "archive_refs": [],
+                "bytes_written": 0,
+                "manifest_updated": False,
+                "refused_pinned_ids": refused,
+            }
 
         date_dir = ensure_dir(self.archive_dir / self._now_fn().strftime("%Y-%m-%d"))
         first, last = valid_ids[0], valid_ids[-1]
@@ -263,6 +278,7 @@ class CuratorArchiveStore:
             "archive_refs": [ref],
             "bytes_written": archive_path.stat().st_size,
             "manifest_updated": True,
+            "refused_pinned_ids": refused,
         }
 
     def retrieve(self, refs: list[str], max_tokens: int = 2000, mode: str = "snippet") -> dict[str, Any]:
@@ -348,9 +364,10 @@ class CuratorAssembler:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         context_window_tokens: int,
     ):
-        self._fallback = ModelBinding(provider, model)
+        self.provider = provider
+        self.model = model
         self.get_tool_definitions = get_tool_definitions
-        self._fallback_window = int(context_window_tokens)
+        self.context_window_tokens = context_window_tokens
         self.trimmer = HistoryTrimmer(
             provider,
             model,
@@ -361,33 +378,10 @@ class CuratorAssembler:
         # CuratorSegmentBuilder before any build/validate call.
         self.prefix: "AssembledPrefix | None" = None
 
-    @property
-    def provider(self) -> "LLMProvider":
-        """The provider of the turn's binding; the build-time one outside a turn."""
-        return resolve(None, self._fallback).provider
-
-    @property
-    def model(self) -> str:
-        """The model of the turn's binding; the build-time one outside a turn."""
-        return resolve(None, self._fallback).model
-
-    @property
-    def context_window_tokens(self) -> int:
-        """The running turn's window; the one built with, outside a turn.
-
-        A property because this object outlives any number of turns and two
-        sessions can be on models of different sizes at once -- an int copied
-        at construction answers for whichever session happened to build it.
-        """
-        return active_window(self._fallback_window)
-
-    @context_window_tokens.setter
-    def context_window_tokens(self, tokens: int) -> None:
-        self._fallback_window = int(tokens)
-
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built."""
-        self._fallback = ModelBinding(provider, model)
+        self.provider = provider
+        self.model = model
         self.trimmer.set_provider(provider, model)
 
     def set_context_window(self, tokens: int) -> None:
@@ -420,11 +414,19 @@ class CuratorAssembler:
         plan: ContextPlan,
     ) -> tuple[AssembledContext, dict[str, Any]]:
         working_state = plan.working_state_injection or None
-        protected_ids = {item.id for item in state.manifest if item.protected}
+        # Pinned ids are enforced here rather than in each path that produces a
+        # plan: this is the one funnel (slow path, fallback, and candidate
+        # validation all land here), so a pin cannot be lost by a plan that
+        # simply never mentioned the id. Note that ``protected`` alone would not
+        # be enough -- it shields an id from budget trimming, not from a plan
+        # that omitted it.
+        pinned_ids = {item.id for item in state.manifest if item.pinned}
+        ids = sorted(set(plan.include_message_ids) | pinned_ids) if pinned_ids else plan.include_message_ids
+        protected_ids = {item.id for item in state.manifest if item.protected or item.pinned}
 
         messages, outcome = self.trimmer.trim(
             session_messages=state.session_messages,
-            ids=plan.include_message_ids,
+            ids=ids,
             protected_ids=protected_ids,
             reserved_output=state.budget.reserved_output,
             build_messages=lambda h: self._full_messages(h, working_state),
@@ -513,7 +515,10 @@ class CuratorArchiveMessagesTool(_CuratorTool):
 
     @property
     def description(self) -> str:
-        return "Losslessly archive selected old session messages to disk and update the manifest."
+        return (
+            "Losslessly archive selected old session messages to disk and update the manifest. "
+            "Pinned ids are refused and reported back under refused_pinned_ids."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -832,6 +837,80 @@ def _plan_from_kwargs(kwargs: dict[str, Any]) -> ContextPlan:
     )
 
 
+# Tools whose result is a skill body rather than conversation. ``read_skill``
+# is included because it returns the same body for a local skill, so which of
+# the two the agent happened to call must not decide whether the pin holds.
+_SKILL_FETCH_TOOLS = frozenset({"use_skill", "read_skill"})
+
+
+def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
+    """``(name, arguments)`` from one stored tool_call, or ``("", {})``.
+
+    Arguments are serialized as a JSON *string* on the way into the session
+    (OpenAI shape, see ``ToolCall.to_openai_tool_call``) but arrive as a dict
+    from some providers, so both are accepted. Anything unparseable degrades to
+    "no arguments", never an exception -- this runs inside manifest building,
+    where a raise would fail the whole turn.
+    """
+    if not isinstance(tool_call, dict):
+        return ("", {})
+    fn = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else tool_call
+    name = fn.get("name") if isinstance(fn.get("name"), str) else ""
+    raw = fn.get("arguments")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    return (name or "", raw if isinstance(raw, dict) else {})
+
+
+def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | None) -> set[int]:
+    """Ids of the messages that fetched a pinned skill's body.
+
+    Returns the assistant message carrying the fetch **and every result message
+    of that assistant turn** -- not only the skill result. Pinning half of a
+    tool exchange is what creates a dangling tool_call: the budget trimmer drops
+    ids one at a time without re-closing adjacency, so a sibling result left
+    unpinned can be dropped out from under a pinned parent and the provider
+    rejects the request.
+
+    Only the latest fetch per skill id is pinned: a re-read supersedes the
+    earlier copy, so the same 2k-token body can never occupy the window twice.
+    """
+    wanted = {s for s in (skill_ids or []) if isinstance(s, str) and s}
+    if not wanted:
+        return set()
+
+    results_by_call: dict[str, list[int]] = {}
+    for idx, message in enumerate(messages):
+        if message.get("role") == "tool" and message.get("tool_call_id"):
+            results_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
+
+    latest: dict[str, int] = {}
+    calls_by_parent: dict[int, list[str]] = {}
+    for idx, message in enumerate(messages):
+        if message.get("role") != "assistant" or not message.get("tool_calls"):
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            name, args = _tool_call_name_args(tool_call)
+            call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+            if call_id:
+                calls_by_parent.setdefault(idx, []).append(str(call_id))
+            if name not in _SKILL_FETCH_TOOLS:
+                continue
+            skill_id = args.get("skill_id")
+            if isinstance(skill_id, str) and skill_id in wanted:
+                latest[skill_id] = idx
+
+    pinned: set[int] = set()
+    for parent_idx in set(latest.values()):
+        pinned.add(parent_idx)
+        for call_id in calls_by_parent.get(parent_idx, []):
+            pinned.update(results_by_call.get(call_id, []))
+    return pinned
+
+
 def _message_text(message: dict[str, Any]) -> str:
     content = message.get("content")
     if isinstance(content, str):
@@ -895,7 +974,10 @@ def _curator_input_payload(state: CuratorState, archive: CuratorArchiveStore) ->
         "working_state": archive.read_working_state(state.session_key),
         "instructions": (
             "Use tools to inspect budget and build a final context. "
-            "End by calling curator_build_context. Prefer protected, recent, relevant, and unresolved messages."
+            "End by calling curator_build_context. Prefer protected, recent, relevant, and unresolved messages. "
+            "Items marked pinned are instruction material the main agent cannot re-derive: they are added to "
+            "your plan whether or not you list them, cannot be archived, and are the last thing trimmed, so "
+            "spend no steps on them."
         ),
     }
 

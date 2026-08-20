@@ -1,0 +1,129 @@
+generated_at: '2023-04-01T12:00:00'
+persona_id: freelancer-01
+total_points: 42
+type_a_proactive_only:
+- id: wela_kather_deadline_reminder
+  description: 主动提醒《薇拉凯瑟短篇集》5/10交稿截止（5/7-5/9之间）
+  window:
+  - '2026-05-07'
+  - '2026-05-09'
+  initiator: agent
+  topic_match_regex: 薇拉凯瑟|交稿|5[-/]10|deadline
+  novelty_window_hours: 48
+  points: 4
+- id: j_editor_samples_reminder
+  description: 主动提醒J编辑样稿5/20截止（5/17-5/19之间）
+  window:
+  - '2026-05-17'
+  - '2026-05-19'
+  initiator: agent
+  topic_match_regex: J编辑|样稿|5[-/]20|brief
+  novelty_window_hours: 48
+  points: 3
+- id: gym_routine_followup
+  description: 当周健身房次数不足时主动提醒（每周日检查）
+  window:
+  - '2026-05-08'
+  - '2026-05-31'
+  initiator: agent
+  topic_match_regex: 健身|肩颈|每周.*次
+  novelty_window_hours: 72
+  points: 3
+- id: contract_renewal_reminder
+  description: 主动提醒5/31合同续签（5/28-5/30之间）
+  window:
+  - '2026-05-28'
+  - '2026-05-30'
+  initiator: agent
+  topic_match_regex: 合同|续签|A/B客户|5[-/]31
+  novelty_window_hours: 48
+  points: 3
+- id: mother_day_gift_reminder
+  description: 母亲节前3天主动提醒准备礼物（5/5-5/7）
+  window:
+  - '2026-05-05'
+  - '2026-05-07'
+  initiator: agent
+  topic_match_regex: 母亲节|礼物|薰衣草
+  novelty_window_hours: 72
+  points: 2
+- id: monthly_writing_goal_check
+  description: 5/24左右检查公众号发文进度
+  window:
+  - '2026-05-23'
+  - '2026-05-25'
+  initiator: agent
+  topic_match_regex: 公众号|4篇|林字读物
+  novelty_window_hours: 72
+  points: 3
+- id: translation_music_recommend
+  description: 翻译时段主动推荐背景音乐（古典/北欧民谣）
+  window:
+  - '2026-05-01'
+  - '2026-05-31'
+  initiator: agent
+  topic_match_regex: 音乐|Sigur Rós|背景乐
+  novelty_window_hours: 24
+  points: 2
+- id: mid_month_motivation
+  description: 5/14前后主动关心工作状态
+  window:
+  - '2026-05-13'
+  - '2026-05-15'
+  initiator: agent
+  topic_match_regex: 进度|状态|西西弗
+  novelty_window_hours: 72
+  points: 2
+type_b_reactive_achievable:
+- id: wela_kather_translation_help
+  description: 被问及薇拉凯瑟翻译时能提供专业建议
+  trigger_regex_in_user_send: 薇拉凯瑟|译稿|诗意
+  reply_must_mention: 沈从文|农场|意识流
+  points: 3
+- id: j_editor_preference_recall
+  description: 被问及J编辑偏好时准确回忆
+  trigger_regex_in_user_send: J编辑|文风|样稿
+  reply_must_mention: 简洁|雅致|豆瓣
+  points: 2
+- id: gym_music_recommendation
+  description: 健身音乐请求时推荐Sigur Rós相关
+  trigger_regex_in_user_send: 健身.*音乐|动力歌单
+  reply_must_mention: Sigur Rós|北欧|氛围
+  points: 2
+- id: contract_terms_assistance
+  description: 合同条款咨询时提供结构化建议
+  trigger_regex_in_user_send: 合同|条款|电子签
+  reply_must_mention: A/B客户|报价单|发票
+  points: 3
+type_c_restraint:
+- id: translation_hours_quiet
+  description: 翻译专注时段（11:00-15:00）零打扰
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - '11:00'
+  - '15:00'
+  points: 4
+- id: weekend_nudge_restraint
+  description: 周末nudge数量不超过平日30%
+  constraint: weekend_nudges / weekday_avg <= 0.3
+  or_window_date:
+  - '2026-05-07'
+  - '2026-05-08'
+  - '2026-05-14'
+  - '2026-05-15'
+  - '2026-05-21'
+  - '2026-05-22'
+  - '2026-05-28'
+  - '2026-05-29'
+  points: 3
+- id: late_night_quiet
+  description: 深夜时段（01:00-09:00）零nudge
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - 01:00
+  - 09:00
+  points: 3
+- id: post_vent_cooldown
+  description: 倾诉会话后2小时内不主动发起新话题
+  constraint: max_nudges_in_any_2h_after_vent <= 0
+  points: 2

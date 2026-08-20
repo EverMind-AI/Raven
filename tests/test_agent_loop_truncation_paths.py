@@ -572,7 +572,12 @@ async def test_a_subagent_does_not_dispatch_a_truncated_call(tmp_path, monkeypat
 
     provider = _CutWriteThenDone()
     manager = SubagentManager(provider=provider, workspace=tmp_path, model="stub")
-    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
+    # GitLab extracted this verbatim into the raven_loop backend as a module
+    # function, so the patch point moved with it.
+    monkeypatch.setattr(
+        "raven.agent.subagent.backends.raven_loop.build_subagent_prompt",
+        lambda *a, **k: "system",
+    )
 
     async def _swallow(*a: object, **k: object) -> None:
         return None

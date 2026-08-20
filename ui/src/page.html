@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Raven</title>
+<style>
+/*__STYLE__*/
+</style>
+</head>
+<body>
+
+<!-- Boot splash: the literal first frame. Markup lives here, before anything
+     else in <body>, so the browser paints it ahead of the app shell -- no
+     flash of skeleton rows or half-drawn chrome. The demo hides it on window
+     load; live mode keeps it up until the boot sequence has real data. -->
+<div id="splash" aria-hidden="true">
+  <div class="sp-in">
+    <img class="sp-rv" src="assets/ravens/main-agent.webp" alt="" decoding="async">
+    <div class="sp-wl">Raven Agent</div>
+    <div class="sp-bar"><i></i></div>
+  </div>
+</div>
+
+<!-- First-run onboarding surface. Empty shell: showOnboard() renders the
+     steps into it, driven by the same RPCs the TUI setup gate uses
+     (setup.status / model.options / model.save_key / config.set), so the
+     onboarding logic itself lives once, server-side. -->
+<div id="onb" hidden></div>
+
+<div id="noJs" style="position:fixed;left:0;right:0;top:0;z-index:99;background:#e0a030;color:#16150f;
+  font:13px/1.6 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;padding:10px 16px">
+  <b>这个页面的脚本没有运行</b> —— 所以只剩空壳：没有会话列表、没有对话、发送键是空的。
+  多半是当前预览环境不执行 JavaScript。把文件保存到本地，用 Chrome 或 Safari 直接打开即可。
+</div>
+
+<div class="app">
+  <!-- ─── rail ─────────────────────────────────────────────────────── -->
+  <aside class="rail">
+    <div class="railtop">
+      <!-- aria-expanded is what paints it as engaged: the toggle never moves, so
+           its own state is the only thing that says whether the rail is open. -->
+      <button class="ghost-ic tipdn" id="railBtn" aria-expanded="true" data-i18n-tip="gui.collapse_rail" data-i18n-aria="gui.collapse_rail">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>
+        </svg>
+      </button>
+      <button class="ghost-ic tipdn" id="findBtn" data-i18n-tip="gui.search_sessions" data-i18n-aria="gui.search_sessions" aria-expanded="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav class="rail-nav">
+      <button class="navi newrun" id="newBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        <span data-i18n="gui.new_task">新任务</span>
+      </button>
+      <button class="navi" id="skillBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M12 4l1.9 5.3L19 11l-5.1 1.7L12 18l-1.9-5.3L5 11l5.1-1.7Z"/>
+        </svg>
+        <span data-i18n="gui.tab.skills">技能</span>
+      </button>
+      <button class="navi" id="plugBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3"/>
+        </svg>
+        <span data-i18n="gui.tab.plugins">插件</span>
+      </button>
+      <button class="navi" id="memBtn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5"/>
+        </svg>
+        <span data-i18n="gui.nav.mem">记忆</span>
+      </button>
+      <!-- 连接 / 入口 / 定时 live one level in: they are set-up-once surfaces,
+           not daily destinations, and seven top-level rows buried the four
+           that are. The flyout drawn by drawMoreFly() is their home. -->
+      <button class="navi" id="moreBtn" aria-expanded="false" aria-controls="moreFly">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <circle cx="5" cy="12" r="1.1"/><circle cx="12" cy="12" r="1.1"/><circle cx="19" cy="12" r="1.1"/>
+        </svg>
+        <span data-i18n="gui.nav.more">更多</span>
+      </button>
+      <div class="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more"></div>
+    </nav>
+
+    <div class="find" id="findBox" hidden>
+      <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>
+      </svg>
+      <input id="sfind" data-i18n-ph="gui.search_sessions" data-i18n-aria="gui.search_sessions" placeholder="搜索会话" />
+      <button class="clr" id="sclr" hidden data-i18n-aria="gui.clear_search">&#10005;</button>
+    </div>
+
+    <div class="list" id="list"></div>
+
+    <div class="rail-foot">
+      <button class="upnote" id="upnote" hidden>
+        <span class="pip"></span>
+        <span class="t" data-i18n="gui.update.note">界面有更新</span>
+        <span class="rl" data-i18n="gui.update.reload">刷新</span>
+      </button>
+      <!-- The foot is the door to settings, and only that: accounts are not a
+           thing this product has, so nothing down here pretends to be one.
+           The version under the label is drawn by drawFoot(). -->
+      <button class="me" id="meBtn" data-i18n-aria="gui.nav.set">
+        <span class="av anon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/>
+            <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21"/></svg>
+        </span>
+        <span class="who">
+          <span class="n" data-i18n="gui.nav.set">设置</span>
+          <span class="s" id="meSub"></span>
+        </span>
+        <span class="kbd" id="meKbd"></span>
+      </button>
+    </div>
+    <div class="grip" id="railGrip" role="separator" aria-orientation="vertical"
+         data-i18n-title="gui.resize_rail" data-i18n-aria="gui.resize_rail"></div>
+  </aside>
+
+  <!-- ─── main ─────────────────────────────────────────────────────── -->
+  <div class="main">
+    <div class="split" id="split">
+      <div class="chat">
+        <!-- The session header belongs to the chat column, not the whole main
+             pane: spanning both columns would leave a band of empty header
+             above the workspace, which then reads as detached from the top. -->
+        <div class="top">
+          <h1 id="title">新任务</h1>
+          <button class="ghost-ic tipdn" id="renameBtn" data-i18n-tip="gui.rename_session" data-i18n-aria="gui.rename_session">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
+              <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5 17.5 9.5"/>
+            </svg>
+          </button>
+          <span class="spacer"></span>
+          <button class="ghost-ic wstog tipdn" id="wsBtn" aria-expanded="false" data-i18n-tip="gui.expand_ws" data-i18n-aria="gui.expand_ws">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
+            </svg>
+            <span class="bdg" id="wsBdg" hidden>2</span>
+          </button>
+        </div>
+
+        <div class="scroll" id="scroll">
+          <div id="bannerHost"></div>
+          <div class="flash" id="flash"></div>
+          <div class="col" id="stage"></div>
+        </div>
+        <button class="backpill" id="backpill" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5"/></svg>
+        </button>
+        <!-- The workspace seam, hung off the chat rather than the panel: the panel
+             clips its own overflow, so a grip inside it could only be grabbed
+             from one side. -->
+        <div class="grip" id="wsGrip" role="separator" aria-orientation="vertical"
+             data-i18n-title="gui.resize_ws" data-i18n-aria="gui.resize_ws"></div>
+
+        <div id="brand" aria-hidden="true">
+          <span class="mk"></span>
+          <span class="wl">Raven Agent</span>
+        </div>
+
+        <div class="dock">
+          <!-- Behind the composer on purpose: this one is drawn as a torso
+               leaning over the top edge, and the card cutting off its lower
+               half is what makes it look like it is ON the box rather than
+               pasted in front of it. -->
+          <div class="crew crew-back" aria-hidden="true">
+            <img class="rv rv-content" src="assets/ravens/content.webp" alt="" decoding="async">
+          </div>
+          <!-- Sheets stack here, above the composer card and apart from it:
+               each is its own floating glass card over the transcript, not a
+               strip embedded in the box the user types in. -->
+          <div class="sheets" id="sheetRack"></div>
+          <div class="dock-in">
+            <div class="queued" id="queued"></div>
+            <div class="field">
+              <textarea id="ta" rows="1" data-i18n-ph="gui.composer_ph" placeholder="Do anything"></textarea>
+            </div>
+            <!-- One bar under a clean writing line: actions and identity on
+                 the left, session state and the send button on the right --
+                 nothing shares the row the reader types in. -->
+            <div class="under">
+              <button class="tool-btn" id="attBtn" data-i18n-tip="gui.attach" data-i18n-aria="gui.attach">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4"/>
+                </svg>
+              </button>
+              <button class="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
+                <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>
+                </svg>
+                <span id="permName">自动执行</span>
+              </button>
+              <span class="chip" id="envChip" hidden><span class="led"></span><span id="envName">本机</span></span>
+              <span class="meter" id="meter"></span>
+              <button class="chip ctx" id="ctxChip" hidden>
+                <svg class="ring" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle class="bg" cx="10" cy="10" r="7.6"></circle>
+                  <circle class="fg" cx="10" cy="10" r="7.6"></circle>
+                </svg>
+              </button>
+              <button class="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
+              <button class="go" id="go" disabled data-i18n-aria="gui.send"></button>
+            </div>
+
+            <div class="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands">
+              <div class="hd"><span class="lab" data-i18n="gui.session_commands">会话命令</span></div>
+              <div id="slashList"></div>
+            </div>
+
+            <div class="pop" id="permPop" data-open="false" role="dialog" data-i18n-aria="gui.perm.title">
+              <div class="hd"><span class="lab" data-i18n="gui.perm.title">权限模式</span></div>
+              <div id="permList"></div>
+              <div class="note" data-i18n="gui.perm.wip">还没接到后端，这里的选择只记在界面上</div>
+            </div>
+          </div>
+                    <!-- In front of the composer: these four stand on or beside it. -->
+          <div class="crew crew-front" aria-hidden="true">
+            <img class="rv rv-main"     src="assets/ravens/main-agent.webp" alt="" decoding="async">
+            <img class="rv rv-research" src="assets/ravens/research.webp"   alt="" decoding="async">
+            <img class="rv rv-coding"   src="assets/ravens/coding.webp"     alt="" decoding="async">
+            <img class="rv rv-data"     src="assets/ravens/data.webp"       alt="" decoding="async">
+          </div>
+<div class="ainote" data-i18n="gui.ai_note">内容由 AI 生成，请注意甄别</div>
+        </div>
+      </div>
+
+      <!-- workspace: what the agent is touching right now -->
+      <aside class="ws" id="ws" data-i18n-aria="gui.workspace">
+        <div class="ws-top">
+          <!-- Segmented icons, not a dropdown: a collapsed menu hides exactly the
+               thing you need in your peripheral vision -- that a command is still
+               running, or that three more files changed. -->
+          <div class="wseg" id="wsTabs" role="tablist">
+            <button role="tab" data-w="diff" aria-selected="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/>
+              </svg>
+              <span class="lb" data-i18n="gui.ws.changes">Diff</span>
+              <span class="bdg" id="wsUnseen" hidden></span>
+            </button>
+            <button role="tab" data-w="file" aria-selected="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path d="M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z"/>
+              </svg>
+              <span class="lb" data-i18n="gui.ws.files">文件</span>
+            </button>
+            <button role="tab" data-w="browser" aria-selected="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <circle cx="12" cy="12" r="8"/><path d="M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15"/>
+              </svg>
+              <span class="lb" data-i18n="gui.ws.browser">浏览器</span>
+            </button>
+            <button role="tab" data-w="agents" aria-selected="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4.5V8M8.5 13h.01M15.5 13h.01"/>
+              </svg>
+              <span class="lb" data-i18n="gui.ws.agents">子智能体</span>
+              <span class="rundot" id="wsAgentRun" hidden></span>
+            </button>
+          </div>
+          <div class="ws-acts">
+            <!-- Two glyphs, one button: arrows out to take the window, arrows in
+                 to give it back. The state is on the button, so which one shows
+                 is CSS rather than a redraw. -->
+            <button class="ghost-ic wsfull tipdn" id="wsWide" aria-pressed="false"
+                    data-i18n-tip="gui.ws.expand_panel" data-i18n-aria="gui.ws.expand_panel">
+              <svg class="ex" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path d="M14 5h5v5M10 19H5v-5M19 5l-6 6M5 19l6-6"/>
+              </svg>
+              <svg class="in" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <path d="M19 10h-5V5M5 14h5v5M13 11l6-6M11 13l-6 6"/>
+              </svg>
+            </button>
+            <!-- Same glyph and same corner as the toggle in the chat header, and
+                 only one of the two is ever on screen: the panel toggle is one
+                 control at one place that changes state, not a pair that trade
+                 positions when the panel opens. -->
+            <button class="ghost-ic wstog tipdn" id="wsClose" aria-expanded="true" data-i18n-tip="gui.collapse_ws" data-i18n-aria="gui.collapse_ws">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="ws-body" id="wsBody"></div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<!-- The way back when the rail is collapsed. It sits out here rather than in
+     the chat header because that header opens a stacking context of its own
+     (.top is positioned with a z-index), which capped this button below the
+     full-page modules no matter how high its own z-index went -- collapsing the
+     rail inside 技能 / 插件 / 记忆 then covered the only control that brings it
+     back, with no way left to reach another module. -->
+<button class="ghost-ic tipdn" id="railShow" data-i18n-tip="gui.expand_rail" data-i18n-aria="gui.expand_rail" hidden>
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>
+  </svg>
+</button>
+
+<!-- ─── module 2: capabilities (one section, two modules) ──────────────
+     技能 and 插件 are separate rail entries but the same machinery: search,
+     status pills, card grid, detail drawer. The section is reused; the title
+     and the body follow whichever module opened it. -->
+<section class="page" id="capsPage" data-open="false">
+  <header>
+    <h2 id="capsTitle" data-i18n="gui.tab.skills">技能</h2>
+  </header>
+  <div class="work">
+    <div class="wrap">
+      <div class="cbar">
+        <div class="cfind">
+          <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>
+          </svg>
+          <input id="cq" placeholder="搜索" data-i18n-aria="gui.search" />
+        </div>
+        <div class="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status">
+          <button class="pill" data-k="all" aria-pressed="true" data-i18n="gui.filter.all">全部</button>
+          <button class="pill" data-k="on" aria-pressed="false" data-i18n="gui.filter.on">已启用</button>
+          <button class="pill" data-k="attn" aria-pressed="false" data-i18n="gui.filter.todo">需要处理</button>
+          <button class="pill" data-k="add" aria-pressed="false" data-i18n="gui.filter.add">可添加</button>
+        </div>
+      </div>
+      <div id="capsBody"></div>
+
+      <details class="adv" id="advAdd">
+        <summary data-i18n="gui.adv_add">高级 &middot; 手动添加</summary>
+        <p style="color:var(--muted);font-size:12.5px;margin:10px 0 0" data-i18n="gui.adv_hint">
+          知道要接什么就直接填地址或启动命令，Raven 会握手取回它提供的动作。</p>
+        <div class="row">
+          <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder="名称，例如 内部 CRM" />
+          <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder="地址或命令，例如 npx -y @acme/crm-mcp" />
+          <button class="mini" id="mAdd" data-i18n="gui.add">添加</button>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ─── module 2b: connections ─────────────────────────────────────── -->
+<section class="page" id="xaPage" data-open="false" data-i18n-aria="gui.page.agents">
+  <header>
+    <h2 data-i18n="gui.page.agents">连接</h2>
+  </header>
+  <div class="work">
+    <div class="wrap" id="xaBody"></div>
+  </div>
+</section>
+
+<section class="page" id="connPage" data-open="false" data-i18n-aria="gui.page.conn">
+  <header>
+    <h2 data-i18n="gui.page.conn">入口</h2>
+  </header>
+  <div class="work">
+    <div class="wrap" id="connBody"></div>
+  </div>
+</section>
+
+<!-- ─── module 3b: data & memory ───────────────────────────────────── -->
+<section class="page" id="memPage" data-open="false" data-i18n-aria="gui.mem.hero">
+  <header>
+    <h2 data-i18n="gui.nav.mem">记忆</h2>
+  </header>
+  <div class="work">
+    <div class="wrap" id="memBody"></div>
+  </div>
+</section>
+
+<!-- ─── module 4: scheduled ────────────────────────────────────────── -->
+<section class="page" id="cronPage" data-open="false" data-i18n-aria="gui.page.cron">
+  <header>
+    <h2 data-i18n="gui.page.cron">定时</h2>
+  </header>
+  <div class="work">
+    <div class="wrap" id="cronBody"></div>
+  </div>
+</section>
+
+<!-- The new-job sheet renders here from the cron island
+     (ui/src/features/cron/CronPage.tsx); only the veil is static markup. -->
+<div class="veil" id="jobVeil" data-open="false"></div>
+
+<aside class="detail" id="detail" data-open="false" role="dialog" aria-modal="true" data-i18n-aria="gui.cap_detail">
+  <div class="dpanel">
+    <header>
+      <b id="dTitle">—</b>
+      <button class="dx" id="dClose" data-i18n-aria="gui.close" aria-label="关闭">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="body" id="dBody"></div>
+  </div>
+</aside>
+
+<!-- ─── module 3: settings ─────────────────────────────────────────── -->
+<!-- Settings is a dialog, not a place: it is something you adjust and dismiss,
+     and taking over the whole window made a two-second change feel like leaving
+     the session behind. -->
+<div class="veil setveil" id="setVeil" data-open="false">
+  <div class="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set">
+    <nav class="snav" id="snav">
+      <div class="brandrow">
+        <span class="wm" data-i18n="gui.page.set">设置</span>
+      </div>
+      <div class="snavlist" id="snavList"></div>
+    </nav>
+    <div class="sbody">
+      <header class="shd">
+        <div class="ttl">
+          <h3 id="setTitle">设置</h3>
+          <p class="sub" id="setSub"></p>
+        </div>
+        <button class="icb" id="setClose" data-i18n-tip="gui.close" data-i18n-aria="gui.close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="spanels" id="spanels"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── overlays ───────────────────────────────────────────────────── -->
+<div class="veil" id="veil" data-open="false">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
+    <header id="cfTitle">确认</header>
+    <div class="body" id="cfBody"></div>
+    <footer>
+      <button class="btn" id="cfNo" data-i18n="gui.cancel">取消</button>
+      <button class="btn bad" id="cfYes">确认</button>
+    </footer>
+  </div>
+</div>
+
+<!-- One entry's credentials. Its own veil rather than the confirm dialog's:
+     disconnecting from inside it raises that one, and a dialog cannot be both
+     the thing asking and the thing asked. The sheet renders here from the
+     connections island (ui/src/features/connections/ConnPage.tsx); only the
+     veil is static markup. -->
+<div class="veil" id="connVeil" data-open="false"></div>
+
+<!-- The 更多 flyout: a slim second column that grows out of the rail, drawn by
+     drawMoreFly(). It holds the set-up-once modules (连接 / 入口 / 定时). -->
+<div class="menu" id="menu" data-open="false" role="menu"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+/*__MODERN__*/
+</script>
+<script>
+/*__DEMO__*/
+</script>
+</body>
+</html>

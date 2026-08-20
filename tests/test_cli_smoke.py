@@ -175,16 +175,24 @@ REGISTERED_COMMAND_NAMES = {
     "gateway",
     "import",
     "onboard",
+    "playbook",
+    # Singular: per-server actions (`plugin auth <server>`). Distinct from the
+    # plural listing below, which answers "what is installed".
+    "plugin",
     "plugins",
     "provider",
     "sandbox",
     "sentinel",
+    "serve",
     "sessions",
     "skill",
     "status",
     "tracing",
     "tui",
     "upgrade",
+    # The page, beside `serve`, which is the gateway. `web` attaches to a
+    # gateway already running rather than starting a second one.
+    "web",
 }
 
 

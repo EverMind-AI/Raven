@@ -9,6 +9,7 @@ import { Fragment, memo, useMemo, useRef } from 'react'
 
 import type { AppLayoutProps } from '../app/interfaces.js'
 
+import { $directChat, sendingPausedReason } from '../app/directChatStore.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $isBlocked, $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiState } from '../app/uiStore.js'
@@ -28,6 +29,7 @@ import { FloatingOverlays, PromptZone } from './appOverlays.js'
 import { Banner, Panel, SessionPanel, StartupLoader } from './branding.js'
 import { FpsOverlay } from './fpsOverlay.js'
 import { HelpHint } from './helpHint.js'
+import { InstanceChips } from './instanceChips.js'
 import { MessageLine } from './messageLine.js'
 import { QueuedMessages } from './queuedMessages.js'
 import { LiveTodoPanel, StreamingAssistant } from './streamingAssistant.js'
@@ -178,6 +180,8 @@ const ComposerPane = memo(function ComposerPane({
 }: Pick<AppLayoutProps, 'actions' | 'composer' | 'status'>) {
   const ui = useStore($uiState)
   const isBlocked = useStore($isBlocked)
+  const directChat = useStore($directChat)
+  const sendingPaused = sendingPausedReason(directChat)
   const sh = (composer.inputBuf[0] ?? composer.input).startsWith('!')
   const promptText = sh ? '$' : ui.theme.brand.prompt
   const promptWidth = composerPromptWidth(promptText)
@@ -232,6 +236,8 @@ const ComposerPane = memo(function ComposerPane({
       }}
       paddingX={1}
     >
+      <InstanceChips cols={composer.cols} t={ui.theme} />
+
       <QueuedMessages
         cols={composer.cols}
         queued={composer.queuedDisplay}
@@ -306,7 +312,9 @@ const ComposerPane = memo(function ComposerPane({
               width={Math.max(1, composer.cols - 2)}
             >
               <Box width={promptWidth}>
-                {sh ? (
+                {sendingPaused !== null ? (
+                  <PromptPrefix color={ui.theme.color.muted} promptText={promptText} width={promptWidth} />
+                ) : sh ? (
                   <PromptPrefix color={ui.theme.color.shellDollar} promptText={promptText} width={promptWidth} />
                 ) : composer.inputBuf.length ? (
                   <Text color={ui.theme.color.prompt}>{promptBlank}</Text>
@@ -345,6 +353,8 @@ const ComposerPane = memo(function ComposerPane({
           </>
         )}
       </Box>
+
+      {sendingPaused !== null && <Text color={ui.theme.color.muted}>{sendingPaused}</Text>}
 
       {!composer.empty && !ui.sid && (
         <Text color={ui.theme.color.muted}>

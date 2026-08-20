@@ -403,14 +403,15 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     registered by the production path. Future additions to the umbrella
     automatically extend this test.
     """
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import (
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import (
         register_aligned_methods,
         register_aligned_methods_except_system,
     )
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.methods.system import (
         system_hello,
         system_ping,
+        system_upgrade,
         system_version,
     )
 
@@ -418,10 +419,13 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     register_aligned_methods(umbrella)
     umbrella_methods = set(umbrella.methods())
 
+    # Mirrors the hand-expanded system.* block in tui_commands.py — keep the two
+    # in step when either gains a method.
     production = Dispatcher()
     production.register("system.hello", system_hello)
     production.register("system.ping", system_ping)
     production.register("system.version", system_version)
+    production.register("system.upgrade", system_upgrade)
     register_aligned_methods_except_system(production)
     production_methods = set(production.methods())
 
@@ -444,9 +448,9 @@ def test_confirm_registered_when_broker_present():
     (mirrors the emitter/turn gate). Without a broker neither the umbrella nor
     the production path registers it, so the drift test above stays balanced.
     """
-    from raven.tui_rpc.confirm_broker import ConfirmBroker
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import register_aligned_methods_except_system
+    from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import register_aligned_methods_except_system
 
     async def _send(_frame):
         return None

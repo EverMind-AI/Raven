@@ -21,6 +21,9 @@ class TraceCtx:
     session_key: str | None = None
     channel: str | None = None
     chat_id: str | None = None
+    # Which front end this turn came in from, when the connection declared one
+    # (see raven.tracing.spans.set_surface for the process-wide fallback).
+    surface: str | None = None
     parent_span_id: str | None = None
     # Name of the nearest enclosing non-model span — the purpose a model call is
     # made on behalf of (turn / memory.extract / skill.gate / ...). Model-kind
@@ -77,6 +80,7 @@ def push(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
+    surface: str | None = None,
 ):
     """Set the active ctx so descendants parent onto ``span_id``; returns a reset token.
 
@@ -96,6 +100,7 @@ def push(
             session_key=session_key,
             channel=channel,
             chat_id=chat_id,
+            surface=surface,
             parent_span_id=span_id,
             source=source,
         )

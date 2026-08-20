@@ -3,6 +3,8 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { DagRunState } from './domain/dagRun.js'
+
 export interface ActiveTool {
   context?: string
   id: string
@@ -125,6 +127,10 @@ export interface EpisodeTool {
   name: string
   summary: string
   resultPreview?: string
+  // A run_subagent_dag call's graph, pinned here when the run reported one. The
+  // live store is cleared at turn end and the tool result is clamped to 200
+  // chars, so this is what keeps the graph in the transcript.
+  dag?: DagRunState
   diff?: string
   added?: number
   removed?: number

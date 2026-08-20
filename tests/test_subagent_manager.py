@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent.subagent import manager as manager_mod
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
 from raven.providers.base import LLMResponse, ToolCallRequest
@@ -135,13 +136,73 @@ async def test_gate_of_one_serializes_subagents(monkeypatch):
     assert peak == 1
 
 
+def test_the_dispatch_gate_is_the_one_spawns_wait_on() -> None:
+    """DAG nodes are handed this same object, so `max_concurrent_subagents`
+    counts every sub-agent in flight rather than granting each tool its own
+    allowance. A copy sized the same would silently double the real cap."""
+    mgr = _make_manager(max_concurrent=3)
+    assert mgr.dispatch_gate is mgr._gate
+
+
+async def test_announce_dag_result_addresses_the_originating_conversation() -> None:
+    """A backgrounded DAG returns before its graph does, so this is the only
+    path its outcome takes back to the agent -- and it has to land in the chat
+    that asked."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result(
+        "20260101T000000Z-abcd1234",
+        "DAG run 20260101T000000Z-abcd1234 finished: 2 completed",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+    )
+
+    assert len(submitted) == 1
+    req = submitted[0]
+    assert req.conversation == "web:sess1"
+    assert req.source.channel == "web"
+    assert req.source.chat_id == "default"
+    assert "20260101T000000Z-abcd1234" in req.text
+    assert "2 completed" in req.text
+
+
+async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
+    """The announce carries the run's own summary and nothing else.
+
+    A graph's deliverable is its terminal node outputs, so any framing or
+    retell-in-two-sentences instruction wrapped around them is lossy. The
+    untrusted fence is the one exception: node output is attacker-influenceable
+    and this arrives shaped like an inbound message, not like a tool result.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+    summary = "DAG run r1 finished: 1 completed, 0 failed, 0 skipped (of 1).\n\n### report\nthe deliverable"
+
+    await mgr.announce_dag_result("r1", summary, {"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    # Asserted structurally, not against a second wrap_untrusted call: the fence
+    # mints a fresh nonce each time, so two wraps of one string never compare
+    # equal. Everything between the markers must be the summary, unaltered.
+    lines = submitted[0].text.splitlines()
+    assert lines[0].startswith("[BEGIN UNTRUSTED subagent ")
+    assert lines[-1].startswith("[END UNTRUSTED subagent ")
+    assert "\n".join(lines[1:-1]) == summary
+
+
+async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
+    """The announce runs in a background task; an entry point that never wired
+    the spine must lose the result, not kill the task with an assertion."""
+    mgr = _make_manager(max_concurrent=1)
+    await mgr.announce_dag_result("run-1", "summary", {"channel": "cli", "chat_id": "direct", "session_key": "cli"})
+
+
 async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_path):
     provider = _DeleteRetryProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)
     executor = _RecordingExecutor()
     announcements: list[dict[str, str]] = []
-
-    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
 
     async def _capture_announcement(task_id, label, task, result, origin, status) -> None:
         announcements.append({"result": result, "status": status})
@@ -162,7 +223,7 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
     assert len(provider.responses) == 1
     assert announcements == [
         {
-            "result": manager_mod._ABORTED_ACTION_RESULT,
+            "result": manager_mod.ABORTED_ACTION_RESULT,
             "status": "error",
         }
     ]
@@ -274,6 +335,54 @@ async def test_cancel_by_session_cancels_live_task(monkeypatch):
     await _settle(lambda: mgr.get_running_count() == 0)
 
 
+async def test_default_subagent_instance_is_live_while_in_flight(monkeypatch):
+    """A built-in (agent=None) spawn must key `_instance_tasks` the same way
+    `_write_spawn_status` keys its registry row -- otherwise `live_handles`
+    never reports it and a genuinely running instance reads as dead."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _blocking_inner)
+
+    assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
+    await _settle(entered.is_set)
+
+    assert mgr.live_handles("sessLive") == {(GENERIC_AGENT, "handle-x")}
+
+    release.set()
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+async def test_cancel_by_instance_stops_a_live_default_subagent(monkeypatch):
+    """The stop key a later task wires to `cancel_by_instance` must actually
+    find a built-in spawn, not silently no-op because it was never indexed."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
+        entered.set()
+        await release.wait()  # never set -- keeps the task live until cancelled
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _blocking_inner)
+
+    assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
+    await _settle(entered.is_set)
+
+    cancelled = await mgr.cancel_by_instance("sessLive", GENERIC_AGENT, "handle-x")
+    assert cancelled is True
+    await _settle(lambda: mgr.get_running_count() == 0)
+
+
 async def test_announce_result_routes_to_tui_session_key(monkeypatch):
     """TUI origins pass an authoritative session_key distinct from channel:chat_id
     (chat_id falls back to "default" while the live subscription is keyed by
@@ -316,11 +425,12 @@ async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
     assert submitted[0].conversation == "whatsapp:12345"
 
 
-def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
-    """_build_subagent_prompt uses a transient ContextBuilder just for
+def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch, tmp_path):
+    """build_subagent_prompt uses a transient ContextBuilder just for
     _build_runtime_context; it must not leave a skill-catalog file watcher
     running behind it (one leaked watchfiles/inotify thread per spawn)."""
     import raven.agent.context as context_mod
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
     calls = []
     real_init = context_mod.ContextBuilder.__init__
@@ -331,10 +441,127 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
 
     monkeypatch.setattr(context_mod.ContextBuilder, "__init__", _spy_init)
 
-    mgr = _make_manager(max_concurrent=1)
-    mgr._build_subagent_prompt()
+    build_subagent_prompt(tmp_path, tmp_path / "session")
 
     assert calls == [False]
+
+
+def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
+    """The catalog handed to a sub-agent must not advertise a skill whose
+    procedure needs a tool this backend never registers — the DAG skill tells
+    the reader to call run_subagent_dag, which only the main agent has."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session", ["read_file", "exec"])
+
+    assert "subagent-dag-orchestration" not in prompt
+    assert "run_subagent_dag" not in prompt
+    # The filter is targeted, not a blanket catalog suppression.
+    assert "weather" in prompt
+
+
+def test_build_subagent_prompt_gates_on_the_declaration_not_a_skill_name(tmp_path):
+    """The rule is `requires.tools`, not a hardcoded name list: a sub-agent that
+    somehow did hold run_subagent_dag would see the guide, and any future
+    tool-gated skill is covered without editing this backend."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session", ["read_file", "run_subagent_dag"])
+
+    assert "subagent-dag-orchestration" in prompt
+
+
+def test_build_subagent_prompt_without_a_tool_list_gates_everything_tool_bound(tmp_path):
+    """A sub-agent prompt is always built next to its own registry, so "no names"
+    means "no tools" — the opposite of the main agent's segment builder, where an
+    unanswerable tool lookup has to degrade to showing everything."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session")
+
+    assert "subagent-dag-orchestration" not in prompt
+    assert "weather" in prompt  # declares no requires.tools
+
+
+async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
+    """Backstop for the tool layer: even if a future backend registers the DAG
+    tool on a sub-agent, the call fails loudly instead of fanning out."""
+    from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.tools.base import ToolResult
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+
+    token = IN_SUBAGENT_RUN.set(True)
+    try:
+        blocked = await tool.execute(nodes=[])
+    finally:
+        IN_SUBAGENT_RUN.reset(token)
+
+    assert blocked.startswith("Error:")
+    assert "not available inside a sub-agent run" in blocked
+
+    # Same call from the main agent's context is accepted (empty graph → no-op).
+    # A refusal is a plain error string; an accepted run comes back as a
+    # ToolResult carrying the transcript label alongside the model text.
+    assert isinstance(await tool.execute(nodes=[]), ToolResult)
+
+
+async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
+    """RavenLoopBackend.run is what sets the flag the DAG guard reads, and it
+    must restore the previous value so the main agent keeps its own tools."""
+    from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=object(), model="m", agent_home=tmp_path)
+    seen: list[bool] = []
+
+    async def _probe(task, **kwargs):
+        seen.append(IN_SUBAGENT_RUN.get())
+        return "done"
+
+    backend._run = _probe
+
+    assert IN_SUBAGENT_RUN.get() is False
+    await backend.run("t", task_id="1", workspace=tmp_path, executor=None)
+
+    assert seen == [True]
+    assert IN_SUBAGENT_RUN.get() is False
+
+
+RAVEN_ROW = ("s1", "raven", "notes")
+
+
+async def test_default_subagent_gets_a_registry_row(tmp_path, monkeypatch):
+    from raven.agent.subagent import manager as manager_mod
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    registry = InstanceRegistry(tmp_path / "reg.json")
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
+
+    # The generic built-in row's name, spelled out. It used to be substituted
+    # inside this helper for a ``None`` agent -- one of eight such branches -- and
+    # the substitution now happens once, where a spawn enters the manager.
+    await manager_mod._write_spawn_status("s1", GENERIC_AGENT, "notes", "running")
+
+    rows = registry.list_instances("s1")
+    assert [(r["sessionKey"], r["agent"], r["handle"]) for r in rows] == [RAVEN_ROW]
+    # `upsert_spawn` hardcodes kind="cli" (instances.py:115). Semantically off for
+    # the built-in sub-agent, but deliberately unchanged: the web RPC's
+    # reconciliation branches on kind == "cli" to decide whether to consult
+    # live_handles, and a new kind would silently stop reconciling these rows.
+    assert rows[0]["kind"] == "cli"
+
+
+def _stub_manager() -> SimpleNamespace:
+    return SimpleNamespace()
+
+
+def test_instance_is_accepted_for_the_default_subagent():
+    from raven.agent.tools.spawn import SpawnTool
+
+    tool = SpawnTool(manager=_stub_manager())
+    assert tool._reject_useless_instance(None, "refactor-auth") is None
 
 
 async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
@@ -379,3 +606,134 @@ async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
 
     assert response.finish_reason != "error"
     assert captured["api_key"] == "k-main"
+
+
+from raven.providers.base import LLMProvider, LLMResponse  # noqa: E402
+
+
+class _WhitelistStubProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        return LLMResponse(content="done", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+async def test_raven_loop_backend_tools_allow_filters_the_registry(tmp_path, monkeypatch):
+    """A per-role whitelist decides what gets registered at all: a withheld
+    tool never reaches the registry, so it never appears in the LLM's tools
+    field -- restriction by absence, not by instruction."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.tools.registry import ToolRegistry
+
+    registered: list[list[str]] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):
+        real(self, tool)
+        registered[-1].append(tool.name)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+
+    async def _names(**kw) -> list[str]:
+        registered.append([])
+        backend = RavenLoopBackend(provider=_WhitelistStubProvider(), model="stub", agent_home=tmp_path, **kw)
+        await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+        return registered[-1]
+
+    full = await _names()
+    only_read = await _names(tools_allow=["read_file"])
+    none_at_all = await _names(tools_allow=[])
+
+    assert {"read_file", "write_file", "exec", "web_fetch"} <= set(full)
+    assert only_read == ["read_file"]
+    assert none_at_all == []
+
+
+def test_build_subagent_prompt_skills_allow_narrows_the_menu(tmp_path):
+    """None keeps the full catalog, [] hides the menu, a list shows only the
+    named skills."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    default = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"])
+    named = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"], skills_allow=["weather"])
+    hidden = build_subagent_prompt(tmp_path, tmp_path / "s", ["read_file"], skills_allow=[])
+
+    assert "weather" in default
+    assert "weather" in named
+    assert "weather" not in hidden
+
+
+def test_build_subagent_prompt_skills_allow_stacks_with_the_tool_filter(tmp_path):
+    """Whitelisting a skill does not smuggle it past the requires.tools gate:
+    a skill whose procedure needs a tool this backend lacks stays hidden even
+    when named."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(
+        tmp_path,
+        tmp_path / "s",
+        ["read_file"],
+        skills_allow=["subagent-dag-orchestration", "weather"],
+    )
+
+    assert "subagent-dag-orchestration" not in prompt
+    assert "weather" in prompt
+
+
+def _spawn_origin(agent: str | None, instance: str | None) -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "chat_id": "default",
+        "session_key": "web:sess1",
+        "agent": agent,
+        "instance": instance,
+        "handle": instance or "abcd1234",
+    }
+
+
+async def test_announcement_carries_the_instance_handle() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        "abcd1234", "Refactor", "do it", "done", _spawn_origin("claude_code", "refactor-auth-a3f9c1"), "ok"
+    )
+
+    assert "Instance handle: refactor-auth-a3f9c1" in submitted[0].text
+
+
+async def test_announcement_omits_the_handle_line_for_a_stateless_call() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "One shot", "do it", "done", _spawn_origin("oneshot", None), "ok")
+
+    assert "Instance handle" not in submitted[0].text
+
+
+async def test_announcement_no_longer_tells_the_model_to_drop_technical_detail() -> None:
+    """The old wording made the handle a forbidden 'technical detail', which
+    would have had the model discard the thing it was just handed."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "Summarize", "do it", "done", _spawn_origin(None, "summarize-a1b2c3"), "ok")
+
+    assert 'Do not mention technical details like "subagent" or task IDs' not in submitted[0].text
+    assert "out of what you say to the user" in submitted[0].text

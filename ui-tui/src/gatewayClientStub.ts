@@ -2,15 +2,18 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// GatewayClientStub — drop-in replacement for GatewayClient when there is no
-// Python backend. Public interface matches GatewayClient (see
-// gatewayClient.original.ts.removed in this same directory for the original):
-// `start() / drain() / request<T>(method, params) / kill() / getLogTail(limit?)`
-// plus EventEmitter `event` and `exit` channels. Internally there are no
-// subprocesses, sockets, or filesystem reads — every RPC dispatches to a
-// constant fixture from `./lib/stubGatewayFixtures.js`. Unknown methods log
-// once and resolve to `{}` so the UI renders empty data instead of crashing.
-// Deleted in a single commit when `tui-ipc-bridge` L2 lands real IPC.
+// GatewayClientStub — in-memory test double for GatewayClient, and the
+// nominal home of the `GatewayClient` interface type that `app.tsx` /
+// `useMainApp.ts` / the component tree import as `import type`. Nothing in
+// production constructs this class; `entry.tsx` always builds
+// `GatewayClientCompat` (the real RPC path). Tests construct the stub to
+// drive the UI without a Python backend: `start() / drain() /
+// request<T>(method, params) / kill() / getLogTail(limit?)` plus
+// EventEmitter `event` and `exit` channels, every RPC answered from a
+// constant fixture in `./lib/stubGatewayFixtures.js`. Unknown methods log
+// once and resolve to `{}` so the UI renders empty data instead of
+// crashing. (An earlier header promised deletion "when real IPC lands";
+// real IPC landed and the type + test-double roles keep this file alive.)
 
 import { EventEmitter } from 'node:events'
 
@@ -177,10 +180,10 @@ export class GatewayClientStub extends EventEmitter {
   }
 }
 
-// Backwards-compat type alias: hermes consumers (app.tsx, useMainApp.ts, ...)
-// import `type { GatewayClient } from './gatewayClientStub.js'` — after the sed
-// rewrite (Phase 1 T2.4 / Phase 3 T3.3) they import from this file, but the
-// symbol name they use is still `GatewayClient`. Avoids a churn-y rename
-// across ~30 consumer sites. Deleted with the rest when tui-ipc-bridge L2
-// brings the real GatewayClient back.
+// The `GatewayClient` interface type, under the name every consumer uses:
+// app.tsx, useMainApp.ts and the rest import `type { GatewayClient }` from
+// this file and typecheck structurally against it — `GatewayClientCompat`
+// (the production wiring) satisfies it without importing it. The alias
+// stays because renaming it is churn across ~30 consumer sites with no
+// payoff; like the class above, it has no pending deletion.
 export type GatewayClient = GatewayClientStub

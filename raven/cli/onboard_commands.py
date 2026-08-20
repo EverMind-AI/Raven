@@ -1,4 +1,4 @@
-"""Six-step onboarding wizard: LLM provider → sandbox → channel → memory → deep research → import.
+"""Six-step onboarding wizard: LLM provider → sandbox → channel → memory → sub-agents → import.
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
@@ -11,7 +11,8 @@ Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   3. Chat channel (optional, stackable)
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
-  5. deep_research tool (optional; MiroThinker key + model)
+  5. Sub-agents shipped in this checkout (optional; per folder, own key or
+     this raven's LLM)
   6. Cold-start import from other AI tools (optional)
   7. Done
 
@@ -1165,20 +1166,25 @@ def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
 
 
 def _persist_default_model(model: Optional[str], provider: str) -> None:
-    """Patch ``agents.defaults.model`` and the provider that serves it.
+    """Patch ``agents.defaults.model`` and the pin that overrides it.
 
-    Both, always. ``agents.defaults.provider`` decides whose credential a model
-    id is sent on, so writing the model alone leaves the wizard's own choice
-    routed to whoever was named before -- with that vendor's key. The wizard
-    asks for the provider before the model, so it always has one; nothing is
-    derived here, which is the same rule ``/model`` and ``raven provider use``
-    enforce.
+    Both, always. ``agents.defaults.provider`` wins over whatever a model id
+    names, so writing the model alone leaves the wizard's own choice routed to
+    whichever provider was pinned before -- with that provider's key. The rule
+    for what to pin is ``providers.pin``, the same one the picker and
+    ``raven provider use`` ask.
     """
     if not model:
         return
+    from raven.config.loader import load_config
     from raven.config.update import set_default_model
+    from raven.providers import pin
 
-    set_default_model(model, provider=provider)
+    try:
+        pinned = load_config().agents.defaults.provider or ""
+    except Exception:
+        pinned = ""
+    set_default_model(model, provider=pin.resolve(model, provider=provider, pinned=pinned))
 
 
 # ---------------------------------------------------------------------------
@@ -1878,12 +1884,9 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 # re-pick instead of leaving a model whose provider has no key.
                 from raven.config.update import set_default_model
 
-                # The provider goes with it: left behind it would route the next
-                # model the user picks to the vendor whose key was just removed.
-                # Cleared to "", not to "auto" -- that sentinel is retired, and
-                # the migration that rewrites it will not come back for a config
-                # already stamped at the current generation.
-                set_default_model("", provider="")
+                # The pin goes with it: left behind it would route the next model
+                # the user picks to the provider whose key was just removed.
+                set_default_model("", provider="auto")
             console.print(
                 _t(
                     f"  [green]✓ Removed {_provider_label(target)}'s configuration.[/green]",
@@ -2777,7 +2780,7 @@ def run_wizard(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
-    skip_deep_research: bool = False,
+    skip_subagents: bool = False,
     skip_import: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
@@ -2808,7 +2811,7 @@ def run_wizard(
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
-            skip_deep_research=skip_deep_research,
+            skip_subagents=skip_subagents,
             skip_import=skip_import,
             non_interactive=non_interactive,
             yes=yes,
@@ -2820,26 +2823,26 @@ def run_wizard(
         _logger.enable("raven")
 
 
-def _step5_deep_research(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
-    """Step 5 — deep_research (MiroThinker) tool, optional, forward-only.
+def _step5_subagents(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
+    """Step 5 — the sub-agents in this checkout, optional, forward-only.
 
-    Delegates to the shared configure flow (also reachable via
-    ``raven deep-research enable``). Skipped on --skip-deep-research or
-    non-interactive; leaving it unconfigured just means the opt-in tool stays
-    unregistered.
+    Registration is a wizard step rather than an installer step because it needs
+    a configured host raven, and ``subagents/install.sh`` runs before one exists.
+    Skipped on --skip-subagents or non-interactive; leaving it undone just means
+    an empty third-party roster, and re-running ``onboard`` fills it in.
     """
-    _step_header(5, _t("Deep research tool", "深度研究工具"))
+    _step_header(5, _t("Sub-agents", "子代理"))
     if skip or non_interactive:
         console.print(
             _t(
-                "  [dim]Skipping deep_research (configure later: raven deep-research enable).[/dim]",
-                "  [dim]跳过 deep_research(以后可用 raven deep-research enable 配置)。[/dim]",
+                "  [dim]Skipping the sub-agents (set them up later: raven onboard).[/dim]",
+                "  [dim]跳过子代理(以后可用 raven onboard 设置)。[/dim]",
             )
         )
         return None
-    from raven.cli.deep_research_commands import configure_deep_research
+    from raven.cli.subagent_setup import configure_subagents
 
-    configure_deep_research(non_interactive=non_interactive, warnings=warnings)
+    configure_subagents(non_interactive=non_interactive, warnings=warnings)
     return None
 
 
@@ -2853,7 +2856,7 @@ def _run_wizard_body(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
-    skip_deep_research: bool = False,
+    skip_subagents: bool = False,
     skip_import: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
@@ -2881,13 +2884,13 @@ def _run_wizard_body(
                 "[dim]We'll configure, in order:[/dim]\n"
                 "  [accent]①[/accent] LLM      [accent]②[/accent] Run location      "
                 "[accent]③[/accent] Chat channel      [accent]④[/accent] Long-term memory      "
-                "[accent]⑤[/accent] Deep research      [accent]⑥[/accent] Import history\n\n"
+                "[accent]⑤[/accent] Sub-agents         [accent]⑥[/accent] Import history\n\n"
                 "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
                 "[bold][accent]✨ 欢迎使用 Raven 配置向导[/accent][/bold]\n\n"
                 "[dim]我们将依次配置:[/dim]\n"
                 "  [accent]①[/accent] LLM      [accent]②[/accent] 运行位置      "
                 "[accent]③[/accent] 聊天渠道      [accent]④[/accent] 长期记忆      "
-                "[accent]⑤[/accent] 深度研究      [accent]⑥[/accent] 历史导入\n\n"
+                "[accent]⑤[/accent] 子代理      [accent]⑥[/accent] 历史导入\n\n"
                 "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
             border_style="border",
@@ -2919,8 +2922,8 @@ def _run_wizard_body(
             warnings=warnings,
             skip_test=skip_test,
         ),
-        lambda: _step5_deep_research(
-            skip=skip_deep_research,
+        lambda: _step5_subagents(
+            skip=skip_subagents,
             non_interactive=non_interactive,
             warnings=warnings,
         ),
@@ -3020,7 +3023,7 @@ def register(app: typer.Typer) -> None:
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
-        skip_deep_research: bool = typer.Option(False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"),
+        skip_subagents: bool = typer.Option(False, "--skip-subagents", help="Skip Step 5 (sub-agent setup)"),
         skip_import: bool = typer.Option(False, "--skip-import", help="Skip Step 6 (history import)"),
         non_interactive: bool = typer.Option(
             False,
@@ -3049,7 +3052,7 @@ def register(app: typer.Typer) -> None:
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
-            skip_deep_research=skip_deep_research,
+            skip_subagents=skip_subagents,
             skip_import=skip_import,
             non_interactive=non_interactive,
             yes=yes,

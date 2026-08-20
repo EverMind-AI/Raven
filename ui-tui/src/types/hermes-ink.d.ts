@@ -118,7 +118,6 @@ declare module '@hermes/ink' {
   export const NoSelect: React.ComponentType<any>
   export const ScrollBox: React.ComponentType<any>
   export const Text: React.ComponentType<any>
-  export const TextInput: React.ComponentType<any>
   export const stringWidth: (s: string) => number
   export function isXtermJs(): boolean
 

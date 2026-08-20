@@ -31,10 +31,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
-# Defensive limits for untrusted zip extraction.
-_MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
-_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
-_ALLOWED_SUFFIXES = {
+# Defensive limits for untrusted zip extraction. Public because the skillhub RPC
+# install path unpacks the same archives and must not drift to a laxer policy.
+MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
+MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
+ALLOWED_SUFFIXES = {
     # docs / data / config
     ".md",
     ".txt",
@@ -96,11 +97,26 @@ class SkillHubClient:
         self._source = source
         self._cache_dir = cache_dir or (Path.home() / ".raven" / "skills" / "hub")
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout_s))
+        self._timeout = httpx.Timeout(timeout_s)
+        self._client = client or httpx.AsyncClient(timeout=self._timeout)
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _http(self) -> httpx.AsyncClient:
+        """The transport, rebuilt if a previous ``aclose`` retired it.
+
+        One instance is shared by the router's Hub source and the read_skill /
+        use_skill tools, and ``AgentLoop.close_executor`` closes it on any turn
+        that raises -- which the loop then recovers from. Without this the
+        holders keep a permanently closed transport and every later Hub call
+        fails for the life of the process. An injected client belongs to its
+        owner, so it is never replaced.
+        """
+        if self._owns_client and self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
 
     def _headers(self) -> dict[str, str]:
         h = {"X-Request-ID": uuid.uuid4().hex}
@@ -138,7 +154,7 @@ class SkillHubClient:
             params["category"] = category
         if sort:
             params["sort"] = sort
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills",
             params=params,
             headers=self._headers(),
@@ -159,7 +175,7 @@ class SkillHubClient:
 
     # ── Read body (skill_md) — no download ──────────────────────────
     async def get(self, skill_id: str) -> dict[str, Any]:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}",
             headers=self._headers(),
         )
@@ -168,7 +184,7 @@ class SkillHubClient:
 
     # ── Bundle (zip with scripts/assets) ────────────────────────────
     async def download(self, skill_id: str) -> bytes:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}/download",
             params={"source": self._source},
             headers=self._headers(),
@@ -246,17 +262,23 @@ class SkillHubClient:
                 # entry would be wrongly rejected as unsafe.
                 if not target.is_relative_to(dest.resolve()):
                     raise SkillHubError(f"unsafe zip path: {name!r}")
-                if Path(name).suffix.lower() not in _ALLOWED_SUFFIXES:
+                if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
                     logger.warning("skipping disallowed file in skill zip: %r", name)
                     continue
-                if info.file_size > _MAX_ZIP_ENTRY_BYTES:
+                if info.file_size > MAX_ZIP_ENTRY_BYTES:
                     logger.warning("skipping oversized file in skill zip: %r", name)
                     continue
-                if total + info.file_size > _MAX_ZIP_TOTAL_BYTES:
+                if total + info.file_size > MAX_ZIP_TOTAL_BYTES:
                     raise SkillHubError("zip uncompressed total too large")
                 total += info.file_size
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(zf.read(info))
 
 
-__all__ = ["SkillHubClient", "SkillHubError"]
+__all__ = [
+    "ALLOWED_SUFFIXES",
+    "MAX_ZIP_ENTRY_BYTES",
+    "MAX_ZIP_TOTAL_BYTES",
+    "SkillHubClient",
+    "SkillHubError",
+]

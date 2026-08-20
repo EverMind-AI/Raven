@@ -20,6 +20,7 @@ import { OverlayHint } from './overlayControls.js'
 import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from './prompts.js'
 import { SessionPicker } from './sessionPicker.js'
 import { SkillsHub } from './skillsHub.js'
+import { SubagentsHub } from './subagentsHub.js'
 
 const COMPLETION_WINDOW = 16
 
@@ -134,7 +135,13 @@ export function FloatingOverlays({
   const sid = useStore($uiSessionId)
   const theme = useStore($uiTheme)
 
-  const hasAny = overlay.modelPicker || overlay.pager || overlay.picker || overlay.skillsHub || completions.length
+  const hasAny =
+    overlay.modelPicker ||
+    overlay.pager ||
+    overlay.picker ||
+    overlay.skillsHub ||
+    overlay.subagentsHub ||
+    completions.length
 
   if (!hasAny) {
     return null
@@ -169,7 +176,6 @@ export function FloatingOverlays({
             launcher={launchRavenCommand}
             onCancel={() => patchOverlayState({ modelPicker: false })}
             onSelect={onModelSelect}
-            scope={overlay.modelPicker === 'default' ? 'default' : 'session'}
             sessionId={sid}
             suspend={suspendForHandoff}
             t={theme}
@@ -180,6 +186,12 @@ export function FloatingOverlays({
       {overlay.skillsHub && (
         <FloatBox color={theme.color.border}>
           <SkillsHub gw={gw} onClose={() => patchOverlayState({ skillsHub: false })} t={theme} />
+        </FloatBox>
+      )}
+
+      {overlay.subagentsHub && (
+        <FloatBox color={theme.color.border}>
+          <SubagentsHub gw={gw} onClose={() => patchOverlayState({ subagentsHub: false })} t={theme} />
         </FloatBox>
       )}
 
