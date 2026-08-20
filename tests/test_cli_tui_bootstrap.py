@@ -403,12 +403,12 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     registered by the production path. Future additions to the umbrella
     automatically extend this test.
     """
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import (
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import (
         register_aligned_methods,
         register_aligned_methods_except_system,
     )
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.methods.system import (
         system_hello,
         system_ping,
         system_version,
@@ -444,9 +444,9 @@ def test_confirm_registered_when_broker_present():
     (mirrors the emitter/turn gate). Without a broker neither the umbrella nor
     the production path registers it, so the drift test above stays balanced.
     """
-    from raven.tui_rpc.confirm_broker import ConfirmBroker
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import register_aligned_methods_except_system
+    from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import register_aligned_methods_except_system
 
     async def _send(_frame):
         return None

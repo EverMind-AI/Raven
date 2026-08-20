@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.tui_rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
+from raven.rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
 
 MAX_QUESTIONS = 4
 """Cap on one call. Each question is its own round-trip, so an uncapped

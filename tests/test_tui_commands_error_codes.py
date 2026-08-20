@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from raven.cli.tui_commands import _build_tui_agent_loop
-from raven.tui_rpc.errors import InternalError, RpcError
+from raven.rpc.errors import InternalError, RpcError
 
 # ---------------------------------------------------------------------------
 # _build_tui_agent_loop — narrow exception → InternalError(-32603)

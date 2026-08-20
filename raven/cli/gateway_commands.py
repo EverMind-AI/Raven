@@ -138,8 +138,8 @@ async def _deliver_question_to_channel(frame: dict, *, sources: dict, hub) -> No
     live source: a silent drop left the broker waiting out its whole budget on a
     question that was never rendered.
     """
+    from raven.rpc.question_broker import QuestionUndeliverableError
     from raven.spine import Text
-    from raven.tui_rpc.question_broker import QuestionUndeliverableError
 
     params = frame.get("params", {})
     qcid = params.get("conversation_id", "")
@@ -537,7 +537,7 @@ def register(app: typer.Typer) -> None:
                 # so the live turn's real inbound Source is still in gw_sources
                 # (keyed by conversation id) — reuse it so a topic / thread address
                 # is exact, rather than reconstructing it from the conversation id.
-                from raven.tui_rpc.question_broker import QuestionBroker
+                from raven.rpc.question_broker import QuestionBroker
 
                 async def _question_to_channel(frame: dict) -> None:
                     await _deliver_question_to_channel(frame, sources=gw_sources, hub=gw_hub)

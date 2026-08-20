@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from raven.tui_rpc.subscriptions import (
+from raven.rpc.subscriptions import (
     COALESCE_WINDOW_S,
     QUEUE_CAPACITY,
     SubscriptionEmitter,
