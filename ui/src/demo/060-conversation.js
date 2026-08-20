@@ -106,168 +106,33 @@ function openImage(src, name) {
   box.focus();
 }
 
-/* Past this many, the row collapses: a wall of thumbnails buries the sentence
-   it was sent with, and past two filenames the chips stop being readable. */
-const ATT_SHOW_IMG = 3;
-const ATT_SHOW_DOC = 2;
-
-/* What was handed over, drawn above what was said about it. Images show
-   themselves; a stack of them collapses to one pile with a count, files to one
-   chip with a count -- either opens the whole set on click. */
-function attBox(paths, expanded) {
-  const box = mk('div', 'abox');
-  const imgs = paths.filter((p) => ATT_IMG.has(String(p)));
-  const docs = paths.filter((p) => !ATT_IMG.has(String(p)));
-  const openAll = () => box.replaceWith(attBox(paths, true));
-
-  const thumb = (p, live) => {
-    const src = ATT_IMG.get(String(p));
-    const nm = String(p).split('/').pop();
-    const img = mk('img', 'shot');
-    img.src = src;
-    img.alt = nm;
-    if (live) {
-      img.title = T('gui.img.open', { name: nm });
-      img.onclick = () => openImage(src, nm);
-    }
-    return img;
-  };
-  const chip = (p) => {
-    const c = mk('button', 'achip');
-    c.appendChild(mk('span', 'nm', String(p).split('/').pop()));
-    c.title = p;
-    c.onclick = () => { if (typeof showFile === 'function') showFile(p); };
-    return c;
-  };
-
-  /* A lone image keeps its own proportions; several are squared off so the row
-     reads as one set instead of a ragged filmstrip. */
-  if (imgs.length > 1) box.classList.add('set');
-  if (imgs.length && (expanded || imgs.length <= ATT_SHOW_IMG)) {
-    imgs.forEach((p) => box.appendChild(thumb(p, true)));
-  } else if (imgs.length) {
-    const pile = mk('button', 'pile');
-    pile.append(thumb(imgs[0], false), mk('span', 'cnt', `${imgs.length}`));
-    pile.title = T('gui.att.show_all');
-    pile.onclick = openAll;
-    box.appendChild(pile);
-  }
-  if (docs.length && (expanded || docs.length <= ATT_SHOW_DOC)) {
-    docs.forEach((p) => box.appendChild(chip(p)));
-  } else if (docs.length) {
-    const more = mk('button', 'achip more');
-    more.appendChild(mk('span', 'nm', T('gui.att.n_files', { n: docs.length })));
-    more.title = T('gui.att.show_all');
-    more.onclick = openAll;
-    box.appendChild(more);
-  }
-  return box;
-}
-
 function ask(text, when) {
   const ch = document.querySelector('.chat');
   if (ch) delete ch.dataset.fresh;
   stick = true;                      // sending always snaps back to the tail
-  const { body, atts: files } = splitAtts(String(text));
-  const w = mk('div', 'ask in');
-  if (files.length) w.appendChild(attBox(files, false));
-  /* No empty bubble under a file sent on its own. */
-  if (body.trim()) {
-    const bEl = mk('div', 'b', body);
-    /* A long message folds to a preview so it cannot bury the reply;
-       the fold keeps the full text in the DOM (copy still copies it all). */
-    if (body.length > 640 || body.split('\n').length > 12) {
-      bEl.classList.add('clip');
-      const tg = mk('button', 'qfold', T('gui.ask.expand'));
-      tg.setAttribute('aria-expanded', 'false');
-      tg.onclick = () => {
-        const open = !bEl.classList.toggle('clip');
-        tg.textContent = T(open ? 'gui.ask.collapse' : 'gui.ask.expand');
-        tg.setAttribute('aria-expanded', String(open));
-        if (!open) bEl.scrollIntoView({ block: 'nearest' });
-      };
-      w.append(bEl, tg);
-    } else w.appendChild(bEl);
-  }
-  /* Same footer grammar as an answer -- what the reader typed is quotable and
-     locatable in time too. Mirrored, since the bubble sits on the right. */
-  const foot = mk('div', 'ansfoot');
-  const acts = mk('div', 'acts');
-  const cp = mk('button');
-  cp.dataset.tip = T('gui.answer.copy');
-  cp.setAttribute('aria-label', T('gui.answer.copy'));
-  cp.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${COPY_ICO}</svg>`;
-  cp.onclick = () => {
-    if (navigator.clipboard) navigator.clipboard.writeText(body);
-    tipFlash(cp, T('gui.answer.copied'));
-  };
-  acts.appendChild(cp);
-  foot.appendChild(acts);
-  foot.appendChild(mk('span', 'turnmeta', when || stamp(Date.now())));
-  w.appendChild(foot);
-  stageBox().appendChild(w); down();
+  /* The bubble, its attachment chips and its footer are the island's. */
+  RavenIslands.transcript.ask(text, when);
 }
 
-/* Writes what the row shows and what it can give back, together. Both have to
-   move as one: a caller that rewrites the visible line and leaves the recoverable
-   text behind (compressNow swapping its result over "Compacting...") would strand
-   the row holding the wrong thing.
-
-   `title` goes up unconditionally rather than only when the line is measured to
-   overflow. A measurement at insert is a snapshot of a layout that keeps moving:
-   opening the workspace re-lays the chat column and its divider drags, so a row
-   that fitted the full column when it landed is ellipsised with nothing to hover
-   the moment the panel opens -- the recovery path disappearing exactly when the
-   truncation arrives. A tooltip duplicating a fully visible line costs nothing;
-   it is only ever drawn on hover. */
+/* Writes what the row shows and what it can give back, together; `row` is
+   the island handle noteRow returned. */
 function noteSay(row, label, detail) {
-  const head = String(label || '');
-  const full = String(detail || '');
-  const brief = firstErrLine(full, 140) || full;
-  row.querySelector('.tx').textContent = brief ? `${head} · ${brief}` : head;
-  row.title = full ? `${head} · ${full}` : head;
+  row.set(label, detail);
 }
 
 /* The one row for everything raven says about itself in the transcript, so a
    new kind of notice cannot arrive wearing its own shape. `label` leads, the
    detail follows after a `·`, and the whole thing is one line: a failure and a
-   framework note differ only in colour.
-
-   A failure still reports in two registers -- one line a person can act on, and
-   the provider's own text for whoever has to debug it -- and the second one no
-   longer costs a panel, but it does need to survive as text and not just as a
-   tooltip: a hover cannot be selected or copied and does not exist on touch,
-   and the visible line is capped at 140 characters. So the row carries the same
-   right-click Copy the answer bubble does, over the UNTRUNCATED text -- which is
-   what someone pasting a litellm traceback into an issue actually needs, since
-   that paragraph repeats itself inside two nested tracebacks and the line can
-   only ever hold the one fact in it.
-
-   Options: `quiet` for a framework note (no failure happened, so no red),
-   `host` for a caller that must write to the main stage even while a delegated
-   transcript owns stageBox(), and `retry`, which is the caller's -- this row
-   cannot know what should happen next, and guessing was worse than not
-   offering. Omit it and no action appears. */
+   framework note differ only in colour. Options: `quiet` for a framework note
+   (no failure happened, so no red) and `retry`, which is the caller's -- this
+   row cannot know what should happen next. Omit it and no action appears. */
 function noteRow(label, detail, opts) {
   const o = opts || {};
-  const w = mk('div', 'tnote in' + (o.quiet ? '' : ' bad'));
-  w.appendChild(mk('span', 'tx'));
-  noteSay(w, label, detail);
-  /* `title` is the whole text by construction, so it is also what Copy hands
-     over -- no second copy of the string to fall out of step with the row. */
-  ctxMenu(w, () => [
-    { label: T('gui.answer.copy'), fn: () => copyToClip(w.title, T('gui.answer.copied')) },
-  ]);
-  if (typeof o.retry === 'function') {
-    const b = mk('button', 'rt', T('gui.retry'));
-    b.onclick = () => { w.remove(); o.retry(); };
-    w.appendChild(b);
-  }
-  /* Above the live glyph, like every other row that lands mid-turn -- under it
-     the note would sit beneath a spinner still claiming to be working. */
-  const host = o.host || stageBox();
-  host.insertBefore(w, host.querySelector(':scope > .turnlive'));
-  down();
-  return w;
+  /* The row is an island segment now; the handle keeps the two verbs the
+     shell still uses on it (noteSay's set, compressNow's remove). `host`
+     needs no forwarding: the island's main lane IS the #stage transcript,
+     and a delegated pane draws its own notes from its own record. */
+  return RavenIslands.transcript.note(label, detail,
+    { quiet: !!o.quiet, retry: typeof o.retry === 'function' ? o.retry : null });
 }
 

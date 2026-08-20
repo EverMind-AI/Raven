@@ -62,6 +62,19 @@ export interface Shell {
      with the transcript's own renderer (live-only; the demo global it calls
      through stays null, and the island never asks without a record). */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
+  /* Transcript island verbs: the tail-follow, the attachment image bytes,
+     the lightbox, the path opener, the diff builders the workspace panel
+     already owns, and the turn's tl/raw logs the shell keeps per turn. */
+  down?(): void
+  attImage?(path: string): string | undefined
+  openImage?(src: string, name: string): void
+  attNotes?(): string[]
+  pathOpen?(path: string): void
+  hunkFromEdit?(oldText: string, newText: string): unknown
+  hunkFromWrite?(content: string): unknown
+  hunkFromUnified?(lines: string | string[]): unknown
+  tlPush?(entry: { name: string; arg: string; ms: number; ok: boolean }): void
+  rawPush?(line: string): void
 }
 
 declare global {

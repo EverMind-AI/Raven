@@ -41,6 +41,15 @@ function parkTurn() {
   });
 }
 
+/* A parked node is detached but not finished with: the transcript island
+   releases a lane host once it leaves the page, and the only copy of a turn
+   still streaming lives in one of these arrays until restoreTurn puts it
+   back. */
+DS.transcript.parked = (node) => {
+  for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
+  return false;
+};
+
 function restoreTurn(pk) {
   turnOwner = cur;
   const stage = $('#stage');
