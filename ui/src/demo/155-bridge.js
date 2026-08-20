@@ -18,7 +18,7 @@ window.RavenShell = {
   wsShows: (tab) => wsOpen && wsTab === tab,
   lang: () => LANG,
   hostPlatform: () => HOST_PLATFORM,
-  wsView: () => ({ tab: wsTab, open: wsOpen, picked: wsPicked }),
+  wsView: () => wsView(),
   wsState: () => WS,
   wsPick: (tab) => wsPick(tab),
   sessionKey: () => cur,
