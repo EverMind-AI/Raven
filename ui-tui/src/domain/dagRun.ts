@@ -32,6 +32,9 @@ export interface DagRunNode {
   /** Shared stateful handle; nodes naming the same one ran sequentially. */
   instance?: string
   status: DagRunNodeStatus
+  /** The prompt as submitted, which names what the node was asked. Absent when
+   * neither the call args nor the run dir supplied one. */
+  promptTemplate?: string
   outputFile?: string
   error?: string
 }
@@ -55,7 +58,7 @@ export interface DagRunState {
   summary?: DagRunSummary
 }
 
-const fromStart = (payload: DagRunStartedEvent['payload']): DagRunState => ({
+const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Record<string, string>): DagRunState => ({
   runId: payload.run_id,
   ...(payload.tool_call_id ? { toolCallId: payload.tool_call_id } : {}),
   done: false,
@@ -64,6 +67,7 @@ const fromStart = (payload: DagRunStartedEvent['payload']): DagRunState => ({
     subagent: node.subagent,
     dependsOn: [...node.depends_on],
     ...(node.instance ? { instance: node.instance } : {}),
+    ...(promptTemplates?.[node.id] ? { promptTemplate: promptTemplates[node.id] } : {}),
     status: 'pending' as const
   }))
 })
@@ -107,10 +111,18 @@ const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload
  * update that arrives first (a subscription attached mid-run) is dropped rather
  * than used to invent a node, which would draw a graph that never gains its
  * edges. An event naming a different run leaves `prev` untouched.
+ *
+ * `promptTemplates` (node id -> prompt as submitted) comes from the tool call's
+ * own arguments, since no event carries it. Only `dag.run_started` builds nodes,
+ * so it is read there and ignored on the rest.
  */
-export const foldDagEvent = (prev: DagRunState | null, event: DagEvent): DagRunState | null => {
+export const foldDagEvent = (
+  prev: DagRunState | null,
+  event: DagEvent,
+  promptTemplates?: Record<string, string>
+): DagRunState | null => {
   if (event.type === 'dag.run_started') {
-    return fromStart(event.payload)
+    return fromStart(event.payload, promptTemplates)
   }
 
   if (prev === null || prev.runId !== event.payload.run_id) {
@@ -134,9 +146,11 @@ export const foldDagEvent = (prev: DagRunState | null, event: DagEvent): DagRunS
  * typically `running`, forever. The snapshot is the durable record and wins
  * outright; it is only ever fetched when the local state is known to be stale.
  *
- * `prev` contributes exactly one thing the snapshot cannot know: the tool call
- * the graph was pinned to. Without carrying that over, a repaired graph is
- * orphaned from the transcript row that draws it.
+ * `prev` contributes two things the snapshot may not have. The tool call the
+ * graph was pinned to, which it never knows -- without carrying that over, a
+ * repaired graph is orphaned from the transcript row that draws it. And a node's
+ * prompt template, which an older run dir did not record: letting the snapshot
+ * win outright there would blank a row that was reading fine a moment earlier.
  */
 export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapshot): DagRunState => ({
   runId: snapshot.run_id,
@@ -144,13 +158,18 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
   done: snapshot.finalized,
   dir: snapshot.dir,
   summary: { ...snapshot.summary },
-  nodes: snapshot.files.map(file => ({
-    id: file.node,
-    subagent: file.subagent ?? '',
-    dependsOn: [...(file.depends_on ?? [])],
-    ...(file.instance ? { instance: file.instance } : {}),
-    status: file.status,
-    ...(file.output_file ? { outputFile: file.output_file } : {}),
-    ...(file.error ? { error: file.error } : {})
-  }))
+  nodes: snapshot.files.map(file => {
+    const template = file.prompt_template ?? prev?.nodes.find(node => node.id === file.node)?.promptTemplate
+
+    return {
+      id: file.node,
+      subagent: file.subagent ?? '',
+      dependsOn: [...(file.depends_on ?? [])],
+      ...(file.instance ? { instance: file.instance } : {}),
+      status: file.status,
+      ...(template ? { promptTemplate: template } : {}),
+      ...(file.output_file ? { outputFile: file.output_file } : {}),
+      ...(file.error ? { error: file.error } : {})
+    }
+  })
 })

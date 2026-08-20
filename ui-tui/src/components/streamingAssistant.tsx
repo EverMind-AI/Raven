@@ -50,7 +50,7 @@ export const StreamingAssistant = memo(function StreamingAssistant({
 
   return (
     <>
-      <LiveDagPanels />
+      <LiveDagPanels cols={cols} />
 
       {groupedSegments(streamSegments).map((msg, i) => (
         <MessageLine
@@ -115,14 +115,14 @@ export const StreamingAssistant = memo(function StreamingAssistant({
  * Only the legacy transcript needs this: the episodes view renders each graph in
  * the tool row it belongs to (see `episodeView`), and drawing them here as well
  * would show every graph twice. */
-export const LiveDagPanels = memo(function LiveDagPanels() {
+export const LiveDagPanels = memo(function LiveDagPanels({ cols }: { cols?: number }) {
   const ui = useStore($uiState)
   const dagRuns = useTurnSelector(state => state.dagRuns)
 
   return (
     <>
       {dagRuns.map(run => (
-        <DagPanel key={run.runId} run={run} t={ui.theme} />
+        <DagPanel key={run.runId} run={run} t={ui.theme} width={cols ? Math.max(24, cols - 4) : undefined} />
       ))}
     </>
   )

@@ -34,7 +34,7 @@ import type {
 import type { Msg } from '../types.js'
 
 import { t } from '../i18n/index.js'
-import { argPreview } from '../lib/toolArgs.js'
+import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
 import {
   appendDirectDelta,
   appendDirectMessage,
@@ -203,7 +203,6 @@ const dispatchDirect = (
 /** Tools whose whole purpose is to put a new sub-agent instance in the session. */
 const DISPATCH_TOOLS = new Set(['spawn', 'run_subagent_dag'])
 
-
 // Render an ISO timestamp for the cron.missed summary block: local HH:MM
 // when the reminder was scheduled today, MM-DD HH:MM otherwise - a missed
 // notice's whole point is how long ago, and a bare "09:00" after a weekend
@@ -323,7 +322,9 @@ const dispatch = (
     case 'cron.missed': {
       if (sys) {
         const { count, items } = event.payload
-        const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`)
+        const lines = items.map(
+          item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`
+        )
         const noun = count === 1 ? 'reminder' : 'reminders'
         sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
       }
@@ -351,6 +352,13 @@ const onTokenDelta = (ev: TokenDeltaEvent): void => {
 
 const onToolStart = (ev: ToolStartEvent): void => {
   const { tool_call_id, name, arguments: args, display } = ev.payload
+
+  // The graph's own prompts, kept before the args are discarded: no dag.* event
+  // carries them, so this is the only source the panel has before a node runs.
+  if (name === 'run_subagent_dag') {
+    turnController.recordDagPrompts(tool_call_id, dagPromptTemplates(args))
+  }
+
   // Prefer the tool-authored call label; else preview the "what" of the call
   // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
   turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))

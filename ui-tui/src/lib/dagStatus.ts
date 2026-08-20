@@ -2,13 +2,15 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// How a DAG node's status and a run's progress read on screen. Split from the
-// panel so both are testable without a render, and so the transcript's folded
-// row and the expanded graph can never disagree about a run's tally.
+// How a DAG node and a run's progress read on screen. Split from the panel so
+// both are testable without a render, and so the transcript's folded row and the
+// expanded graph can never disagree about a run's tally.
 
-import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
+import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 import type { DagNodeDetail } from '../rpc/index.js'
 import type { Theme } from '../theme.js'
+
+import { clipToWidth } from './text.js'
 
 /** Glyph + tone per status. A `Record` over the union rather than a lookup with
  * a fallback, so adding a status without styling it is a type error instead of a
@@ -24,6 +26,61 @@ export const DAG_STATUS_GLYPH: Record<DagRunNodeStatus, { color: (t: Theme) => s
 }
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`
+
+// Markdown furniture opening a line: a heading marker, a bullet, an ordered-list
+// number, or a blockquote. The line reads as prose without it, and a row this
+// narrow has no cells to spend on syntax.
+//
+// Each marker is matched only where whitespace or the line end follows it, so
+// `-5 degrees` and `*emphasis*` keep their first character.
+const LINE_FURNITURE_RE = /^(?:(?:#{1,6}|[-*+]|\d+[.)])(?=\s|$)\s*|>\s*)+/
+
+// A `{{ <node>.output }}` / `{{ ref:<path> }}` injection point. Collapsed rather
+// than shown: the row already spells its dependencies out at the end, so the
+// node name inside the placeholder is redundant there, and 40 cells of it crowd
+// out the words that say what the node actually does.
+const PLACEHOLDER_RE = /\{\{[^}]*\}\}/g
+
+// Section headings a prompt uses as scaffolding. They name where the request is,
+// never what it is, so a row showing one says nothing about the node at all --
+// which is why a bare label is skipped while `## Task: audit the skills`, whose
+// text does state the request, is kept.
+const SECTION_LABEL_RE =
+  /^(?:tasks?|goals?|objectives?|contexts?|backgrounds?|instructions?|inputs?|requests?|prompts?|roles?|summary|outputs?)\s*:?$/i
+
+/**
+ * What a node is being asked, as one line no wider than `room`.
+ *
+ * The first line of the prompt template that says something: a DAG prompt opens
+ * with its instruction and elaborates below it, so that line is the query and
+ * the rest is detail. Blank lines, bare markdown markers, lone placeholders and
+ * section labels are stepped over -- each would summarise to nothing, or to
+ * punctuation, and leave the row unable to say what its node is for.
+ *
+ * Empty when no template reached the client -- an older run dir wrote none, and
+ * a host that does not correlate progress with a tool row supplies no call args.
+ * The row then falls back to the node id, the only other thing that names it.
+ */
+export const dagNodeSummary = (promptTemplate: string | undefined, room: number): string => {
+  const first = (promptTemplate ?? '')
+    .split('\n')
+    .map(line => line.trim().replace(LINE_FURNITURE_RE, '').replace(PLACEHOLDER_RE, '…').trim())
+    .find(line => line && line !== '…' && !SECTION_LABEL_RE.test(line))
+
+  return first ? clipToWidth(first, room) : ''
+}
+
+/**
+ * The two trailing parts of a node's row, as the exact strings it renders.
+ *
+ * Returned together with the row's own arithmetic in mind: the summary gets
+ * whatever cells these leave, so a caller measuring them separately from what it
+ * draws would clip against the wrong budget.
+ */
+export const dagNodeNames = (node: Pick<DagRunNode, 'dependsOn' | 'instance' | 'subagent'>) => ({
+  deps: node.dependsOn.length > 0 ? ` \u2190 ${node.dependsOn.join(', ')}` : '',
+  parens: `(${node.subagent}${node.instance ? `@${node.instance}` : ''})`
+})
 
 /**
  * One-line progress summary for the run's header row.

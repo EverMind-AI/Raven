@@ -13,6 +13,10 @@
 //   * show a node's rendered prompt or its output. No event carries either: the
 //     manifest inlines only the leaf nodes' text, and the tool result kept in
 //     the transcript is clamped to 200 chars.
+//   * name the nodes. `run_subagent_dag`'s own call label elides past the third
+//     id, and a graph row carries its id only in the block a click opens, so on
+//     a graph of any size the refresh listing is the only way to learn the id
+//     this command takes as its argument.
 //
 // Both are user-initiated for a reason: the terminal event handlers are
 // synchronous (the turn commits its transcript row inside them), so an RPC
@@ -55,6 +59,14 @@ export const dagCommands: SlashCommand[] = [
                 // the line cannot disagree with the graph that just re-rendered.
                 const refreshed = getTurnState().dagRuns.find(item => item.runId === run.runId)
                 transcript.sys(`${run.runId}: ${refreshed ? dagRunHeadline(refreshed) : 'refreshed'}`)
+
+                // The ids, because this command's own argument is one and there
+                // is no other keyboard route to them: the tool row's label
+                // elides past the third, and a graph row shows its id only once
+                // expanded, which takes a mouse.
+                if (refreshed && refreshed.nodes.length > 0) {
+                  transcript.sys(`  nodes: ${refreshed.nodes.map(item => item.id).join(', ')}`)
+                }
               })
             )
             .catch((err: unknown) => {

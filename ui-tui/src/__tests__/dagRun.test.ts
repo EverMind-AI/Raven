@@ -142,6 +142,21 @@ describe('foldDagEvent', () => {
 
     expect(JSON.stringify(before)).toBe(snapshot)
   })
+
+  it("attaches each node's prompt template, which no event carries", () => {
+    // The template comes off the tool call's own arguments -- the only source
+    // available before a node has run, which is when the graph is first drawn.
+    const run = foldDagEvent(null, started(CHAIN, 'dag-1', 'call-a'), { a: 'read the file', b: 'summarise it' })
+
+    expect(run?.nodes.map(n => n.promptTemplate)).toEqual(['read the file', 'summarise it'])
+  })
+
+  it('leaves a node the call args did not name without a template', () => {
+    const run = foldDagEvent(null, started(CHAIN, 'dag-1', 'call-a'), { a: 'read the file' })
+
+    expect(run?.nodes[0]!.promptTemplate).toBe('read the file')
+    expect(run?.nodes[1]!.promptTemplate).toBeUndefined()
+  })
 })
 
 describe('foldDagSnapshot', () => {
@@ -216,5 +231,20 @@ describe('foldDagSnapshot', () => {
     const run = foldDagSnapshot(live, snapshot([{ node: 'a', status: 'completed' }]))
 
     expect(run.toolCallId).toBe('call-a')
+  })
+
+  it("reads each node's prompt template off the run dir", () => {
+    const run = foldDagSnapshot(null, snapshot([{ node: 'a', status: 'completed', prompt_template: 'read the file' }]))
+
+    expect(run.nodes[0]!.promptTemplate).toBe('read the file')
+  })
+
+  it('keeps the template the call args supplied when the run dir has none', () => {
+    // An older run dir wrote no template. Letting the snapshot win outright
+    // there would blank a row that was reading fine a moment earlier.
+    const live = foldDagEvent(null, started(CHAIN, 'dag-1', 'call-a'), { a: 'read the file' })
+    const run = foldDagSnapshot(live, snapshot([{ node: 'a', status: 'completed' }]))
+
+    expect(run.nodes[0]!.promptTemplate).toBe('read the file')
   })
 })

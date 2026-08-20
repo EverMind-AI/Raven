@@ -4,11 +4,12 @@
 
 import { render } from 'ink-testing-library'
 import React from 'react'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 
 import { DagPanel } from '../components/dagPanel.js'
+import { $dagOpenNodes, dagNodeKey, toggleDagNode } from '../lib/dagOpenNodes.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
@@ -114,5 +115,131 @@ describe('DagPanel', () => {
     }
 
     expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('author')
+  })
+})
+
+describe('DagPanel node rows', () => {
+  beforeEach(() => {
+    $dagOpenNodes.set(new Set())
+  })
+
+  const WITH_PROMPTS: DagRunState = {
+    runId: 'dag-2',
+    done: false,
+    nodes: [
+      {
+        ...node('inspect_i18n_messages_20260820', 'running', [], 'Coder'),
+        instance: 'inspect-i18n-messages-20260820-1a4a53',
+        promptTemplate: 'Inspect the i18n messages for dag.* keys\n\nCheck both locales carefully.'
+      }
+    ]
+  }
+
+  it('reads a node as the agent and what it was asked', () => {
+    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('Coder: Inspect the i18n messages for dag.* keys')
+  })
+
+  it('names the agent and its instance handle in parentheses', () => {
+    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('(Coder@inspect-i18n-messages-20260820-1a4a53)')
+  })
+
+  it('keeps the node id off the collapsed row', () => {
+    // The id is machine-generated and the widest thing on the row; what the node
+    // was asked is what a reader is scanning for. The id is one click away.
+    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+
+    expect(f).not.toContain('inspect_i18n_messages_20260820')
+  })
+
+  it('falls back to the node id when no prompt reached the client', () => {
+    // An older run dir writes no template and a host that does not correlate
+    // progress with a tool row supplies no call args. A row named after nothing
+    // would be worse than a row named after its id.
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('fetch')
+    expect(f).not.toContain('echo: ')
+  })
+
+  it('clips the summary so a long prompt cannot overrun the row', () => {
+    const run: DagRunState = {
+      runId: 'dag-3',
+      done: false,
+      nodes: [{ ...node('a', 'running', [], 'Coder'), promptTemplate: 'x'.repeat(400) }]
+    }
+    const lines = frame(<DagPanel run={run} t={DEFAULT_THEME} width={60} />).split('\n')
+
+    lines.forEach(line => expect(line.length).toBeLessThanOrEqual(60))
+  })
+
+  it('shows the full prompt and the node id once the row is expanded', () => {
+    toggleDagNode(dagNodeKey('dag-2', 'inspect_i18n_messages_20260820'))
+
+    const f = frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('inspect_i18n_messages_20260820')
+    expect(f).toContain('Check both locales carefully.')
+  })
+
+  it('leaves the other nodes of the run collapsed', () => {
+    const run: DagRunState = {
+      runId: 'dag-4',
+      done: false,
+      nodes: [
+        { ...node('a', 'running', [], 'Coder'), promptTemplate: 'first\nAAA_BODY' },
+        { ...node('b', 'pending', [], 'Coder'), promptTemplate: 'second\nBBB_BODY' }
+      ]
+    }
+
+    toggleDagNode(dagNodeKey('dag-4', 'a'))
+
+    const f = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('AAA_BODY')
+    expect(f).not.toContain('BBB_BODY')
+  })
+
+  it('has nothing to expand for a node with no template', () => {
+    // Such a row is already showing its node id, so an expanded block would add
+    // nothing -- and the row is left unclickable rather than swallowing a click.
+    const closed = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+
+    toggleDagNode(dagNodeKey(DIAMOND.runId, 'fetch'))
+
+    expect(frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)).toBe(closed)
+  })
+
+  it('keys expansion by run as well as node, so two runs cannot share a toggle', () => {
+    // Node ids are only unique within a run; a bare node key would expand the
+    // same-named node of every graph in the transcript.
+    toggleDagNode(dagNodeKey('other-run', 'inspect_i18n_messages_20260820'))
+
+    expect(frame(<DagPanel run={WITH_PROMPTS} t={DEFAULT_THEME} />)).not.toContain('Check both locales carefully.')
+  })
+})
+
+describe('toggleDagNode', () => {
+  beforeEach(() => {
+    $dagOpenNodes.set(new Set())
+  })
+
+  it('opens a closed node and closes an open one', () => {
+    toggleDagNode('r/a')
+    expect($dagOpenNodes.get().has('r/a')).toBe(true)
+
+    toggleDagNode('r/a')
+    expect($dagOpenNodes.get().has('r/a')).toBe(false)
+  })
+
+  it('publishes a new set, so a subscriber re-renders', () => {
+    const before = $dagOpenNodes.get()
+
+    toggleDagNode('r/a')
+
+    expect($dagOpenNodes.get()).not.toBe(before)
   })
 })
