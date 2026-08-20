@@ -340,25 +340,6 @@ function agentFoldTime(box, ctx) {
   if (from && to && to > from) foldTime(fold, dur(to - from));
 }
 
-function drawWsWeb(box) {
-  if (!WS.urls.length) { box.appendChild(mk('div', 'wsnote', T('gui.ws.no_web'))); return; }
-  WS.urls.forEach((u) => {
-    const r = mk('button', 'urow');
-    r.appendChild(ico(ICO.web));
-    const body = mk('span', 'u', u.url.replace(/^https?:\/\//, ''));
-    body.appendChild(mk('small', null, `${T(u.kind === 'search' ? 'gui.ws.web_searched' : 'gui.ws.web_fetched')} · ${u.at}`));
-    r.appendChild(body);
-    r.appendChild(ico(ICO.ext, 'ext'));
-    r.title = u.url;
-    r.onclick = () => wsOpenUrl(u.url);
-    ctxMenu(r, () => [
-      { label: T('gui.ws.open_url'), fn: () => wsOpenUrl(u.url) },
-      { label: T('gui.ws.copy_url'), fn: () => copyToClip(u.url, T('gui.ws.copied_url')) },
-    ]);
-    box.appendChild(r);
-  });
-}
-
 function drawWsFile(box) {
   box.appendChild(mk('div', 'wsnote', T('gui.ws.dir_empty')));
 }

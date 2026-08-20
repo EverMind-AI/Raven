@@ -13,4 +13,8 @@ window.RavenShell = {
   useInTask: (key, name) => useInTask(key, name),
   reachText: (reach) => reachText(reach),
   closeDetail: () => closeDetail(),
+  copyToClip: (text, done) => copyToClip(text, done),
+  showWorkspace: (tab) => { if (!wsOpen) setWs(true); wsPick(tab); },
+  wsShows: (tab) => wsOpen && wsTab === tab,
+  lang: () => LANG,
 };

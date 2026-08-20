@@ -2,6 +2,8 @@ import { createRoot } from 'react-dom/client'
 
 import { ConnApp } from './features/connections/ConnPage'
 import * as connections from './features/connections/store'
+import * as browser from './features/browser/mount'
+import { installLinkTrap } from './features/browser/store'
 import { CronApp } from './features/cron/CronPage'
 import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
@@ -76,7 +78,16 @@ window.RavenIslands = {
     redraw: connections.redraw,
     closeDialog: connections.closeDialog,
   },
+  browser: {
+    draw: browser.draw,
+    detach: browser.detach,
+    hidden: browser.hidden,
+  },
 }
+
+/* The transcript's link handler lives with the island now; it arms itself
+   only when the installed DS.browser source is the embedded one. */
+installLinkTrap()
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)
