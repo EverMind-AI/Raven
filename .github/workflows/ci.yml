@@ -94,6 +94,17 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python }}
 
+      # tests/test_ui_css_token_gate.py shells out to the node gate, and it is
+      # the ONLY thing anywhere that checks what that gate rejects -- the page
+      # job below runs the gate against the current stylesheet, which proves it
+      # runs and that the file passes, and nothing about refusal. Installed
+      # here so this job really runs that suite: without it the runtime skip in
+      # that file quietly drops all 43 cases.
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
 
@@ -255,6 +266,7 @@ jobs:
           python3 ui/build.py
           node ui/scripts/check-page.mjs
           node ui/scripts/count-shared-globals.mjs
+          node ui/scripts/check-css.mjs
 
   bridge:
     name: bridge checks
