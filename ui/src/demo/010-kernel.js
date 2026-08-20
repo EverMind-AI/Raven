@@ -57,9 +57,6 @@ function applyI18n(root) {
   document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
 }
 
-const ICON_SEND = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M5 12h13M12 5l7 7-7 7"/></svg>';
-const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>';
-
 /* Verbs come from i18n; a tool without an entry keeps its raw name rather
    than getting a made-up translation. mcp_* names show as [server] tool. */
 const MCP_RE = /^mcp_([^_]+)_(.+)$/;
@@ -96,18 +93,10 @@ const dur = (ms) => {
   return ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : `${t}s`;
 };
 
-/* An icon-only button whose verb lives in the hover pill ([data-tip]). */
 /* One copy glyph for every footer that offers to copy something. */
 const COPY_ICO = '<rect x="9" y="9" width="11" height="11" rx="2.5"/>'
   + '<path d="M5.5 15H5a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 5 4h8A1.5 1.5 0 0 1 14.5 5.5V6"/>';
 
-function tipBtn(inner, label, cls) {
-  const b = mk('button', cls ? 'icb ' + cls : 'icb');
-  b.dataset.tip = label;
-  b.setAttribute('aria-label', label);
-  b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${inner}</svg>`;
-  return b;
-}
 /* No toasts for tiny actions: the button reports back through its own tip. */
 function tipFlash(b, word) {
   const keep = b.dataset.tip;

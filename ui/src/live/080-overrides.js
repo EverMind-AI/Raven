@@ -148,16 +148,18 @@ const mediaOf = (text) => {
 };
 
 send = function (text) {
-  const pending = atts.filter((a) => a.uploading).length;
+  /* The tray is the composer island's; what happens to a staged file when the
+     message leaves is not -- the note it becomes is what the reader's own
+     bubble renders from and what survives into session history. */
+  const pending = RavenIslands.composer.attsPending();
   if (pending) { noteRow(T('gui.att.pending'), T('gui.att.pending_body', { n: pending })); return; }
-  if (atts.length) {
-    const list = atts.map((a) => `- ${a.path}`).join('\n');
+  const staged = RavenIslands.composer.takeAtts();
+  if (staged.length) {
+    const list = staged.map((p) => `- ${p}`).join('\n');
     /* Handing over a file with nothing typed is a message in itself; the note
        leads on its own rather than trailing a blank line. */
     const note = `${T('gui.att.note')}\n${list}`;
     text = text.trim() ? `${text}\n\n${note}` : `\n\n${note}`;
-    atts.length = 0;
-    drawAtts();
   }
   if (busy) { q.push(text); drawQ(); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();

@@ -196,11 +196,7 @@ const fmtTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 // Per-turn cost lives under each answer and "a turn is running" is now the
 // ticking row above the composer, so the strip under the field stays empty.
-drawMeter = function () {
-  $('#meter').textContent = '';
-  drawTurnLive();
-  drawPill();
-};
+DS.composer.meter = () => '';
 
 function finishTurn(usage) {
   killStatus();
