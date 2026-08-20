@@ -77,29 +77,10 @@ $('#newBtn').onclick = () => {
 };
 $('#renameBtn').onclick = () => renameTitle();
 
-$('#sfind').oninput = () => {
-  query = $('#sfind').value.trim().toLowerCase();
-  $('#sclr').hidden = !query;
-  drawList();
-};
-$('#sclr').onclick = () => { $('#sfind').value = ''; query = ''; $('#sclr').hidden = true; drawList(); $('#sfind').focus(); };
-
-/* Search is a chore, so it hides until asked for; leaving it empty and
-   clicking away puts the row back. */
-function toggleFind(force) {
-  const box = $('#findBox');
-  const open = force != null ? force : box.hidden;
-  box.hidden = !open;
-  $('#findBtn').setAttribute('aria-expanded', String(open));
-  if (open) $('#sfind').focus();
-  else if (query) { $('#sfind').value = ''; query = ''; $('#sclr').hidden = true; drawList(); }
-}
-$('#findBtn').onclick = () => toggleFind();
-$('#sfind').onkeydown = (e) => {
-  if (composing(e)) return;
-  if (e.key === 'Escape') { e.stopPropagation(); toggleFind(false); }
-};
-$('#sfind').onblur = () => { if (!query) toggleFind(false); };
+/* ---- the search row ------------------------------------------------
+   Owned by ui/src/shell/find.ts, which holds the term and publishes
+   toggleFind(). The Cmd+F handler above stays here because showing the rail
+   first is a chrome decision, and it is the only caller from this side. */
 
 const setRail = (on) => {
   const app = document.querySelector('.app');

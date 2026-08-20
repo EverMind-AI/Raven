@@ -17,15 +17,16 @@ export interface SessRow {
   status?: string | null
 }
 
-/* What one draw reads: the list plus the three page facts a row's look
- * depends on (the current session, whether a turn is running, the search
- * term the chrome's find box holds).
+/* What one draw reads: the list plus the two page facts a row's look depends
+ * on (the current session, and whether a turn is running). The search term is
+ * NOT in here: it belongs to the row that produces it (shell/find.ts), and
+ * asking the demo and live sources to carry a value only the bundle can
+ * produce was coupling with nothing on the other end of it.
  */
 export interface RailSnapshot {
   rows: SessRow[]
   cur: string | null
   busy: boolean
-  query: string
 }
 
 export interface RailSource {

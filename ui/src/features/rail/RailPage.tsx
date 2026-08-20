@@ -7,6 +7,7 @@ import { plainTitle } from './title'
 import type { MenuItem } from '../../shell/bridge'
 import type { SessRow } from './types'
 import type { JSX, KeyboardEvent } from 'react'
+import { term as findTerm } from '../../shell/find'
 
 /* The row's context/⋯ menu. Every action leaves through the shell by name,
    so the live layer's rebinds (removeSession, renameTitle, openSession,
@@ -211,7 +212,9 @@ export function RailApp(): JSX.Element | null {
   }
   const snap = s.snap
   if (!snap) return null
-  const query = snap.query
+  /* Not a snapshot field: the search row owns the term (shell/find.ts), and
+     neither the demo nor the live source can produce it. */
+  const query = findTerm()
   const hit = (x: SessRow): boolean =>
     !query || x.title.toLowerCase().includes(query) || (x.last || '').toLowerCase().includes(query)
   const rows = snap.rows.filter(hit)
