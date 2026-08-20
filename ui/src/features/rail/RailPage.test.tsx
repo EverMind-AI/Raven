@@ -6,7 +6,7 @@ import { RailApp } from './RailPage'
 import * as store from './store'
 
 import type { MenuItem, Shell, ToastAction } from '../../shell/bridge'
-import type { RailSnapshot, SessRow } from './types'
+import type { RailSnapshot, RailSource, SessRow } from './types'
 
 /* The search term is the find row's, not the snapshot's, so the island reads it
    straight out of shell/find. Stubbed here rather than mounting that row's
@@ -50,17 +50,14 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
       calls.push(['setCur', id])
     },
     openSession: (s) => calls.push(['openSession', (s as SessRow).id]),
-    removeSession: (s) => {
-      calls.push(['removeSession', (s as SessRow).id])
-      store.remove(s as SessRow)
-    },
-    renameTitle: () => calls.push(['renameTitle', null]),
     dropDraft: (id) => calls.push(['dropDraft', id]),
-    pinPersist: (id, pinned) => calls.push(['pinPersist', { id, pinned }]),
     openCron: () => calls.push(['openCron', null]),
     navState: () => ({ pages: [], btnOf: () => undefined }),
   }
   window.RavenShell = fakeShell
+  /* Only the read, so every case below exercises the island's OWN behaviour --
+     which is what an offline page gets. The cases that need a page with
+     somewhere to write install the verbs themselves. */
   window.DS = { sessions: { snapshot: () => state } }
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
@@ -71,6 +68,9 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
   return { state, calls, menus, toasts }
 }
+
+/* The installed source, for the cases that add a write verb to it. */
+const src = (): RailSource => window.DS!.sessions as RailSource
 
 /* The nav the assembled page hands over (demo/155-bridge.js reads it off
    NAV_OF and MORE_ROWS): every module page, the rail button each one lights
@@ -234,6 +234,8 @@ describe('rail island', () => {
 
   it('pins through the row menu, optimistically and persisted', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const pins: Array<[string, boolean]> = []
+    src().pin = (id: string, pinned: boolean) => pins.push([id, pinned])
     const host = mount()
     act(() => {
       rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
@@ -241,12 +243,42 @@ describe('rail island', () => {
     const pin = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.pin') as MenuItem
     act(() => pin.fn())
     expect(h.state.rows[1]!.pin).toBe(true)
-    expect(h.calls).toContainEqual(['pinPersist', { id: 'b', pinned: true }])
+    expect(pins).toEqual([['b', true]])
     expect(h.toasts.map((x) => x.text)).toContain('gui.pinned_ok')
     expect(screen.getByText('gui.rail.pinned')).toBeTruthy()
   })
 
-  it('deletes through the shell verb and restores on undo', () => {
+  /* A page with nowhere to keep the flag still moves the row: the pin is
+     optimistic, and the attempt to record it must not undo it. */
+  it('pins with no source verb at all', () => {
+    const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const host = mount()
+    act(() => {
+      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
+    })
+    const pin = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.pin') as MenuItem
+    expect(() => act(() => pin.fn())).not.toThrow()
+    expect(h.state.rows[1]!.pin).toBe(true)
+  })
+
+  /* A source that can delete gets the whole action, and the island does none
+     of the local work -- no splice, no undo, no moving off the row. */
+  it('hands the delete to a source that can do it', () => {
+    const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+    const gone: string[] = []
+    src().remove = (s: SessRow) => gone.push(s.id)
+    const host = mount()
+    act(() => {
+      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
+    })
+    act(() => (h.menus[0]!.find((x) => x !== '-' && x.bad) as MenuItem).fn())
+    expect(gone).toEqual(['b'])
+    expect(screen.getByText('second task')).toBeTruthy()
+    expect(h.toasts.find((x) => x.action)).toBeUndefined()
+    expect(h.calls.find((c) => c[0] === 'dropDraft')).toBeUndefined()
+  })
+
+  it('deletes locally when no source can, and restores on undo', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
     const host = mount()
     act(() => {
@@ -254,7 +286,6 @@ describe('rail island', () => {
     })
     const del = h.menus[0]!.find((x) => x !== '-' && x.bad) as MenuItem
     act(() => del.fn())
-    expect(h.calls).toContainEqual(['removeSession', 'b'])
     expect(h.calls).toContainEqual(['dropDraft', 'b'])
     expect(h.calls).toContainEqual(['setCur', 'a'])
     expect(h.calls).toContainEqual(['openSession', 'a'])
@@ -263,6 +294,79 @@ describe('rail island', () => {
     expect(undo.text).toBe('gui.sess.deleted_x {"title":"second task"}')
     act(() => undo.action!.fn())
     expect(screen.getByText('second task')).toBeTruthy()
+  })
+
+  /* The rename had no coverage at all, and the seam is the reason to give it
+     some: the live layer used to persist it by hanging a blur listener off the
+     input this island creates, which an Enter -- replacing that input while it
+     still has focus -- could slip past entirely. Telling the source from
+     inside the commit is what closes that. */
+  describe('renaming the current session', () => {
+    function edit(h: Harness): HTMLInputElement {
+      const host = mount()
+      act(() => {
+        rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
+      })
+      const it_ = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
+      act(() => it_.fn())
+      return document.querySelector<HTMLInputElement>('input.titin')!
+    }
+
+    function key(inp: HTMLInputElement, k: string): void {
+      act(() => {
+        inp.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
+      })
+    }
+
+    const wire = (): Array<[string, string]> => {
+      const said: Array<[string, string]> = []
+      src().renamed = (id: string, title: string) => said.push([id, title])
+      return said
+    }
+
+    it('tells the source on Enter, which is the case a blur listener missed', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const said = wire()
+      const inp = edit(h)
+      inp.value = 'renamed by hand'
+      key(inp, 'Enter')
+      expect(said).toEqual([['b', 'renamed by hand']])
+      /* And the editor is gone, with the heading back. */
+      expect(document.querySelector('input.titin')).toBeNull()
+      expect(document.getElementById('title')!.textContent).toBe('renamed by hand')
+    })
+
+    it('tells the source on blur too', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const said = wire()
+      const inp = edit(h)
+      inp.value = 'renamed by leaving'
+      act(() => inp.dispatchEvent(new FocusEvent('blur')))
+      expect(said).toEqual([['b', 'renamed by leaving']])
+    })
+
+    it('says nothing on escape, or when the title did not change', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const said = wire()
+      const inp = edit(h)
+      inp.value = 'thrown away'
+      key(inp, 'Escape')
+      expect(said).toEqual([])
+      expect(document.getElementById('title')!.textContent).toBe('second task')
+
+      const again = edit(h)
+      again.value = 'second task'
+      key(again, 'Enter')
+      expect(said).toEqual([])
+    })
+
+    it('renames with no source verb at all', () => {
+      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      const inp = edit(h)
+      inp.value = 'offline rename'
+      expect(() => key(inp, 'Enter')).not.toThrow()
+      expect(h.state.rows[1]!.title).toBe('offline rename')
+    })
   })
 
   it('folds a group on its eyebrow and unfolds it again', () => {

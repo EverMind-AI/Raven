@@ -241,7 +241,10 @@ halt = function () {
   softStop();
 };
 
-removeSession = function (s) {
+/* Deleting for real. Installed on the session source rather than replacing the
+   rail's local name: the island asks the source whether there is anywhere to
+   delete from, and here there is. */
+DS.sessions.remove = function (s) {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
     try {
       await rpc.call('session.delete', { session_id: s.id });
@@ -261,18 +264,12 @@ removeSession = function (s) {
 
 $('#newBtn').onclick = () => { showPage(null); startDraft(); };
 
-/* Persist a manual rename made through the title editor. */
-{
-  const origRename = renameTitle;
-  renameTitle = function () {
-    const before = sess(cur) ? sess(cur).title : null;
-    origRename();
-    const inp = $('#title').querySelector('input');
-    if (!inp) return;
-    inp.addEventListener('blur', () => {
-      const s = sess(cur);
-      if (s && s.title !== before) rpc.call('session.title', { session_id: s.id, title: s.title }).catch(() => {});
-    });
-  };
-}
+/* Persist a manual rename made through the title editor. The editor is the
+   rail island's, and this used to wrap its entry point to hang a blur listener
+   off the input it had just created -- reaching into another layer's DOM, and
+   missing an Enter, which replaces that input while it still has focus. The
+   island tells us instead. */
+DS.sessions.renamed = (id, title) => {
+  rpc.call('session.title', { session_id: id, title }).catch(() => {});
+};
 

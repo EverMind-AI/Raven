@@ -2,7 +2,7 @@
 
 /* One delete per session, and a session that refuses stays in the list -- the
    rail must never claim something is gone while the file is still on disk. */
-deleteAllSessions = async () => {
+DS.sessions.deleteAll = async () => {
   const gone = [];
   for (const s of SESS.slice()) {
     try {

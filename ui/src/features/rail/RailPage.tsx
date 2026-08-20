@@ -9,9 +9,10 @@ import type { SessRow } from './types'
 import type { JSX, KeyboardEvent } from 'react'
 import { term as findTerm } from '../../shell/find'
 
-/* The row's context/⋯ menu. Every action leaves through the shell by name,
-   so the live layer's rebinds (removeSession, renameTitle, openSession,
-   pinPersist) win exactly as they did over the legacy renderer. */
+/* The row's context/⋯ menu. Moving to a session still leaves through the
+   shell by name (setCur, openSession, drawList are page state this island does
+   not own); the three actions ON a session go through the source instead, so
+   what happens is whatever the installed source can actually do. */
 function sessItems(s: SessRow): Array<MenuItem | '-'> {
   const sh = shell()
   return [
@@ -29,7 +30,7 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
           sh.drawList?.()
           sh.openSession?.(s)
         }
-        sh.renameTitle?.()
+        store.rename()
       },
     },
     {
@@ -38,14 +39,16 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
         s.pin = !s.pin
         sh.drawList?.()
         sh.toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
-        /* Optimistic: the row moved already; live mode persists the flag in
-           session metadata. The demo has no server, so the bridge's guard
-           makes this a no-op there. */
-        sh.pinPersist?.(s.id, !!s.pin)
+        /* Optimistic: the row moved already; a source that can keep the flag
+           persists it. The demo has no server and installs no pin, so this is
+           where it ends there. Read here rather than when the menu is built:
+           source() throws when nothing is installed, and building a menu must
+           not be the thing that raises. */
+        store.pin(s.id, !!s.pin)
       },
     },
     '-',
-    { label: t('gui.sess.delete'), bad: true, fn: () => sh.removeSession?.(s) },
+    { label: t('gui.sess.delete'), bad: true, fn: () => store.remove(s) },
   ]
 }
 
