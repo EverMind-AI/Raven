@@ -761,10 +761,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .wkin { display: grid; gap: 5px; min-width: 0; }
 /* The icon is what this line leads with, so the icon is what sits on the
    transcript's left edge. fit-content keeps a hover or focus state hugging its
-   own line instead of growing a full-width bar. */
+   own line instead of growing a full-width bar.
+   `min-width: 0` is what makes the max-width above reachable, and it is not
+   redundant with the same declaration on .wk / .wkin. A row is a GRID ITEM of
+   those, so with the default `min-width: auto` the auto track cannot size below
+   the row's own min-content -- a nowrap label makes that the whole string, the
+   track grows past the grid container, and `max-width: 100%` then resolves
+   against that overgrown grid area rather than the column. Measured on a
+   744px column: the track went to 923px and the row with it. The sibling
+   fit-content rows (.think, .tfh) sit in block parents, where 100% is already
+   the column, which is why only this one needed it. */
 .wrow {
   display: flex; align-items: center; gap: 7px; color: var(--muted);
-  width: fit-content; max-width: 100%;
+  width: fit-content; max-width: 100%; min-width: 0;
   font-size: 13.5px; line-height: 1.5; padding: 3px 8px; margin: 0 -8px;
   border-radius: 7px;
 }
