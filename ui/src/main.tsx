@@ -11,6 +11,8 @@ import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
+import { PlugApp } from './features/plugins/PluginsPage'
+import * as plugins from './features/plugins/store'
 import { RailApp } from './features/rail/RailPage'
 import * as rail from './features/rail/store'
 import { plainTitle } from './features/rail/title'
@@ -80,6 +82,10 @@ window.md = md
    with innerHTML, which must never tear down nodes React owns. */
 const skillsHost = document.createElement('div')
 
+/* The plugins island renders into a host node it owns the same way: the
+   tab chrome (demo/153-plugins.js) re-appends it on every plugin draw. */
+const plugHost = document.createElement('div')
+
 window.RavenIslands = {
   ...(window.RavenIslands || {}),
   cron: {
@@ -143,6 +149,19 @@ window.RavenIslands = {
   nav: {
     draw: navfly.draw,
     toggle: navfly.toggle,
+  },
+  plugins: {
+    host: plugHost,
+    view: plugins.view,
+    redraw: plugins.redraw,
+    reset: plugins.reset,
+    drawerClosed: plugins.drawerClosed,
+    setQuery: plugins.setQuery,
+    searchIfIdle: plugins.searchIfIdle,
+    toggleView: plugins.toggleView,
+    toggleMcp: plugins.toggleMcp,
+    installedCount: plugins.installedCount,
+    event: plugins.onEvent,
   },
 }
 
@@ -234,3 +253,4 @@ window.RavenIslands = {
 
 const listHost = document.getElementById('list')
 if (listHost) createRoot(listHost).render(<RailApp />)
+createRoot(plugHost).render(<PlugApp />)
