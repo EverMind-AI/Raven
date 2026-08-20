@@ -197,6 +197,77 @@ describe('transcript island, streaming', () => {
   })
 })
 
+/* The three delegation verbs are optional, and the offline demo installs none
+   of them -- it used to install null-guarded stand-ins in the page layer, which
+   put the "what happens with no host behind this" decision in the wrong place.
+   These pin the island's own answers, which are now the whole of that. */
+describe('transcript island, the delegation verbs', () => {
+  /* A dag call plus a second call, because the work summary row only exists for
+     a stretch of more than one -- without it the card never opens and every
+     assertion about its contents is inert. */
+  function dagCard(): HTMLElement {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', { nodes: [{ id: 'alpha' }, { id: 'beta' }] })
+        .done(true, 'DAG run-7: 2 nodes done', 30)
+      st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    const row = $$('.wkin .wrow')[0] as HTMLElement
+    act(() => { row.click() })
+    return row.nextElementSibling as HTMLElement
+  }
+
+  const chipStates = (card: HTMLElement): string[] =>
+    [...card.querySelectorAll<HTMLElement>('.nds .nd')].map((n) => n.dataset.st!)
+
+  it('sends a spawn row to the agents panel when nothing else will take it', () => {
+    const went: string[] = []
+    wire()
+    window.RavenShell!.showWorkspace = (tab) => went.push(tab)
+    store.openSpawn('researcher', 'read the docs')
+    expect(went).toEqual(['agents'])
+  })
+
+  /* A restored card recovers its node states through dagRows. The falsifiable
+     half is the contrast: with a reader the chips take the reported states,
+     without one they stay as seeded. */
+  it('hydrates a restored dag card from dagRows', async () => {
+    wire({ dagRows: () => Promise.resolve([{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }]) })
+    const card = dagCard()
+    await act(async () => { await Promise.resolve() })
+    expect(chipStates(card)).toEqual(['completed', 'failed'])
+  })
+
+  it('leaves the chips as seeded when no reader is installed', async () => {
+    wire()
+    const card = dagCard()
+    await act(async () => { await Promise.resolve() })
+    expect(chipStates(card)).toEqual(['pending', 'pending'])
+    /* Still marked live: the run id was recovered, only its states were not. */
+    expect(card.querySelector('.nds')!.getAttribute('data-live')).toBe('1')
+  })
+
+  it('opens a node through the source, with the run id it recovered', () => {
+    const opened: Array<[string, string]> = []
+    wire({ openDagNode: (runId, nodeId) => opened.push([runId, nodeId]) })
+    const card = dagCard()
+    act(() => { card.querySelector<HTMLElement>('.nds .nd')!.click() })
+    expect(opened).toEqual([['run-7', 'alpha']])
+  })
+
+  /* Called directly, not through the chip: React swallows an exception thrown
+     inside an event handler, so a click can never witness this. There is no
+     matching case for an ABSENT opener -- optional chaining makes that
+     unfalsifiable, and the case above already proves the call happens when a
+     verb is there, which is the only observable difference. */
+  it('survives a node opener that throws', () => {
+    wire({ openDagNode: () => { throw new Error('no such run') } })
+    expect(() => store.openDagNode('run-7', 'alpha')).not.toThrow()
+  })
+})
+
 describe('transcript island, tool episodes', () => {
   function twoCalls(secondFails = false): void {
     act(() => {
