@@ -11,6 +11,9 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``store``    — pin registry + rotation-transparent span reader. A pinned
   attempt is corpus, not diagnostics: any purge tooling must consult
   :func:`store.pins` before deleting spans or the artifacts they reference.
+- ``bundle``   — the bundle collector. Packs one attempt's spans, artifacts,
+  session record, and verdicts into a self-contained offline directory (and
+  pins the id, since bundling declares the trajectory corpus).
 
 The address unit is the **attempt** (``attempt.id`` on every span): one task
 try, possibly spanning several turns. Without an explicitly opened attempt
@@ -21,6 +24,7 @@ attempt with zero ceremony.
 
 from __future__ import annotations
 
+from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.store import is_pinned, iter_spans, pin, pins, span_log_paths, unpin
 from raven.trajectory.verdict import (
     VERDICT_STATUSES,
@@ -31,8 +35,10 @@ from raven.trajectory.verdict import (
 )
 
 __all__ = [
+    "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
     "Verdict",
+    "collect_bundle",
     "is_pinned",
     "iter_spans",
     "latest_verdict",

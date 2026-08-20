@@ -594,6 +594,13 @@ The retention promise for an Attempt or trace id, recorded in `pins.json` in the
 state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
 their spans or the artifacts those spans reference.
 
+**Trajectory Bundle** (`raven/trajectory/bundle.py`):
+The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
+for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
+bundle-relative paths) + `artifacts/` + the session's conversation record + its
+verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
+_Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
 ### Workspace & Onboarding
 
 **Workspace**:
