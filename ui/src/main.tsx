@@ -27,6 +27,7 @@ import { XaApp } from './features/xa/XaPage'
 import * as xa from './features/xa/store'
 import { SettingsApp } from './features/settings/SettingsPage'
 import * as settings from './features/settings/store'
+import * as find from './shell/find'
 import * as foot from './shell/foot'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
@@ -48,6 +49,7 @@ declare global {
     workGlyphSvg?: typeof composer.workGlyphSvg
     plainTitle?: typeof plainTitle
     toggleTheme?: typeof toggleTheme
+    toggleFind?: typeof find.toggle
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
   }
@@ -67,8 +69,11 @@ window.plainTitle = plainTitle
 /* The shell chrome's own names, called from the boot sequence (paneLoad) and
    from the live layer (drawFoot, on a language flip and once the running
    version has landed). toggleTheme has no caller in the page today; it stays
-   published because the name is the shell's one door between the two themes. */
+   published because the name is the shell's one door between the two themes.
+   toggleFind does have one: the chrome's Cmd+F handler opens the row after
+   showing the rail, and that handler stays legacy for now. */
 window.toggleTheme = toggleTheme
+window.toggleFind = find.toggle
 window.paneLoad = panes.load
 window.drawFoot = foot.draw
 
@@ -187,13 +192,14 @@ installLinkTrap()
    because the markup is already in the document; the handlers read the shell
    and DS.composer lazily, which is what makes that safe this early. */
 composer.install()
-/* The chrome that installs itself. All three wire listeners over the static
+/* The chrome that installs itself. All four wire listeners over the static
    markup, which is already parsed by the time this bundle runs: the page script
    below is the LAST thing in the body. Installing here rather than from the
    shell keeps each module's wiring next to the behaviour it belongs to. */
 scrollbars.install()
 panes.install()
 navfly.install()
+find.install()
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)

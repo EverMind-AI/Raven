@@ -12,4 +12,4 @@ function removeSession(s) { RavenIslands.rail.remove(s); }
 /* inline rename in the top bar; the list follows */
 function renameTitle() { RavenIslands.rail.rename(); }
 
-DS.sessions ??= { snapshot: () => ({ rows: SESS, cur, busy, query }) };
+DS.sessions ??= { snapshot: () => ({ rows: SESS, cur, busy }) };

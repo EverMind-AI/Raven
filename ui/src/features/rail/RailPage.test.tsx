@@ -1,12 +1,19 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RailApp } from './RailPage'
 import * as store from './store'
 
 import type { MenuItem, Shell, ToastAction } from '../../shell/bridge'
 import type { RailSnapshot, SessRow } from './types'
+
+/* The search term is the find row's, not the snapshot's, so the island reads it
+   straight out of shell/find. Stubbed here rather than mounting that row's
+   markup: this file asks what the LIST does with a term, and find.test.ts asks
+   how the row produces one. */
+const found = vi.hoisted(() => ({ term: '' }))
+vi.mock('../../shell/find', () => ({ term: () => found.term }))
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -27,7 +34,7 @@ interface Harness {
    and a snapshot source on window.DS.sessions. The fake drawList loops back
    into store.draw() exactly as the legacy shim does. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
-  const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, query: '', ...over }
+  const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
   const menus: Array<Array<MenuItem | '-'>> = []
   const toasts: Array<{ text: string; action?: ToastAction }> = []
@@ -96,6 +103,7 @@ const rowByTitle = (host: HTMLElement, title: string): HTMLElement =>
 
 afterEach(() => {
   cleanup()
+  found.term = ''
 })
 
 describe('rail island', () => {
@@ -184,14 +192,26 @@ describe('rail island', () => {
   })
 
   it('answers a search with hits and with the empty note', () => {
-    const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], query: 'gtm' })
+    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    found.term = 'gtm'
     const host = mount()
     expect(screen.getByText('gui.rail.search_hits {"n":1}')).toBeTruthy()
     expect(host.querySelectorAll('.sess').length).toBe(1)
-    h.state.query = 'zzz'
+    found.term = 'zzz'
     act(() => store.draw())
     expect(screen.getByText('gui.rail.no_hits {"q":"zzz"}')).toBeTruthy()
     expect(host.querySelector('.sess')).toBeNull()
+  })
+
+  /* The term is read at paint time, never captured: a redraw the find row did
+     not trigger (a new session, a finished turn) must still filter. */
+  it('reads the term on every draw, not once at mount', () => {
+    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const host = mount()
+    expect(host.querySelectorAll('.sess').length).toBe(2)
+    found.term = 'second'
+    act(() => store.draw())
+    expect(host.querySelectorAll('.sess').length).toBe(1)
   })
 
   it('opens another session through the shell and repaints the mark', () => {

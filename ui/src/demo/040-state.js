@@ -1,6 +1,6 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 let cur = 'a', busy = false, timers = [], q = [], use = null, kids = [], tl = [], raw = [];
-let rt = 'local', model = 'minimax-m3', query = '', lastRun = null, undoBin = null;
+let rt = 'local', model = 'minimax-m3', lastRun = null, undoBin = null;
 const CFG = {
   /* Light until the reader says otherwise: a fresh install has no stored
      preference, and following the system would mean the desktop shell's
