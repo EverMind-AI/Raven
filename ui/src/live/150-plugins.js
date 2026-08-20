@@ -77,7 +77,7 @@ rpc.notify['system.update_available'] = (p) => {
    per-server events, because a backend that cannot store is not part of any one
    conversation's turn. */
 rpc.notify['memory.health'] = (p) => {
-  memFault = p && p.ok === false ? (p.error || T('gui.mem.down')) : null;
+  setMemFault(p && p.ok === false ? (p.error || T('gui.mem.down')) : null);
   drawBanner();
 };
 

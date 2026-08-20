@@ -16,7 +16,6 @@ interface Calls {
   halted: number
   notes: Array<[string, string]>
   toasts: string[]
-  images: Array<[string, string]>
   attImgs: Array<[string, string]>
   draftDropped: number
   stick: boolean
@@ -62,7 +61,7 @@ const DOCK = `
 
 function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; calls: Calls } {
   const calls: Calls = {
-    sent: [], halted: 0, notes: [], toasts: [], images: [], attImgs: [],
+    sent: [], halted: 0, notes: [], toasts: [], attImgs: [],
     draftDropped: 0, stick: true,
   }
   const fakeShell: Shell = {
@@ -83,7 +82,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     draftTouch: () => {},
     draftDrop: () => { calls.draftDropped += 1 },
     draftPark: () => {},
-    openImage: (src, name) => { calls.images.push([src, name]) },
     attImageSet: (p, url) => { calls.attImgs.push([p, url]) },
     slashName: (id) => id.replace(/^gui\./, ''),
     slashHelp: (id) => `help for ${id}`,
@@ -385,8 +383,11 @@ describe('the attachment tray', () => {
     const img = box.querySelector('.att.img img') as HTMLImageElement
     expect(img).toBeTruthy()
     act(() => { fireEvent.click(img) })
-    expect(calls.images.length).toBe(1)
-    expect(calls.images[0]![1]).toBe('p.png')
+    /* The lightbox is a module in this bundle now, not a shell verb, so the
+       click opens the real overlay rather than recording a call. */
+    const shown = document.querySelector('.lightbox img') as HTMLImageElement
+    expect(shown).toBeTruthy()
+    expect(shown.alt).toBe('p.png')
   })
 
   it('removes a chip, hides the tray when the last one goes, and re-deadens send', async () => {

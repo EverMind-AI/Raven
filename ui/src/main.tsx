@@ -27,8 +27,10 @@ import { XaApp } from './features/xa/XaPage'
 import * as xa from './features/xa/store'
 import { SettingsApp } from './features/settings/SettingsPage'
 import * as settings from './features/settings/store'
+import * as banner from './shell/banner'
 import * as find from './shell/find'
 import * as foot from './shell/foot'
+import * as lightbox from './shell/lightbox'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
 import { md } from './shell/prose'
@@ -50,6 +52,10 @@ declare global {
     plainTitle?: typeof plainTitle
     toggleTheme?: typeof toggleTheme
     toggleFind?: typeof find.toggle
+    drawBanner?: typeof banner.draw
+    setMemFault?: typeof banner.setFault
+    openImage?: typeof lightbox.open
+    closeImage?: typeof lightbox.close
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
   }
@@ -76,6 +82,15 @@ window.toggleTheme = toggleTheme
 window.toggleFind = find.toggle
 window.paneLoad = panes.load
 window.drawFoot = foot.draw
+/* The banner and the lightbox keep their legacy names because their callers
+   are spread across layers this migration has not reached: drawBanner from the
+   turn machine and four page layers, setMemFault from the live memory.health
+   event, and openImage/closeImage from the chrome's Escape chain. Same shape as
+   drawFoot -- the name is the door, the module behind it moved. */
+window.drawBanner = banner.draw
+window.setMemFault = banner.setFault
+window.openImage = lightbox.open
+window.closeImage = lightbox.close
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine

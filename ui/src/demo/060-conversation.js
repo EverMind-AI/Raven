@@ -25,34 +25,12 @@ function openSession(s) {
   }
 }
 
-/* A standing memory fault, or null. Set from the `memory.health` event: three
-   consecutive failed writes mean the backend is not coming back on its own, and
-   the reader has been getting normal-looking replies the whole time. */
-let memFault = null;
-
-function drawBanner() {
-  const host = $('#bannerHost'); host.innerHTML = '';
-  if (memFault) {
-    /* No dismiss: the condition lasts until it is fixed, and a banner the
-       reader can wave away is one they will wave away and then forget. */
-    const b = mk('div', 'banner bad');
-    b.append(mk('b', null, T('gui.mem.down')), mk('span', null, memFault));
-    host.appendChild(b);
-    return;
-  }
-  const c = cap('websearch');
-  if (!c || c.state !== 'need') return;
-  const b = mk('div', 'banner');
-  b.append(mk('b', null, '网页搜索还没配置'));
-  b.appendChild(mk('span', null, '现在 Raven 只能抓你给出的网址，不能自己找资料。'));
-  const go = mk('button', null, '去配置');
-  go.onclick = () => { openPlugins(); openDetail('websearch'); };
-  const x = mk('button', 'x', '✕');
-  x.setAttribute('aria-label', '忽略');
-  x.onclick = () => b.remove();
-  b.append(go, x);
-  host.appendChild(b);
-}
+/* The fixture half of DS.banner. `cap` reads the capability list, which the
+   live layer fills in place, so one implementation answers for both modes --
+   the same shape DS.sessions uses over SESS. */
+DS.banner ??= {
+  websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
+};
 
 function pitch() {
   /* The empty state is the composer itself, moved to the visual centre --
@@ -86,25 +64,6 @@ function splitAtts(text) {
    bytes are already in the page; attachments travel to the agent as paths, so
    this is the only place they can be recovered from. */
 const ATT_IMG = new Map();
-
-/* Full-size view for any image in the page — a staged thumbnail or one already
-   sent. Clicking anywhere closes it; Escape is wired into the global chain. */
-function closeImage() {
-  document.querySelectorAll('.lightbox').forEach((n) => n.remove());
-}
-
-function openImage(src, name) {
-  closeImage();
-  const box = mk('button', 'lightbox');
-  box.setAttribute('aria-label', T('gui.img.close'));
-  const img = mk('img');
-  img.src = src;
-  img.alt = name || '';
-  box.appendChild(img);
-  box.onclick = closeImage;
-  document.body.appendChild(box);
-  box.focus();
-}
 
 function ask(text, when) {
   const ch = document.querySelector('.chat');
