@@ -122,57 +122,15 @@ DS.xa = {
 const DAGS = new Map();  // session key -> the graph that conversation is running
 const dagFor = (key) => DAGS.get(key || sheetSession()) || null;
 
-/* Wider and taller than the first pass: the box now carries a status mark as
-   well as the node's id, the agent under it and a clock, and 108x38 had them
-   touching each other. GAP_X leaves 46px of edge between columns, which is
-   enough for a curve to read as a curve rather than as a kink. */
-const DAG_GAP_X = 182;
-const DAG_GAP_Y = 60;
-const DAG_W = 136;
-const DAG_H = 44;
-const DAG_PAD = 10;
-
-/* Depth by longest path, which is what puts a node in the column after the last
-   thing it waits for. Memoised, and guarded against a cycle it should never see:
-   the server rejects a cyclic graph before running it, but a panel that hangs is
-   a worse way to find that out than a panel that draws something odd. */
-function dagDepths(nodes) {
-  const by = new Map(nodes.map((n) => [n.id, n]));
-  const depth = new Map();
-  const walking = new Set();
-  const of = (id) => {
-    if (depth.has(id)) return depth.get(id);
-    const n = by.get(id);
-    const deps = (n && n.depends_on) || [];
-    if (!n || !deps.length || walking.has(id)) { depth.set(id, 0); return 0; }
-    walking.add(id);
-    let d = 0;
-    deps.forEach((p) => { if (by.has(p)) d = Math.max(d, of(p) + 1); });
-    walking.delete(id);
-    depth.set(id, d);
-    return d;
-  };
-  nodes.forEach((n) => of(n.id));
-  return depth;
-}
-
-/* One sentence for a reader who does not want to read a graph: how much work,
-   how deep, who is doing it, and whether anything actually runs side by side. */
-function dagGist(d) {
-  const nodes = d.order.map((id) => d.nodes.get(id));
-  const depth = dagDepths(nodes);
-  const layers = new Map();
-  nodes.forEach((n) => {
-    const k = depth.get(n.id) || 0;
-    layers.set(k, (layers.get(k) || 0) + 1);
-  });
-  const widest = Math.max(...layers.values(), 1);
-  const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))];
-  const bits = [T('gui.dag.count').replace('{n}', String(nodes.length)).replace('{d}', String(layers.size))];
-  bits.push(widest > 1 ? T('gui.dag.parallel').replace('{n}', String(widest)) : T('gui.dag.serial'));
-  if (agents.length) bits.push(agents.join(' · '));
-  return bits.join(' · ');
-}
+/* Geometry, the two graph walkers and the two summary lines live in the bundle
+   (ui/src/features/dag/graph.ts), where they are reachable from a test. Aliased
+   rather than called through the long name at each site: this file reads the
+   same as it did, and the names are the ones the renderer below already used. */
+const { W: DAG_W, H: DAG_H, GAP_X: DAG_GAP_X, GAP_Y: DAG_GAP_Y, PAD: DAG_PAD } = RavenIslands.dag;
+const dagLayout = (nodes) => RavenIslands.dag.layout(nodes);
+const dagGist = (d) => RavenIslands.dag.gist(d);
+const dagSummary = (d) => RavenIslands.dag.summary(d);
+const dagTook = (n) => RavenIslands.dag.took(n, Date.now());
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -200,33 +158,6 @@ function dagMark(status, cx, cy) {
     return svgEl('path', { d: `M${cx - 4.5} ${cy}h9` }, 'mk skip');
   }
   return svgEl('circle', { cx, cy, r: 3.6 }, 'mk wait');
-}
-
-/* Column x, row y, and the sizes that follow from them. Each column is centred
-   on the graph's own midline rather than stacked from the top: a fan-out into
-   three and a fan-in back to one then reads as the diamond it is, instead of a
-   staircase whose single nodes sit against the ceiling with their edges cutting
-   diagonally down. */
-function dagLayout(nodes) {
-  const depth = dagDepths(nodes);
-  const cols = new Map();
-  nodes.forEach((n) => {
-    const c = depth.get(n.id) || 0;
-    if (!cols.has(c)) cols.set(c, []);
-    cols.get(c).push(n);
-  });
-  const tallest = Math.max(...[...cols.values()].map((c) => c.length), 1);
-  const height = DAG_PAD * 2 + tallest * DAG_H + (tallest - 1) * (DAG_GAP_Y - DAG_H);
-  const width = DAG_PAD * 2 + (cols.size - 1) * DAG_GAP_X + DAG_W;
-  const at = new Map();
-  cols.forEach((column, c) => {
-    const span = column.length * DAG_H + (column.length - 1) * (DAG_GAP_Y - DAG_H);
-    const top = (height - span) / 2;
-    column.forEach((n, i) => {
-      at.set(n.id, { x: DAG_PAD + c * DAG_GAP_X, y: top + i * DAG_GAP_Y });
-    });
-  });
-  return { at, width, height };
 }
 
 function dagSvg(d) {
@@ -298,12 +229,6 @@ function dagSvg(d) {
     svg.appendChild(g);
   });
   return svg;
-}
-
-function dagTook(n) {
-  if (!n.started_at) return '';
-  const end = n.ended_at || Date.now();
-  return dur(Math.max(end - n.started_at, 1000));
 }
 
 /* ── the clock on a running node ──────────────────────────────────────────
@@ -451,14 +376,6 @@ function dagSelect(d) {
     if (on) slot.g.dataset.sel = '1';
     else delete slot.g.dataset.sel;
   });
-}
-
-function dagSummary(d) {
-  const s = d.summary || {};
-  const bits = [T('gui.dag.done').replace('{n}', String(s.completed || 0)).replace('{t}', String(s.total || d.order.length))];
-  if (s.failed) bits.push(T('gui.dag.failed').replace('{n}', String(s.failed)));
-  if (s.skipped) bits.push(T('gui.dag.skipped').replace('{n}', String(s.skipped)));
-  return bits.join(' · ');
 }
 
 /* A node opens where a sub-agent's work already lives, rather than growing a

@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import * as composer from './features/composer/mount'
+import * as dag from './features/dag/graph'
 import { ConnApp } from './features/connections/ConnPage'
 import * as connections from './features/connections/store'
 import * as browser from './features/browser/mount'
@@ -166,6 +167,24 @@ window.RavenIslands = {
     markNew: rail.markNew,
     remove: rail.remove,
     rename: rail.rename,
+  },
+  /* Not a React island either, and not a renderer at all: the dag panel's
+     geometry and its two summary lines. The graph itself is still drawn by
+     live/240-external-agents.js, which reads these -- the layout walkers and
+     the sentences are where this domain's edge cases live (a cycle, a fan-out
+     that has to read as a diamond, a summary counting more nodes than the
+     graph holds), and inside the live layer none of it was reachable from a
+     test. */
+  dag: {
+    layout: dag.layout,
+    gist: dag.gist,
+    summary: dag.summary,
+    took: dag.took,
+    W: dag.W,
+    H: dag.H,
+    GAP_X: dag.GAP_X,
+    GAP_Y: dag.GAP_Y,
+    PAD: dag.PAD,
   },
   /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
      rides the same bag because the bag is simply what the legacy shell reaches
