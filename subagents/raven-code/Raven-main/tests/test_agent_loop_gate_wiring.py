@@ -9,6 +9,8 @@ a reliable way to exercise the firing path.
 
 from __future__ import annotations
 
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -109,13 +111,66 @@ async def test_finishing_without_edits_injects_the_nudge_once_and_counts_it(work
     )
 
     injected = [
-        m
-        for m in messages
+        m for m in messages
         if m.get("role") == "user" and "without any observed repository modification" in str(m.get("content"))
     ]
     assert len(injected) == 1
     assert outcome.gate_triggers == {"empty_diff": 1}
     assert provider.calls == 2  # the answer, then one more after the nudge
+
+
+@pytest.mark.asyncio
+async def test_second_turn_does_not_claim_the_first_turn_s_edits_never_happened(workspace, monkeypatch):
+    """Regression: a harness turn that only confirms completion must not be
+    told the repository is unmodified when turn one already changed it.
+
+    Reproduces the WorkBuddy shape exactly -- the eval re-invokes the agent for
+    a second turn whenever the first reply misses the completion token, so the
+    edits sit in turn one and the turn-local edit flag starts over at False.
+    """
+    _only_empty_diff_gate(monkeypatch)
+    _init_repo(workspace)
+    (workspace / "app.py").write_text("x = 2  # the previous turn's fix\n", encoding="utf-8")
+    provider = _TextOnlyProvider()
+    agent = _agent(workspace, provider)
+
+    _f, _t, messages, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "Continue from the current state."}],
+    )
+
+    assert not any("without any observed repository modification" in str(m.get("content")) for m in messages)
+    assert outcome.gate_triggers == {}
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_still_fires_when_the_repository_is_verifiably_untouched(workspace, monkeypatch):
+    _only_empty_diff_gate(monkeypatch)
+    _init_repo(workspace)
+    provider = _TextOnlyProvider()
+    agent = _agent(workspace, provider)
+
+    _f, _t, messages, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "Make sure the frobnicator handles empty input."}],
+    )
+
+    injected = [
+        m for m in messages
+        if m.get("role") == "user" and "without any observed repository modification" in str(m.get("content"))
+    ]
+    assert len(injected) == 1
+    assert outcome.gate_triggers == {"empty_diff": 1}
+
+
+def _init_repo(path: Path) -> None:
+    (path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+    for args in (
+        ("init", "-q"),
+        ("add", "-A"),
+        ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base"),
+    ):
+        subprocess.run(("git", *args), cwd=path, check=True, env=env, capture_output=True)
 
 
 @pytest.mark.asyncio
@@ -175,7 +230,9 @@ async def test_stdout_reports_counters_when_a_gate_fires(workspace, monkeypatch,
     provider = _TextOnlyProvider()
     agent = _agent(workspace, provider)
 
-    out = await agent._process_message(_user_turn("Make sure the frobnicator handles empty input."), session_key="s1")
+    out = await agent._process_message(
+        _user_turn("Make sure the frobnicator handles empty input."), session_key="s1"
+    )
 
     assert out is not None
     assert "gate_triggers: empty_diff=1" in capsys.readouterr().out

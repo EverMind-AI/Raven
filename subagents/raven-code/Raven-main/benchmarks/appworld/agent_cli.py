@@ -58,6 +58,7 @@ Your task:
 def _build_agent(args):
     from benchmarks.appworld.tool import AppWorldExecuteTool
     from raven.agent.loop import AgentLoop
+    from raven.agent.profile import PROFILES
     from raven.cli._helpers import load_runtime_config, make_provider
     from raven.config.raven import load_raven_config
     from raven.session.manager import SessionManager
@@ -91,6 +92,10 @@ def _build_agent(args):
         context_config=ec_config.context,
         hooks=None,
         disabled_tools=disabled,
+        # Answer-style benchmark turns: no shadow-git checkpoint in task
+        # workspaces (this executor used to inherit interactive=True and paid
+        # for one), and none of the code-completion gates.
+        profile=PROFILES["eval_answer"],
     )
     exec_tool = AppWorldExecuteTool(args.env_url, args.task_id)
     agent.tools.register(exec_tool)

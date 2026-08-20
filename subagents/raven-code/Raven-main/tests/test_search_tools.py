@@ -1,7 +1,9 @@
-"""Unit tests for the grep and find search tools.
+"""Unit tests for the grep and glob search tools.
 
-Tests exercise both the ripgrep-backed path (when rg is on PATH) and the
-pure-Python fallback (forced by patching shutil.which to return None).
+Tests exercise both the ripgrep-backed path (bundled via ripgrep-bin, resolved
+by ``resolve_rg``) and the pure-Python fallback (forced by patching
+``resolve_rg`` to return None — patching shutil.which is no longer enough now
+that a bundled binary outranks PATH).
 """
 
 from __future__ import annotations
@@ -11,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+import raven.agent.tools.file_search as fs
 from raven.agent.tools.file_search import FindTool, GrepTool, _expand_braces
+from raven.agent.tools.registry import ToolRegistry
 
 
 @pytest.fixture
@@ -75,7 +79,7 @@ async def test_grep_invalid_regex(tree: Path):
 
 
 async def test_grep_python_fallback(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern=r"def hello")
     assert "app.py" in out
@@ -84,14 +88,14 @@ async def test_grep_python_fallback(tree: Path, monkeypatch):
 
 async def test_grep_fallback_skips_binary(tree: Path, monkeypatch):
     (tree / "blob.bin").write_bytes(b"def hello\x00\x01binary")
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="hello")
     assert "blob.bin" not in out
 
 
 async def test_grep_context(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)  # deterministic format
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)  # deterministic format
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="return 'world'", context=1)
     assert "def hello" in out  # context line above the match
@@ -105,7 +109,7 @@ async def test_grep_outside_allowed_dir(tmp_path: Path):
     assert "Error" in out
 
 
-# ── find ────────────────────────────────────────────────────────────────
+# ── glob ────────────────────────────────────────────────────────────────
 
 
 async def test_find_basename_recursive(tree: Path):
@@ -224,14 +228,14 @@ async def test_find_brace_cap_error(tree: Path):
 
 
 async def test_grep_glob_brace_fallback(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="hello", glob="*.{py,md}")
     assert "app.py" in out
     assert "README.md" in out
 
 
-@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed; CI runs a with-rg leg")
+@pytest.mark.skipif(fs.resolve_rg() is None, reason="ripgrep not resolvable; CI runs a with-rg leg")
 async def test_grep_glob_brace_rg(tree: Path):
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="hello", glob="*.{py,md}")
@@ -240,7 +244,7 @@ async def test_grep_glob_brace_rg(tree: Path):
 
 
 async def test_grep_fallback_path_glob_is_explicit_error(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="hello", glob="src/*.py")
     assert out.startswith("Error")
@@ -250,9 +254,7 @@ async def test_grep_fallback_path_glob_is_explicit_error(tree: Path, monkeypatch
 async def test_grep_fallback_deadline_cut_is_declared(tree: Path, monkeypatch):
     """A walk stopped at the deadline must never report a confident empty
     result — absence over a partial scan proves nothing."""
-    import raven.agent.tools.file_search as fs
-
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     monkeypatch.setattr(fs, "_WALK_DEADLINE_S", -1.0)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="def hello")
@@ -261,7 +263,159 @@ async def test_grep_fallback_deadline_cut_is_declared(tree: Path, monkeypatch):
 
 
 async def test_grep_fallback_full_walk_keeps_plain_empty_message(tree: Path, monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
     tool = GrepTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="zzz_no_such_symbol_zzz")
     assert out == "No matches found."
+
+
+# ── rg resolution ───────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_rg_cache():
+    """resolve_rg caches for the process lifetime; tests must not leak a
+    resolution made under one monkeypatch into the next test. getattr because
+    tests that replace resolve_rg with a plain lambda are still patched when
+    this teardown runs (fixture teardown precedes monkeypatch undo)."""
+
+    def clear() -> None:
+        cache_clear = getattr(fs.resolve_rg, "cache_clear", None)
+        if cache_clear is not None:
+            cache_clear()
+
+    clear()
+    yield
+    clear()
+
+
+def test_resolve_rg_env_override_wins(tmp_path: Path, monkeypatch):
+    fake = tmp_path / "my-rg"
+    fake.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("RAVEN_RG", str(fake))
+    assert fs.resolve_rg() == str(fake)
+
+
+def test_resolve_rg_bad_override_falls_through(tmp_path: Path, monkeypatch):
+    """A dangling RAVEN_RG must not brick grep — it warns and keeps resolving."""
+    monkeypatch.setenv("RAVEN_RG", str(tmp_path / "missing-rg"))
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "rg").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(fs.sysconfig, "get_path", lambda kind: str(scripts))
+    assert fs.resolve_rg() == str(scripts / "rg")
+
+
+def test_resolve_rg_bundled_outranks_path(tmp_path: Path, monkeypatch):
+    """The binary raven ships must win over whatever the host has on PATH —
+    host rg versions are exactly the variance bundling exists to remove."""
+    monkeypatch.delenv("RAVEN_RG", raising=False)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "rg").write_text("#!/bin/sh\n")
+    monkeypatch.setattr(fs.sysconfig, "get_path", lambda kind: str(scripts))
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/rg")
+    assert fs.resolve_rg() == str(scripts / "rg")
+
+
+def test_resolve_rg_path_fallback(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("RAVEN_RG", raising=False)
+    monkeypatch.setattr(fs.sysconfig, "get_path", lambda kind: str(tmp_path / "empty"))
+    monkeypatch.setattr(shutil, "which", lambda _: "/host/rg")
+    assert fs.resolve_rg() == "/host/rg"
+
+
+# ── spill on truncation ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def spill_home(tmp_path: Path, monkeypatch) -> Path:
+    """Redirect ~/.raven/tool-output into the test tree."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    return home / ".raven" / "tool-output"
+
+
+async def test_grep_cap_overflow_spills_complete_result(tree: Path, spill_home: Path, monkeypatch):
+    """Truncation must never lose evidence: the cut lines are recoverable from
+    the spill file, so the model narrows with knowledge instead of blind."""
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
+    (tree / "many.py").write_text("".join(f"hit_{i} = {i}\n" for i in range(50)))
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern=r"hit_\d+", limit=10)
+    assert "showing first 10 of 50" in out
+    assert "saved to" in out
+    spilled = next(spill_home.glob("grep-*.log"))
+    content = spilled.read_text()
+    assert "hit_49" in content  # the tail the cap dropped is all there
+    assert content.count("hit_") == 50
+
+
+async def test_grep_under_cap_does_not_spill(tree: Path, spill_home: Path, monkeypatch):
+    monkeypatch.setattr(fs, "resolve_rg", lambda: None)
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern=r"def hello")
+    assert "saved to" not in out
+    assert not spill_home.exists() or not list(spill_home.glob("grep-*.log"))
+
+
+async def test_find_cap_overflow_spills_complete_list(tree: Path, spill_home: Path):
+    for i in range(20):
+        (tree / f"gen_{i:02d}.py").write_text("x = 1\n")
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="gen_*.py", limit=5)
+    assert "showing first 5 of 20" in out
+    assert "complete list saved to" in out
+    spilled = next(spill_home.glob("find-*.log"))
+    assert spilled.read_text().count("gen_") == 20
+
+
+# ── glob rename + grep context cap ──────────────────────────────────────
+
+
+def test_grep_context_schema_has_no_maximum():
+    schema = GrepTool().parameters["properties"]["context"]
+    assert "maximum" not in schema
+    assert schema["minimum"] == 0
+
+
+async def test_grep_context_30_passes_schema_and_executes(tree: Path):
+    registry = ToolRegistry()
+    registry.register(GrepTool(workspace=tree, allowed_dir=tree))
+    result = str(await registry.execute("grep", {"pattern": "helper", "path": "src", "context": 30}))
+    assert "Invalid parameters" not in result
+    assert "util.py" in result
+
+
+def test_find_tool_is_named_glob():
+    tool = FindTool()
+    assert tool.name == "glob"
+    assert "find" in tool.aliases
+
+
+async def test_registry_resolves_find_alias_to_glob(tree: Path):
+    registry = ToolRegistry()
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    registry.register(tool)
+    assert registry.get("find") is registry.get("glob") is tool
+    assert registry.has("find")
+    assert "find" in registry
+    assert registry.canonical_name("find") == "glob"
+    result = str(await registry.execute("find", {"pattern": "*.py"}))
+    assert "app.py" in result
+
+
+def test_wire_definitions_expose_only_glob(tree: Path):
+    registry = ToolRegistry()
+    registry.register(FindTool(workspace=tree, allowed_dir=tree))
+    names = [d["function"]["name"] for d in registry.get_definitions()]
+    assert names == ["glob"]
+
+
+def test_unregister_by_legacy_name_removes_glob(tree: Path):
+    registry = ToolRegistry()
+    registry.register(FindTool(workspace=tree, allowed_dir=tree))
+    registry.unregister("find")
+    assert not registry.has("glob")
+    assert not registry.has("find")

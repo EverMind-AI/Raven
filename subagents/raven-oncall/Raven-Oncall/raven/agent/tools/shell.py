@@ -54,7 +54,13 @@ class ExecTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Execute a shell command and return its output. Use with caution."
+        return (
+            "Execute a shell command and return its output. Use with caution. "
+            "Runs on THIS computer unless you name a machine: pass 'machine' with an id "
+            "from ops_connections, or the name of a campaign, to run it there instead. "
+            "A machine of the owner's is where their code and their cases live, and work "
+            "that outlives the call belongs to ops_submit, so this refuses to detach there."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -78,6 +84,12 @@ class ExecTool(Tool):
                     "minimum": 1,
                     "maximum": 600,
                 },
+                "machine": {
+                    "type": "string",
+                    "description": "Where to run it: a machine id from ops_connections, or a "
+                                   "campaign name (its declaration says which machine). Leave "
+                                   "out to run on THIS computer.",
+                },
             },
             "required": ["command"],
         }
@@ -87,8 +99,25 @@ class ExecTool(Tool):
         command: str,
         working_dir: str | None = None,
         timeout: int | None = None,
+        machine: str = "",
         **kwargs: Any,
     ) -> str:
+        # Someone else's machine is a different place with different rules: the
+        # guards below are about this computer (a deny-list for accidents, an
+        # operator's workspace boundary), while there the rule is that work
+        # outliving the call belongs on the ledger. Branching before them keeps
+        # each set where it means something.
+        #
+        # Imported here and nowhere else in this module: a caller who names no
+        # machine must not be able to be broken by the ops layer -- a malformed
+        # connection registry has to leave the plain shell working.
+        if machine:
+            from raven.agent.tools.ops_exec import resolve_machine, run_on_machine
+
+            conn, camp = resolve_machine(machine)
+            return await run_on_machine(command, campaign=camp, connection=conn,
+                                        cwd=working_dir)
+
         cwd = working_dir or self.working_dir or os.getcwd()
 
         if not self._executor.is_sandboxed:
@@ -105,6 +134,22 @@ class ExecTool(Tool):
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
+
+        # A command that only waits gets the same ceiling here as it does on a
+        # machine. Not a new rule: looking at a machine has always been capped at a
+        # minute, with the reason given -- and on 2026-08-19 a loop took that
+        # message four times and then made the identical wait without a machine,
+        # where nothing applied. Compiling and installing still get their ten
+        # minutes; those do something.
+        waited = 0
+        try:
+            from raven.agent.tools.ops_exec import _TIMEOUT_S, waiting_only
+
+            waited = waiting_only(command)
+            if waited > _TIMEOUT_S:
+                effective_timeout = min(effective_timeout, _TIMEOUT_S)
+        except Exception:  # noqa: BLE001 -- a shell must not depend on this
+            waited = 0
 
         env: dict[str, str] | None = None
         if self.path_append:
@@ -123,7 +168,38 @@ class ExecTool(Tool):
             result = await self._executor.exec(command, cwd=cwd, timeout=effective_timeout, env=env)
         except Exception as e:
             return f"Error executing command: {str(e)}"
-        return result.as_text(self._MAX_OUTPUT)
+        text = result.as_text(self._MAX_OUTPUT) + self._whose(command, cwd)
+        if waited > effective_timeout:
+            from raven.agent.tools.ops_exec import waiting_note
+
+            text += waiting_note(waited, int(effective_timeout))
+        return text
+
+    @staticmethod
+    def _whose(command: str, cwd: str) -> str:
+        """One line naming the machine this command touched, or "" if none.
+
+        A command that reaches a path on a different box fails, and that failure
+        is what sends the loop to the machine list. Here it succeeds, and success
+        says nothing about the directory having an owner: measured 2026-08-19,
+        three runs of the same task went straight to a local shell, twice writing
+        into the owner's case. So the fact goes back the same way the failure
+        would -- in the result.
+
+        Only the first claimed path is named. A command can touch several, and a
+        paragraph of provenance would push out the output the caller asked for.
+        """
+        import re
+
+        try:
+            from raven.ops.connections import provenance_line
+        except Exception:  # noqa: BLE001 -- a shell must not depend on this
+            return ""
+        for candidate in [*re.findall(r"(/[^\s'\"|;&>]+)", command), cwd]:
+            line = provenance_line(candidate)
+            if line:
+                return line
+        return ""
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""

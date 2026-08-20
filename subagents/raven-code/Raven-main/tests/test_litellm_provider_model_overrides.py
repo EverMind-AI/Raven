@@ -177,3 +177,60 @@ async def test_reasoning_not_mirrored_for_non_gateway(monkeypatch: pytest.Monkey
     await p.chat(messages=[{"role": "user", "content": "hi"}], reasoning_effort="high")
 
     assert "extra_body" not in seen[0]
+
+
+# ---- extra_body: the provider's built-in extras merge, never overwrite ----------
+
+
+def _provider_with_wire_extras(model: str, overrides: dict[str, dict[str, Any]] | None = None) -> LiteLLMProvider:
+    provider = LiteLLMProvider(
+        api_key="test-key",
+        api_base="http://local/v1",
+        default_model=model,
+        provider_name="custom",
+        model_overrides=overrides,
+        extra_body={"provider": {"order": ["Anthropic"]}},
+    )
+    provider.generation = GenerationSettings(temperature=0.1)
+    return provider
+
+
+@pytest.mark.asyncio
+async def test_wire_extra_body_does_not_drop_a_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model_overrides extra_body is set first; assigning over it lost it.
+
+    Qwen3's thinking switch is configured exactly this way, so an overwrite here
+    silently ran the model with thinking in the wrong state.
+    """
+    seen = _capture(monkeypatch)
+    p = _provider_with_wire_extras(
+        "qwen3-max",
+        {"qwen3": {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}},
+    )
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
+
+    body = seen[0]["extra_body"]
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body["provider"] == {"order": ["Anthropic"]}
+
+
+@pytest.mark.asyncio
+async def test_user_value_wins_on_a_key_collision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """model_overrides is documented as the channel that reverses a default."""
+    seen = _capture(monkeypatch)
+    p = _provider_with_wire_extras("qwen3-max", {"qwen3": {"extra_body": {"provider": {"order": ["Together"]}}}})
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
+
+    assert seen[0]["extra_body"]["provider"] == {"order": ["Together"]}
+
+
+@pytest.mark.asyncio
+async def test_wire_extra_body_still_reaches_the_wire_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture(monkeypatch)
+    p = _provider_with_wire_extras("some-model")
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
+
+    assert seen[0]["extra_body"] == {"provider": {"order": ["Anthropic"]}}

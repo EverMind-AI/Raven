@@ -399,6 +399,7 @@ def _build_tui_agent_loop():
             config.workspace_path,
             ec_config,
             registry=plugin_registry,
+            provider=provider,
         )
 
         agent_loop = AgentLoop(
@@ -654,14 +655,13 @@ async def _run_rpc_server_until_done(
         if agent_loop is not None and agent_loop.backend is not None:
 
             async def _start_backend() -> None:
-                try:
-                    await agent_loop.backend.start()  # type: ignore[union-attr]
-                except Exception:
-                    from loguru import logger as _logger
+                # Backgrounded so a slow server start does not hold up first
+                # render. An exception raised here would die inside the task
+                # and reach nobody, so the failure is reported at ERROR by the
+                # helper instead of being allowed to escape.
+                from raven.cli._plugin_stack import start_memory_backend
 
-                    _logger.exception(
-                        "tui: memory backend start failed; continuing with degraded memory path",
-                    )
+                await start_memory_backend(agent_loop.backend, fail_fast=False)
                 _strip_tty_stream_handlers()
 
             asyncio.create_task(_start_backend())

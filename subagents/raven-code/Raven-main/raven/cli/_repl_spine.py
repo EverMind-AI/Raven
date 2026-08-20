@@ -135,6 +135,7 @@ async def run_repl_loop(
     handle_slash: Callable[[str], bool],
     thinking: Callable[[], Any],
     on_exit: Callable[[], None],
+    on_turn_failed: Callable[[], None] | None = None,
 ) -> None:
     """Read a line, submit it as a turn, wait for the turn to finish AND its
     output to render, then prompt again — so a reply always lands before the next
@@ -163,8 +164,13 @@ async def run_repl_loop(
                 )
             )
             with thinking():
-                await handle.result()
+                outcome = await handle.result()
             await wait_idle(channel)
+            if outcome is None and on_turn_failed is not None:
+                # result() resolves None when the turn raised; the hub sink
+                # drops the TurnFailed event, so this is the only place the
+                # REPL can tell the user the turn died rather than reply.
+                on_turn_failed()
         except (EOFError, KeyboardInterrupt):
             on_exit()
             return

@@ -21,22 +21,28 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        self._aliases: dict[str, str] = {}
 
     def register(self, tool: Tool) -> None:
-        """Register a tool."""
+        """Register a tool (and any legacy-name aliases it declares)."""
         self._tools[tool.name] = tool
+        # getattr: plugin/stub tools may duck-type Tool without the attribute.
+        for alias in getattr(tool, "aliases", ()):
+            self._aliases[alias] = tool.name
 
     def unregister(self, name: str) -> None:
-        """Unregister a tool by name."""
-        self._tools.pop(name, None)
+        """Unregister a tool by name (aliases resolve to the tool they name)."""
+        canonical = self._aliases.get(name, name)
+        self._tools.pop(canonical, None)
+        self._aliases = {a: n for a, n in self._aliases.items() if n != canonical}
 
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
-        return self._tools.get(name)
+        return self._tools.get(self._aliases.get(name, name))
 
     def has(self, name: str) -> bool:
         """Check if a tool is registered."""
-        return name in self._tools
+        return self._aliases.get(name, name) in self._tools
 
     def get_definitions(self) -> list[dict[str, Any]]:
         """Get all tool definitions in OpenAI format."""
@@ -52,6 +58,8 @@ class ToolRegistry:
         """
         if name in self._tools:
             return name
+        if name in self._aliases:
+            return self._aliases[name]
         return self._repair_tool_name(name) or name
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
@@ -64,6 +72,9 @@ class ToolRegistry:
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
         note = ""
+        # Declared aliases are intentional compatibility names — resolve them
+        # silently, unlike the mangled-name repair below which announces itself.
+        name = self._aliases.get(name, name)
         tool = self._tools.get(name)
         if not tool:
             repaired = self._repair_tool_name(name)
@@ -75,6 +86,11 @@ class ToolRegistry:
             tool = self._tools[repaired]
             note = f"[note: tool name {name!r} resolved to {repaired!r}]\n"
             name = repaired
+
+        resolve_aliases = getattr(tool, "resolve_param_aliases", None)
+        if resolve_aliases is not None:
+            params, alias_note = resolve_aliases(params)
+            note += alias_note
 
         try:
             # Attempt to cast parameters to match schema types
@@ -119,9 +135,10 @@ class ToolRegistry:
         not intend.
         """
         wanted = self._normalize_tool_name(name)
-        matches = [n for n in self._tools if self._normalize_tool_name(n) == wanted]
+        candidates = [*self._tools, *self._aliases]
+        matches = {self._aliases.get(n, n) for n in candidates if self._normalize_tool_name(n) == wanted}
         if len(matches) == 1:
-            return matches[0]
+            return matches.pop()
         return None
 
     def _suggest_tool_for_params(self, name: str, params: dict[str, Any]) -> str:
@@ -155,4 +172,4 @@ class ToolRegistry:
         return len(self._tools)
 
     def __contains__(self, name: str) -> bool:
-        return name in self._tools
+        return self.has(name)

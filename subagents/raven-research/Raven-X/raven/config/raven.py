@@ -1900,6 +1900,19 @@ class DRFlowFinalShapeConfig(_Base):
     report_structure: bool = True
     """dr@2.8: ask for a research report. Product surface only. Distribution change.
 
+    dr@3.5: the clause becomes a fixed three-section template - ``## Answer``,
+    ``## Findings``, ``## Limitations``, exact headings, all three present every
+    time - instead of an ordered-prose request with optional per-question
+    sections. Same knob, same gating; only the appended text changed.
+
+    dr@3.6: the template also overrides formatting instructions in the question
+    itself - a question asking for one word, JSON, or a table is still answered
+    as the three-section report, the requested shape satisfied inside it. The
+    override passage has its own switch, ``report_format_override`` below; with
+    this knob on and that one off, the clause is the dr@3.5 template byte for
+    byte. Benchmark profiles pin this off, so a bench answer keeps taking its
+    format from the task text.
+
     The contract is five rules of research discipline and says nothing about the
     shape of the reply. That is deliberate on the measurement side - a bench answer
     gets its format from the task text ("organize the results in one Markdown table
@@ -1921,6 +1934,63 @@ class DRFlowFinalShapeConfig(_Base):
     way. ``final_shape``'s transform is pure, additive and non-shortening by
     construction; a restructure cannot be, so it is asked for during generation
     instead."""
+    report_format_override: bool = True
+    """dr@3.6: the report template takes precedence over formatting instructions
+    in the question itself. Product surface only. Distribution change when
+    ``report_structure`` is on; inert when it is off, because the passage lives
+    inside the report clause.
+
+    Its own switch because the override has a price worth measuring - it trades
+    per-question format compliance for a stable reply shape - and an unablatable
+    claim in a prompt cannot be priced. Off restores the dr@3.5 clause byte for
+    byte (the template that fixed the layout only where the question was silent),
+    which both keeps that superseded label's prompt reproducible from this build
+    and lets a same-batch A/B run template-vs-template+override;
+    ``test_the_dr_prompt_bytes_match_the_batch_that_measured_them`` pins both
+    states."""
+    report_reminder: bool = True
+    """dr@3.7: repeat the template as a short block on the current user message.
+
+    Product surface only, and inert unless ``report_structure`` is on - it
+    restates that clause, so without it there is nothing to restate. Distribution
+    change: the model reads it.
+
+    The clause it repeats sits in the system prompt, which is the weakest place
+    for an instruction a conversation can argue with. Measured on this repo's demo
+    sessions (30 turns carrying the template): 8/14 research turns well-formed
+    against 2/9 of the turns the conversation gate ruled non-research - the
+    reformat follow-ups, whose sessions held two or three earlier outline replies.
+    Against that few-shot, recency is the variable worth moving, not wording.
+
+    Rides the current user message and is stripped before persist, the same seam
+    and lifetime as the research memo, so it never becomes history and never
+    accumulates. See ``flow/report_shape.py``."""
+    report_bounce: bool = False
+    """dr@3.7: bounce a terminal draft that is missing a template section, once.
+
+    Product surface only, inert unless ``report_structure`` is on. Distribution
+    change of the strongest kind - it decides which turns are re-sampled.
+
+    Off by default, unlike the reminder, and the reason is measurement rather
+    than doubt. The 43%-malformed baseline above is an upper bound: the session
+    record stamps ``flow_version`` but not the ``finalShape`` knobs, so some of
+    those turns may have run with the template off entirely. A knob that spends a
+    whole extra generation on every malformed turn should be priced before it
+    ships on, and this one can be: turn it on for a product profile, then read
+    ``report_shape_gate.bounces`` against ``report_shape_gate.shipped_malformed``
+    (the gate's own friction; ``report_shape`` next to it carries the shape that
+    actually shipped). The reminder is the half that is cheap enough to default
+    on.
+
+    Price it with ``record`` on. The rewrite's shrink is
+    ``report_shape_gate.draft_chars`` against ``final_shape.visible_chars``, and
+    only the first of those is exported unconditionally - a ``record: false`` arm
+    would collect a numerator with no denominator, i.e. no way to ask whether a
+    bounce cost evidence, which is the one risk this gate is designed around.
+
+    Deterministic and model-free, so unlike the verify gate it is affordable on
+    every turn - which is the point, since the stratum it exists for is the one
+    the verify gate never sees."""
     process_appendix: bool = True
     """dr@2.8: append a deterministic research trail. Product surface only.
 
@@ -2020,29 +2090,68 @@ class DRFlowConfig(_Base):
     """
 
     enabled: bool = False
-    version: str = "dr@3.3"
-    """dr@3.3 also carries the turn-task fix: the draft reviewer and the salvage gate
-    are handed the question this turn actually asked, with the harness's own
-    ``[Runtime Context …]`` / memo / recovery envelopes removed. Both used to read the
-    FIRST user message verbatim - correct by accident on a single-turn benchmark, and
-    on a conversation it judged every follow-up against turn one's question. See
-    ``raven/agent/flow/turn_task.py`` for the measured reproduction.
+    version: str = "dr@3.7"
+    """dr@3.7: the report template stops being a request nothing reads back. A
+    per-turn reminder rides the current user message (``finalShape.reportReminder``,
+    default on) and a deterministic markdown bar can bounce a draft missing a
+    section (``finalShape.reportBounce``, default off). The reminder changes what
+    the model reads on every product turn, so the label moves even though the
+    system prompt is byte-identical to dr@3.6's.
 
-    Folded into dr@3.3 rather than bumped (user's call, 2026-08-17). The label is the
-    key of the measurement ledger, and the thing a bump protects is a reading that
-    already carries the old label - dr@3.3 has run ZERO batches, so no reading is
-    mislabelled by widening it. What this does cost is that the label no longer maps
-    to a single commit: dbef506 and the fix commit both call themselves dr@3.3 with
-    different behaviour. Provenance for any future batch therefore has to come from
-    its own ``_src_snapshot`` plus the per-arm fingerprints in ``iso_manifest.json``,
-    never from the label alone - which is already this project's standing rule (see
-    the README on there being no commit that "is" dr@3.1).
+    dr@3.6: the report template takes precedence over formatting instructions
+    in the question itself; see ``DRFlowFinalShapeConfig.report_structure``.
+    A prompt-text change, so it is bumped rather than folded: dr@3.5 runs were
+    taken under the template-without-override clause, and widening the label
+    would put two different prompts behind one name.
 
-    The envelope half of the fix DOES change what the reviewer reads on every treated
-    arm, and it has never been measured. It cannot move an anchor - both gates are
-    flow hooks, absent when the flow is off."""
+    dr@3.5 introduced the fixed three-section template (``## Answer`` /
+    ``## Findings`` / ``## Limitations``) in place of dr@2.8's ordered-prose
+    request, bumped from dr@3.4 for the same reason: the dr@3.4 live-web
+    readings ran with the old clause on.
+
+    dr@3.4 also carries the out-of-band reasoning waiver on the closing-tag bar
+    (``flow/answer_text.closing_tag_bar``): a response that delivered its reasoning
+    via ``reasoning_content`` - the channel LiteLLM keeps separate from ``content`` -
+    holds only answer text in ``content``, so requiring ``</think>`` there erased
+    every complete answer. Measured on the OpenRouter live-web config: 4 of 4 turns
+    force-finalized as ``empty_visible_answer`` while carrying a full report, the
+    commit nudge burned a re-sample each time, and the verify gate (which reads the
+    same bar as of this build) never saw a draft.
+
+    Folded into dr@3.4 rather than bumped (user's call, 2026-08-18), same reasoning
+    as the dr@3.3 turn-task fold: a bump protects a reading that already carries the
+    old label, and the one dr@3.4 batch run before the fold (w302s100) pinned
+    ``thinkClosingTagRequired: false`` on every arm - a configuration in which the
+    waiver is structurally unreachable, so no reading is mislabelled by widening the
+    label. The recurring cost is the same as dr@3.3's: the label maps to more than
+    one commit, and provenance for any batch has to come from its own
+    ``_src_snapshot`` plus the per-arm fingerprints in ``iso_manifest.json``, never
+    from the label alone.
+
+    It cannot move an anchor: every changed site keys on the flow's bar, which is
+    False whenever the flow is off, and the verify/finalize gates are flow hooks
+    that do not exist on the flow-off arm."""
     max_iterations: int | None = None
     """Iteration budget for DR turns. ``None`` keeps the agent default."""
+    context_window_tokens: int | None = None
+    """Context window for DR turns. ``None`` keeps the agent default (same
+    pattern as ``max_iterations`` above), so declaring this field changes no
+    existing batch's behavior.
+
+    Exists to let a DR arm's window be A/B'd independently of the flow-off
+    anchor's - today ``agents.defaults.contextWindowTokens`` is the only
+    knob, and it sets ``available_history`` on both arms (AGENTS.md #0.3), so
+    raising it to test a budget-control fix on the treated arm would also
+    move the anchor. Capability only: nothing in this build sets it.
+
+    ``agents.defaults.contextWindowTokens`` is itself a fallback, not a
+    declaration: ``AgentLoop._window_for`` resolves the model's real window
+    first and only falls back to this value when the model is unknown to the
+    resolver. On a model the resolver knows, setting this field would still
+    be silently overridden the same way the top-level default already is -
+    the biggest candidate use (re-pricing the timeout/iteration-cap
+    population on a strong backend) has to wait for that resolution order to
+    be made explicit, not for anything in the token estimator."""
     tools_allowlist: tuple[str, ...] = ("web_search", "web_fetch")
     """Tools visible to the model in DR mode; everything else is
     unregistered at assembly. Every extra tool is context noise, a
@@ -2066,7 +2175,15 @@ class DRFlowConfig(_Base):
     56 of 230 questions ended that way, judged correct 0/56.
 
     Turn this off for a serving stack that emits no think tags at all -- there
-    every answer would otherwise be erased."""
+    every answer would otherwise be erased.
+
+    dr@3.4 (folded in): waived per-response when the reasoning arrived
+    out-of-band (``reasoning_content``) - content then carries only answer
+    text and a closing tag can never appear in it, so the bar's premise is
+    void for that response. The flag now means "require the tag on responses
+    whose reasoning is inline". A stack that never inlines reasoning should
+    still set this false: a response that skipped reasoning entirely carries
+    neither channel and would be erased by the bar."""
 
     minimal_context: bool = True
     """Drop the assistant-product prompt segments (bootstrap / memory /
@@ -2132,16 +2249,87 @@ class DRFlowConfig(_Base):
     _SUPERSEDED_VERSIONS = (
         "dr@1", "dr@1.0", "dr@1.1", "dr@1.2", "dr@1.3", "dr@1.4", "dr@1.5", "dr@1.6", "dr@1.7", "dr@1.8",
         "dr@1.9", "dr@2.0", "dr@2.1", "dr@2.2", "dr@2.3", "dr@2.4", "dr@2.5", "dr@2.6",
-        "dr@2.7", "dr@2.8", "dr@2.9", "dr@3.0", "dr@3.1", "dr@3.2",
+        "dr@2.7", "dr@2.8", "dr@2.9", "dr@3.0", "dr@3.1", "dr@3.2", "dr@3.3", "dr@3.4", "dr@3.5",
+        "dr@3.6",
     )
 
     @model_validator(mode="after")
     def _version_matches_build(self) -> "DRFlowConfig":
         """Reject a superseded label on this build.
 
-    This build's flow semantics are dr@3.1: everything dr@3.0 carried, plus (9) below.
-    (5) and (7) are product-surface only and reach no arm; they are listed so the label's contents
-    are complete.
+    This build's flow semantics are dr@3.7: everything dr@3.6 carried, plus the
+    report-template reminder and the optional shape bar.
+
+    (dr@3.7) The template gains the two things a prompt clause cannot give it.
+    ``finalShape.reportReminder`` (default ON) appends a ~60-token restatement to
+    the current user message at assembly, stripped before persist like the
+    research memo, so the instruction is adjacent to the generation instead of
+    thousands of tokens up the context - measured motivation: 8/14 well-formed on
+    research turns against 2/9 on the gate's non-research turns, whose sessions
+    carried earlier outline replies as few-shot. ``finalShape.reportBounce``
+    (default OFF) installs ``ReportShapeGate``, a deterministic markdown check
+    that bounces a draft missing a section back once; it is the only DR observer
+    NOT wrapped in ``GatedHook``, deliberately, because the non-research turn is
+    the stratum it exists for and it makes no model call. The system prompt is
+    byte-identical to dr@3.6 - both surfaces keep their shas - but the reminder
+    changes what the model reads on every product turn, which is the bump.
+
+    Anchor: cannot move. Both read assembly fields, and ``build_dr_flow`` returns
+    None on the flow-off arm; both additionally resolve to off unless
+    ``report_structure`` is on, which every bench profile pins off.
+
+    (dr@3.6) ``_DR_REPORT_STRUCTURE_CLAUSE`` gains the precedence rule: the
+    three-section layout overrides formatting instructions in the question
+    itself, and the clause names where a requested shape goes instead. The knob,
+    its gating and its numbering are unchanged; only the appended text moved, so
+    the bench contract (both optional clauses off) and the marker-only surface
+    keep their measured shas byte for byte. It is a distribution change on every
+    arm that runs ``finalShape.reportStructure=true`` - the product surface,
+    including the live-web profile - and dr@3.5 runs were taken under the
+    template-without-override clause, which is why this is a bump and not a fold.
+    The passage rides its own switch (``finalShape.reportFormatOverride``,
+    default on, byte-identical to the label's semantics at that default); off
+    restores the dr@3.5 clause byte for byte, so the superseded label's prompt
+    stays reproducible and the override can be priced same-batch.
+
+    (dr@3.5) ``_DR_REPORT_STRUCTURE_CLAUSE`` is rewritten from an ordered-prose
+    request into a fixed three-section template with exact headings (``## Answer``
+    / ``## Findings`` / ``## Limitations``, all three present every time). Bumped
+    from dr@3.4 for the same reason: those arms' dr@3.4 readings were taken under
+    the old clause.
+
+    Anchor: cannot move. The clause is appended inside ``DRModeSegmentBuilder``,
+    which only exists on a flow assembly; the flow-off arm has no DR segment at
+    all, and every bench profile pins ``reportStructure`` off explicitly.
+
+    (dr@3.4) Everything dr@3.3 carried, plus the cross-turn scoping fixes,
+    per-query pagination depth, and the out-of-band reasoning waiver on the
+    closing-tag bar (folded in later; see ``version``).
+
+    (dr@3.4) Three flow consumers stop re-deriving "this turn's messages" from the
+    whole assembled context, via ``AgentHookContext.turn_base``: the fetch gate's
+    first-iteration scan (a previous turn ending on a >=15 unread-search tail closed
+    ``web_search`` on the next turn's first iteration, with no notice because the
+    newest message is the user's question), the fetch floor's watermark (previous
+    turns' tool results double-booked into the new turn's streak), and the verify
+    gate's elision snapshot (elision placeholders persist, so one left on disk by any
+    earlier turn degraded every later turn's reject to a pass for the rest of the
+    session). On a single-turn benchmark the slice IS the whole list, so no measured
+    arm's bytes move; only conversations change. Pagination depth is additionally
+    keyed on the query family (``SearchSaturation.page_for``): the ladder's
+    escalation level stays turn-global, but a brand-new query is no longer sent to
+    page 2 - Serper ranks 11-20 for terms whose first ten ranks nobody had seen, whose
+    near-certain empty return then scored as dry and fed the ``stop`` rung. That is a
+    distribution change on saturation-enabled arms, hence the label.
+
+    Anchor: cannot move. Every touched consumer exists only on a flow assembly - the
+    flow-off arm has no hooks and no saturation rule - and the turn slice is
+    byte-identical to the full list on a single-turn run.
+
+    The remainder below is the dr@3.1 entry this docstring carried when the ladder
+    was last rewritten in place; kept for the same reason the README ladder is
+    append-only. (5) and (7) are product-surface only and reach no arm; they are
+    listed so the label's contents are complete.
 
     (9) The replay cache is keyed on the page as well as the two widths. dr@3.0 made pagination
     reachable and left ``page`` out of that key, so a page-2 request could be answered from the
@@ -2474,7 +2662,17 @@ def load_raven_config(config_path: Path | None = None) -> RavenConfig:
         try:
             with open(actual_path, encoding="utf-8") as f:
                 data = json.load(f) or {}
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            # Loud, because the consequence is not "no config": every extension
+            # block - drFlow included - silently starts from class defaults, so
+            # an unreadable file runs a DIFFERENT measured configuration while
+            # the command line still names the intended one.
+            logging.getLogger(__name__).warning(
+                "config: could not parse %s (%s); ALL extension blocks (drFlow "
+                "included) fall back to class defaults",
+                actual_path,
+                e,
+            )
             data = {}
         # Apply the same migrations the base loader uses so legacy fields
         # (e.g. ``agents.defaults.everos``) end up in their new

@@ -8,10 +8,23 @@ from raven.memory_engine.consolidate.consolidator import MemoryStore
 
 
 def test_paths_under_user_memory_root(tmp_path: Path) -> None:
+    """The root is raven's own per-workspace bucket, not the workspace: for a
+    coding agent the workspace is the repository being judged."""
+    from raven.config.paths import workspace_state_path
+
+    root = workspace_state_path(tmp_path, "user_memory")
     store = MemoryStore(tmp_path)
-    assert store.attention_file == tmp_path / "user_memory" / "attention.md"
-    assert store.behaviors_file == tmp_path / "user_memory" / "behaviors.md"
-    assert store.behaviors_offsets_path == (tmp_path / "user_memory" / ".behaviors_offsets.json")
+    assert store.attention_file == root / "attention.md"
+    assert store.behaviors_file == root / "behaviors.md"
+    assert store.behaviors_offsets_path == root / ".behaviors_offsets.json"
+
+
+def test_nothing_lands_in_the_workspace(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.write_long_term("remembered")
+    store.append_history("an episode")
+    assert list(tmp_path.iterdir()) == []
+    assert store.memory_file.read_text(encoding="utf-8") == "remembered"
 
 
 def test_lock_paths_are_siblings(tmp_path: Path) -> None:

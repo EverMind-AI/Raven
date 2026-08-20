@@ -80,7 +80,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     )
     monkeypatch.setattr(
         "raven.cli._plugin_stack.build_plugin_tools",
-        lambda ws, cfg, *, registry=None: fake_tools,
+        lambda ws, cfg, *, registry=None, provider=None: fake_tools,
     )
 
     captured["fake_registry"] = fake_registry
@@ -198,7 +198,7 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
         passed_registries.append(("backend", registry))
         return None
 
-    def _spy_tools(ws, cfg, *, registry=None):
+    def _spy_tools(ws, cfg, *, registry=None, provider=None):
         passed_registries.append(("tools", registry))
         return []
 

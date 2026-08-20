@@ -54,6 +54,9 @@
       "record": true,
       "requireMarker": false,
       "reportStructure": true,
+      "reportFormatOverride": true,
+      "reportReminder": true,
+      "reportBounce": false,
       "processAppendix": true
     },
     "conversation": {

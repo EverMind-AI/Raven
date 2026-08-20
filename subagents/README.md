@@ -23,13 +23,24 @@ multi-turn semantics are per-agent and only documented there.
 | `.env` | The real secrets. Mode 600, never committed |
 | `.gitignore` | The per-folder exclusion list - the enforceable form of "what ships" |
 
-The three folders differ only in the names:
+The four folders differ only in the names:
 
-| Folder | Roster name | Checkout | `.env` prefix |
-|---|---|---|---|
-| `raven-code/` | `Raven-Code` | `Raven-main/` | `CODE_` |
-| `raven-oncall/` | `Raven-Oncall` | `Raven-Oncall/` | `ONCALL_` |
-| `raven-research/` | `Raven-Research` | `Raven-X/` | `RESEARCH_` |
+| Folder | Roster name | Checkout | `.env` prefix | `uv` extra |
+|---|---|---|---|---|
+| `raven-code/` | `Raven-Code` | `Raven-main/` | `CODE_` | - |
+| `raven-oncall/` | `Raven-Oncall` | `Raven-Oncall/` | `ONCALL_` | - |
+| `raven-research/` | `Raven-Research` | `Raven-X/` | `RESEARCH_` | - |
+| `raven-ppt/` | `Raven-PPT` | `Raven-PPT/` | `PPT_` | `ppt` |
+
+Two of those columns are derived, not configured. The `.env` prefix is the folder
+name without `raven-`, upper-cased (`prefix_of` here, `_env_var` in
+`raven/cli/subagent_setup.py`). The extra is the same stem, lower-cased, and is
+passed to `uv sync` **only when the checkout declares an optional-dependency
+group by that name** - `raven-ppt` needs `--extra ppt` for the rendering stack,
+and guessing on a folder that declares no such group would turn a working
+install into a failed one. So a new folder gets both by being named for them, and
+nothing here holds a list.
+
 
 ## Installing, from a fresh clone
 
@@ -77,7 +88,7 @@ is the model the folder is tuned for: inheritance brings the host's
 `agents.defaults.model` along with its credentials, so without one the folder
 answers on whatever this raven answers on.
 
-All three are tuned for models served through OpenRouter, so a raven that already
+All four are tuned for models served through OpenRouter, so a raven that already
 has an OpenRouter key needs no second copy: the wizard reuses that one and asks
 nothing. It reads `providers.openrouter` specifically - a key in `custom` belongs
 to whatever private gateway that section points at, and spending it against
@@ -109,7 +120,14 @@ absolute-path shebangs into `.venv/bin/`. Each launcher checks for
 
 ```bash
 cd subagents/<folder>/<Checkout> && uv sync     # requires-python >= 3.12
+cd subagents/raven-ppt/Raven-PPT && uv sync --extra ppt
 ```
+
+Pass `--extra` whenever the table above names one for the folder. Without it the
+venv still builds, and `.venv/bin/raven` still exists and runs, so all three
+readiness checks - the setup step's, `install.sh`'s and the launcher's - call the
+folder ready; the missing rendering and PDF stack surfaces only when the agent
+reaches its first render.
 
 **2. Supply the secrets.** `config.json` is published and holds none; the
 launcher merges `.env` into a config it renders at launch.

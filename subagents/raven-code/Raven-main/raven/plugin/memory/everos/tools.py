@@ -68,6 +68,16 @@ class UnderstandMediaTool(Tool):
         if not paths or not isinstance(paths, list):
             return "Error: 'paths' is required — a list of attachment file paths."
 
+        # Both steps wait until a call actually needs them: doing them in the
+        # factory made building the plugin's tools set EVEROS_ROOT and seed the
+        # home even when memory was switched off entirely. Importing the parser
+        # does not resolve EverOS settings (its ``load_settings`` is cached but
+        # uncalled at import), so pointing the root here is still early enough.
+        from raven.config.update_everos import configure_everos_env, ensure_everos_home
+
+        configure_everos_env()
+        ensure_everos_home()
+
         try:
             results = await understand_files([str(p) for p in paths])
         except MultimodalUnavailableError as e:
@@ -121,12 +131,6 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     only the static "is the parser installed" fact decides registration.
     """
     del ctx
-    # Point EverOS at raven's ~/.everos/raven home before any everos import
-    # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
-
-    configure_everos_env()
-    ensure_everos_home()
     if not _multimodal_available():
         return None
     return UnderstandMediaTool()

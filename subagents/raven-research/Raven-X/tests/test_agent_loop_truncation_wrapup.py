@@ -153,14 +153,16 @@ async def test_wrapup_shrink_is_a_noop_when_there_is_nothing_old():
 # --------------------------------------------------------------------------- #
 
 
-def _fires(final_content, finish_reason, *, salvaged=False):
+def _fires(final_content, finish_reason, *, salvaged=False, reasoning_oob=False):
     """Thin alias for the REAL predicate the loop calls.
 
     Deliberately not a re-implementation: an earlier draft of this file mirrored
     the expression here, which meant the assertions below described a private copy
     and would have stayed green after the loop's own predicate changed.
     """
-    return _is_truncated_answerless(final_content, finish_reason, salvaged=salvaged)
+    return _is_truncated_answerless(
+        final_content, finish_reason, salvaged=salvaged, reasoning_oob=reasoning_oob
+    )
 
 
 # The shape these items actually have. Under prefilled-think serving the template
@@ -180,6 +182,23 @@ def test_guard_fires_on_the_measured_shape():
 
 def test_guard_ignores_a_completed_answer():
     assert _fires("<think>reasoning</think>The answer is 76.", "length") is False
+
+
+def test_guard_waives_the_bar_for_out_of_band_reasoning():
+    """dr@3.4 fold. A response whose reasoning arrived via ``reasoning_content``
+    holds only answer text in ``content`` - no closing tag can ever appear - so
+    the strict bar would call EVERY length-cut answer on such a stack answerless
+    and replace it with a lossy wrap-up. Waived on the per-response fact (arm-
+    neutral, unlike the config flag), a cut mid-ANSWER ships as-is, exactly like
+    an inline cut after ``</think>``."""
+    assert _fires("The answer is 76, because", "length", reasoning_oob=True) is False
+
+
+def test_guard_still_fires_on_an_oob_cut_before_any_answer():
+    """Cut mid-REASONING on an out-of-band stack: ``content`` is empty, the
+    waiver has nothing to protect, and the wrap-up must still run."""
+    assert _fires("", "length", reasoning_oob=True) is True
+    assert _fires("   ", "length", reasoning_oob=True) is True
 
 
 def test_guard_ignores_a_normal_stop():

@@ -127,11 +127,14 @@ class TestHttpAdapterSearch:
         assert req.method == "POST"
         assert str(req.url) == "http://mem.test/api/v1/memory/search"
         body = json.loads(req.content.decode())
-        # everos's SearchRequest wire contract is user_id XOR agent_id.
+        # everos's SearchRequest wire contract is user_id XOR agent_id, plus
+        # the storage scope every request carries.
         assert body == {
             "user_id": "alice",
             "query": "coffee",
             "top_k": 5,
+            "app_id": "raven",
+            "project_id": "default",
         }
 
     async def test_returns_jsonified_data(self, mock, http_client) -> None:
@@ -226,7 +229,12 @@ class TestHttpAdapterMemorize:
         assert mock.requests[0].method == "POST"
         assert str(mock.requests[0].url).endswith("/api/v1/memory/add")
         body = json.loads(mock.requests[0].content.decode())
-        assert body == {"session_id": "session-1", "messages": msgs}
+        assert body == {
+            "session_id": "session-1",
+            "messages": msgs,
+            "app_id": "raven",
+            "project_id": "default",
+        }
 
     async def test_5xx_raises(self, mock, http_client) -> None:
         mock.status_for_path["/api/v1/memory/add"] = 500
@@ -380,3 +388,131 @@ class TestBackendHttpMode:
         await b.stop()
         # Second stop should not raise even though client is closed
         await b.stop()
+
+
+# ---------------------------------------------------------------------------
+# Scope symmetry (app_id / project_id)
+# ---------------------------------------------------------------------------
+
+
+class TestScopeSymmetry:
+    """everos isolates memory by ``(app_id, project_id)`` at the storage layer
+    and a search never crosses that pair. ``memorize`` sent the scope while
+    ``search`` sent none, so anything written to a non-default bucket became
+    unsearchable -- HTTP 200, empty result, no log line."""
+
+    @staticmethod
+    def _bodies(mock: _MockEverOS) -> dict[str, dict]:
+        return {r.url.path: json.loads(r.content.decode()) for r in mock.requests}
+
+    async def test_store_and_recall_address_the_same_bucket(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.store("session-1", [{"role": "user", "content": "hello"}])
+        await b.recall("hello", user_id="alice", top_k=5)
+
+        bodies = self._bodies(mock)
+        add = bodies["/api/v1/memory/add"]
+        search = bodies["/api/v1/memory/search"]
+        assert (add["app_id"], add["project_id"]) == (
+            search["app_id"],
+            search["project_id"],
+        )
+
+        await adapter._client.aclose()
+
+    async def test_scope_is_derived_from_the_workspace(self, tmp_path: Path) -> None:
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.recall("hello", user_id="alice", top_k=5)
+
+        search = self._bodies(mock)["/api/v1/memory/search"]
+        assert search["app_id"] == "raven"
+        assert search["project_id"] != "default"
+
+        await adapter._client.aclose()
+
+    async def test_flush_carries_the_same_scope(self, tmp_path: Path) -> None:
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path, flush_every_turns=1))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.store("session-1", [{"role": "user", "content": "hello"}])
+
+        bodies = self._bodies(mock)
+        add = bodies["/api/v1/memory/add"]
+        flush = bodies["/api/v1/memory/flush"]
+        assert (flush["app_id"], flush["project_id"]) == (
+            add["app_id"],
+            add["project_id"],
+        )
+
+        await adapter._client.aclose()
+
+
+class TestSessionScopedRecall:
+    """A coding run is one session per task, and in the evaluation harness every
+    task shares the same workspace path (`/testbed`) while the session name is
+    what differs. Recall therefore has to narrow by session, or task 500 recalls
+    task 1."""
+
+    async def test_recall_sends_the_session_filter(self, tmp_path: Path) -> None:
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.recall("q", user_id="alice", session_id="cli:task-1", top_k=5)
+
+        body = json.loads(mock.requests[0].content.decode())
+        # A top-level equality scalar: the only shape everos also honours for
+        # returning the not-yet-extracted tail.
+        assert body["filters"] == {"session_id": "cli:task-1"}
+
+        await adapter._client.aclose()
+
+    async def test_session_scoping_can_be_turned_off(self, tmp_path: Path) -> None:
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path, scope_recall_to_session=False))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.recall("q", user_id="alice", session_id="cli:task-1", top_k=5)
+
+        assert "filters" not in json.loads(mock.requests[0].content.decode())
+
+        await adapter._client.aclose()
+
+    async def test_store_and_recall_agree_on_the_session(self, tmp_path: Path) -> None:
+        """The id the write uses and the id the read filters on must be the
+        same string, or memory is written where it is never looked for."""
+        mock = _MockEverOS()
+        b = EverosBackend(_ctx(tmp_path))
+        adapter = b._adapter
+        assert isinstance(adapter, _HttpEverosAdapter)
+        adapter._client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
+
+        await b.store("cli:task-1", [{"role": "user", "content": "hello"}])
+        await b.recall("hello", user_id="alice", session_id="cli:task-1", top_k=5)
+
+        bodies = {r.url.path: json.loads(r.content.decode()) for r in mock.requests}
+        assert bodies["/api/v1/memory/add"]["session_id"] == (
+            bodies["/api/v1/memory/search"]["filters"]["session_id"]
+        )
+
+        await adapter._client.aclose()

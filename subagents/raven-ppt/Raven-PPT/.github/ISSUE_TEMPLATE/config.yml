@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and community support
+    url: https://discord.gg/gYep5nQRZJ
+    about: Ask usage questions and discuss Raven with the EverMind community.
+  - name: Chinese community
+    url: https://github.com/EverMind-AI/EverOS/discussions/67
+    about: Join the EverMind Chinese community.
+  - name: Security vulnerability
+    url: https://github.com/EverMind-AI/Raven/security/advisories/new
+    about: Please report security vulnerabilities privately.

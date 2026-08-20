@@ -94,6 +94,19 @@ def terminal_state(metadata: dict[str, Any]) -> dict[str, Any]:
     budget = metadata.get("budget")
     if budget:
         out["budget"] = {k: v for k, v in budget.items() if isinstance(v, int)}
+    # dr@3.7. Exported whenever the gate ran, not only when it bounced: "the bar
+    # was installed and every draft cleared it" and "no bar was installed" are
+    # different states, and the second one is what every arm without the knob
+    # reads as. The delivered shape is stamped separately as ``report_shape``.
+    report_shape_gate = metadata.get("report_shape_gate")
+    if report_shape_gate:
+        out["report_shape_gate"] = _scalar_snapshot(report_shape_gate)
+    # Rollbacks the loop REFUSED past its per-turn cap. The requesting gate has
+    # already booked its side (the verify gate writes ``reject``+``revisions``
+    # before returning), so without this count the trajectory says a bounce
+    # happened that never did.
+    if metadata.get("rollbacks_refused"):
+        out["rollbacks_refused"] = int(metadata["rollbacks_refused"])
     # How the turn ended, stamped unconditionally: batch attribution needs to
     # tell a model that gave no answer from a harness that lost one (a context
     # overflow surfaces as a dead call whose response is never persisted, so the

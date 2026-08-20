@@ -1,0 +1,31 @@
+# Tool Usage Notes
+
+Signatures arrive through function calling. This file records the constraints that
+are not visible in a signature.
+
+## The build script
+
+It goes at `ppt_projects/<project>/build/build.py` — that whole path, relative to
+the workspace. A bare `build/build.py` lands somewhere the build does not look.
+
+The program runs with python-pptx and Pillow, in the build directory, and reads its
+paths from the environment: `PPT_OUTPUT` (save there and nowhere else),
+`PPT_FIGURES_DIR`, and — when the deck has a template — `PPT_TEMPLATE` (the
+template with its example pages removed, open this one) and `PPT_TEMPLATE_SOURCE`
+(the original, to clone a page out of).
+
+Beside it, rewritten on every build: `ppt_theme.py` (palettes and `rgb`),
+`ppt_icons.py` (`add_icon`, `find_icons`, `ICON_NAMES`), and `ppt_template.py`
+(`clone_page`, `replace_text`, `replace_picture`, `drop_shape`) when a template is
+bound. **Do not write a module into that directory whose name shadows a standard
+one** — a `copy.py` there breaks python-pptx itself, and the traceback will not
+mention your file.
+
+Draw the pages in `build.py` itself, one block per page. A `build.py` that runs
+another file, or a loop that draws every page from one call, is refused: the build
+matches each render back to the code that drew it by that block.
+
+## exec
+
+Available, and not the delivery path. A deck copied out by hand is a deck no gate
+has seen. Publication happens inside `ppt_build`.

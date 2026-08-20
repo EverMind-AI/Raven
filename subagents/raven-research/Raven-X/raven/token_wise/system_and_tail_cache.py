@@ -24,20 +24,21 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.registry import supports_prompt_caching
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.token_wise.base import TokenStrategy
 
-_CACHE_CONTROL = {"type": "ephemeral"}
+_CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
-    """Delegates to the one resolver. This module is a comparison artifact - it
+    """Delegates to the one resolver (``providers.prompt_cache`` -- see it for
+    why the answer is wire x family). This module is a comparison artifact - it
     reproduces Hermes's placement strategy for the head-to-head report and is
     never instantiated outside it - so it takes the model-string answer and does
     not accept a provider probe."""
-    if not model:
-        return False
-    return supports_prompt_caching(model)
+    from raven.providers.prompt_cache import accepts_cache_control
+
+    return accepts_cache_control(model)
 
 
 def _apply_cache_marker(msg: dict[str, Any]) -> None:

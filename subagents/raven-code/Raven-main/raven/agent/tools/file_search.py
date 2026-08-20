@@ -1,26 +1,34 @@
-"""Search tools: grep (content search) and find (file lookup).
+"""Search tools: grep (content search) and glob (file lookup).
 
 Both run host-side and reuse ``_FsTool``'s workspace/allowed_dir resolution so
 they share the exact same path boundary as read_file/write_file/list_dir — never
 the SandboxExecutor (avoids shuttling large result sets across a VM edge).
 
-``grep`` prefers the ``rg`` (ripgrep) binary when present on PATH for speed and
-.gitignore awareness, and falls back to a pure-Python scan otherwise so raven
-keeps working with zero hard binary dependency.
+``grep`` runs on the ripgrep binary raven bundles via the ``ripgrep-bin``
+dependency (a statically linked musl build that runs on any Linux, installed
+into the interpreter's scripts directory), so search quality no longer depends
+on what the host or eval container happens to have on PATH. A host ``rg`` and
+a pure-Python scan remain as ordered fallbacks so raven still works from a
+source checkout whose venv predates the dependency.
 """
 
 import asyncio
 import fnmatch
+import functools
 import os
 import re
 import shutil
+import sysconfig
 import time
 from pathlib import Path
 from typing import Any
 
-from raven.agent.tools.filesystem import _FsTool
+from loguru import logger
 
-# Noise directories skipped by the pure-Python fallback / find. ripgrep handles
+from raven.agent.tools.filesystem import _FsTool
+from raven.sandbox.interfaces import spill_output
+
+# Noise directories skipped by the pure-Python fallback / glob. ripgrep handles
 # its own ignore logic via .gitignore, so this only gates the fallback path.
 _IGNORE_DIRS = {
     ".git",
@@ -39,7 +47,7 @@ _IGNORE_DIRS = {
 }
 
 # Pseudo / system filesystem roots that must never be tree-walked. A model that
-# runs `grep <pat> /` (or find over /) would otherwise traverse the entire host
+# runs `grep <pat> /` (or glob over /) would otherwise traverse the entire host
 # — including slow network mounts under /proc, /sys, or /mnt — and hang the whole
 # run indefinitely (observed: a 47-min wedge in disk-sleep on a shared mount).
 # Searches must name a real subtree, not a system root.
@@ -49,6 +57,33 @@ _DENY_TRAVERSAL_ROOTS = {Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run",
 _WALK_DEADLINE_S = 20.0
 
 _BRACE_EXPANSION_CAP = 50
+
+
+@functools.lru_cache(maxsize=1)
+def resolve_rg() -> str | None:
+    """Locate the ripgrep binary: ``RAVEN_RG`` override, bundled, then PATH.
+
+    The ``ripgrep-bin`` dependency installs a statically linked ``rg`` next to
+    the interpreter (the environment's scripts directory), so a raven install
+    carries its own binary — search behavior no longer depends on what the host
+    or eval container has installed. Before this, SWE eval images without rg
+    silently downgraded grep to the deadline-capped pure-Python walk, which can
+    stop mid-tree on large repos and underreport matches.
+
+    Cached for the process lifetime; tests reset via ``resolve_rg.cache_clear()``.
+    """
+    exe = "rg.exe" if os.name == "nt" else "rg"
+    override = os.environ.get("RAVEN_RG")
+    if override:
+        if Path(override).is_file():
+            return override
+        # Fall through rather than fail the whole tool, but say so loudly: a
+        # silently ignored override would be undiagnosable from tool output.
+        logger.warning("RAVEN_RG={} does not exist; falling back to bundled/PATH rg", override)
+    bundled = Path(sysconfig.get_path("scripts")) / exe
+    if bundled.is_file():
+        return str(bundled)
+    return shutil.which("rg")
 
 
 def _expand_braces(pattern: str, _budget: list[int] | None = None) -> list[str]:
@@ -145,7 +180,9 @@ class GrepTool(_FsTool):
         return (
             "Search file contents by regular expression. Prefer this over running "
             "grep/rg through exec — results are paginated and capped, noise directories "
-            "are skipped (.gitignore-aware when ripgrep is installed). "
+            "are skipped, and .gitignore is respected (raven bundles its own ripgrep). "
+            "When results overflow the cap, the complete list is saved to a file whose "
+            "path is given in the result. "
             "output_mode 'content' returns matching lines with path:line numbers, "
             "'files_with_matches' lists only file paths, 'count' shows match counts per file. "
             "Use glob to restrict to file types (e.g. '*.py')."
@@ -178,7 +215,6 @@ class GrepTool(_FsTool):
                     "type": "integer",
                     "description": "Lines of context before and after each match, content mode only (default 0)",
                     "minimum": 0,
-                    "maximum": 20,
                 },
                 "limit": {
                     "type": "integer",
@@ -218,7 +254,7 @@ class GrepTool(_FsTool):
                 "Specify a narrower directory (e.g. the workspace or a project subtree)."
             )
 
-        rg = shutil.which("rg")
+        rg = resolve_rg()
         try:
             if rg:
                 return await self._run_rg(rg, pattern, base, glob, output_mode, case_insensitive, context, cap)
@@ -407,6 +443,13 @@ class GrepTool(_FsTool):
         shown = lines[:cap]
         result = "\n".join(shown)
         notes = []
+        # Truncation must never lose evidence: the model cannot know whether the
+        # dropped tail held the one file that matters, and "narrow the pattern"
+        # sends it narrowing in the dark. Persist the COMPLETE result and hand
+        # back a path it can grep/read — same contract as exec output spilling.
+        spilled: str | None = None
+        if total > cap or len(result) > self._MAX_CHARS:
+            spilled = spill_output("\n".join(lines), "grep")
         if total > cap:
             notes.append(
                 f"showing first {cap} of {total} {unit} — {total - cap} more not shown; "
@@ -419,13 +462,18 @@ class GrepTool(_FsTool):
                 f"output truncated to {self._MAX_CHARS} chars — narrow the pattern/glob or "
                 "use output_mode='count' to get exact totals instead of eyeballing this view"
             )
+        if spilled:
+            notes.append(
+                f"the COMPLETE result ({total} {unit}) was saved to {spilled} — "
+                "grep or read_file that file to see everything that was cut here"
+            )
         if notes:
             result += f"\n\n(⚠️ {'; '.join(notes)})"
         return result
 
 
 # ---------------------------------------------------------------------------
-# find
+# glob
 # ---------------------------------------------------------------------------
 
 
@@ -434,9 +482,11 @@ class FindTool(_FsTool):
 
     _DEFAULT_LIMIT = 1000
 
+    aliases = ("find",)
+
     @property
     def name(self) -> str:
-        return "find"
+        return "glob"
 
     @property
     def description(self) -> str:
@@ -509,18 +559,23 @@ class FindTool(_FsTool):
                         continue
                     seen[p] = None
         except (ValueError, OSError) as e:
-            return f"Error running find: {e}"
+            return f"Error running glob: {e}"
         matches = list(seen)
         if not matches:
             return "No files found matching pattern."
 
         matches.sort(key=lambda p: self._mtime(p), reverse=True)
         total = len(matches)
-        shown = matches[:cap]
-        lines = [f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix() for p in shown]
-        result = "\n".join(lines)
+        lines = [
+            f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix() for p in matches
+        ]
+        result = "\n".join(lines[:cap])
         if total > cap:
-            result += f"\n\n(showing first {cap} of {total} results)"
+            # Same no-silent-loss contract as grep: persist the complete list so
+            # the model can page through what the cap cut, instead of guessing.
+            spilled = spill_output("\n".join(lines), "find")
+            saved = f"; complete list saved to {spilled} — grep or read_file it" if spilled else ""
+            result += f"\n\n(showing first {cap} of {total} results{saved})"
         return result
 
     @staticmethod

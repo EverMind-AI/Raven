@@ -90,24 +90,24 @@ class PluginRegistry:
         discovered: list[DiscoveredPlugin],
         *,
         disabled: frozenset[str] = frozenset(),
+        enabled: frozenset[str] = frozenset(),
     ) -> None:
         """Resolve and register every contribution from every admitted plugin.
 
         A plugin is admitted iff:
 
-        - its id is not in ``disabled`` (user opt-out), AND
-        - ``enabled_by_default`` is True OR the host has another reason
-          to include it. PG-2 enforces only the first rule; PG-3 layers
-          on the second when wired to the user config.
+        - its id is not in ``disabled`` (user opt-out; wins over ``enabled``), AND
+        - ``enabled_by_default`` is True OR its id is in ``enabled``
+          (the user's explicit opt-in list, ``plugins.enabled``).
         """
         for d in discovered:
             mf = d.manifest
             if mf.id in disabled:
                 logger.info("plugin %s disabled by user config", mf.id)
                 continue
-            if not mf.enabled_by_default:
+            if not mf.enabled_by_default and mf.id not in enabled:
                 logger.info(
-                    "plugin %s not enabled by default; skipping (use explicit opt-in once supported)",
+                    "plugin %s not enabled by default; add it to plugins.enabled to opt in",
                     mf.id,
                 )
                 continue

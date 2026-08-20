@@ -50,6 +50,9 @@
       "record": true,
       "requireMarker": false,
       "reportStructure": false,
+      "reportFormatOverride": false,
+      "reportReminder": false,
+      "reportBounce": false,
       "processAppendix": false
     }
   },

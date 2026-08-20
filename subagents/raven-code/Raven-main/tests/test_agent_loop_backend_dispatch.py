@@ -14,6 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from raven.agent.loop import AgentLoop
 
 # ---------------------------------------------------------------------------
@@ -48,7 +50,7 @@ class _FakeBackend:
     async def feedback(self, signals):
         pass
 
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+    async def recall(self, query, *, user_id=None, agent_id=None, session_id=None, top_k):
         return []
 
     async def store(self, session_id, messages, *, metadata=None):
@@ -129,22 +131,21 @@ class TestDispatcher:
         assert call["session_id"] == "session-key-x"
         assert call["messages"] == slice_
 
-    async def test_backend_exception_swallowed(
+    async def test_backend_exception_surfaces(
         self,
         tmp_path: Path,
     ) -> None:
-        """A backend failure must not derail the AgentLoop. The turn is
-        already saved to the session log; plugin-side indexing is
-        best-effort."""
+        """The MemoryBackend contract says the host does not silently swallow
+        store failures. Swallowing them let a run finish reporting success with
+        every write lost, leaving nothing to recall next time."""
         b = _FakeBackend()
         b.store_raises = RuntimeError("evermem down")
         agent = _make_loop(tmp_path, backend=b)
-        # The dispatcher swallows the exception (and logs an exception
-        # traceback). The call must return normally.
-        await agent._dispatch_backend_store(
-            "s",
-            [{"role": "user", "content": "x"}],
-        )
+        with pytest.raises(RuntimeError, match="evermem down"):
+            await agent._dispatch_backend_store(
+                "s",
+                [{"role": "user", "content": "x"}],
+            )
         # Verify the adapter was hit (so we know exception came from store).
         assert len(b.store_calls) == 1
 

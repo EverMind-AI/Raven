@@ -172,6 +172,47 @@ class TestEnablement:
         )
         assert reg.activated_ids() == []
 
+    def test_non_default_plugin_admitted_via_explicit_opt_in(self) -> None:
+        def fake_factory(ctx):
+            return "x"
+
+        _install_test_module("_test_plugin_e", {"make_backend": fake_factory})
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                _make_discovered(
+                    "plug",
+                    backends=[
+                        ("everos", "_test_plugin_e:make_backend"),
+                    ],
+                    enabled=False,
+                ),
+            ],
+            enabled=frozenset({"plug"}),
+        )
+        assert reg.activated_ids() == ["plug"]
+
+    def test_disabled_wins_over_explicit_opt_in(self) -> None:
+        def fake_factory(ctx):
+            return "x"
+
+        _install_test_module("_test_plugin_f", {"make_backend": fake_factory})
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                _make_discovered(
+                    "plug",
+                    backends=[
+                        ("everos", "_test_plugin_f:make_backend"),
+                    ],
+                    enabled=False,
+                ),
+            ],
+            disabled=frozenset({"plug"}),
+            enabled=frozenset({"plug"}),
+        )
+        assert reg.activated_ids() == []
+
 
 # ---------------------------------------------------------------------------
 # Conflicts

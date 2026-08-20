@@ -15,6 +15,24 @@ from raven.agent.tools.base import Tool
 from raven.tui_rpc.question_broker import QuestionBroker
 
 
+def _live_campaigns() -> list[str]:
+    """Names of campaigns not yet concluded, or [] when ops is not in play.
+
+    Imported lazily and swallowed: asking the owner a question must not depend on
+    the ops layer being readable.
+    """
+    try:
+        from raven.agent.tools.ops import _ops_home
+
+        home = _ops_home()
+        return sorted(
+            d.name for d in home.iterdir()
+            if d.is_dir() and not (d / "concluded.json").exists()
+        ) if home.exists() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
 class AskUserTool(Tool):
     """Ask the user a question mid-turn and wait for their answer.
 
@@ -103,6 +121,22 @@ class AskUserTool(Tool):
         }
 
     async def execute(self, questions: list[dict[str, Any]], **kwargs: Any) -> str:
+        live = _live_campaigns()
+        if live:
+            # This waits ten minutes before giving up, and it does nothing else
+            # while it waits. Measured 2026-08-19: a campaign's command was wrong,
+            # the loop diagnosed it correctly, and asked here -- so a machine sat
+            # idle and a 25-minute budget ran while a question that did not block
+            # anything went unanswered. It could have declared a fresh campaign
+            # with the command fixed and asked at the same time.
+            return (
+                f"Error: ask_user always waits, and an experiment is running "
+                f"({', '.join(live[:3])}). Ask through ops_ask_owner instead: it takes "
+                f"blocks_progress, and with False it records the question on the campaign "
+                f"and lets you carry on with what does not depend on the answer. Pass True "
+                f"only when there is genuinely nothing else to do -- it waits the same way "
+                f"this would, but the question is on the record either way. Nothing was asked."
+            )
         cid = self._cid.get()
         if not self._broker:
             return "Error: ask_user not configured (no question broker)"
@@ -110,6 +144,7 @@ class AskUserTool(Tool):
             return "Error: ask_user has no conversation context"
         if not questions:
             return "Error: ask_user requires at least one question"
+
 
         results: list[str] = []
         for entry in questions:

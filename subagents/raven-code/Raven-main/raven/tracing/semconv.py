@@ -246,7 +246,10 @@ def _skill_read_path(name: str, params: Any) -> str | None:
     """
     if name not in _FILE_READ_TOOLS:
         return None
-    path = params.get("path") if isinstance(params, dict) else (params if isinstance(params, str) else None)
+    if isinstance(params, dict):
+        path = params.get("file_path") or params.get("path")
+    else:
+        path = params if isinstance(params, str) else None
     if isinstance(path, str) and path.replace("\\", "/").lower().rstrip("/").endswith("skill.md"):
         return path
     return None

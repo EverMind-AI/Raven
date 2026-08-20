@@ -14,6 +14,7 @@ const PREVIEW_KEYS = [
   'command',
   'cmd',
   'pattern',
+  'file_path',
   'path',
   'file',
   'url',

@@ -276,6 +276,11 @@ class Lane:
                 await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
             raise
         except Exception as exc:
+            # The lane is the last frame that still has the traceback: the
+            # sink gets only str(exc), and the CLI hub sink drops lifecycle
+            # events entirely -- without this line a failed turn leaves no
+            # trace anywhere.
+            logger.exception("turn failed in lane {}: {}", self._conversation_id, exc)
             if started:
                 await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
             return None

@@ -686,33 +686,27 @@ def _load_current_default_model() -> Optional[str]:
 
 
 def _model_routes_to_provider(model: str, spec: Any) -> bool:
-    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``."""
-    if not model or not spec:
-        return False
-    model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
-    if "/" in model_lower:
-        prefix = model_lower.split("/", 1)[0].replace("-", "_")
-        return prefix == spec.name
-    return any(
-        kw.lower() in model_lower or kw.lower().replace("-", "_") in model_normalized
-        for kw in (getattr(spec, "keywords", None) or ())
-    )
+    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``.
+
+    Defers to the spec so this guard cannot disagree with the routing it guards.
+    """
+    return bool(model and spec and spec.claims(model))
 
 
-def _format_model_for_provider(spec: Any, model_id: str) -> str:
-    """Apply ``spec.litellm_prefix`` to a raw ``/v1/models`` id when needed."""
-    if not model_id:
-        return model_id
-    prefix = getattr(spec, "litellm_prefix", "") or ""
-    if not prefix:
-        return model_id
-    if model_id.startswith(f"{prefix}/"):
-        return model_id
-    for skip in getattr(spec, "skip_prefixes", ()) or ():
-        if model_id.startswith(skip):
-            return model_id
-    return f"{prefix}/{model_id}"
+def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
+    """Apply the provider's route prefix to a raw ``/v1/models`` id when needed.
+
+    A vendor Raven carries no spec for still needs the prefix, and needs it most:
+    the id it returns is bare, and a bare id is routed by keyword and fallback
+    rather than to the section the user just configured. Handing one back
+    unprefixed sent the request wherever those rules landed.
+
+    The rule itself is ``providers.wire.stored_model_id``; deciding it here as
+    well is what made the wizard and the TUI write one model two ways.
+    """
+    from raven.providers.wire import stored_model_id
+
+    return stored_model_id(provider, model_id)
 
 
 def _pick_model(
@@ -743,7 +737,7 @@ def _pick_model(
         default_value = spec.default_model or ""
 
     if model_ids:
-        choices = [_format_model_for_provider(spec, mid) for mid in model_ids]
+        choices = [_format_model_for_provider(spec.name, spec, mid) for mid in model_ids]
         if default_value and default_value not in choices:
             choices.insert(0, default_value)
         prompt_label = _t(
@@ -2125,8 +2119,11 @@ def _resolve_model_provider(model: str) -> Optional[str]:
     """
     if not model:
         return None
-    head = model.split("/", 1)[0].replace("-", "_")
-    if "/" in model:
+    from raven.providers.registry import split_model_id
+
+    prefix, _ = split_model_id(model)
+    head = prefix.replace("-", "_")
+    if prefix:
         from raven.config.update_providers import provider_field_specs
 
         try:
@@ -2168,20 +2165,20 @@ def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
         registry ``default_api_base`` → a known fallback);
       - carry the provider's stored api_key.
     """
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, split_model_id
 
-    provider = _resolve_model_provider(main_model) or main_model.split("/", 1)[0].replace("-", "_")
+    provider = _resolve_model_provider(main_model) or split_model_id(main_model)[0].replace("-", "_")
     spec = find_by_name(provider)
     prov_cfg = (_load_raw_config().get("providers") or {}).get(provider, {})
 
     # Strip the litellm routing prefix to the bare model id the upstream
     # endpoint expects. Direct providers (openai / deepseek / gemini) carry a
     # ``{provider}/`` route prefix that litellm consumes but the raw OpenAI
-    # client must not see; gateways (openrouter) carry their litellm_prefix.
+    # client must not see; gateways (openrouter) carry their route prefix.
     # Custom endpoints store a bare id already, so no prefix matches → unchanged.
     bare_model = main_model
-    litellm_prefix = getattr(spec, "litellm_prefix", "") if spec else ""
-    for prefix in (litellm_prefix, provider):
+    route_prefix = getattr(spec, "model_prefix", "") if spec else ""
+    for prefix in (route_prefix, provider):
         if prefix and bare_model.startswith(f"{prefix}/"):
             bare_model = bare_model.split("/", 1)[1]
             break

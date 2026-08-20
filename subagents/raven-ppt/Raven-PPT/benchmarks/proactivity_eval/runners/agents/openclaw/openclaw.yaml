@@ -1,0 +1,24 @@
+# OpenClaw agent config — invoked via the `openclaw` CLI in a subprocess
+# with a per-task temp OPENCLAW_HOME pointing at the LAN vLLM endpoint.
+
+name: openclaw
+
+# Thinking level: off | minimal | low | medium | high | xhigh.
+# medium works well for proactivity benchmarks without ballooning elapsed.
+thinking: medium
+
+# Subprocess timeouts (seconds).
+cli_timeout_s: 300
+subprocess_timeout_s: 360
+
+# null → use runners.config.yaml::systems.openclaw_cmd (typically "openclaw").
+openclaw_cmd: null
+
+# When set, run openclaw inside this docker image instead of invoking
+# openclaw_cmd on PATH. Needed when the host can't install openclaw.
+# The per-sample tmp home is bind-mounted to /home/node/.openclaw.
+docker_image: openclaw:local
+
+# Override vLLM endpoint / model per-agent. null → inherit from runners.config.yaml.
+vllm_base_url: null
+vllm_model_id: null

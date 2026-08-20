@@ -146,3 +146,71 @@ def test_a_corpus_contained_subagent_registry_has_no_subprocess_tool():
     )
     assert "exec" in not_yet._build_subagent_tools(None).names()
     assert not_yet.last_surface_dropped == []
+
+
+@pytest.mark.asyncio
+async def test_a_previous_turns_persisted_placeholder_does_not_degrade_this_turns_reject():
+    """dr@3.4. The elision snapshot scans ``messages[ctx.turn_base:]``, never 0.
+
+    Elision placeholders are persisted, so one left on disk by ANY earlier turn
+    of the session latched every later turn's reject into a pass for the rest
+    of the conversation - the verify gate effectively off, with
+    ``fail_open_on_elided_evidence`` defaulting true.
+    """
+    gate = DraftReviewerGate(_Reviewer())
+    placeholder = "[earlier tool output elided to fit the context window]"
+    history = [
+        {"role": "user", "content": "turn one"},
+        {"role": "tool", "name": "web_fetch", "content": placeholder},
+        {"role": "assistant", "content": "turn one answer"},
+    ]
+    ctx = AgentHookContext(session_key="cli:test", turn_base=len(history))
+    ctx.iteration = 3
+    ctx.response = SimpleNamespace(has_tool_calls=False, content="reasoning</think>## Answer: Dr Martens")
+    ctx.messages = history + [
+        {"role": "user", "content": "turn two task"},
+        {"role": "tool", "name": "web_fetch", "content": "docid=5 body text"},
+    ]
+    decision = await gate.after_iteration(ctx)
+    state = ctx.metadata["verify_gate"]
+    assert state["evidence_elided_in_context"] == 0
+    assert state.get("rejected_on_elided", 0) == 0
+    assert decision.rollback is True, "the reject was silently degraded by prior-turn elision"
+
+
+@pytest.mark.asyncio
+async def test_a_tagless_draft_with_oob_reasoning_is_still_reviewed():
+    """Under ``closing_tag_required=True`` a response whose reasoning arrived
+    out-of-band (``reasoning_content``) carries no think tag by construction.
+    Without the waiver the gate extracted no draft and the reviewer was
+    structurally silenced -- 4/4 turns on the OpenRouter live-web config."""
+    reviewer = _Reviewer()
+    gate = DraftReviewerGate(reviewer, closing_tag_required=True)
+    ctx = _ctx(elided=False)
+    ctx.response = SimpleNamespace(
+        has_tool_calls=False,
+        content="## Answer: Dr Martens",
+        reasoning_content="chain of thought, delivered out-of-band",
+    )
+
+    await gate.after_iteration(ctx)
+
+    assert reviewer.calls == 1
+    assert ctx.metadata["verify_gate"]["rejects"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_tagless_draft_without_oob_reasoning_stays_unreviewed_under_the_strict_caliber():
+    """The waiver must not become a blanket disable of the bar: a tagless
+    response with no out-of-band reasoning is still indistinguishable from a
+    generation cut mid-think, and reviewing it would re-open the dr@3.4 hole
+    (a reject injecting raw reasoning into persisted history)."""
+    reviewer = _Reviewer()
+    gate = DraftReviewerGate(reviewer, closing_tag_required=True)
+    ctx = _ctx(elided=False)
+    ctx.response = SimpleNamespace(has_tool_calls=False, content="bare reasoning, cut before the tag")
+
+    await gate.after_iteration(ctx)
+
+    assert reviewer.calls == 0
+    assert "verify_gate" not in ctx.metadata

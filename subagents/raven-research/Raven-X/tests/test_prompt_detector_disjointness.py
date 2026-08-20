@@ -21,7 +21,15 @@ from __future__ import annotations
 
 import pytest
 
-from raven.agent.flow import budget_note, dr, fetch_floor, finalize, spin_breaker, verify
+from raven.agent.flow import (
+    budget_note,
+    dr,
+    fetch_floor,
+    finalize,
+    report_shape,
+    spin_breaker,
+    verify,
+)
 from raven.agent.loop import main as loop_main
 from raven.agent.tools import registry as tool_registry
 from raven.agent.tools import web
@@ -38,7 +46,14 @@ from raven.context_engine.segments import render
 #     hoist in ``registry.py`` is what makes this entry mean anything.
 #   · ``render.RAVEN_GUIDELINES`` is the identity guideline block, now defined once
 #     and imported by ``ContextBuilder`` (it used to exist twice, byte-identical).
-_PROMPT_MODULES = (dr, finalize, verify, fetch_floor, budget_note, web, tool_registry, render)
+#
+# 20260819 added ``report_shape`` (dr@3.7). Its reminder rides the END of the current
+# user message, which makes it the highest-recency prompt text this build emits - the
+# position a model is likeliest to echo, and echoed text is exactly what a detector
+# then matches. Clean today; in scope from now on.
+_PROMPT_MODULES = (
+    dr, finalize, verify, fetch_floor, budget_note, web, tool_registry, render, report_shape
+)
 
 # Detector vocabularies: every list of literals matched against text the model
 # produced. Add new ones here the moment a detector is written.
@@ -65,6 +80,9 @@ def _prompt_texts() -> list[tuple[str, str]]:
     # frozen for the anchor and must not drift into a marker either.
     out.append(("loop.main._loop_break_nudge(dr)", loop_main._loop_break_nudge("web_search", 3, dr_mode=True)))
     out.append(("loop.main._loop_break_nudge(product)", loop_main._loop_break_nudge("web_search", 3, dr_mode=False)))
+    # Assembled from a body constant plus delimiters, so the constant scan sees the
+    # body but not the block the model actually reads.
+    out.append(("flow.report_shape.render_reminder()", report_shape.render_reminder()))
     out.append(("segments.render.identity_text()", render.identity_text.__doc__ or ""))
     # The anchor still renders the product identity; a regression there would
     # re-bias the control arm, so it is in scope even though DR mode drops it.
@@ -235,10 +253,23 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     assert sha(marker_only.text) == "7ad4b42cc78aec62"
     assert marker_only.text.startswith(measured.text.rstrip())
 
-    # The dr@2.8 product surface: both clauses, still purely appended.
+    # The product surface: both clauses, still purely appended. This pin moves
+    # with every report-clause rewrite: dr@3.5 replaced the dr@2.8 ordered-prose
+    # value (41d7d4d2b582bd55, the dr@2.8-3.4 live-web batches) with the fixed
+    # template (93ab746e00264baf), and dr@3.6 added the format-override rule.
+    # Superseded readings reproduce from their own arm_env.json stamps, not from
+    # this build.
     seg = asyncio.run(DRModeSegmentBuilder().build(None))
-    assert sha(seg.text) == "41d7d4d2b582bd55"
+    assert sha(seg.text) == "75d2ad71c15aacc0"
     assert seg.text.startswith(marker_only.text.rstrip())
+
+    # The dr@3.5 surface stays reachable: the override passage rides its own
+    # switch, and the off state must reproduce the superseded label's bytes -
+    # this pin is what makes dr@3.5 runs comparable against a same-batch arm
+    # cut from this build rather than only against their own _src_snapshot.
+    no_override = asyncio.run(DRModeSegmentBuilder(report_format_override=False).build(None))
+    assert sha(no_override.text) == "93ab746e00264baf"
+    assert no_override.text.startswith(marker_only.text.rstrip())
 
     # Guidance ablation, held at its measured length by pinning the other knob too:
     # a length that moved because an unrelated default flipped would read as the

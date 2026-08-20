@@ -1,0 +1,192 @@
+"""Unit tests for the account catalogue that answers what Codex models exist."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+import pytest
+
+from raven.providers import codex_catalog
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_catalogue():
+    codex_catalog.reset_cache()
+    yield
+    codex_catalog.reset_cache()
+
+
+@pytest.fixture
+def signed_in(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, payload: Any, *, status: int = 200) -> list[httpx.Request]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+
+        return httpx.Response(status, json=payload)
+
+    real_get = httpx.get
+
+    def fake_get(url, **kwargs):
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(transport=transport) as client:
+            return client.get(url, **{k: v for k, v in kwargs.items() if k != "timeout"})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    assert real_get is not fake_get
+
+    return seen
+
+
+def test_only_the_models_meant_to_be_offered_come_back(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    """The catalogue marks some entries hidden -- reachable, but not to be listed."""
+    _serve(
+        monkeypatch,
+        {
+            "models": [
+                {"slug": "gpt-5.6-sol", "visibility": "list"},
+                {"slug": "gpt-5.6-sol-wm", "visibility": "hide"},
+                {"slug": "gpt-5.4", "visibility": "list"},
+                {"slug": "codex-auto-review", "visibility": "hide"},
+            ]
+        },
+    )
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol", "gpt-5.4")
+
+
+def test_the_client_version_is_sent(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    """The value a live account was observed to answer for, pinned so a change to
+    it is a decision rather than a typo."""
+    seen = _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    codex_catalog.account_models()
+
+    assert seen[0].url.params["client_version"] == codex_catalog.CLIENT_VERSION
+
+
+def test_the_answer_is_cached_between_refreshes(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    """The picker rebuilds its list on every refresh; entitlements do not change
+    between keystrokes."""
+    seen = _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",)
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",)
+
+    assert len(seen) == 1
+
+
+def test_a_provider_list_still_renders_when_the_catalogue_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+
+    assert codex_catalog.account_models() == ()
+
+
+def test_being_offline_is_asked_about_once_not_once_per_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    """Every picker refresh rebuilds the candidate list. Without a failure cache
+    each one waits out the full timeout again, on a machine that has already been
+    told there is no network."""
+    attempts = 0
+
+    def boom(url, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+
+    assert codex_catalog.account_models() == ()
+    assert codex_catalog.account_models() == ()
+    assert codex_catalog.account_models() == ()
+
+    assert attempts == 1
+
+
+def test_a_cached_failure_does_not_outlive_a_reset(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    """``reset_cache`` is how the callers that know the answer has changed say so --
+    ``provider test``, and ``provider login`` once it has one."""
+
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    assert codex_catalog.account_models() == ()
+
+    codex_catalog.reset_cache()
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",)
+
+
+def test_not_being_signed_in_is_an_empty_catalogue(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "empty"))
+
+    assert codex_catalog.account_models() == ()
+
+
+def test_a_different_credential_is_a_different_answer(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Signing in as somebody else happens in another process, so there is no call
+    to invalidate on -- and serving the previous account's models to the next one
+    is what the picker would then offer, right where the sign-in drops the user."""
+    auth = tmp_path / "chatgpt" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth.parent))
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    auth.write_text('{"access_token": "first"}', encoding="utf-8")
+    _serve(monkeypatch, {"models": [{"slug": "first-account-model", "visibility": "list"}]})
+    assert codex_catalog.account_models() == ("first-account-model",)
+
+    # A second sign-in rewrites the file the driver owns.
+    auth.write_text('{"access_token": "second", "account_id": "other"}', encoding="utf-8")
+    _serve(monkeypatch, {"models": [{"slug": "second-account-model", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("second-account-model",)
+
+
+def test_a_report_does_not_leave_its_failure_behind(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``provider test`` asks strictly because it reports on this moment. The
+    picker asking next must not inherit that verdict: it would answer "no models"
+    for the rest of the failure window over a credential that works."""
+    auth = tmp_path / "chatgpt" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text('{"access_token": "live"}', encoding="utf-8")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth.parent))
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    with pytest.raises(httpx.ConnectError):
+        codex_catalog.account_models(strict=True)
+
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",), "the picker inherited a report's failure"

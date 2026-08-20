@@ -231,3 +231,113 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     assert response.content == ""
     assert response.tool_calls == []
     assert response.finish_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Terminal-chunk finish_reason / error_classification / truncation
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_call_stream_terminal_length_marks_truncated() -> None:
+    """The terminal chunk's finish_reason='length' survives assembly and the
+    response is judged truncated, same as the non-streaming path would."""
+    chunks = [
+        StreamDelta(content="partial answ"),
+        StreamDelta(content=None, finish_reason="length"),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.finish_reason == "length"
+    assert response.truncated is True
+
+
+async def test_llm_call_stream_terminal_length_refuses_last_tool_call() -> None:
+    """A turn cut at the ceiling puts its last streamed call in doubt: the
+    truncation verdict lands on that call's run_meta so the registry refuses it."""
+    chunks = [
+        StreamDelta(
+            content=None,
+            tool_call_delta={
+                "tool_calls": [{"id": "call_1", "function": {"name": "fs.write", "arguments": '{"path": "/tmp/x"'}}]
+            },
+        ),
+        StreamDelta(content=None, finish_reason="length"),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.truncated is True
+    tc = response.tool_calls[0]
+    # Cut mid-arguments: the buffer did not parse strictly, so the repair is
+    # recorded -- the one locally computable clue the call never finished.
+    assert tc.run_meta is not None
+    assert tc.run_meta.arguments_repaired is True
+    assert tc.run_meta.truncation is not None
+
+
+async def test_llm_call_stream_unparsed_last_call_marked_without_length() -> None:
+    """A cut the upstream never admits to (finish_reason='stop' on a truncated
+    response) still marks the unparsed last call as last-of-turn, not truncated.
+
+    The reported 'stop' is normalized to 'tool_calls': gateways answer a
+    tool-call stream with 'stop', so on a turn that carries calls the payload
+    outranks that word -- only 'length' / 'content_filter' survive as-is."""
+    chunks = [
+        StreamDelta(
+            content=None,
+            tool_call_delta={
+                "tool_calls": [{"id": "call_1", "function": {"name": "fs.write", "arguments": '{"path": "/tmp'}}]
+            },
+        ),
+        StreamDelta(content=None, finish_reason="stop"),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.truncated is False
+    assert response.finish_reason == "tool_calls"
+    tc = response.tool_calls[0]
+    assert tc.run_meta is not None
+    assert tc.run_meta.arguments_repaired is True
+    assert tc.run_meta.last_of_turn is True
+    assert tc.run_meta.truncation is None
+
+
+async def test_llm_call_stream_propagates_terminal_error() -> None:
+    """The base-class fallback surfaces a failed chat() as one terminal delta;
+    the assembly must not relabel it 'stop' and drop the classification."""
+    from raven.providers.base import ErrorClassification
+
+    classification = ErrorClassification("network", retryable=True, should_fallback=True)
+    chunks = [
+        StreamDelta(
+            content="Error calling LLM (network): boom", finish_reason="error", error_classification=classification
+        ),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is classification
+    assert response.truncated is False

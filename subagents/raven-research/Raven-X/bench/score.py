@@ -147,6 +147,21 @@ _JUDGE_CONTRA_RE = re.compile(
     r"不匹配|不一致|不相符|不等同|与.{0,12}不符", re.I)
 
 
+def _contains_word(needle: str, haystack: str) -> bool:
+    """Whole-word containment on already-`norm()`-ed (space-delimited, punctuation
+    stripped) text. Plain `needle in haystack` treats gold as an unanchored
+    substring, so any gold whose norm form is 1-2 chars — a single letter/digit,
+    "yes"/"no" — matches almost any prose (measured 35.5% false-positive rate on
+    this path overall, 84.2% when norm(gold) <= 2 chars: e.g. hle-836 gold "b" is
+    a substring of "table", scoring a wrong answer correct). Anchoring on the
+    space padding both sides is exact for norm() output and also handles a
+    multi-word needle like "x congolensis" as one phrase.
+    """
+    if not needle:
+        return False
+    return f" {haystack} ".find(f" {needle} ") != -1
+
+
 def match_ds(gold: str, ans: str) -> bool:
     g, a = norm(gold), norm(ans)
     if not g:
@@ -155,11 +170,11 @@ def match_ds(gold: str, ans: str) -> bool:
     # 时,g in a / token-recall 都会假阳 → 直接判不匹配,交 LLM 判官走语义路。
     if re.search(rf"\b(not|no|isn'?t|wasn'?t|不是|并非|而非)\s+(the\s+)?{re.escape(g)}", a):
         return False
-    if g in a:
+    if _contains_word(g, a):
         return True
     # token-recall: most gold tokens present (handles "X congolensis" in prose)
     gt = g.split()
-    return bool(gt) and sum(t in a for t in gt) / len(gt) >= 0.9
+    return bool(gt) and sum(_contains_word(t, a) for t in gt) / len(gt) >= 0.9
 
 
 _SALVAGE_CORRECT_RE = re.compile(r'"correct"\s*:\s*(true|false)', re.I)

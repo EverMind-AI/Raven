@@ -222,7 +222,7 @@ def test_default_always_visible_covers_core_and_interaction_primitives() -> None
         "edit_file",
         "list_dir",
         "grep",
-        "find",
+        "glob",
         "exec",
         "ask_user",
         "spawn",

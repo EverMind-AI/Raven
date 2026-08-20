@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.config.loader import get_config_path
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 
 
@@ -56,8 +57,22 @@ def test_safe_write_skips_when_concurrent_modification(tmp_path: Path) -> None:
 # Multi-process serialization (POSIX-only)
 
 
-def _worker_acquire_and_hold(lock_dir: str, hold_secs: float, ready: Value, done: Value) -> None:
-    """Helper run in subprocess: grab the same fcntl lock and hold it."""
+def _worker_acquire_and_hold(
+    lock_dir: str,
+    hold_secs: float,
+    ready: Value,
+    done: Value,
+    config_path: str,
+) -> None:
+    """Helper run in subprocess: grab the same fcntl lock and hold it.
+
+    A spawned process starts with a fresh interpreter: the parent's config
+    context is gone, and the memory directory is derived from it, so without
+    this the worker would lock a different file entirely.
+    """
+    from raven.config import loader
+
+    loader.set_config_path(Path(config_path))
     store = MemoryStore(Path(lock_dir))
     with store.locked():
         ready.value = 1  # signal main: we have the lock
@@ -80,7 +95,7 @@ def test_lock_serializes_across_processes(tmp_path: Path) -> None:
     done = ctx.Value("i", 0)
     p = ctx.Process(
         target=_worker_acquire_and_hold,
-        args=(str(tmp_path), 0.3, ready, done),
+        args=(str(tmp_path), 0.3, ready, done, str(get_config_path())),
     )
     p.start()
 

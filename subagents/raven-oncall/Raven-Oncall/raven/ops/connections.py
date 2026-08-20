@@ -56,8 +56,13 @@ STORE = "connections.json"
 _SHOWN = ("kind", "device", "cores", "memory", "software", "budget_unit",
           "concurrency", "note")
 
-# What the backend needs and the agent does not.
-_TRANSPORT = ("host", "port", "user", "key")
+# What the backend needs and the agent does not. ``transport`` is in here rather
+# than in _SHOWN on purpose: whether a machine is reached over ssh or is simply
+# this one changes nothing about which machine the work calls for, and a field
+# the agent can see is a field it can reason about wrongly -- here, by deciding
+# it may skip naming the machine at all, which loses the record of where a
+# command ran.
+_TRANSPORT = ("host", "port", "user", "key", "transport")
 
 
 def store_path() -> Path:
@@ -145,7 +150,97 @@ def describe() -> str:
         lines.append("  " + "   ".join(bits))
     return (
         f"{len(rows)} connection(s) this instance can run on:\n" + "\n".join(lines) +
-        "\nPick the one the task calls for and pass its id as 'connection'. "
-        "Say which you picked and why. If none of them fits, ask the owner; "
-        "do not look for a way in yourself."
+        # The id has to be told where to go. Measured 2026-08-19: a loop reached
+        # this listing, picked the right machine, wrote "that one is this laptop, I
+        # will just run it here", and hand-ran five trials. It held an id with no
+        # destination, so it fell back to what it already knew how to do. Naming
+        # the next call is the whole difference: the run before this one skipped
+        # the listing, was handed ops_declare directly, and used it.
+        "\nPick the one the task calls for and hand its id to ops_declare as "
+        "'connection' -- that is the one thing a campaign cannot be given later, "
+        "and declaring costs nothing and runs nothing. Say which you picked and "
+        "why. A machine that happens to be the computer you are on is still that "
+        "machine's work: what you would be giving up by running it by hand is the "
+        "ledger, the budget and the per-round directory, not distance. If none of "
+        "them fits, ask the owner rather than looking for a way in yourself."
     )
+
+def machine_for_path(path: str) -> tuple[str, str] | None:
+    """The machine a path belongs to, as ``(id, display_name)``, or None.
+
+    Answers one question and not the other: *whose* directory this is, never
+    *where the work should run*. A case can sit on the owner's laptop and belong
+    on the 32-core box; only the connection list, read whole, settles that.
+
+    Why this exists. A task statement gives a path, and the first thing anyone
+    does with a path is look at it. When the path is on a different machine that
+    look fails, and the failure is what makes the loop go and read the machine
+    list -- measured 2026-08-19 14:13, three local probes, "the path does not
+    exist", then ops_connections eight seconds later. When the path is on THIS
+    machine the look succeeds, and success carries no hint that the directory has
+    an owner: three runs, three times straight to a local shell, twice writing
+    into the owner's case. So the fact travels back the same way the failure does
+    -- in the tool's own result, at the moment of looking.
+
+    Claims come from ``paths`` when a connection lists them, and otherwise from
+    the absolute paths already written into ``software`` ("CalculiX 2.17
+    (/Evermind/...)"). Parsing a free-text field is loose on purpose: a claim
+    that is missed costs one line of provenance, and a claim that is wrong costs
+    one line that does not apply. Neither refuses anything, which is what makes a
+    stale list affordable here.
+    """
+    import re
+
+    try:
+        target = Path(path).expanduser()
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a look must not depend on this file
+        return None
+    for row in rows:
+        claims = row.get("paths")
+        if not isinstance(claims, list) or not claims:
+            claims = re.findall(r"(/[^\s(),;:]+)", str(row.get("software") or ""))
+        for claim in claims:
+            root = Path(str(claim)).expanduser()
+            if not _is_specific_enough(root):
+                continue
+            if target == root or root in target.parents:
+                return str(row.get("id") or ""), str(row.get("display_name") or row.get("id") or "")
+    return None
+
+
+# A claim shallower than this is a whole filesystem, not a case: "/", "/opt",
+# "/Users/admin". Honouring one would put a line about machines on every ordinary
+# look, and a note that fires everywhere is read as noise and then not read at
+# all. Three components is the shallowest thing worth claiming
+# ("/Evermind/bj_share/lxt" is four; "/srv/arena" is two and is allowed by the
+# root list below rather than by depth).
+_MIN_CLAIM_DEPTH = 2
+_NEVER_CLAIMED = frozenset({
+    "/", "/usr", "/opt", "/etc", "/var", "/tmp", "/bin", "/sbin", "/lib",
+    "/home", "/Users", "/Applications", "/System", "/Library", "/private",
+})
+
+
+def _is_specific_enough(root: Path) -> bool:
+    """Whether a claimed root names a place rather than a filesystem."""
+    text = str(root).rstrip("/") or "/"
+    if text in _NEVER_CLAIMED:
+        return False
+    parts = [p for p in root.parts if p not in ("/", "")]
+    if len(parts) < _MIN_CLAIM_DEPTH:
+        return False
+    # A home directory itself: /Users/admin, /home/me. Two components, and every
+    # ordinary look happens under it.
+    return not (len(parts) == 2 and f"/{parts[0]}" in ("/Users", "/home"))
+
+
+def provenance_line(path: str) -> str:
+    """One line naming the machine a path is on, or "" when nothing claims it."""
+    found = machine_for_path(path)
+    if not found:
+        return ""
+    conn_id, name = found
+    return (f"\n\nThis is on {name} (machine={conn_id}), one of the machines you have. "
+            f"Work that runs there and is worth watching goes through ops_declare and "
+            f"ops_submit; ops_connections shows what else is available and what each one has.")

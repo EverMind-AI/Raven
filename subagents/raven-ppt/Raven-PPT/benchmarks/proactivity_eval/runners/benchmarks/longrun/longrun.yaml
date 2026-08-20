@@ -1,0 +1,10 @@
+name: longrun
+description: |
+  LLM-simulator × 30-day proactivity trajectories.
+  One scenario per persona YAML (data/longrun/persona-*.yaml).
+  Simulator: openrouter/anthropic/claude-sonnet-4.5 (default; override
+  with --simulator-model).
+  Agent + Sentinel: local qwen3.5-27B (from ~/.hermes/config.yaml).
+  Produces trajectory.jsonl + per-day checkpoint + scorecard.
+data_dir: ../../data/longrun
+default_day_limit: 30

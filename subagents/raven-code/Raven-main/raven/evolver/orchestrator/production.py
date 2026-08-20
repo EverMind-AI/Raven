@@ -530,11 +530,13 @@ def build_evolution_orchestrator(
 
     # GSME: the per-cell elite bank (persisted under work_dir, reloaded on
     # resume). Created before the design step so the designer can read it.
+    # config.gsme=False ablates the mechanism entirely: no banking, no
+    # recombination, and the designer never sees an elite bank.
     from raven.evolver.orchestrator.archive import GsmeArchive
 
-    archive = GsmeArchive(config.archive_path)
+    archive = GsmeArchive(config.archive_path) if config.gsme else None
 
-    design_fn = design_of(sha_of, history, archive.summary_text)
+    design_fn = design_of(sha_of, history, archive.summary_text if archive is not None else lambda: "")
 
     raw_apply = make_git_commit_apply_fn(
         repo_root,
@@ -648,7 +650,7 @@ def build_evolution_orchestrator(
         inert_hook=inert_hook,
         seed_failure_map=seed_failure_map,
         archive=archive,
-        recombine_fn=make_git_recombine_fn(repo_root),
+        recombine_fn=make_git_recombine_fn(repo_root) if archive is not None else None,
     )
 
 

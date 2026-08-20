@@ -79,6 +79,12 @@ class OrchestratorConfig:
     work_dir: Path
     driver_llm_spec: dict[str, Any]
 
+    # GSME ablation switch: False disables the whole elite-archive mechanism
+    # (no banking, no cross-cell recombination, no elite bank in the design
+    # prompt). Partial ablation — recombination off but the archive still
+    # banked and visible to the designer — is budget.recombinations_per_round=0.
+    gsme: bool = True
+
     k_screen: int = 1
     k_confirm: int = 3
     anchor: AnchorParams = field(default_factory=AnchorParams)

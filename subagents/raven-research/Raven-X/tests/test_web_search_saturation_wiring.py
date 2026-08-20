@@ -100,7 +100,16 @@ async def test_page_one_still_omits_the_page_key_entirely():
 
 
 @pytest.mark.asyncio
-async def test_a_saturated_turn_puts_page_on_the_wire():
+async def test_a_saturated_turn_pages_the_repeated_query_not_the_fresh_one():
+    """dr@3.4. The escalation level is turn-global; the page on the wire is not.
+
+    The dry streak deliberately spans queries, but once the ladder stood at page
+    2 every LATER query - including brand-new terms - was sent to page 2, i.e.
+    Serper ranks 11-20 for a query whose first ten ranks nobody had seen. The
+    fresh query's near-certain empty page then scored as dry, feeding the
+    ``stop`` rung. Depth is therefore keyed on the query family: a repeated
+    query goes one page deeper, a fresh one starts at page 1.
+    """
     rec = _Recorder(data={"organic": []})
     sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
     tool = WebSearchTool(api_key="k", max_results=5, saturation=sat)
@@ -109,7 +118,9 @@ async def test_a_saturated_turn_puts_page_on_the_wire():
         await tool.execute(query="b")
         assert sat.page == 2
         await tool.execute(query="c")
-    assert rec.bodies[-1] == {"q": "c", "num": 5, "page": 2}
+        assert rec.bodies[-1] == {"q": "c", "num": 5}, "fresh query was beheaded to page 2"
+        await tool.execute(query="a")
+    assert rec.bodies[-1] == {"q": "a", "num": 5, "page": 2}
 
 
 @pytest.mark.asyncio
@@ -310,3 +321,45 @@ async def test_start_turn_reopens_search_for_the_next_question():
         assert not sat.stopped
         await tool.execute(query="b")
     assert rec.bodies[-1] == {"q": "b", "num": 5}
+
+
+@pytest.mark.asyncio
+async def test_a_transport_error_does_not_advance_the_query_page_depth():
+    """dr@3.4. The depth latch records pages SERVED, not pages attempted.
+
+    A query whose page-1 request dies in transport has shown nobody anything;
+    latching the attempt would send its retry to page 2, skipping the ten
+    ranks the retry exists to fetch.
+    """
+    rec = _Recorder(data={"organic": []})
+    fail = {"on": False}
+    real_client = rec.client
+
+    def client(**kw):
+        inner = real_client(**kw)
+        if not fail["on"]:
+            return inner
+
+        class _Boom:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *_a, **_kw):
+                raise RuntimeError("connection reset")
+
+        return _Boom()
+
+    sat = SearchSaturation(k=2, on_saturate="paginate", max_pages=2)
+    tool = WebSearchTool(api_key="k", max_results=5, saturation=sat)
+    with patch("raven.agent.tools.web.httpx.AsyncClient", client):
+        await tool.execute(query="a")
+        await tool.execute(query="b")
+        assert sat.page == 2
+        fail["on"] = True
+        await tool.execute(query="x")
+        fail["on"] = False
+        await tool.execute(query="x")
+    assert rec.bodies[-1] == {"q": "x", "num": 5}, "errored attempt latched the page depth"

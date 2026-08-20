@@ -16,13 +16,13 @@ import httpx
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.token_wise import pricing
 
 # The real fetch, captured before conftest's autouse guard stubs it to {}.
-_REAL_FETCH = pricing._fetch_openrouter_models
+_REAL_FETCH = rates._fetch_openrouter_models
 
 
 class UsageProvider(LLMProvider):
@@ -61,9 +61,9 @@ def workspace():
 
 @pytest.fixture(autouse=True)
 def _reset_openrouter_cache():
-    pricing._OPENROUTER_CACHE.clear()
+    rates._OPENROUTER_CACHE.clear()
     yield
-    pricing._OPENROUTER_CACHE.clear()
+    rates._OPENROUTER_CACHE.clear()
 
 
 def _make_agent(workspace: Path, provider: LLMProvider, model: str, window: int) -> AgentLoop:
@@ -120,9 +120,9 @@ async def test_usage_sink_context_max_from_live_openrouter(workspace, monkeypatc
         kwargs.setdefault("transport", httpx.MockTransport(handler))
         return real_client(*args, **kwargs)
 
-    monkeypatch.setattr(pricing, "_fetch_openrouter_models", _REAL_FETCH)
-    monkeypatch.setattr(pricing.httpx, "Client", client_factory)
-    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", 0.0)
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _REAL_FETCH)
+    monkeypatch.setattr(rates.httpx, "Client", client_factory)
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
 
     provider = UsageProvider("openrouter/deepseek/deepseek-v4-pro", 1000, 500)
     agent = _make_agent(

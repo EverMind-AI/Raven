@@ -66,8 +66,11 @@ class _Patched:
 
     def __init__(self, response):
         self._client = patch("raven.agent.tools.web.httpx.AsyncClient", lambda **kw: _FakeClient(response))
+        async def _ok(u, **_):
+            return (True, "")
+
         self._validator = patch(
-            "raven.agent.tools.web.validate_url_target", lambda u, **_: (True, "")
+            "raven.agent.tools.web.validate_url_target_async", _ok
         )
 
     def __enter__(self):
@@ -482,8 +485,11 @@ def _patch_reader(monkeypatch, client):
     monkeypatch.setattr(
         "raven.agent.tools.web.httpx.AsyncClient", lambda **kw: client
     )
+    async def _ok_target(u, **_):
+        return (True, "")
+
     monkeypatch.setattr(
-        "raven.agent.tools.web.validate_url_target", lambda u, **_: (True, "")
+        "raven.agent.tools.web.validate_url_target_async", _ok_target
     )
     slept = []
 

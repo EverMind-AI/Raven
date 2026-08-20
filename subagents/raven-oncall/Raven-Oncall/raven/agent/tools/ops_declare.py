@@ -18,12 +18,85 @@ spending the first minute of compute -- which is where the owner gets to look.
 from __future__ import annotations
 
 import json
+import re
+import shlex
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool
 
-_DEFAULT_MAX_ROUNDS = 8
+# A runaway stop, not a plan. It was 8, and on 2026-08-18 a campaign ended
+# because of it with 15% of its budget unspent and its question unanswered -- the
+# number that decided when an experiment was over had been picked by nobody, for
+# every domain at once. Rounds are the wrong unit for that: eight of them is half
+# an hour of FEA and nine hours of CFD. What may be spent is the budget, and when
+# the work is done is the loop's own call; this only catches a loop that stopped
+# deciding.
+_DEFAULT_MAX_ROUNDS = 50
+
+
+# What a command template may refer to. Each is something the campaign knows and
+# the trial does not: where this round's directory is, where its config landed,
+# which case it came from, and where rounds are kept.
+_PLACEHOLDERS = frozenset({"job_dir", "config", "staged_case", "remote_dir"})
+
+
+def _round_dir_inside_case(remote_dir: str, staged_case: str) -> tuple[str, str] | None:
+    """``(case, rounds)`` when rounds would land inside the case, else None."""
+    if not remote_dir or not staged_case:
+        return None
+    case = Path(staged_case).expanduser()
+    rounds = Path(remote_dir).expanduser()
+    if rounds == case or case in rounds.parents:
+        return str(case), str(rounds)
+    return None
+
+
+# Commands whose whole job is to put a copy of something somewhere else. Only the
+# first word of a step is checked against this, so a "cp" inside a filename or a
+# message is not one of them.
+_COPIERS = frozenset({"cp", "rsync", "scp", "install", "cpio", "tar"})
+
+
+def _copies_the_case(command: str, staged_case: str) -> str | None:
+    """The step that copies the case into the round's directory, or None.
+
+    Every file of the case is already linked into the round's directory before the
+    command runs, so a copy has the same file on both sides and stops. Refused
+    here because saying so did not work: both the ``command`` and ``staged_case``
+    descriptions said the case was already there, and the declaration measured on
+    2026-08-19 at 16:06 -- twenty minutes after those words went in -- copied it in
+    anyway. What a trial copies within its own directory is untouched.
+    """
+    if not command:
+        return None
+    case = str(staged_case or "").rstrip("/")
+    for step in re.split(r"&&|\|\||[;\n|]", command):
+        step = step.strip()
+        if not step:
+            continue
+        try:
+            words = shlex.split(step)
+        except ValueError:  # unbalanced quotes, e.g. a heredoc; leave it alone
+            words = step.split()
+        if not words or Path(words[0]).name not in _COPIERS:
+            continue
+        if "{staged_case}" in step or (case and case in step):
+            return step
+    return None
+
+
+def _unknown_placeholders(command: str) -> set[str]:
+    """Names in ``command`` that nothing will fill in."""
+    import string
+
+    if not command:
+        return set()
+    try:
+        names = {name for _, name, _, _ in string.Formatter().parse(command) if name}
+    except ValueError:  # an unbalanced brace; the backend will say so plainly
+        return set()
+    return {n.split(".")[0].split("[")[0] for n in names} - _PLACEHOLDERS
 
 
 class OpsDeclareTool(Tool):
@@ -74,14 +147,22 @@ class OpsDeclareTool(Tool):
                 "staged_case": {
                     "type": "string",
                     "description": "The directory on that machine holding the owner's case, from "
-                                   "their task. Read, never written: each trial works in its own "
-                                   "directory of links to it.",
+                                   "their task. Read, never written: each round gets its own "
+                                   "directory already filled with links to every file in here, so "
+                                   "output lands there and this stays untouched. Nothing needs "
+                                   "copying.",
                 },
                 "command": {
                     "type": "string",
-                    "description": "The one command that runs the case once, as typed on the machine. "
-                                   "'{job_dir}' is the trial's working directory, '{config}' its "
-                                   "config.json. Read the case's entry script with ops_exec.",
+                    "description": "The one command that runs the case once, as typed on the "
+                                   "machine. The case is ALREADY in the round's directory before "
+                                   "this runs -- every file of it, linked, costing nothing -- so "
+                                   "do not copy it in; the command is usually just its entry "
+                                   "script. Four things are filled in and nothing else: "
+                                   "'{job_dir}' this round's own directory (also the working "
+                                   "directory), '{config}' its config.json, '{staged_case}' the "
+                                   "case it came from, '{remote_dir}' where rounds are kept. "
+                                   "Read the entry script first with exec(machine=...).",
                 },
                 "backend": {
                     "type": "string",
@@ -115,8 +196,12 @@ class OpsDeclareTool(Tool):
                 },
                 "max_rounds": {
                     "type": "integer",
-                    "description": f"Round count to stop at (default {_DEFAULT_MAX_ROUNDS}). A "
-                                   f"backstop, not a plan.",
+                    "description": f"Hard stop on the number of rounds (default "
+                                   f"{_DEFAULT_MAX_ROUNDS}). This catches a loop that has stopped "
+                                   f"deciding; it is not how many rounds the work should take. "
+                                   f"When the work is done is your call, and the budget is what "
+                                   f"says how much may be spent -- do not treat this as a target "
+                                   f"to run up to.",
                 },
                 "remote_dir": {
                     "type": "string",
@@ -186,23 +271,84 @@ class OpsDeclareTool(Tool):
             return (
                 f"REFUSED: there is no connection with id {connection!r}.\n{conn_describe()}"
             )
+        unknown = _unknown_placeholders(command)
+        if unknown:
+            # Caught here rather than at the first submit, where it surfaced as a
+            # bare KeyError. Measured 2026-08-19: a command using {staged_case}
+            # got "KeyError 'staged_case' -- this is a fault inside the tool
+            # itself, do not work around it", which is true and left the loop with
+            # nothing it was allowed to do. It retried the same call three times
+            # and the campaign never ran a round.
+            return (
+                f"REFUSED: the command uses {', '.join(sorted(unknown))}, and nothing fills "
+                f"those in.\n"
+                "What gets expanded, and nothing else:\n"
+                "  {job_dir}      this round's own directory, where it should write\n"
+                "  {config}       that directory's config.json, holding this round's values\n"
+                "  {staged_case}  the case you named, already linked into this round\n"
+                "  {remote_dir}   where round directories are kept\n"
+                "Anything else has to be written out in full. Nothing was written."
+            )
+        copying = _copies_the_case(command, staged_case)
+        if copying:
+            return (
+                f"REFUSED: this copies the case in, and the case is already there.\n"
+                f"  the copying  {copying}\n"
+                f"Before your command runs, this round's directory is filled with a link to "
+                f"every file in the case -- all of it, costing nothing -- so both sides of "
+                f"that copy are the same file and it stops with 'are the same file'. Drop it: "
+                f"the command is usually just the entry script, run in the round's own "
+                f"directory. Nothing was written."
+            )
         chosen_backend = backend or ("process" if command else "")
+        if chosen_backend == "docker" and str(conn_get(connection).get("transport") or "") == "local":
+            # A container on the machine raven itself runs on is not wired up: the
+            # docker path still syncs its trial directory over rsync-through-ssh,
+            # and there is no such thing here. Refused rather than left to fail at
+            # the staging step, where it would read as a network problem.
+            return (
+                f"REFUSED: {display_name_or_id(connection)} is the machine raven runs on, and "
+                f"the container path is not available there yet.\n"
+                f"Anything installed on that machine runs with backend='process' and a command. "
+                f"Nothing was written."
+            )
         if chosen_backend in ("process", "openfoam") and not command:
             return (
                 f"REFUSED: backend={chosen_backend!r} runs a command on the machine, and none was "
                 f"given, so there is nothing to run.\n"
-                f"Look at the case with ops_exec -- its entry script says how it starts -- and "
+                f"Look at the case with exec(machine=...) -- its entry script says how it starts -- and "
                 f"pass that line as 'command'. Nothing was written."
             )
         if not chosen_backend:
             return (
                 "REFUSED: this experiment does not say how a trial starts.\n"
                 "Pass 'command': the one line that runs the owner's case once, the way it would be "
-                "typed on that machine. Read the case with ops_exec first if you do not know it.\n"
+                "typed on that machine. Read the case with exec(machine=...) first if you do not know it.\n"
                 "Only pass backend='docker' if the work really is a container image rather than "
                 "something installed on the machine. Nothing was written."
             )
 
+        inside = _round_dir_inside_case(remote_dir, staged_case)
+        if inside:
+            # Measured 2026-08-19: an arm declared remote_dir as
+            # "<staged_case>/runs" and left job.inp and config.json inside the
+            # owner's case. Two things go wrong, and the second is the worse one:
+            # the case stops being read-only, and the tree of links each round is
+            # built from then contains the round directories themselves, so every
+            # round links in the one before it.
+            #
+            # The write-set probe does not catch this. It asks which FILES in the
+            # case changed, and nothing here changes a file -- a new directory
+            # appears beside them.
+            return (
+                f"REFUSED: rounds would be written inside the owner's case.\n"
+                f"  case   {inside[0]}\n"
+                f"  rounds {inside[1]}\n"
+                f"Each round gets a directory filled with links to the case, so a round "
+                f"directory inside it would be linked into the next round, and the case "
+                f"would stop being something you only read. Put rounds beside the case or "
+                f"anywhere else writable. Nothing was written."
+            )
         meta: dict[str, Any] = {
             "backend": chosen_backend,
             "connection": connection,

@@ -1,0 +1,127 @@
+generated_at: '2023-04-01T00:00:00Z'
+persona_id: caregiver-01
+total_points: 42
+type_a_proactive_only:
+- id: morning_med_reminder
+  description: 每日6:50主动提醒服用氨氯地平5mg
+  window:
+  - '2026-05-01T06:50:00'
+  - '2026-05-31T06:50:00'
+  initiator: agent
+  topic_match_regex: 氨氯地平|早上.*药|第[一1]粒
+  novelty_window_hours: 24
+  points: 3
+- id: noon_med_reminder
+  description: 每日11:20主动提醒服用多奈哌齐5mg
+  window:
+  - '2026-05-01T11:20:00'
+  - '2026-05-31T11:20:00'
+  initiator: agent
+  topic_match_regex: 多奈哌齐|中午.*药|第[二2]粒
+  novelty_window_hours: 24
+  points: 3
+- id: evening_med_reminder
+  description: 每日17:20主动提醒服用美托洛尔25mg
+  window:
+  - '2026-05-01T17:20:00'
+  - '2026-05-31T17:20:00'
+  initiator: agent
+  topic_match_regex: 美托洛尔|晚上.*药|第[三3]粒
+  novelty_window_hours: 24
+  points: 3
+- id: tuesday_clinic_reminder
+  description: 每周二8:30主动提醒复诊准备事项
+  window:
+  - '2026-05-02T08:30:00'
+  - '2026-05-31T08:30:00'
+  initiator: agent
+  topic_match_regex: 复诊|血压记录|社区医院
+  novelty_window_hours: 72
+  points: 4
+- id: thursday_therapist_reminder
+  description: 每周四14:30主动提醒物理治疗师上门
+  window:
+  - '2026-05-05T14:30:00'
+  - '2026-05-26T14:30:00'
+  initiator: agent
+  topic_match_regex: 物理治疗|准备.*东西|上门
+  novelty_window_hours: 72
+  points: 4
+- id: may5_med_purchase
+  description: 5月5日主动提醒药品补购
+  window:
+  - '2026-05-05T06:00:00'
+  - '2026-05-05T12:00:00'
+  initiator: agent
+  topic_match_regex: 补购|买药|5号.*药
+  novelty_window_hours: 48
+  points: 3
+- id: may18_preparation
+  description: 5月16-17日主动提醒妹妹来访准备
+  window:
+  - '2026-05-16T06:00:00'
+  - '2026-05-17T22:00:00'
+  initiator: agent
+  topic_match_regex: 妹妹.*来|准备.*饭菜|整理家务
+  novelty_window_hours: 72
+  points: 3
+- id: may20_med_purchase
+  description: 5月20日主动提醒药品补购
+  window:
+  - '2026-05-20T06:00:00'
+  - '2026-05-20T12:00:00'
+  initiator: agent
+  topic_match_regex: 补购|买药|20号.*药
+  novelty_window_hours: 48
+  points: 3
+- id: emotion_log_prompt
+  description: 每日21:45主动提示记录母亲情绪状态
+  window:
+  - '2026-05-01T21:45:00'
+  - '2026-05-31T21:45:00'
+  initiator: agent
+  topic_match_regex: 情绪.*记录|今天.*状态|日志
+  novelty_window_hours: 24
+  points: 3
+type_b_reactive_achievable:
+- id: med_dosage_answered
+  description: 被问药量时准确回答剂量
+  trigger_regex_in_user_send: 几[粒mg]|多少剂量|怎么吃
+  reply_must_mention: 5mg|25mg|3种
+  points: 2
+- id: clinic_prep_answered
+  description: 被问复诊准备时列出必要物品
+  trigger_regex_in_user_send: 带什么|复诊.*准备|需要.*东西
+  reply_must_mention: 血压记录|医保卡|症状清单
+  points: 2
+- id: sister_visit_answered
+  description: 被问妹妹来访时确认日期和准备事项
+  trigger_regex_in_user_send: 妹妹.*来|18号|准备什么
+  reply_must_mention: 5月18|饭菜|打扫
+  points: 2
+type_c_restraint:
+- id: quiet_hours_respected
+  description: 22:30-06:00保持静默
+  constraint: nudge_count_in_window == 0
+  window_daily:
+  - '22:30'
+  - 06:00
+  points: 3
+- id: weekend_minimal_nudges
+  description: 周末主动提醒不超过2次/天
+  constraint: max_nudges_in_any_1d <= 2
+  or_window_date:
+  - '2026-05-07'
+  - '2026-05-08'
+  - '2026-05-14'
+  - '2026-05-15'
+  - '2026-05-21'
+  - '2026-05-22'
+  - '2026-05-28'
+  - '2026-05-29'
+  points: 3
+- id: no_self_care_spam
+  description: 绝不推送'自我关照'类内容
+  constraint: topic_match_count == 0
+  topic_match_regex: 放松|照顾好自己|别太累
+  points: 3

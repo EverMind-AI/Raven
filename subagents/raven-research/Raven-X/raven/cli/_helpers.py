@@ -62,58 +62,138 @@ def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
         )
 
 
+def check_provider_credentials(config: Config) -> None:
+    """Fail-fast when the configured provider is missing required credentials.
+
+    Cheap (no litellm import), so it can run at startup even when the real
+    provider is built lazily.
+
+    Raises ``MissingCredentialsError`` rather than printing and exiting: more
+    than one entry point calls this, and only one of them is a terminal. Each
+    renders the failure in its own idiom -- the CLI as a red line and exit 1,
+    the TUI as an RPC error carrying the same sentence.
+
+    What counts as configured is `providers.auth`, the same declaration routing
+    and `provider list` consult. Deciding it here as well is what produced three
+    verdicts on one config: a Gemini section holding only `api_key_list` read as
+    configured in `provider list` and refused to start, and Azure with a key and
+    no address was routed and displayed as configured yet rejected here.
+    """
+    from raven.providers.auth import MissingCredentialsError, credential_status
+    from raven.providers.registry import find_by_model, split_model_id
+
+    model = config.agents.defaults.model
+    provider_name = config.get_provider_name(model)
+    if not provider_name:
+        # Routing found no configured section, so name the provider the model id
+        # points at rather than reporting on nothing.
+        spec = find_by_model(model)
+        provider_name = spec.name if spec else split_model_id(model)[0]
+    if not provider_name:
+        raise MissingCredentialsError(
+            "no provider configured",
+            remedy=(
+                "Run: raven provider set <name> --api-key <key>, then raven provider use <name>/<model>\n"
+                "Or run `raven onboard` for guided setup."
+            ),
+        )
+
+    status = credential_status(provider_name, config.providers.get(provider_name), include_external=True)
+    if status.ok:
+        return
+
+    # A first run fails this check while naming a provider the user never chose:
+    # with nothing configured, routing falls back to the schema's default model,
+    # whose vendor then gets reported as the thing to go fix. Sending someone who
+    # only has an OpenRouter key to `provider set anthropic` is the wrong errand,
+    # so answer the wizard instead. Both halves are required -- a user who picked
+    # this model, or who has some other provider working, gets the specific
+    # verdict, which for the OAuth families names a sign-in rather than a key.
+    # Names come from the declared fields *and* the extras: an undeclared
+    # provider key is a supported shape, and `ProvidersConfig.get` is the only
+    # place allowed to resolve either kind, so route both through it rather than
+    # reading `__dict__` -- which sees no extras and would call a user whose one
+    # working credential lives there unconfigured.
+    chose_a_model = config.agents.defaults.model != type(config.agents.defaults)().model
+    configured = (*config.providers.__dict__, *(config.providers.model_extra or {}))
+    if not chose_a_model and not any(
+        credential_status(name, config.providers.get(name), include_external=True).ok for name in configured
+    ):
+        raise MissingCredentialsError(
+            "no provider is configured yet -- run `raven onboard` for guided setup",
+            remedy="Already have a key? raven provider set <name> --api-key <key>",
+        )
+
+    raise MissingCredentialsError(
+        status.summary,
+        provider=provider_name,
+        remedy="Run `raven onboard` for guided setup.",
+    )
+
+
 def make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
+    from raven.providers.auth import MissingCredentialsError
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
+
+    check_provider_credentials(config)
 
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    # OpenAI Codex (OAuth)
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+    defaults = config.agents.defaults
+
+    from raven.providers.registry import endpoints_unsupported_reason, find_by_name
+
+    spec = find_by_name(provider_name) if provider_name else None
+    client = spec.client if spec else ""
+
+    if p and p.endpoints:
+        reason = endpoints_unsupported_reason(provider_name)
+        if reason:
+            raise MissingCredentialsError(reason, provider=provider_name or "")
+
+    if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
-    # Azure OpenAI: direct Azure OpenAI endpoint with deployment name
-    elif provider_name == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
+    elif client == "minimax_oauth":
+        from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
+
+        provider = MiniMaxOAuthProvider(
+            region="global" if provider_name == "minimax_global" else "cn",
             default_model=model,
         )
+    elif client == "azure":
+        provider = AzureOpenAIProvider(
+            api_key=p.effective_api_key,
+            api_base=p.api_base,
+            default_model=model,
+            deployment=getattr(p, "deployment", "") or "",
+            api_version=getattr(p, "api_version", "") or "2024-10-21",
+        )
     else:
+        from raven.providers.capabilities import wire_overrides
+        from raven.providers.endpoints import provider_endpoints
         from raven.providers.litellm_provider import LiteLLMProvider
-        from raven.providers.registry import find_by_name
 
-        spec = find_by_name(provider_name)
-        if (
-            not model.startswith("bedrock/")
-            and not (p and p.api_key)
-            and not (spec and (spec.is_oauth or spec.is_local))
-        ):
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.raven/config.json under providers section")
-            raise typer.Exit(1)
-        # OpenRouter routes qwen3.x-27B through providers that default to
-        # reasoning mode (e.g. AtlasCloud): every chat completion emits
-        # ~800 chain-of-thought tokens and takes ~30s wall — fatal for
-        # interactive use and for high-volume benchmark runs. The
-        # ``reasoning.enabled=false`` flag is OpenRouter-specific and
-        # forwards through LiteLLM's ``extra_body``.
-        extra_body: dict[str, Any] = {}
-        if provider_name == "openrouter" and "qwen" in (model or "").lower():
-            extra_body["reasoning"] = {"enabled": False}
+        # Per-model wire facts live in ``capabilities.wire_overrides`` -- no
+        # model-family branch belongs in this factory. The reasoning-off
+        # override only applies when the user did NOT pin reasoningEffort:
+        # the workaround exists for configs that never asked for reasoning,
+        # and letting it ride along with an explicit reasoningEffort would put
+        # "enabled": false and the requested effort on the same wire request -
+        # the benchmark workaround silently overriding the stated configuration.
+        extra_body: dict[str, Any] = dict(wire_overrides(provider_name, model))
+        if defaults.reasoning_effort and extra_body.get("reasoning") == {"enabled": False}:
+            del extra_body["reasoning"]
         # ``providers.<name>.routing`` pins the OpenRouter upstream — see
         # ProviderConfig.routing for why. Merged into extra_body rather than
-        # assigned over it: the qwen clause above and this one are independent
-        # conditions on the same request body, and a config that happened to
-        # satisfy both would otherwise get whichever branch ran last.
+        # assigned over it: the wire overrides above and this one are
+        # independent conditions on the same request body, and a config that
+        # happened to satisfy both would otherwise get whichever branch ran
+        # last.
         routing = getattr(p, "routing", None) if p else None
         if routing:
             if provider_name == "openrouter":
@@ -123,22 +203,50 @@ def make_provider(config: Config):
                     f"[yellow]Note: providers.{provider_name}.routing is OpenRouter-only "
                     f"and was ignored.[/yellow]"
                 )
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-            extra_body=extra_body,
-        )
 
-    defaults = config.agents.defaults
+        eps = provider_endpoints(p) if p else []
+
+        def _litellm(api_key, api_base, extra_headers):
+            return LiteLLMProvider(
+                api_key=api_key,
+                # ``api_base`` already carries the section's flat address when
+                # the endpoint named none of its own (see ``provider_endpoints``);
+                # the fallback here is only for a gateway/local provider whose
+                # *flat* address is also empty, where ``get_api_base`` still has
+                # the spec's default to offer.
+                api_base=api_base or config.get_api_base(model),
+                default_model=model,
+                extra_headers=extra_headers,
+                provider_name=provider_name,
+                extra_body=extra_body or None,
+                model_overrides=defaults.model_overrides,
+            )
+
+        if len(eps) > 1:
+            from raven.providers.endpoint_rotor import EndpointRotorProvider
+
+            def make_inner(ep):
+                return _litellm(ep.api_key, ep.api_base, ep.extra_headers)
+
+            provider = EndpointRotorProvider(
+                eps,
+                make_inner,
+                default_model=model,
+                strategy=p.endpoint_strategy if p else "sticky",
+            )
+        elif eps:
+            provider = _litellm(eps[0].api_key, eps[0].api_base, eps[0].extra_headers)
+        else:
+            # No config section for this provider at all -- ``provider_endpoints``
+            # always synthesizes one entry from a section, so [] means p is None.
+            provider = _litellm(None, None, None)
+
     provider.generation = GenerationSettings(
         temperature=defaults.temperature,
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         repetition_penalty=defaults.repetition_penalty,
-        request_timeout_seconds=defaults.request_timeout_seconds,
+        timeout=defaults.request_timeout_seconds,
     )
     return provider
 

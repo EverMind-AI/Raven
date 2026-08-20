@@ -1,0 +1,25 @@
+# Uniform minimal task framing — identical for every agent (no persona,
+# no decision principles). The only author-injected text in the uniform
+# pbench cells; see the ablation appendix in the benchmark README.
+#
+# Placeholders (filled by prompts_loader.render() via str.format):
+#   {obs_block}    — activity stream lines, always present
+#   {synth_block}  — synthesized context; empty string in cold mode
+
+system: |
+  You are a personal AI assistant. You observe the user's recent activity
+  stream and decide whether to proactively reach out to the user right now.
+
+  When you have decided, emit your final answer as a JSON code block and stop:
+
+  ```json
+  {{"should_help": true|false, "proposed_task": "<short concrete task, or null>", "reason": "<one sentence>"}}
+  ```
+
+user: |
+  Recent activity stream (time-ordered, most recent last):
+
+  {obs_block}
+  {synth_block}
+  Decide whether to proactively reach out to the user right now, then emit
+  the JSON decision and stop.

@@ -16,7 +16,7 @@ from raven.agent.ledger import ledger_append as _ledger_append
 from raven.agent.search_saturation import SearchSaturation
 from raven.agent.tools.base import Tool
 from raven.security.benchmark_containment import BenchmarkContainment
-from raven.security.network import validate_url_target
+from raven.security.network import validate_url_target_async
 
 DigestFn = Callable[[str, str], Awaitable[str]]
 
@@ -75,6 +75,25 @@ _NO_SHAPING = {"answer_box_chars": 0, "knowledge_chars": 0,
                # snippet characters, i.e. an effect inferred from an aggregate rather
                # than an event recorded when it happened. This counts the marks.
                "snippet_repeat_marks": 0}
+
+
+def _error_shaping(exc: Exception) -> dict:
+    """Shaping payload for a search that died in transport.
+
+    ``transport_err: true`` alone made a drained API key and a network blip the
+    same row - during the one mid-run outage this project has already eaten, the
+    ledger could not say which it was. The error string and status make the row
+    diagnosable; ``quota_err`` singles out the credential/billing statuses the
+    rollout-time balance polling watches for.
+    """
+    shaping = dict(_NO_SHAPING)
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    shaping["error"] = f"{type(exc).__name__}: {exc}"[:500]
+    shaping["status"] = int(status) if status is not None else None
+    shaping["quota_err"] = status in (401, 402, 403)
+    return shaping
+
+
 # The corpus retrieval service clamps to this of its own accord
 # (``bcplus_serve.py``), so asking for more would silently return the same rows.
 _MAX_SEARCH_DEPTH = 50
@@ -278,7 +297,7 @@ class WebSearchTool(Tool):
         self.repeat_notice = repeat_notice
         # Carries the ordered result URLs alongside the rendered text so a replay is
         # logged from what was actually served, not re-parsed out of the rendering.
-        self._prior: dict[tuple[str, int], tuple[int, str, list[str]]] = {}
+        self._prior: dict[tuple[str, int, int, int], tuple[int, str, list[str], dict]] = {}
         self._searches = 0
         self._retry_budget = _RetryBudget()
         # Set by the verify gate on a rejection; read here. None outside a flow that
@@ -357,13 +376,25 @@ class WebSearchTool(Tool):
         ) else None
         k = self._request_width(n_requested, deep)
         # Read once, before either branch. The replay key below and the request itself
-        # must be built from the same value; see ``_search``.
-        page = self._saturation.page if self._saturation is not None else 1
+        # must be built from the same value; see ``_search``. Keyed on the normalized
+        # query (dr@3.4): the ladder's escalation is turn-global, but a page is only
+        # deeper for terms already served the pages before it - a fresh query sent to
+        # page 2 skips ranks 1-10 for terms nobody has seen ranked, and its
+        # near-certain empty return then scores as dry, feeding the ``stop`` rung.
+        norm_query = " ".join((query or "").lower().split())
+        page = self._saturation.page_for(norm_query) if self._saturation is not None else 1
+        req_page = page if self._saturation is not None else None
         if not self.repeat_notice:
             if deep is not None:
                 self._evidence_round.consume()
             result, urls, shaping = await self._search(query, n_requested, k=k, page=page)
-            self._log_search(query, n_requested, urls, result, shaping, replay=False, k=k)
+            # Latched after the fact, and never on a transport error: an
+            # errored request served no page, and latching it would send the
+            # retry of the same query one page past results nobody saw.
+            if self._saturation is not None and not self._transport_err(result):
+                self._saturation.note_page(norm_query, page)
+            self._log_search(query, n_requested, urls, result, shaping, replay=False, k=k,
+                             page=req_page)
             return result
         # Keyed on every request dimension that changes what comes back: both widths
         # and the page. The same terms asked for more results is a different request,
@@ -387,7 +418,7 @@ class WebSearchTool(Tool):
         # False, which the corpus path forces. A constant extra tuple element moves
         # no key relative to any other, so only an arm that actually turns a page
         # sees a different hit than it saw before.
-        key = (" ".join((query or "").lower().split()), n_requested, k, page)
+        key = (norm_query, n_requested, k, page)
         if (prior := self._prior.get(key)) is not None:
             replayed = f"{_REPEAT_NOTE}\n{prior[1]}"
             # A byte-identical repeat is the archetypal dry search, so it counts
@@ -398,19 +429,24 @@ class WebSearchTool(Tool):
             if self._saturation is not None:
                 self._saturation.observe(())
             self._log_search(
-                query, n_requested, prior[2], replayed, prior[3], replay=True, k=k
+                query, n_requested, prior[2], replayed, prior[3], replay=True, k=k,
+                page=req_page,
             )
             return replayed
         self._searches += 1
         if deep is not None:
             self._evidence_round.consume()
         result, urls, shaping = await self._search(query, n_requested, k=k, page=page)
+        # Same after-the-fact latch as the no-notice branch above.
+        if self._saturation is not None and not self._transport_err(result):
+            self._saturation.note_page(norm_query, page)
         # Only a real result set is worth replaying. Caching an error or an
         # empty page would turn a transient retrieval failure into a permanent
         # one for the rest of the turn - a retry is the correct response there.
         if not self._failed(result):
             self._prior[key] = (self._searches, result, urls, shaping)
-        self._log_search(query, n_requested, urls, result, shaping, replay=False, k=k)
+        self._log_search(query, n_requested, urls, result, shaping, replay=False, k=k,
+                         page=req_page)
         return result
 
     @staticmethod
@@ -447,7 +483,7 @@ class WebSearchTool(Tool):
     def _log_search(
         self, query: str, n: int, urls: list[str], rendered: str,
         shaping: dict[str, int], *, replay: bool, k: int | None = None,
-        suppressed: bool = False,
+        suppressed: bool = False, page: int | None = None,
     ) -> None:
         """Record one search call.
 
@@ -461,6 +497,16 @@ class WebSearchTool(Tool):
         which a DR arm turns off - is the one part of that difference with no measured
         magnitude anywhere on disk.
         """
+        if replay and shaping.get("n_served") is not None:
+            # ``n_served`` is contractually None on any row whose call never reached
+            # an endpoint, and a replay is exactly that - but the cached shaping dict
+            # carries the ORIGINAL call's count, so spreading it as-is made a reader
+            # of "non-null means the endpoint was reached" overstate reach by the
+            # replay rate (38.1% on one measured DR arm). The original count stays
+            # readable under its own name.
+            shaping = dict(shaping)
+            shaping["n_served_at_capture"] = shaping.pop("n_served")
+            shaping["n_served"] = None
         _ledger_append({
             "ts": time.time(),
             "op": "search",
@@ -484,6 +530,15 @@ class WebSearchTool(Tool):
             # Null rather than 0 on an arm without the mechanism, so "this arm never
             # went deep" stays a different row from "this call did not".
             "k_requested": k if self.cross_query_dedup else None,
+            # The page this call was keyed at (live rows: the page on the wire;
+            # replay rows: the page in the replay key). ``sat_page`` (in the
+            # saturation counters) is the ladder's escalation level; since
+            # ``page_for`` (dr@3.4) the two legitimately diverge - a fresh query
+            # under an escalated ladder still goes to page 1 - and without this
+            # key that behaviour cannot be audited from the ledger. Null when
+            # the arm has no saturation rule (same discipline as k_requested)
+            # and on suppressed rows, which never key a request at all.
+            "req_page": page,
             "evidence_round_open": (
                 self._evidence_round.active if self._evidence_round is not None else None
             ),
@@ -728,10 +783,10 @@ class WebSearchTool(Tool):
             return "\n".join(lines), urls, shaping
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
-            return f"Proxy error: {e}", [], dict(_NO_SHAPING)
+            return f"Proxy error: {e}", [], _error_shaping(e)
         except Exception as e:
             logger.error("WebSearch error: {}", e)
-            return f"Error: {e}", [], dict(_NO_SHAPING)
+            return f"Error: {e}", [], _error_shaping(e)
 
 
     async def _search_corpus(
@@ -765,7 +820,7 @@ class WebSearchTool(Tool):
             served = (r.json() or {}).get("results", [])
         except Exception as e:
             logger.error("WebSearch(corpus) error: {}", e)
-            return f"Error: {e}", [], dict(_NO_SHAPING)
+            return f"Error: {e}", [], _error_shaping(e)
         results, n_skipped = self._select_fresh(served, n, "docid")
         if not results:
             # Same reasoning as the live path: an empty result set is exhaustion,
@@ -832,7 +887,11 @@ class WebFetchTool(Tool):
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
             "extractMode": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
-            "maxChars": {"type": "integer", "minimum": 100},
+            "maxChars": {
+                "type": "integer",
+                "minimum": 100,
+                "description": "Narrow the returned text below the configured cap; cannot raise it",
+            },
             "info_to_extract": {
                 "type": "string",
                 "description": "What to look for in the page; long pages are distilled to exactly this",
@@ -955,7 +1014,11 @@ class WebFetchTool(Tool):
 
         async def _send() -> httpx.Response:
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                return await client.get(f"https://r.jina.ai/{url}", headers=headers)
+                # The fragment marker must be escaped: bare concatenation makes
+                # everything after ``#`` a fragment of the OUTER r.jina.ai URL,
+                # so an SPA route fetched the site root while ``finalUrl``
+                # reported the requested value.
+                return await client.get(f"https://r.jina.ai/{url.replace('#', '%23')}", headers=headers)
 
         return await _send_with_retry(
             _send, op="fetch_retry", key=url, budget=self._retry_budget
@@ -969,7 +1032,12 @@ class WebFetchTool(Tool):
         info_to_extract: str | None = None,
         **kwargs: Any,
     ) -> str:
-        max_chars = maxChars or self.max_chars
+        # The request can narrow the configured cap, never raise it. The schema
+        # says so too, but a schema is advice to the model, not a bound on it:
+        # unclamped, one maxChars=10000000 call pulls a multi-MB page into the
+        # context and the elision machinery then spends the turn's budget
+        # clawing it back out.
+        max_chars = min(maxChars, self.max_chars) if maxChars else self.max_chars
         if self.corpus_endpoint:
             return await self._fetch_corpus(url, extractMode, max_chars, info_to_extract)
         # After the corpus branch: the corpus axis is contained by construction
@@ -983,12 +1051,17 @@ class WebFetchTool(Tool):
         # internal. The private-address block still applies whenever the name
         # resolves; only the refusal-on-failure is dropped. The other caller of this
         # validator follows redirects itself and must stay strict.
-        is_valid, error_msg = validate_url_target(url, strict_dns=False)
+        is_valid, error_msg = await validate_url_target_async(url, strict_dns=False)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
         try:
-            logger.debug("WebFetch: {}", "proxy enabled" if self.proxy else "direct connection")
+            # "no explicit proxy" is not "direct": with trust_env on, httpx
+            # still honours HTTP(S)_PROXY from the environment.
+            logger.debug(
+                "WebFetch: {}",
+                "proxy enabled" if self.proxy else "no explicit proxy (environment proxies may apply)",
+            )
             headers = {"Accept": "text/plain"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"

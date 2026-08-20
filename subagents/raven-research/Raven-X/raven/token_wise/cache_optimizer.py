@@ -34,23 +34,23 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.registry import supports_prompt_caching
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.token_wise.base import TokenStrategy
 
-_CACHE_CONTROL = {"type": "ephemeral"}
+_CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
     """Model-string fallback, used when no provider probe was injected.
 
-    Kept as the default so a bare ``CacheOptimizer()`` behaves as before. It is
-    the weaker answer: it cannot see the gateway, so a Claude-looking model
-    routed through a non-caching gateway resolves True here and False at the
-    provider. Prefer the injected ``supports_caching`` probe.
+    Asked of ``providers.prompt_cache`` -- see it for why (wire x family). It
+    is still the weaker answer than the injected ``supports_caching`` probe:
+    it cannot see the gateway, so a Claude-looking model routed through a
+    non-caching gateway resolves True here and False at the provider.
     """
-    if not model:
-        return False
-    return supports_prompt_caching(model)
+    from raven.providers.prompt_cache import accepts_cache_control
+
+    return accepts_cache_control(model)
 
 
 def _last_index(messages: list[dict[str, Any]], *, role: str) -> int | None:

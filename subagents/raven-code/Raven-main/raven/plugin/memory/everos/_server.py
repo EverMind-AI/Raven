@@ -22,14 +22,19 @@ def _extract_port(base_url: str) -> str:
 
 
 def _probe_health(base_url: str) -> bool:
+    """Report whether an EverOS service answers at ``base_url``.
+
+    Only a refused connection means "not running". Anything else -- a bad
+    proxy, a TLS failure, a name that does not resolve -- is a
+    misconfiguration that would otherwise be reported as a plain absence
+    and then papered over by spawning a second server, so it propagates.
+    """
     import httpx
 
     try:
         r = httpx.get(f"{base_url}/health", timeout=2.0)
         return r.status_code == 200
-    except httpx.ConnectError:
-        return False
-    except Exception:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         return False
 
 
@@ -64,6 +69,23 @@ def _start_server_if_unlocked(port: str) -> bool:
     except LockTimeoutError:
         logger.debug("everos server startup lock held by another process; skipping spawn")
         return False
+
+
+async def probe_everos_server(base_url: str) -> None:
+    """Require an already-running EverOS service at ``base_url``.
+
+    Used when the operator configured an address: raven does not own that
+    process, and starting a local one would quietly serve a different store
+    than the one the address names.
+    """
+    if await asyncio.to_thread(_probe_health, base_url):
+        logger.info("everos server reachable at {}", base_url)
+        return
+    raise RuntimeError(
+        f"EverOS is not reachable at the configured base_url {base_url}. "
+        "raven does not start a server it was not asked to own -- start the "
+        "service, or drop base_url to have raven run one locally."
+    )
 
 
 async def ensure_everos_server(

@@ -83,7 +83,7 @@ class _StubBackend:
     async def store(self, session_id, messages, *, metadata=None):
         pass
 
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+    async def recall(self, query, *, user_id=None, agent_id=None, session_id=None, top_k):
         await asyncio.sleep(self._delay)
         self.recall_calls.append(
             {

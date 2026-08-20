@@ -271,12 +271,9 @@ def openfoam_from_meta(meta: dict[str, Any]) -> OpenFoamExecutor:
     # refuses to run as root, so a parallel solve has to come in as an
     # unprivileged account. Defaulting to root silently limits the campaign to
     # serial runs.
-    run = make_ssh_runner(
-        meta["host"],
-        int(meta.get("port", 22)),
-        os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
-        user=str(meta.get("user", "root")),
-    )
+    from raven.ops.transport import runner_from
+
+    run = runner_from(meta)
     command = meta.get("command")
     if not command:
         raise JobBackendError("openfoam backend needs a 'command' template in the campaign meta")

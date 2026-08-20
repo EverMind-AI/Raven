@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import secrets
 import string
 import uuid
@@ -54,6 +55,35 @@ _OPENROUTER_ATTRIBUTION: dict[str, str] = {
 def _short_tool_id() -> str:
     """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
+
+
+_DEPRECATED_PARAM_RE = re.compile(r"`(\w+)` is (?:deprecated|not supported)")
+
+
+def _deprecated_param(exc: Exception) -> str | None:
+    """Name of the request param an endpoint rejected as deprecated, if any."""
+    match = _DEPRECATED_PARAM_RE.search(str(exc))
+    return match.group(1) if match else None
+
+
+def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
+    """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
+
+    A model_overrides entry (see _apply_model_overrides) may have already placed
+    a user extra_body dict in kwargs -- for example Qwen3's
+    extra_body.chat_template_kwargs.enable_thinking. Assigning wire_extra_body
+    over it would silently drop those keys. On a key collision, the user's
+    value wins: everything wire_extra_body carries is a shipped default
+    workaround (see capabilities._WIRE_OVERRIDES -- disabling OpenRouter's
+    qwen reasoning mode is the whole table today), and model_overrides is
+    documented as the channel that overrides shipped defaults, so a collision
+    is the user deliberately reversing one.
+    """
+    existing = kwargs.get("extra_body")
+    if isinstance(existing, dict):
+        kwargs["extra_body"] = {**wire_extra_body, **existing}
+    else:
+        kwargs["extra_body"] = wire_extra_body
 
 
 def session_affinity_headers() -> dict[str, str]:
@@ -112,6 +142,10 @@ class LiteLLMProvider(LLMProvider):
 
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
+
+        # Params an endpoint rejected as deprecated mid-session, per model.
+        # Learned from live 400s so later calls skip the doomed first attempt.
+        self._deprecated_params: set[tuple[str, str]] = set()
 
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -442,6 +476,12 @@ class LiteLLMProvider(LLMProvider):
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
 
+        # Skip params this endpoint already rejected as deprecated for this
+        # model -- paying the 400 once per session is enough.
+        for known_model, param in self._deprecated_params:
+            if known_model == model:
+                kwargs.pop(param, None)
+
         # Pass api_key directly — more reliable than env vars alone
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -456,7 +496,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Pass provider-specific body extras (e.g. OpenRouter routing pin)
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
 
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
@@ -471,6 +511,21 @@ class LiteLLMProvider(LLMProvider):
             response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
             return self._parse_response(response)
         except Exception as e:
+            # Endpoints deprecate sampling params out from under running
+            # sessions ("`temperature` is deprecated for this model"). The
+            # param is advisory; the request is not. Drop the named param and
+            # retry once rather than failing the whole call.
+            dropped = _deprecated_param(e)
+            if dropped and dropped in kwargs:
+                kwargs.pop(dropped)
+                self._deprecated_params.add((kwargs["model"], dropped))
+                try:
+                    response = await asyncio.wait_for(
+                        acompletion(**kwargs), self.generation.timeout
+                    )
+                    return self._parse_response(response)
+                except Exception as retry_exc:
+                    e = retry_exc
             # Return error as content for graceful handling, but classify the
             # live exception here (status_code + type) before it's lost to a
             # string — the retry/fallback layer reads this verdict.
@@ -501,7 +556,7 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
         try:
             await asyncio.wait_for(acompletion(**kwargs), self.generation.probe_timeout)
             return True
@@ -568,7 +623,7 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True

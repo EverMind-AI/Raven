@@ -47,6 +47,9 @@
       "record": true,
       "requireMarker": true,
       "reportStructure": true,
+      "reportFormatOverride": true,
+      "reportReminder": true,
+      "reportBounce": false,
       "processAppendix": true
     }
   },

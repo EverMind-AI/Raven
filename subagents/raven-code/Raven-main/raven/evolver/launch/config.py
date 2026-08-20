@@ -18,6 +18,7 @@ The YAML shape:
       budget:      {max_why_per_round: 2, candidates_per_why: 3}
       termination: {patience: 10, max_rounds: 20}
       anchor:      {n_sentinel: 12, cull_sigma_mult: 1.5}
+      gsme: true                         # false = ablate the GSME elite archive
 
     bench_config: {...}                  # schema owned by the bench entry
 
@@ -114,7 +115,7 @@ class RunSpec:
 def _build_funnel(repo_root: Path, work_dir: Path, funnel: dict) -> OrchestratorConfig:
     if not isinstance(funnel, dict):
         raise RunSpecError(f"funnel: must be a mapping, got {type(funnel).__name__}")
-    known = {"k_screen", "k_confirm", "anchor", "budget", "termination", "sealed_test_split"}
+    known = {"k_screen", "k_confirm", "anchor", "budget", "termination", "sealed_test_split", "gsme"}
     unknown = set(funnel) - known
     if unknown:
         raise RunSpecError(f"funnel: unknown keys {sorted(unknown)}")
@@ -123,6 +124,7 @@ def _build_funnel(repo_root: Path, work_dir: Path, funnel: dict) -> Orchestrator
             repo_root=repo_root,
             work_dir=work_dir,
             driver_llm_spec={},
+            gsme=bool(funnel.get("gsme", True)),
             k_screen=int(funnel.get("k_screen", 1)),
             k_confirm=int(funnel.get("k_confirm", 3)),
             anchor=AnchorParams(**(funnel.get("anchor") or {})),

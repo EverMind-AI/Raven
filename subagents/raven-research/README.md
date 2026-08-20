@@ -13,15 +13,17 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X (private; obtained as a zip) |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `ce225550` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.5, flow `dr@3.3` (updated 2026-08-18 from `Raven-X-main (1).zip`, upstream `e3edf28`; `dr@3.2` came from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Package / version | `raven` 0.1.5, flow `dr@3.7` (updated 2026-08-20 from upstream `ce225550`; `dr@3.3` came from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
-The repo is private: `api.github.com/repos/ZuyiZhou/Raven-X` returns 404 while
-the owner's account resolves with 4 public repos, none of them this one. There is
-no clone path from here without credentials, hence the zip.
+**The repo is reachable from this machine now.** It was private with no clone
+path when this folder was set up, which is why the early steps arrived as zips;
+as of 2026-08-20 `git ls-remote` lists its 9 branches and `main` fetches, so an
+update no longer depends on someone mailing an archive. Fetch it read-only and
+never add it as a push remote.
 
 It declares itself unrelated to upstream Raven going forward, so do not expect
 our fixes to apply, or theirs to arrive. The Python package is still importable as
@@ -83,17 +85,45 @@ records which one was used on every turn, in the form
 With no key here and no provider key in the host config either, the launcher
 refuses rather than starting something that cannot answer.
 
-## Updating to a newer zip
+## Updating to a newer upstream
 
 The checkout carries **no local patches** - every adaptation lives beside it
 (`run.py`, `config.json`, `subagent.json`, this file), so an update is a straight
-replacement of `Raven-X/` with the zip's tree. Diff before replacing and check
-that nothing exists only on our side; that is what makes the replacement safe.
+replacement of `Raven-X/`. Check that before replacing, rather than assuming it:
+the base commit is whichever one whose tree the checkout matches, found by
+diffing trees since no file records it, and a real local edit shows up as a file
+that differs there. Compare **ASTs** when a file does differ - a formatter run
+upstream reflows strings and moves blank lines, which `git diff
+--ignore-all-space` reports exactly like a real change.
+
+Now that the repo clones, the swap comes from its objects rather than an archive:
+
+```bash
+cd <repo root>
+git fetch --no-tags https://github.com/ZuyiZhou/Raven-X.git \
+    'refs/heads/*:refs/remotes/zuyizhou/*'
+git log --oneline <base>..zuyizhou/main          # what you are taking
+
+cd subagents/raven-research
+rm -rf Raven-X && mkdir Raven-X
+git -C <repo root> archive zuyizhou/main | tar -x -C Raven-X
+git add -A .
+```
+
+Then confirm the staged tree differs from upstream in nothing but the
+policy-excluded assets:
+
+```bash
+git diff --name-status "zuyizhou/main^{tree}" \
+    $(git write-tree --prefix=subagents/raven-research/Raven-X)
+```
 
 Keep `.venv` across the swap by moving it out and back. The install is editable
 (`_editable_impl_raven.pth` points at this checkout), so the new source is live
 immediately; `uv sync` is only needed when `pyproject.toml` or `uv.lock` changed,
-which they did not for `dr@2.6 -> dr@2.8 -> dr@2.9 -> dr@3.2`. `dr@2.9` also
+which they did not for `dr@2.6 -> dr@2.8 -> dr@2.9 -> dr@3.2` but did for
+`dr@3.3 -> dr@3.7` (see that section below - no package is added, so the sync is
+optional in practice). `dr@2.9` also
 brings a `bench/` tree - the evaluation engine - and exempts it from lint in both
 `pyproject.toml` and `.pre-commit-config.yaml`; nothing here calls it.
 
@@ -106,10 +136,33 @@ validator rejects every superseded label on a newer build - `dr@2.4` through
 it kills it: the config fails to load, `raven` exits 1, and `run.py` reports a
 credential-or-config error for what is really a stale label.
 
-The previous build and its config are kept beside the checkout as
-`Raven-X-dr32-rollback.tar.gz` (tree only, no `.venv`) and `config.json.bak-dr32`
-- one pair per swap, `dr29` from the step before - because the source zip is not
-archived anywhere and a swap has no other way back.
+Earlier swaps kept the previous build beside the checkout as
+`Raven-X-dr32-rollback.tar.gz` (tree only, no `.venv`) with a matching
+`config.json.bak-dr32`, one pair per swap, because the source zip was archived
+nowhere and there was no other way back. **That is no longer the reason it is
+there.** The repo clones now, so the tree rolls back with
+`git archive <old commit>`, and `config.json` is tracked in this repo, so its
+previous value is in our own history. Both halves of the pair are gitignored and
+neither was made for the `dr@3.7` swap; keep the old ones as long as the zips
+they came from are the only copy of those builds.
+
+### What `dr@3.4` .. `dr@3.7` changed for us
+
+19 upstream commits, 136 files, +18891/-1739. `pyproject.toml` and `uv.lock` did
+move this time, but **no package is added**: `litellm` goes from a range to an
+exact `==1.85.0` (the venv here already had 1.85.0, so nothing to install),
+`oauth-cli-kit` is dropped as a dependency entirely, and `raven/providers/data/*.json`
+joins the package data. Nothing here authenticates by OAuth, so losing that dep
+costs us nothing.
+
+| Change | Effect here |
+|---|---|
+| **The final answer gets a fixed report shape, and it is on by default** (`finalShape.reportStructure`, dr@3.5 through dr@3.7) | **The one change a reader will see in the output.** We do not set `reportStructure`, so we inherit the new default `true`: dr@3.5 turns the closing clause into a fixed three-section template, dr@3.6 lets that outrank a format the question itself asks for, and dr@3.7 adds a per-turn reminder on the user message (stripped before persist) plus `ReportShapeGate`, a bar that bounces a draft missing a section once. The gate is off until priced; the template and the reminder are not. Set `finalShape.reportStructure: false` to keep the pre-dr@3.5 clause - upstream's own bench profiles pin it off so their anchors cannot move |
+| **Flow hooks are scoped to the turn** (dr@3.4) | Ours: `fetchFloor` and `verify` are both on here, and they now measure against this turn's base rather than the whole conversation. Multi-turn is on (`conversation.enabled`), which is exactly the shape this fixes |
+| The closing-tag bar is waived for out-of-band reasoning | **Does not reach us**: `thinkClosingTagRequired` is already `false` here. Worth knowing why it landed, though - a channel-separated stack returns reasoning in `reasoning_content`, leaving `content` answer-only, and the bar then erased every complete answer, 4 of 4 live-web turns |
+| `DRFlowConfig.context_window_tokens`, a DR-arm-only window override | New, unset here, and upstream verified it changes no behaviour while unset. It exists so a DR arm's window can be moved without dragging the flow-off anchor with it |
+| The provider package is realigned to upstream `5edcda9` - wire ids, auth, endpoints, rates, prompt cache, truncation - and a models.dev snapshot (MIT) is bundled | **Bypassed here**: our `custom` provider names an explicit `apiBase`, so the rewritten wire ids and the bundled registry are not on our path. The loaded provider entry does gain `endpoints` and `endpointStrategy: sticky`, both defaulted |
+| Native runtimes are stopped instead of segfaulting at exit | Removes a false signal rather than changing a contract. A live watchfiles runtime used to segfault interpreter finalization on its own - exit 139, 3 of 3 runs with `raven` never imported - masking the command's real exit code. `run.py` decides success by finding a persisted answer, not by exit code, so it was never fooled; a human reading the log was |
 
 ### What `dr@3.3` changed for us
 

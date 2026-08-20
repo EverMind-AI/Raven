@@ -1,0 +1,95 @@
+# Local patches carried on top of the vendored checkout.
+#
+# Apply from inside the checkout after replacing it with a newer upstream tree:
+#
+#     cd subagents/raven-code/Raven-main && git apply ../local-patches.diff
+#
+# Then confirm the tree differs from upstream in exactly these files and no
+# others. An empty diff-vs-upstream means a patch was lost; extra files mean
+# something local crept in unrecorded.
+#
+# 1. everos timestamp coercion. EverOS's MessageItemDTO declares
+#    `timestamp: int` (ms epoch) while raven stamps its own records with an
+#    ISO-8601 string, so a caller that forwards a persisted message fails the
+#    whole write with 422 INVALID_INPUT, logged at warning level and reported
+#    nowhere else -- the store just stops receiving turns. Upstream still has
+#    the bare `m.get("timestamp") or now_ms` as of e16aec5f.
+#
+#    Status: defense-in-depth, NOT an observed outage. Verified 2026-08-17 that
+#    no current caller sends an ISO string (the assembler's messages carry no
+#    timestamp key; the importer converts to ms before storing). Keep it for
+#    the replay / direct-chat paths that do forward persisted messages.
+diff --git a/raven/plugin/memory/everos/backend.py b/raven/plugin/memory/everos/backend.py
+index 39addf39..da6a5793 100644
+--- a/raven/plugin/memory/everos/backend.py
++++ b/raven/plugin/memory/everos/backend.py
+@@ -29,6 +29,7 @@ from __future__ import annotations
+ import logging
+ import os
+ import time
++from datetime import datetime, timezone
+ from types import SimpleNamespace
+ from typing import Any, Literal, Protocol
+ 
+@@ -152,6 +153,42 @@ _DEFAULT_HTTP_TIMEOUT_S: float = 60.0
+ _MEMORIZE_TIMEOUT_S: float = 360.0
+ 
+ 
++def _timestamp_ms(value: object, *, default_ms: int) -> int:
++    """Coerce a message's timestamp to the ms epoch EverOS's DTO declares.
++
++    Raven stamps its own records with an ISO-8601 string while
++    ``MessageItemDTO.timestamp`` is an ``int``, so passing one straight
++    through fails the whole write -- ``422 INVALID_INPUT`` over HTTP, and an
++    ``int()`` parse error embedded. The failure is logged at warning level and
++    nothing else reports it, so the store simply stops receiving turns.
++
++    An unparseable value falls back to now rather than dropping the message:
++    the timestamp is bookkeeping about the turn, the content is the part worth
++    keeping.
++    """
++    if value is None or isinstance(value, bool):
++        return default_ms
++    if isinstance(value, int):
++        return value
++    if isinstance(value, float):
++        return int(value)
++    if not isinstance(value, str):
++        return default_ms
++    text = value.strip()
++    if not text:
++        return default_ms
++    if text.isdigit():
++        return int(text)
++    try:
++        parsed = datetime.fromisoformat(text)
++    except ValueError:
++        return default_ms
++    # Raven writes a naive isoformat() and its clock is UTC; reading it as
++    # local time would shift every stored turn by the host's offset.
++    if parsed.tzinfo is None:
++        parsed = parsed.replace(tzinfo=timezone.utc)
++    return int(parsed.timestamp() * 1000)
++
+ class _HttpEverosAdapter:
+     """Adapter that talks to an EverOS service over HTTP.
+ 
+@@ -681,7 +718,8 @@ class EverosBackend:
+           ``recall(user_id=<X>)`` must use that same ``<X>``.
+ 
+         Other conversions: drop ``system``; missing ``sender_id`` on a
+-        user message → ``user_id``; missing ``timestamp`` → now (ms);
++        user message → ``user_id``; ``timestamp`` coerced to ms epoch
++        (unparseable → now);
+         multimodal ``content`` → space-joined text; empty text → drop.
+         """
+         now_ms = int(time.time() * 1000)
+@@ -709,7 +747,7 @@ class EverosBackend:
+             entry: dict[str, Any] = {
+                 "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
+                 "role": role,
+-                "timestamp": m.get("timestamp") or now_ms,
++                "timestamp": _timestamp_ms(m.get("timestamp"), default_ms=now_ms),
+                 "content": content,
+             }
+             if tool_calls:

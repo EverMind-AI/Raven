@@ -76,6 +76,16 @@ class SearchSaturation:
     """
 
     _seen: set[str] = field(default_factory=set, repr=False)
+    _query_pages: dict[str, int] = field(default_factory=dict, repr=False)
+    """Deepest page actually REQUESTED per normalized query, this turn.
+
+    The ladder's escalation level (``_page``) is turn-global by design - the dry
+    streak that drives it deliberately spans queries. But a page is only deeper
+    for a query that has already been shown the pages before it: serving a
+    brand-new query at page 2 skips ranks 1-10 for terms nobody has seen ranked,
+    and its near-certain empty page then scores as dry, feeding the ``stop``
+    rung. ``page_for`` therefore caps the global escalation at one past the
+    deepest page this query family has actually been sent to."""
     _dry_streak: int = 0
     _width: int | None = None
     _page: int = 1
@@ -112,6 +122,7 @@ class SearchSaturation:
         """
         if not keep_seen:
             self._seen.clear()
+        self._query_pages.clear()
         self._dry_streak = 0
         self._width = None
         self._page = 1
@@ -127,8 +138,35 @@ class SearchSaturation:
 
     @property
     def page(self) -> int:
-        """Which page the next search should request. 1 means the default page."""
+        """The rung the ladder has escalated to. 1 means the default page.
+
+        This is the turn-global escalation LEVEL, not what any given request
+        should send - requests go through :meth:`page_for`, which keys the
+        depth on the query family so a fresh query still starts at page 1.
+        """
         return self._page
+
+    def page_for(self, query_key: str) -> int:
+        """Page the next request for this (normalized) query should ask for.
+
+        Caps the global escalation at one past the deepest page this query has
+        actually been requested at, so pagination deepens a repeated query
+        instead of beheading a new one. Pure - recording an issued request is
+        :meth:`note_page`'s job, so reading this cannot move state.
+        """
+        if self._page <= 1:
+            return 1
+        return min(self._page, self._query_pages.get(query_key, 0) + 1)
+
+    def note_page(self, query_key: str, page: int) -> None:
+        """Record that a real request for this query was served at ``page``.
+
+        Called by the tool after the request came back - never on a replay
+        hit, a suppressed call, or a transport error, none of which served
+        a page anyone saw.
+        """
+        if page > self._query_pages.get(query_key, 0):
+            self._query_pages[query_key] = page
 
     def width(self, requested: int) -> int:
         """Rendered width for the next search, given what the caller asked for.

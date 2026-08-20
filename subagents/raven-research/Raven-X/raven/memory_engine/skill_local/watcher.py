@@ -11,8 +11,12 @@ Design notes:
 
   - **Daemon thread** running ``watchfiles.watch()``. The Rust-backed
     iterator already debounces events (default 1.6s) so we don't have
-    to throttle on our side. Daemon = process-exit auto-cleanup; the
-    explicit :meth:`stop` path is for tests / clean shutdown.
+    to throttle on our side. Daemon means the thread does not hold the
+    process open -- it does NOT mean exit cleans it up safely: finalizing
+    the interpreter while this notify runtime is live segfaults, measured
+    with nothing else loaded. :meth:`start` therefore registers
+    :meth:`stop` with ``raven.utils.native_runtimes`` so the CLI exit path
+    can shut it down before finalization.
   - **Workspace-only** scope. Builtin / external are read-only mirrors
     in this codebase; the builtin layer in particular can carry ~80K
     files and would blow past Linux's default ``fs.inotify.max_user_watches``
@@ -34,7 +38,12 @@ import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path, PurePath
 
+from raven.utils.native_runtimes import register_native_runtime_thread
+
 log = logging.getLogger(__name__)
+
+#: Also the registry key for this runtime, so the two cannot drift.
+_THREAD_NAME = "SkillFileWatcher"
 
 
 def _is_skill_md(_change, path: str) -> bool:
@@ -101,9 +110,13 @@ class SkillFileWatcher:
             return False
 
         self._stop.clear()
+        # Registered before the thread starts, so a live thread always has a
+        # registered name; the stop hook is what lets the process exit
+        # normally instead of having to skip finalization.
+        register_native_runtime_thread(_THREAD_NAME, stop=self.stop)
         self._thread = threading.Thread(
             target=self._run,
-            name="SkillFileWatcher",
+            name=_THREAD_NAME,
             daemon=True,
         )
         self._thread.start()

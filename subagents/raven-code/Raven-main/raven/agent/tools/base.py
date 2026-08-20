@@ -61,6 +61,15 @@ class Tool(ABC):
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
 
+    # Alternative names this tool stays reachable by after a rename. Hidden:
+    # never emitted in schemas, only resolved by the registry at call time.
+    aliases: tuple[str, ...] = ()
+
+    # Legacy parameter names accepted at the execute boundary: {old: new}.
+    # The schema exposes only the new names; ToolRegistry.execute remaps
+    # before validation so callers still using an old name keep working.
+    param_aliases: dict[str, str] = {}
+
     _TYPE_MAP = {
         "string": str,
         "integer": int,
@@ -111,6 +120,27 @@ class Tool(ABC):
         arguments blob).
         """
         return None
+
+    def resolve_param_aliases(self, params: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """Map legacy parameter names onto their current ones.
+
+        Returns the remapped params plus a note for the tool result — non-empty
+        only when both the old and the new name were given (the new name wins).
+        """
+        if not self.param_aliases or not isinstance(params, dict):
+            return params, ""
+        notes: list[str] = []
+        out = dict(params)
+        for old, new in self.param_aliases.items():
+            if old not in out:
+                continue
+            legacy_value = out.pop(old)
+            if new in out:
+                notes.append(f"both {new!r} and its legacy alias {old!r} were given; {new!r} wins")
+            else:
+                out[new] = legacy_value
+        note = f"[note: {'; '.join(notes)}]\n" if notes else ""
+        return out, note
 
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""

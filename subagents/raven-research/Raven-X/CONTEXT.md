@@ -114,6 +114,24 @@ artifact from the **process appendix**, which is display-only and must never rea
 _Avoid_: "session memory" — the memo is per conversation and carries retrieval, not findings,
 and it is unrelated to the cross-session Memory Engine.
 
+**Report template** (`agent/flow/dr.py`, `_DR_REPORT_STRUCTURE_CLAUSE`, knob
+`drFlow.finalShape.reportStructure`):
+The fixed markdown shape the DR contract asks the model for when the knob is on:
+`## Answer` / `## Findings` / `## Limitations`, exact headings, all three present every
+time, no other headings. Since `dr@3.6` the template also overrides any formatting
+instructions carried by the question itself — a question asking for one word, a JSON
+object, or a table is still answered as the three-section report on that question's topic,
+with the requested shape satisfied inside the report where it fits; the override passage
+rides its own sub-switch, `finalShape.reportFormatOverride` (default on; off restores the
+`dr@3.5` clause byte for byte). Since `dr@3.7` two mechanisms back the clause up, both inert
+without it: a per-turn **reminder** (`reportReminder`, on) that restates the template on the
+current user message and is stripped before persist, and a **shape bar**
+(`reportBounce`, off — `flow/report_shape.py`) that bounces a draft missing a section back
+once. Product surface only: every benchmark profile pins `reportStructure` off, which turns
+all three off with it. _Avoid_: "report format" for the
+`<answer>...</answer>` tags — those come from `finalShape.requireMarker`, a separate knob
+that composes with this one.
+
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by

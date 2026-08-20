@@ -189,10 +189,11 @@ async def test_disconnect_clears_creds(fake_home: Path) -> None:
 async def test_add_model_reflected_in_options(fake_home: Path) -> None:
     await model_save_key({"slug": "anthropic", "api_key": "sk-ant-xxx"})
     result = await model_add_model({"slug": "anthropic", "model": "claude-opus-4-8"})
-    assert "claude-opus-4-8" in result["provider"]["models"]
+    # Stored qualified: a bare id is claimed by keyword matching instead.
+    assert "anthropic/claude-opus-4-8" in result["provider"]["models"]
 
     options = await model_options({})
-    assert "claude-opus-4-8" in _entry(options, "anthropic")["models"]
+    assert "anthropic/claude-opus-4-8" in _entry(options, "anthropic")["models"]
 
 
 async def test_remove_model_reflected_in_options(fake_home: Path) -> None:
@@ -300,7 +301,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     ("openai", "openai/"),
     ("anthropic", "anthropic/"),
     ("gemini", "gemini/"),
-    ("zhipu", "zai/"),
+    ("zai", "zai/"),
     ("groq", "groq/"),
     ("dashscope", "dashscope/"),
 ]

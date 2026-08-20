@@ -154,12 +154,44 @@ class HistoryTrimmer:
         return errors
 
     @staticmethod
-    def _first_droppable(ids: list[int], protected_ids: set[int]) -> int | None:
-        """Position of the first non-protected id (falls back to 0)."""
-        for pos, mid in enumerate(ids):
-            if mid not in protected_ids:
-                return pos
-        return 0 if ids else None
+    def _adjacency_group(messages: list[dict[str, Any]], mid: int) -> set[int]:
+        """The tool-call unit ``mid`` belongs to: parent assistant + all its results.
+
+        Messages drop in these units, never singly - dropping a parent alone
+        leaves orphan tool results, dropping one result alone leaves a call with
+        no reply, and either shape is a structural 400 at the provider. A message
+        outside any tool exchange is its own group.
+        """
+        msg = messages[mid]
+        call_ids: list[str] = []
+        parent: int | None = None
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            parent = mid
+            call_ids = [
+                str(tc["id"]) for tc in msg.get("tool_calls") or []
+                if isinstance(tc, dict) and tc.get("id")
+            ]
+        elif msg.get("role") == "tool" and msg.get("tool_call_id"):
+            wanted = str(msg["tool_call_id"])
+            for idx, m in enumerate(messages):
+                if m.get("role") != "assistant" or not m.get("tool_calls"):
+                    continue
+                ids_here = [
+                    str(tc["id"]) for tc in m.get("tool_calls") or []
+                    if isinstance(tc, dict) and tc.get("id")
+                ]
+                if wanted in ids_here:
+                    parent = idx
+                    call_ids = ids_here
+                    break
+        group = {mid}
+        if parent is None:
+            return group
+        group.add(parent)
+        for idx, m in enumerate(messages):
+            if m.get("role") == "tool" and str(m.get("tool_call_id") or "") in call_ids:
+                group.add(idx)
+        return group
 
     # ------------------------------------------------------------------
     # Budget-driven trimming
@@ -196,11 +228,52 @@ class HistoryTrimmer:
         warnings: list[str] = []
         trimmed_ids = list(canon)
         while estimated > max_prompt and trimmed_ids:
-            drop_idx = self._first_droppable(trimmed_ids, protected_ids)
-            if drop_idx is None:
+            # Drop whole tool-call adjacency groups, lowest-priority first, and
+            # skip any group that touches a protected message. Dropping a lone
+            # member of a group leaves a dangling call or an orphan result -
+            # the provider rejects the request, so exactly the turn that most
+            # needed trimming would die on a 400.
+            drop_group: set[int] | None = None
+            for mid in trimmed_ids:
+                group = self._adjacency_group(session_messages, mid)
+                if group & protected_ids:
+                    continue
+                drop_group = group
                 break
-            dropped = trimmed_ids.pop(drop_idx)
-            warnings.append(f"dropped message {dropped} to fit budget")
+            if drop_group is None:
+                warnings.append(
+                    f"over budget by {estimated - max_prompt} tokens with only "
+                    "protected messages left; nothing more can be dropped"
+                )
+                break
+            dropped = sorted(drop_group.intersection(trimmed_ids))
+            trimmed_ids = [i for i in trimmed_ids if i not in drop_group]
+            # Re-apply the canonical "history starts at a user message"
+            # invariant: dropping a user message can leave the sequence opening
+            # mid-exchange. The invariant yields to the protected contract -
+            # a protected message in the leading slice (or in a remainder with
+            # no user message left at all) is kept and warned about, never cut.
+            for pos, mid in enumerate(trimmed_ids):
+                if session_messages[mid].get("role") == "user":
+                    leading = trimmed_ids[:pos]
+                    break
+            else:
+                leading = list(trimmed_ids)
+            if leading:
+                kept_protected = sorted(set(leading) & protected_ids)
+                if kept_protected:
+                    note = (
+                        f"history does not start at a user message: leading "
+                        f"messages kept because {kept_protected} are protected"
+                    )
+                    if note not in warnings:
+                        warnings.append(note)
+                else:
+                    warnings.append(
+                        f"dropped leading messages {leading} so history starts at a user message"
+                    )
+                    trimmed_ids = trimmed_ids[len(leading):]
+            warnings.append(f"dropped messages {dropped} to fit budget")
             history = self.history_from_ids(session_messages, trimmed_ids)
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(

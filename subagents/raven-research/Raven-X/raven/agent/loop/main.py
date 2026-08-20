@@ -42,12 +42,12 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, RunMeta, ToolCallRequest
+from raven.providers.rates import resolve_context_window
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.security.benchmark_containment import BenchmarkContainment
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
-from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens
 
@@ -111,6 +111,25 @@ def _flow_version() -> str:
     from raven import __version__
 
     return f"raven-{__version__}"
+
+
+def _accumulate_turn_usage(sink: dict[str, Any], usage: dict[str, Any], cost_usd: float) -> None:
+    """Fold one LLM call's usage into the sink's per-turn accumulators.
+
+    The sink's unprefixed fields are per-call by design - the context-%%
+    display wants exactly the last call - but the turn-level ``Usage`` was
+    built from those same fields, so every multi-iteration turn was billed
+    as its final call alone. The ``turn_*`` keys are the sums, and they also
+    absorb the calls made outside the iteration body (exhaustion/truncation
+    synthesis), which previously bypassed the sink entirely.
+    """
+    sink["turn_prompt_tokens"] = int(sink.get("turn_prompt_tokens", 0)) + int(usage.get("prompt_tokens", 0) or 0)
+    sink["turn_completion_tokens"] = (
+        int(sink.get("turn_completion_tokens", 0)) + int(usage.get("completion_tokens", 0) or 0)
+    )
+    sink["turn_total_tokens"] = int(sink.get("turn_total_tokens", 0)) + int(usage.get("total_tokens", 0) or 0)
+    sink["turn_cost_usd"] = float(sink.get("turn_cost_usd", 0.0)) + float(cost_usd or 0.0)
+    sink["turn_llm_calls"] = int(sink.get("turn_llm_calls", 0)) + 1
 
 
 def _filter_qualified_ids(
@@ -185,6 +204,7 @@ def _is_truncated_answerless(
     finish_reason: str | None,
     *,
     salvaged: bool,
+    reasoning_oob: bool = False,
 ) -> bool:
     """Did this turn end because the COMPLETION budget cut it off mid-answer?
 
@@ -192,11 +212,18 @@ def _is_truncated_answerless(
     re-implements a predicate asserts its own copy, and keeps passing after the
     original changes.
 
-    ``closing_tag_required=True`` unconditionally. ``_think_closing_tag_required``
+    The bar is strict except for ``reasoning_oob``. ``_think_closing_tag_required``
     is False whenever the flow is off, so keying on it would judge the anchor with
     a permissive bar and the treated arm with the strict one - repairing the
     treated arm while leaving the anchor broken, i.e. manufacturing an
-    arm-correlated defect in the course of fixing one.
+    arm-correlated defect in the course of fixing one. ``reasoning_oob`` is a
+    per-RESPONSE fact, not a config flag, so both arms read the same bar: a
+    response whose reasoning arrived out-of-band holds only answer text in
+    ``content``, and the strict bar would call every length-cut answer on such a
+    stack "answerless" and replace it with a lossy wrap-up. Waived, the two
+    stacks agree in both sub-cases: cut mid-ANSWER ships as-is (like an inline
+    cut after ``</think>``), cut mid-REASONING is empty ``content`` and still
+    wraps up.
 
     ``salvaged`` is read from the gate's commit flag, never re-derived: a
     committed salvage structurally never carries a closing tag (see
@@ -208,7 +235,7 @@ def _is_truncated_answerless(
         final_content is not None
         and finish_reason == "length"
         and not salvaged
-        and not visible_answer(final_content, closing_tag_required=True)
+        and not visible_answer(final_content, closing_tag_required=not reasoning_oob)
     )
 
 
@@ -337,6 +364,11 @@ class AgentLoop:
     """
 
     _TOOL_RESULT_MAX_CHARS = 16_000
+    # First line of the recovery notice ``_inject_recovery_block`` prepends to a
+    # user message. ``_save_turn`` reads it to know it is still inside injected
+    # envelopes when it looks for the runtime-context paragraph - emitter and
+    # recognizer share the one constant so they cannot drift.
+    _RECOVERY_TAG = "[Recovery — the previous turn was interrupted before finishing]"
     # Tool results are capped at ingestion, with headroom for the untrusted
     # fence and appended in-history notes (budget line, nudges), so the
     # persist-time cap above never fires and cannot chop them off — the
@@ -366,10 +398,16 @@ class AgentLoop:
     # Hook-requested rollbacks (pop the iteration, re-sample) per turn — a
     # global backstop over any per-observer bound; past it, rollback decisions
     # degrade to pass-through so a misbehaving observer can't spin the loop.
-    # Sized above the worst-case sum of per-observer budgets (loopscan 2 +
-    # dup-query 2 + spin-breaker 1 + force-finalize 1) so the cap only stops
-    # a misbehaving observer, never a within-budget terminal gate.
-    _MAX_HOOK_ROLLBACKS = 6
+    # Sized at the worst-case sum of per-observer budgets so the cap only stops
+    # a misbehaving observer, never a within-budget terminal gate: loopscan 2 +
+    # dup-query 2 (both installed by default) + spin-breaker 1 + force-finalize 1
+    # + verify 1 + report-shape 1 on a fully-on DR arm. The enumeration is the
+    # whole justification for the number, so it has to be complete: it omitted
+    # the verify gate and sat at 6, which the dr@3.7 shape bar would have pushed
+    # past. Past the cap a gate has already booked its bounce before being
+    # refused, so the ledger reads one bounce that never happened - only
+    # ``rollbacks_refused`` says otherwise.
+    _MAX_HOOK_ROLLBACKS = 8
     # Generation parameters a rollback may override on the re-sample call.
     # Anything else is dropped: these kwargs feed provider calls directly,
     # and an unknown key from a hook must not TypeError the whole turn.
@@ -492,6 +530,17 @@ class AgentLoop:
         self.context_window_tokens = (
             resolve_context_window(self.model) or context_window_tokens
         )
+        if self.context_window_tokens != context_window_tokens:
+            # One line, not a silent override: the catalog beating a pinned
+            # ``contextWindowTokens`` has already invalidated one cross-model
+            # comparison (one arm ran its configured 65k, the other its
+            # catalog-known 1M) and nothing on disk said so.
+            logger.warning(
+                "context window: model catalog resolves {} to {} tokens, overriding configured {}",
+                self.model,
+                self.context_window_tokens,
+                context_window_tokens,
+            )
 
         from raven.agent.flow import build_dr_flow
 
@@ -516,6 +565,18 @@ class AgentLoop:
         )
         if self._dr_flow is not None and self._dr_flow.max_iterations:
             self.max_iterations = self._dr_flow.max_iterations
+        # Same override, same shape, one line down: DRFlowConfig.context_window_tokens
+        # is None on every config that exists today, so this is capability, not a
+        # behavior change. When set, it must land here - before every later consumer
+        # of ``self.context_window_tokens`` (context engine / HistoryTrimmer, memory
+        # consolidator, the flow-off BudgetObserver default) reads the attribute -
+        # or the flow's own observers (already built above using the override, inside
+        # build_dr_flow's ``effective_window``) would disagree with everything built
+        # after this line, the same "N copies of one number" shape ``__init__``'s
+        # dr@3.2 comment already paid for once. Never reaches the flow-off anchor:
+        # ``self._dr_flow`` is None there, so the anchor cannot move by construction.
+        if self._dr_flow is not None and self._dr_flow.context_window_tokens:
+            self.context_window_tokens = self._dr_flow.context_window_tokens
         # Off unless the flow is on, so chat behavior stays byte-identical.
         self._think_closing_tag_required = (
             self._dr_flow is not None and self._dr_flow.think_closing_tag_required
@@ -1153,6 +1214,34 @@ class AgentLoop:
         elif isinstance(content, list):
             last["content"] = [{"type": "text", "text": block}] + content
 
+    def _inject_report_reminder(self, messages: list[dict]) -> None:
+        """Append this turn's report-template reminder to the current user message.
+
+        Appended where the memo is prepended, and for the opposite half of the
+        same reason: the memo is context the turn should have before it starts,
+        this is an instruction it should still be holding when it writes. The
+        clause it repeats is in the system prompt, thousands of tokens up, and
+        loses to the model's own recent replies on exactly the turns that
+        reformat one of them.
+
+        Stripped by ``_save_turn`` rather than by position - the memo and the
+        recovery block already prepend to this same message, so the three compose
+        only if each one owns its own end of it.
+        """
+        from raven.agent.flow.report_shape import render_reminder
+
+        if not getattr(self._dr_flow, "report_reminder", False) or not messages:
+            return
+        last = messages[-1]
+        if last.get("role") != "user":
+            return
+        block = render_reminder()
+        content = last.get("content")
+        if isinstance(content, str):
+            last["content"] = f"{content}\n\n{block}"
+        elif isinstance(content, list):
+            last["content"] = content + [{"type": "text", "text": block}]
+
     def _update_research_memo(self, session: Session) -> None:
         """Fold this turn's ledger rows into the conversation's memo.
 
@@ -1279,6 +1368,10 @@ class AgentLoop:
         # After the recovery block, so that when both fire the memo is the outer
         # one and ``_save_turn``'s prefix-anchored stripper still finds it.
         self._inject_research_memo(session, messages)
+        # Last, so it is the last thing the model reads before it answers - the
+        # whole point of it - and so the memo above stays the outermost prefix
+        # that ``_save_turn``'s prefix-anchored stripper looks for.
+        self._inject_report_reminder(messages)
         return messages
 
     @staticmethod
@@ -1331,7 +1424,7 @@ class AgentLoop:
         content = last.get("content")
         files = recovery.get("files") or []
         cid = recovery.get("checkpoint_id")
-        lines = ["[Recovery — the previous turn was interrupted before finishing]"]
+        lines = [self._RECOVERY_TAG]
         if files:
             lines.append("Files modified last turn: " + ", ".join(files))
         if cid:
@@ -1700,40 +1793,94 @@ class AgentLoop:
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
+        provider_finish: str | None = None
+        error_classification = None
 
-        async for delta in self.provider.chat_stream(
-            messages=messages,
-            tools=tools,
-            model=model,
-            **(generation_overrides or {}),
-        ):
-            reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
-                reasoning_buf.append(reasoning_delta)
-                if on_reasoning_delta is not None:
-                    await on_reasoning_delta(reasoning_delta)
-            if delta.content:
-                content_buf.append(delta.content)
-                if on_token_delta is not None:
-                    await on_token_delta(delta.content)
-            if delta.tool_call_delta:
-                _merge_tool_call_fragments(
-                    tool_call_slots,
-                    delta.tool_call_delta,
-                )
-            if delta.usage is not None:
-                final_usage = delta.usage
+        try:
+            async for delta in self.provider.chat_stream(
+                messages=messages,
+                tools=tools,
+                model=model,
+                **(generation_overrides or {}),
+            ):
+                reasoning_delta = getattr(delta, "reasoning_content", None)
+                if reasoning_delta:
+                    reasoning_buf.append(reasoning_delta)
+                    if on_reasoning_delta is not None:
+                        await on_reasoning_delta(reasoning_delta)
+                if delta.content:
+                    content_buf.append(delta.content)
+                    if on_token_delta is not None:
+                        await on_token_delta(delta.content)
+                if delta.tool_call_delta:
+                    _merge_tool_call_fragments(
+                        tool_call_slots,
+                        delta.tool_call_delta,
+                    )
+                if delta.usage is not None:
+                    final_usage = delta.usage
+                # Only ever set on the terminal chunk (see StreamDelta); the
+                # one source for "length" / "content_filter", which the
+                # truncation salvage keys on.
+                if getattr(delta, "finish_reason", None):
+                    provider_finish = delta.finish_reason
+                if getattr(delta, "error_classification", None) is not None:
+                    error_classification = delta.error_classification
+        except Exception as exc:
+            # ``getattr``: providers are duck-typed in tests and may not carry
+            # the classifier; without one the error keeps its old propagation.
+            classify = getattr(self.provider, "classify_error", None)
+            classification = classify(exc) if classify is not None else None
+            if classification is None or not classification.should_compress:
+                # Non-recoverable stream errors keep propagating: the turn
+                # boundary turns them into TurnFailed on the wire (N-TURNFAILED),
+                # which streaming outlets rely on.
+                raise
+            # A context overflow is the one error shrinking the request fixes.
+            # Returned in chat_with_retry's error shape so the streaming path
+            # reaches the same clamp/elide-and-retry recovery the non-streaming
+            # path already has, instead of failing the whole turn on an error
+            # the loop knows how to repair.
+            logger.warning("Stream call overflowed the context window: {}: {}", type(exc).__name__, exc)
+            return LLMResponse(
+                content=f"Error calling LLM: {exc}",
+                finish_reason="error",
+                error_classification=classification,
+            )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        # The provider's reported reason wins - "length" and "content_filter"
+        # cannot be inferred from the payload, and dr@2.9's truncation fallback
+        # keys on "length". The tool-call normalisation stays for gateways that
+        # report "stop" on a tool-call stream; without a reported reason the old
+        # inference is the only information available.
+        if tool_calls and provider_finish in (None, "stop"):
+            finish_reason = "tool_calls"
+        else:
+            finish_reason = provider_finish or "stop"
 
-        return LLMResponse(
+        response = LLMResponse(
             content="".join(content_buf),
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
             reasoning_content="".join(reasoning_buf) or None,
+            error_classification=error_classification,
         )
+        if finish_reason != "error":
+            # Same decision point as the non-streaming path (chat_with_retry):
+            # judged here, inside this method's own llm.call span, and before the
+            # registry sees the calls. ``sent`` is None because the ceiling was
+            # resolved inside the provider; it only names a number in the message.
+            from raven.providers.truncation import flag_truncation
+
+            response.max_tokens, response.truncated = flag_truncation(
+                sent=None,
+                finish_reason=response.finish_reason,
+                usage=response.usage,
+                tool_calls=response.tool_calls,
+            )
+        return response
 
     @classmethod
     def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
@@ -1777,7 +1924,9 @@ class AgentLoop:
         does it elide old tool bodies, because that is the evidence the answer
         has to come from. Never raises the reserve back — history only grows.
         """
-        cap = current_cap or int(getattr(getattr(self.provider, "generation", None), "max_tokens", 0) or 0)
+        # generation.max_tokens may be None ("model's own ceiling"); the clamp
+        # needs a number, so fall back to the same 4096 the budget reserve uses.
+        cap = current_cap or int(getattr(getattr(self.provider, "generation", None), "max_tokens", None) or 4096)
         if not cap:
             return messages, current_cap, 0
         window = self._window_for(model)
@@ -1838,7 +1987,9 @@ class AgentLoop:
             # fires" is readable at a glance instead of being an emergent property of
             # three comparisons - which is precisely how the previous version hid.
             return None
-        cap = current_cap or int(getattr(getattr(self.provider, "generation", None), "max_tokens", 0) or 0)
+        # generation.max_tokens may be None ("model's own ceiling"); the clamp
+        # needs a number, so fall back to the same 4096 the budget reserve uses.
+        cap = current_cap or int(getattr(getattr(self.provider, "generation", None), "max_tokens", None) or 4096)
         if not cap:
             return None
         factor = float(getattr(self._dr_flow, "reactive_clamp_factor", 0.5) or 0.5)
@@ -1862,6 +2013,7 @@ class AgentLoop:
         truncated: bool = False,
         max_tokens: int | None = None,
         reasoning_effort: str | None = None,
+        usage_sink: dict[str, Any] | None = None,
     ) -> tuple[str, bool]:
         """One tools-disabled LLM call to wrap up after the iteration budget runs out.
 
@@ -1927,6 +2079,12 @@ class AgentLoop:
                     fallback_models=fallback_models,
                     **extra,
                 )
+            if usage_sink is not None and getattr(response, "usage", None):
+                # The synthesis call is real spend on exactly the turns that
+                # already spent the most; unaccounted it makes the priciest
+                # turns read as their cheapest version.
+                snapshot = AgentLoop._build_usage_snapshot(response, model or getattr(self, "model", ""), "")
+                _accumulate_turn_usage(usage_sink, response.usage, snapshot.estimated_cost_usd)
             text = self._strip_think(response.content)
             if response.finish_reason != "error" and text:
                 return text, True
@@ -1949,7 +2107,7 @@ class AgentLoop:
         self,
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
-        extraction_session_id: str | None = None,
+        session_key: str | None = None,
         model: str | None = None,
         fallback_models: list[str] | None = None,
         injected_skill_ids: list[str] | None = None,
@@ -1966,9 +2124,10 @@ class AgentLoop:
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
         as user turns before the next LLM call.
 
-        ``extraction_session_id`` is the session key passed to local
-        skill extraction when a turn completes. When ``None``, extraction
-        is skipped (no pipeline wired).
+        ``session_key`` names the session this turn belongs to; it reaches the
+        hook contexts, TokenWise usage snapshots and shadow-git labels. ``None``
+        (a caller with no session, as some tests are) degrades those consumers
+        to their anonymous forms.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -2004,13 +2163,18 @@ class AgentLoop:
         iteration = 0
         llm_calls = 0
         final_content = None
+        # True when the final response delivered its reasoning out-of-band
+        # (``reasoning_content``), which waives the closing-tag bar on the
+        # answerless gate below - content then carries only answer text and a
+        # tag can never appear in it. See flow.answer_text.closing_tag_bar.
+        final_reasoning_oob = False
         # dr@2.9: only the NORMAL loop exit sets this. A hook short-circuit (salvage)
         # deliberately leaves it None, so a salvaged answer can never be mistaken for a
         # truncated one - the guard below keys on it and would otherwise re-run a lossy
         # stage on text the gate had just produced.
         final_finish_reason: str | None = None
         tools_used: list[str] = []
-        session_key = extraction_session_id or ""
+        session_key = session_key or ""
         effective_model = model or self.model
 
         # One context for the whole turn (not per iteration): hooks keep
@@ -2023,6 +2187,7 @@ class AgentLoop:
             AgentHookContext(
                 session_key=session_key,
                 turn_question=turn_question(initial_messages),
+                turn_base=turn_base,
             )
             if len(self.hooks) > 0
             else None
@@ -2040,6 +2205,16 @@ class AgentLoop:
             if not decision.rollback:
                 return False
             if hook_rollbacks >= self._MAX_HOOK_ROLLBACKS:
+                # Counted receipt, not just a log line: the gate that asked for
+                # this rollback has already booked it (the verify gate writes
+                # ``reject`` + ``revisions`` to the ledger before returning), so
+                # a silent pass-through here leaves the books saying a bounce
+                # happened that never did. An uncountable suppression is
+                # indistinguishable from one that never occurred.
+                if hook_ctx is not None:
+                    hook_ctx.metadata["rollbacks_refused"] = (
+                        hook_ctx.metadata.get("rollbacks_refused", 0) + 1
+                    )
                 logger.warning(
                     "Hook rollback cap ({}) reached; proceeding without rollback",
                     self._MAX_HOOK_ROLLBACKS,
@@ -2236,7 +2411,15 @@ class AgentLoop:
                 # (e.g. OpenRouter); otherwise the configured default.
                 context_max = self._window_for(call_model)
                 context_used = prompt_tokens + completion_tokens
+                # The unprefixed fields are LAST-CALL values - context-% display
+                # needs exactly that. The turn_* fields accumulate across every
+                # call of the turn, because the turn-level ``Usage`` was being
+                # built from the last call alone and under-billed every
+                # multi-iteration turn by all but its final call.
+                _accumulate_turn_usage(usage_sink, response.usage, usage_snapshot.estimated_cost_usd)
+                turn_totals = {k: v for k, v in usage_sink.items() if k.startswith("turn_")}
                 usage_sink.clear()
+                usage_sink.update(turn_totals)
                 usage_sink["prompt_tokens"] = prompt_tokens
                 usage_sink["completion_tokens"] = completion_tokens
                 usage_sink["total_tokens"] = int(response.usage.get("total_tokens", 0) or 0)
@@ -2485,6 +2668,7 @@ class AgentLoop:
                 )
                 final_content = clean
                 final_finish_reason = getattr(response, "finish_reason", None)
+                final_reasoning_oob = bool(getattr(response, "reasoning_content", None))
                 break
 
         synthesized_on_exhaustion = False
@@ -2515,7 +2699,10 @@ class AgentLoop:
         _truncated_answerless = bool(
             getattr(self._dr_flow, "truncation_wrapup", False)
         ) and _is_truncated_answerless(
-            final_content, final_finish_reason, salvaged=_salvaged_already
+            final_content,
+            final_finish_reason,
+            salvaged=_salvaged_already,
+            reasoning_oob=final_reasoning_oob,
         )
         if _truncated_answerless:
             logger.warning(
@@ -2537,6 +2724,7 @@ class AgentLoop:
                 truncated=True,
                 max_tokens=getattr(self._dr_flow, "truncation_wrapup_max_tokens", None),
                 reasoning_effort=getattr(self._dr_flow, "truncation_wrapup_effort", None),
+                usage_sink=usage_sink,
             )
             if final_content:
                 messages = self.context.add_assistant_message(messages, final_content)
@@ -2563,6 +2751,7 @@ class AgentLoop:
                 fallback_models,
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
+                usage_sink=usage_sink,
             )
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -2620,10 +2809,14 @@ class AgentLoop:
             # static apology, and that case genuinely IS answerless - so the flag, not
             # the branch, is the right thing to test.
             or synthesized_on_exhaustion
-            or visible_answer(final_content, closing_tag_required=self._think_closing_tag_required)
+            or visible_answer(
+                final_content,
+                closing_tag_required=self._think_closing_tag_required and not final_reasoning_oob,
+            )
         )
         if hook_ctx is not None:
-            # answerless is the GATE value and uses self._think_closing_tag_required,
+            # answerless is the GATE value and uses self._think_closing_tag_required
+            # (waived per-response on out-of-band reasoning, an arm-neutral fact),
             # which is False whenever the flow is off - so the anchor is judged with a
             # permissive bar and the treated arm with the strict one, and an
             # "answerless rate" row built from it mixes two definitions. Recomputing
@@ -2662,6 +2855,14 @@ class AgentLoop:
                 "synthesized_on_truncation": bool(_truncated_answerless),
                 "final_finish_reason": final_finish_reason,
                 "closing_tag_required": bool(self._think_closing_tag_required),
+                # dr@3.4 (folded): True when the gate above waived the bar because the final
+                # response carried out-of-band reasoning. Left beside the raw key
+                # rather than folded into it, same discipline as answerless_shape_exempt:
+                # published numbers read the raw key. Note the shape rulers in this
+                # stamp keep their unconditional strict bar, so on an out-of-band
+                # stack answerless_shape reads all-answerless by construction - read
+                # it only alongside this flag.
+                "closing_tag_waived_oob": final_reasoning_oob,
                 "salvage_committed_at_terminal": salvage_committed,
                 "overflows": overflows,
                 "clamps": clamp_retries,
@@ -2693,6 +2894,18 @@ class AgentLoop:
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
         if any(m.get("_recovery_synthetic") for m in messages):
+            # Checkpoint BEFORE the strip. The journal's watermark is a length,
+            # so stripping k synthetics and having appended the final assistant
+            # message can leave the list at exactly the old watermark - the one
+            # message the journal exists to keep would then never be written,
+            # and with exactly one synthetic even ``history_shrunk`` stays
+            # silent. Journaled first, the strip is then visible as a shrink.
+            if journal is not None:
+                journal.checkpoint(messages)
+                journal.event(
+                    "recovery_synthetic_stripped",
+                    removed=sum(1 for m in messages if m.get("_recovery_synthetic")),
+                )
             messages = [m for m in messages if not m.get("_recovery_synthetic")]
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
@@ -2727,7 +2940,10 @@ class AgentLoop:
                 messages[turn_base:],
                 declared_tools=self.tools.names(),
                 metadata=metadata,
-                closing_tag_required=self._think_closing_tag_required,
+                # The oob fact comes from the FINAL response and the invariant
+                # checker judges final_content, so the pair is consistent; on a
+                # stack that switches channels mid-turn this is an approximation.
+                closing_tag_required=self._think_closing_tag_required and not final_reasoning_oob,
             )
             # Stamped on every turn including a clean one, and outside
             # ``terminal_state`` for the same reason ``invariants`` is: that
@@ -2755,6 +2971,12 @@ class AgentLoop:
             # ``synthesized`` is kept beside it rather than replaced: "the call
             # produced a model-written wrap-up rather than the static fallback" is a
             # real and different fact, and collapsing the two is what hid this.
+            #
+            # Same caliber warning as ``answerless_shape``: the strict bar is kept
+            # unconditionally to mirror the scorer's predicate, so on a stack whose
+            # reasoning arrives out-of-band a wrap-up reply carries no tag and
+            # ``recovered`` reads False by construction - read it only alongside
+            # ``closing_tag_waived_oob``.
             _wrapup_answer = bool(
                 visible_answer(final_content, closing_tag_required=True)
             ) if _truncated_answerless else False
@@ -2775,10 +2997,32 @@ class AgentLoop:
             if getattr(self._dr_flow, "record_final_shape", False):
                 from raven.agent.flow.final_shape import shape_final_answer
 
-                observers["final_shape"] = shape_final_answer(
+                shaped = shape_final_answer(
                     final_content,
-                    closing_tag_required=self._think_closing_tag_required,
-                ).counters()
+                    closing_tag_required=self._think_closing_tag_required and not final_reasoning_oob,
+                )
+                observers["final_shape"] = shaped.counters()
+                # dr@3.7: the delivered report shape, recorded whether or not the
+                # bar that enforces it is installed - that is the whole point.
+                # Pricing ``report_bounce`` needs the malformed rate from arms
+                # that do NOT run it, and the record could not supply one: it
+                # stamps flow_version but not the finalShape knobs, so a baseline
+                # scraped from sessions cannot tell a malformed reply from a
+                # profile that never asked for the template. ``expected`` closes
+                # that gap. Read-only, like ``final_shape`` beside it.
+                from raven.agent.flow.report_shape import ReportShape
+
+                # Reads ``shaped.visible`` rather than folding the answer a second
+                # time: the two payloads are then the same string by construction
+                # instead of by two call sites happening to pass the same bar. The
+                # pairing is load-bearing - ``final_shape.visible_chars`` is the
+                # denominator ``report_shape_gate.draft_chars`` is measured against,
+                # and a shrink ratio whose halves were computed under different
+                # definitions of "visible" is not a ratio.
+                observers["report_shape"] = {
+                    "expected": bool(getattr(self._dr_flow, "report_structure", False)),
+                    **ReportShape(shaped.visible).counters(),
+                }
             # dr@2.8 research trail. Placement is the design: ``messages`` already
             # carries the raw answer by this point, so appending here reaches the
             # value returned to the caller and nothing else - the persisted
@@ -2806,7 +3050,12 @@ class AgentLoop:
             # pages, so its rows are empty and the merge is a no-op - but the file
             # still has to be closed, and gating the whole block would leak it.
             _wants_memo = getattr(self._dr_flow, "research_memo", False)
-            if _wants_appendix or _wants_memo:
+            # Entered under the OPEN condition from the top of the turn, not the
+            # wants: with the appendix knob on and the memo off, a turn the
+            # conversation gate ruled non-research wants neither output - but it
+            # DID open a ledger, and gating on the wants left that file behind
+            # with no later reader, exactly what the comment above warns about.
+            if _wants_appendix or _wants_memo or getattr(self._dr_flow, "process_appendix", False):
                 from raven.agent.flow.conversation import stash_turn_rows
                 from raven.agent.ledger import close_product_ledger, ledger_path
                 from raven.agent.process_appendix import build_appendix, read_ledger
@@ -3186,7 +3435,6 @@ class AgentLoop:
             if fallback_models:
                 logger.info("Router fallback chain: {}", fallback_models)
 
-        extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
         # Stamp the inbound user message at turn start so the persisted turn
         # carries its real arrival time, like every message created after it.
@@ -3196,7 +3444,7 @@ class AgentLoop:
         final_content, _, all_msgs, outcome = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress,
-            extraction_session_id=extraction_sid,
+            session_key=key,
             model=routed_model,
             fallback_models=fallback_models,
             injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
@@ -3301,6 +3549,7 @@ class AgentLoop:
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from raven.agent.flow.conversation import MEMO_OPEN, strip_memo
+        from raven.agent.flow.report_shape import REMINDER_CLOSE, REMINDER_OPEN, strip_reminder
 
         for m in messages[skip:]:
             entry = dict(m)
@@ -3312,20 +3561,45 @@ class AgentLoop:
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
+                # dr@3.7: same accumulate-if-persisted reason as the memo below,
+                # and stripped before it because the two anchor at opposite ends.
+                # Before the runtime-context branch too, and that order is
+                # load-bearing: that branch drops the message entirely when
+                # nothing but the runtime block is left, and a reminder still
+                # attached would answer "something is left" on a message whose
+                # only real content was the block being removed.
+                if isinstance(content, str) and content.rstrip().endswith(REMINDER_CLOSE):
+                    content = strip_reminder(content)
+                    entry["content"] = content
                 # dr@3.0: the research memo is assembled fresh from session metadata
                 # at every turn, so persisting the injected copy would accumulate -
                 # turn three would carry turn two's memo as history alongside a newly
                 # rendered one listing the same pages. Stripped before the runtime-tag
-                # branch because the memo is injected last and is therefore outermost.
+                # branch because the memo is the outermost PREFIX on the message.
                 if isinstance(content, str) and content.startswith(MEMO_OPEN):
                     content = strip_memo(content)
                     entry["content"] = content
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                    # Strip the runtime-context prefix, keep only the user text.
-                    parts = content.split("\n\n", 1)
-                    if len(parts) > 1 and parts[1].strip():
-                        entry["content"] = parts[1]
-                    else:
+                if isinstance(content, str) and ContextBuilder._RUNTIME_CONTEXT_TAG in content:
+                    # Strip the runtime-context paragraph, keep only the user text.
+                    # Not prefix-anchored: a recovery notice is prepended OUTSIDE
+                    # this envelope after an interrupted turn, and a prefix match
+                    # then persisted the stale-stamped runtime block into every
+                    # later turn - two conflicting clocks in one history. The scan
+                    # stops at the first real user paragraph, so the tag appearing
+                    # inside user text stays user data.
+                    paras = content.split("\n\n")
+                    for i, para in enumerate(paras):
+                        if para.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                            remainder = paras[:i] + paras[i + 1 :]
+                            if any(p.strip() for p in remainder):
+                                content = "\n\n".join(remainder)
+                                entry["content"] = content
+                            else:
+                                content = None
+                            break
+                        if not para.startswith(self._RECOVERY_TAG):
+                            break
+                    if content is None:
                         continue
                 if isinstance(content, list):
                     filtered = []
@@ -3342,6 +3616,12 @@ class AgentLoop:
                             and c["text"].startswith(MEMO_OPEN)
                         ):
                             continue  # dr@3.0: same reason, multimodal shape
+                        if (
+                            c.get("type") == "text"
+                            and isinstance(c.get("text"), str)
+                            and c["text"].startswith(REMINDER_OPEN)
+                        ):
+                            continue  # dr@3.7: same reason, multimodal shape
                         if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
                             "data:image/"
                         ):
@@ -3559,10 +3839,15 @@ class AgentLoop:
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
 
+        # Turn totals, not the last call's numbers - ``Usage`` documents itself
+        # as "token accounting for one turn". The unprefixed per-call fields
+        # stay in the sink for the context-% display.
         usage = Usage(
-            prompt_tokens=int(usage_sink.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(usage_sink.get("completion_tokens", 0) or 0),
-            total_tokens=int(usage_sink.get("total_tokens", 0) or 0),
+            prompt_tokens=int(usage_sink.get("turn_prompt_tokens", usage_sink.get("prompt_tokens", 0)) or 0),
+            completion_tokens=int(
+                usage_sink.get("turn_completion_tokens", usage_sink.get("completion_tokens", 0)) or 0
+            ),
+            total_tokens=int(usage_sink.get("turn_total_tokens", usage_sink.get("total_tokens", 0)) or 0),
         )
         # A message-tool reply returns None from _process_message but did reply,
         # so it counts as an explicit reply too.
@@ -3604,22 +3889,38 @@ def _merge_tool_call_fragments(
 
 
 def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
+    """Convert accumulator slots into final ToolCallRequest list.
+
+    Mirrors the non-streaming parser (``LiteLLMProvider._parse_response``):
+    strict parse first so "this needed repairing" survives as a signal, then
+    ``json_repair`` with the repair recorded on ``run_meta`` -- a stream cut
+    mid-arguments ends the buffer here, and that repair is the one locally
+    computable clue ``flag_truncation`` reads. Wrapping the raw text instead
+    kept the call dispatchable with a schema complaint about a field the model
+    never sent.
+    """
+    import json_repair
+
     result: list[ToolCallRequest] = []
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
+        repaired = False
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
-            args = {"_raw_arguments": args_text}
+            args = json_repair.loads(args_text)
+            repaired = True
+        if not isinstance(args, dict):
+            args, repaired = {"_raw_arguments": args_text}, True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
+                run_meta=RunMeta(arguments_repaired=True) if repaired else None,
             )
         )
     return result

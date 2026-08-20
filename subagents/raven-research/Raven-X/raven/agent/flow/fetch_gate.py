@@ -42,7 +42,13 @@ class FetchGateObserver(AgentHook):
             # gateway serving a second question would start it already closed, and
             # the symptom would be a rule that fires before its first search.
             self._gate.reset()
-        watermark = int(state.get("watermark", 0))
+        # The scan starts at ``ctx.turn_base``, never 0: everything below it is
+        # the session's persisted history, and a previous turn that ended on a
+        # long unread-search tail would otherwise close ``web_search`` on this
+        # turn's very first iteration - silently, because the newest message at
+        # that point is the user's question, not a tool result to hang the
+        # notice on.
+        watermark = int(state.get("watermark", ctx.turn_base or 0))
         for m in messages[watermark:]:
             if not isinstance(m, dict) or m.get("role") != "tool":
                 continue
@@ -78,8 +84,13 @@ class FetchGateObserver(AgentHook):
             # re-emitted its refusal on every suppressed call and one turn
             # accumulated 195 of them; the cost of a repeated harness sentence is
             # paid in context on the arm that is already closest to overflowing.
-            state["notice_at"] = self._gate.fired
+            #
+            # ``notice_at`` advances only when the notice actually lands: when the
+            # newest message is not a tool result there is nothing to hang it on,
+            # and advancing anyway would skip the explanation for this firing
+            # instead of deferring it to the next iteration that can carry it.
             if messages and messages[-1].get("role") == "tool":
+                state["notice_at"] = self._gate.fired
                 body = messages[-1].get("content") or ""
                 messages[-1]["content"] = f"{body}\n\n{fetch_gate_notice()}"
             logger.warning(

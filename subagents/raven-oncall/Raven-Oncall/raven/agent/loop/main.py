@@ -35,7 +35,6 @@ from raven.agent.tools.media_gen import (
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.ops_connections import OpsConnectionsTool
 from raven.agent.tools.ops_declare import OpsDeclareTool
-from raven.agent.tools.ops_exec import OpsExecTool
 from raven.agent.tools.ops import (
     OpsCheckLaterTool,
     OpsKillTool,
@@ -310,6 +309,28 @@ def _advance_campaign_wake(cron_service: Any, campaign: str, cdir) -> None:
     cron_service.advance_job_to_now(target.id)
 
 
+def _asked_for(messages: list[dict]) -> str:
+    """The last thing the owner said, without the runtime metadata glued to it.
+
+    The metadata block is prepended to the user content by the assembler, and it
+    is separated from the message by a blank line -- so a request that begins with
+    it is split there and the rest kept.
+    """
+    for msg in reversed(messages or []):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = " ".join(
+                str(part.get("text", "")) for part in content if isinstance(part, dict)
+            )
+        text = str(content or "")
+        if text.startswith("[Runtime Context") and "\n\n" in text:
+            text = text.split("\n\n", 1)[1]
+        return text.strip()
+    return ""
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -417,6 +438,9 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        # This turn's answer to "is this work to run and watch", or None before it
+        # has been asked. Lazily filled by _note_watched_path.
+        self._watched_verdict: Any = None
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
@@ -731,7 +755,6 @@ class AgentLoop:
         self.tools.register(OpsCampaignsTool())
         self.tools.register(OpsConnectionsTool())
         self.tools.register(OpsDeclareTool())
-        self.tools.register(OpsExecTool())
         self.tools.register(OpsKillTool())
         # Raw-output pair. ops_tune_status compresses a trial's progress to one
         # line, which loses almost everything when a job writes many lines per
@@ -1304,6 +1327,9 @@ class AgentLoop:
         session_key: str | None = None, task: str = "",
     ) -> None:
         """Update context for all tools that need routing info."""
+        # One judgement per turn, so it is cleared where a turn begins. Left over
+        # from the previous turn it would answer about the wrong request.
+        self._watched_verdict = None
         for name in ("message", "spawn", "cron", "deep_research", "ops_submit", "ops_check_later"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
@@ -1323,6 +1349,50 @@ class AgentLoop:
                         tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
+
+    _WATCHED_TOOLS = {"list_dir": "path", "read_file": "path", "grep": "path",
+                      "find": "path", "exec": "command"}
+
+    async def _note_watched_path(
+        self, name: str, args: dict[str, Any], result: str, message: str
+    ) -> str:
+        """Add one line when a look landed on a path the owner asked about.
+
+        Lazily, and once per turn: a request that never reaches for a path never
+        pays for the judgement, and a turn that reaches for twenty pays once.
+        Skipped entirely for a tool that names a machine already -- that call is
+        on the ops path -- and for a window watching a campaign, where the answer
+        is known and recorded.
+
+        Placed on the result rather than before the call because the result is the
+        only channel measured to change the next move: 2026-08-19, the same fact
+        at the top of the turn was read, written into the reasoning, and ignored,
+        while a fact arriving in a tool result was acted on.
+        """
+        key = self._WATCHED_TOOLS.get(name)
+        if not key or args.get("machine"):
+            return result
+        subject = str(args.get(key) or "")
+        if not subject:
+            return result
+        try:
+            from raven.ops import watched
+
+            verdict = self._watched_verdict
+            if verdict is None:
+                verdict = self._watched_verdict = watched.read_verdict(
+                    (await self._llm_call_stream(
+                        watched.build_prompt(message), None, self.model
+                    )).content
+                )
+            if not verdict.watched:
+                return result
+            hits = re.findall(r"(/[^\s'\"|;&>]+)", subject) if key == "command" else [subject]
+            if any(verdict.claims(h) for h in hits):
+                return result + watched.provenance_line()
+        except Exception:  # noqa: BLE001 -- a look must not fail over a judgement
+            logger.debug("watched-path judgement skipped", exc_info=True)
+        return result
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1589,6 +1659,11 @@ class AgentLoop:
         # last-call meaning. Filled at the provider boundary below.
         if totals_sink is None:
             totals_sink = {}
+        # What the owner actually asked, for the one judgement made per turn. Taken
+        # from the messages rather than threaded in, so every caller of this loop
+        # gets it without a new argument.
+        request_text = _asked_for(initial_messages)
+
         turn_totals = totals_sink
         for key in ("prompt_tokens", "completion_tokens", "total_tokens", "calls", "calls_without_usage"):
             turn_totals.setdefault(key, 0)
@@ -1726,10 +1801,22 @@ class AgentLoop:
                     continue
 
             if response.has_tool_calls:
+                # What it said while reaching for a tool, in the log and not only
+                # on screen. Without it a trace shows the moves and not the reason,
+                # and a wrong first move -- 2026-08-19, iteration 1 went straight to
+                # the local filesystem for work that belonged on a registered
+                # machine -- cannot be told apart from "did not notice the tool
+                # existed", "noticed and thought it was overkill", and "did not read
+                # this as an experiment at all". Those three want different fixes.
+                said = self._strip_think(response.content)
+                if said:
+                    logger.info("Said: {}", said.replace("\n", " ")[:400])
+                if response.reasoning_content:
+                    logger.info("Reasoned: {}",
+                                str(response.reasoning_content).replace("\n", " ")[:400])
                 if on_progress:
-                    thought = self._strip_think(response.content)
-                    if thought:
-                        await on_progress(thought)
+                    if said:
+                        await on_progress(said)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
@@ -1759,6 +1846,9 @@ class AgentLoop:
                         )
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = await self._note_watched_path(
+                        tool_call.name, tool_call.arguments, str(result), request_text
+                    )
                     if getattr(self.tools.get(tool_call.name), "ends_turn", False):
                         turn_closed_by_tool = True
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)

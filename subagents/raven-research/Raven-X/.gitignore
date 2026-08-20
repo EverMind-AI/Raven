@@ -87,3 +87,13 @@ benchmarks/proactivity_eval/data/discovery/*/auth_*.py
 benchmarks/proactivity_eval/data/discovery/*/cache_*.md
 benchmarks/proactivity_eval/data/discovery/*/rate_limit_*.py
 benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
+
+# Runtime data directories. get_data_dir() derives the instance data dir from
+# the ACTIVE CONFIG's parent directory (raven/config/paths.py), so a config
+# placed at the repo root - the QUICKSTART flow - sprays these into the repo.
+/cache/
+/cron/
+/ledger/
+/sentinel/
+/media/
+/sandbox/

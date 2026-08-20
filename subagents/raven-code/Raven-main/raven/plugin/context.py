@@ -22,7 +22,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from raven.providers.base import LLMProvider
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,15 @@ class ServiceLocator:
 
     workspace: Path
     """Root workspace path (``~/.raven/<workspace>``)."""
+
+    provider: "LLMProvider | None" = None
+    """The host's LLM provider, already carrying the session's default model.
+
+    ``None`` at assembly points that have no provider (e.g. the import
+    CLI); a tool that needs LLM calls must decline contribution rather
+    than construct its own provider — a second provider built from a
+    plugin's private config splits credentials/model selection from the
+    host's and silently diverges."""
 
 
 @dataclass(frozen=True)

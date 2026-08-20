@@ -83,3 +83,41 @@ async def test_a_traceback_reaches_the_log(registry, caplog):
         logger.remove(sink)
     joined = "".join(seen)
     assert "KeyError" in joined and "Traceback" in joined
+
+
+@pytest.mark.asyncio
+async def test_a_machine_argument_a_tool_would_ignore_is_refused():
+    """An ignored ``machine`` answers about the wrong machine.
+
+    Most unknown arguments land in **kwargs harmlessly. This one says WHERE.
+    Measured 2026-08-19: read_file was given machine="conn_cpu_32c" for a path
+    that also exists here and returned this computer's copy, with nothing in the
+    result to say so. That run's path happened to be missing locally, so "file not
+    found" made the loop correct itself -- a shared mount, or a path like /opt,
+    would have handed over the wrong contents in silence.
+    """
+    from raven.agent.tools.filesystem import ReadFileTool
+    from raven.agent.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(ReadFileTool())
+
+    out = await registry.execute("read_file", {"path": "/etc/hosts", "machine": "conn_box"})
+
+    assert out.startswith("Error")
+    assert "has no 'machine'" in out
+    assert "exec" in out and "conn_box" in out, "the refusal has to name the way to do it"
+    assert "Nothing was done" in out
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_does_take_a_machine_is_untouched():
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.shell import ExecTool
+
+    registry = ToolRegistry()
+    registry.register(ExecTool(working_dir="/tmp"))
+
+    out = await registry.execute("exec", {"command": "echo hi"})
+
+    assert "hi" in out
