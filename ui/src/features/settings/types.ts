@@ -1,0 +1,78 @@
+/* One provider row of the model panel. Both sources answer with the shared
+   PROVIDERS array (ui/src/demo/130-settings.js), mutated in place: the live
+   loadProviders rebuilds it from model.options, so the composer's model chip
+   menu and the island read the same rows. */
+export interface ProviderRow {
+  id: string
+  name: string
+  models: string[]
+  on: boolean
+  /* 'api_key' | 'oauth' | 'local' | 'endpoint' */
+  kind?: string
+  needsBase?: boolean
+  env?: string
+  warn?: string
+  key?: string
+}
+
+export interface EverosSection {
+  model?: string
+  base_url?: string
+  api_key_set?: boolean
+}
+
+export interface EverosInfo {
+  sections?: Record<string, EverosSection>
+}
+
+export interface UsageModelRow {
+  model: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface UsageStats {
+  days: number
+  llm: {
+    total: { calls: number; input_tokens: number; output_tokens: number; cost_usd: number }
+    models: UsageModelRow[]
+  }
+  tools: {
+    total: number
+    counts: Array<{ name: string; count: number }>
+  }
+}
+
+/* Everything the dialog draws from, in one read. `raw` is the config
+   settings.get returned (camelCased keys, one level per dot); the fixture
+   answers an empty object so every V() read falls back to the schema
+   default, exactly as the demo page always painted. */
+export interface SettingsSnapshot {
+  raw: Record<string, unknown>
+  configPath: string
+  everos: EverosInfo | null
+  providers: ProviderRow[]
+  curProvider: string
+  model: string
+}
+
+export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect'
+
+/* The DS.settings contract both the fixture source (demo shell) and the rpc
+   source (live layer) implement. Writes in the fixture throw { notLive: true },
+   which the island renders as the in-row refusal the demo page always spoke;
+   the rpc source speaks its own toasts and throws { handled: true } so the
+   island only redraws. `usage` resolving null means "no counter behind this
+   page" (the demo), not zero usage. `pickModel` is the live layer's model
+   picker popover -- absent in the fixture, so the demo refuses the button. */
+export interface SettingsSource {
+  load(): Promise<SettingsSnapshot>
+  set(key: string, value: unknown): Promise<SettingsSnapshot>
+  everosSet(section: string, fields: Record<string, string> | null): Promise<SettingsSnapshot>
+  usage(): Promise<UsageStats | null>
+  provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
+  model(): string
+  pickModel?(anchor: HTMLElement, after: () => void): void
+}

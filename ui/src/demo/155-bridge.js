@@ -65,3 +65,20 @@ window.RavenShell = {
   dockLift: () => dockLift(),
   plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
+
+/* Settings-island verbs, one guarded line each: a helper missing from this
+   build leaves its verb absent, and the island refuses that control instead
+   of the whole bundle crashing at evaluation. */
+if (typeof openSet === 'function') window.RavenShell.openSet = () => openSet();
+if (typeof closeSet === 'function') window.RavenShell.closeSet = () => closeSet();
+if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOpen();
+if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();
+if (typeof APP_VERSION !== 'undefined') window.RavenShell.appVersion = () => APP_VERSION || null;
+if (typeof SESS !== 'undefined') window.RavenShell.sessionCount = () => SESS.length;
+if (typeof deleteAllSessions !== 'undefined') window.RavenShell.deleteAllSessions = () => deleteAllSessions();
+if (typeof checkUpdate !== 'undefined') window.RavenShell.checkUpdate = (btn) => checkUpdate(btn);
+if (typeof wsOpenUrl !== 'undefined') window.RavenShell.openUrl = (u) => wsOpenUrl(u);
+if (typeof setLangShim === 'function') window.RavenShell.setLang = (v) => setLangShim(v);
+if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
+if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };
+if (typeof renderToolset === 'function') window.RavenShell.renderToolset = (host) => renderToolset(host);
