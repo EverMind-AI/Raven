@@ -108,7 +108,7 @@ $('#modelChip').onclick = () => {
   menuAt(r.left, r.bottom + 6, items);
 };
 
-$('#permChip').onclick = () => ($('#permPop').dataset.open === 'true' ? closePermPop() : openPermPop());
+$('#permChip').onclick = () => togglePerm();
 
 /* Arrows, not references: live.js swaps openCaps for one that loads real data
    first, and a stored reference would keep calling the demo. */
