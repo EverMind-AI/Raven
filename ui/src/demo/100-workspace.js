@@ -221,6 +221,20 @@ function wsPick(tab) {
   drawWs(); bumpWs();
 }
 
+/* The pane's state, out and back. The live layer's parked-turn machinery is the
+   caller: it saves this when the reader leaves a session mid-turn and hands it
+   back on return. Two functions rather than two bindings for that layer to read
+   and write -- which view is up and whether the reader chose it belong to the
+   panel, and only the panel knows a restore is not a fresh pick. */
+function wsView() {
+  return { tab: wsTab, open: wsOpen, picked: wsPicked };
+}
+
+function wsRestore(tab, picked) {
+  wsTab = tab || 'diff';
+  wsPicked = !!picked;
+}
+
 /* Bumped on every redraw. A view that fetches before it can render must
    re-check this before appending, or a slow answer lands in whatever view the
    user switched to meanwhile. */

@@ -36,7 +36,9 @@ function parkTurn() {
        another session. */
     liveT0: RavenIslands.composer.liveAnchor(),
     ws: { changes: WS.changes, cmds: WS.cmds, urls: WS.urls, file: WS.file, turn: WS.turn, unseen: WS.unseen },
-    wsTab, wsPicked,
+    /* Asked for, not read off the panel's own bindings: this layer parks the
+       pane state, it does not own it. */
+    pane: wsView(),
     events: [], overflow: false,
   });
 }
@@ -61,7 +63,7 @@ function restoreTurn(pk) {
      clock resumes from the turn's real start rather than from the switch. */
   RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
   Object.assign(WS, pk.ws);
-  wsTab = pk.wsTab; wsPicked = pk.wsPicked;
+  wsRestore(pk.pane.tab, pk.pane.picked);
   const s = sess(cur);
   if (s && s.status === 'run') s.status = null;
   pk.events.forEach((ev) => { try { onEvent(ev); } catch { /* one bad frame must not eat the rest */ } });
