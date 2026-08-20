@@ -25,9 +25,17 @@ function openSession(s) {
   }
 }
 
-/* The fixture half of DS.banner. `cap` reads the capability list, which the
-   live layer fills in place, so one implementation answers for both modes --
-   the same shape DS.sessions uses over SESS. */
+/* The fixture half of DS.banner, and only that half. `cap` reads the capability
+   list, which the live layer does fill in place -- but live mode does not use
+   this reading of it: live/120-settings.js installs a source that refuses the
+   suggestion outright, because a config gap belongs in the settings page, not
+   as a strip over every conversation.
+   Not "never", exactly: the demo boot paints before the live layer has
+   installed anything, so a live page's FIRST draw of this strip does come
+   through here, and is cleared by the first redraw after the install. That is
+   the boot order rather than this source's business, and it is the same reason
+   a live page's composer meter shows a fixture's token counts until the first
+   session opens. */
 DS.banner ??= {
   websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
 };

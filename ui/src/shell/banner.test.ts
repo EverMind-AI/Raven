@@ -59,20 +59,23 @@ describe('the banner strip', () => {
     expect(b.querySelector('button')).toBeNull()
   })
 
-  /* setFault stores without drawing, on purpose: the live layer replaces the
-     published drawBanner with a no-op, and a redraw from inside this module
-     would put the strip back in a mode that deliberately has none. */
-  it('stores the fault without drawing it, leaving the redraw to the caller', () => {
+  /* The whole bug this fixes, at the level a unit test can reach it: a setter
+     whose effect waited on the caller making a second call. The live layer's
+     one caller made it, and the name it called had been replaced with a clear,
+     so the fault was stored and never seen. */
+  it('puts the fault on screen by itself, and takes it away by itself', () => {
     wire(false)
     setFault('disk full')
-    expect(banner()).toBeNull()
-    draw()
     expect(banner()).toBeTruthy()
     setFault(null)
-    expect(banner()).toBeTruthy()
-    draw()
     expect(banner()).toBeNull()
   })
+
+  /* Deliberately not a second test for "a source that refuses the suggestion
+     still gets the fault": every mutation that would break it breaks the one
+     above, since that one already wires a refusing source. The live half of
+     this fix -- the source replacing the drawing override -- is in a concat
+     layer vitest does not load, and is verified in a browser instead. */
 
   it('offers the websearch notice when the capability is unconfigured', () => {
     const w = wire(true)
