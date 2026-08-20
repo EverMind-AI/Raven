@@ -65,6 +65,41 @@
      Transcript, banner and composer all read from this one token, so the
      column and the field it is typed into always share an edge. */
   --col: 744px;
+
+  /* Ink and surface roles hoisted from rule-level hex literals. Rules that
+     keep literal colors on purpose (theme-preview swatches, mask gradients,
+     structural color-mix) are marked literal-by-design at the rule. */
+  --ink-on-accent: #fff;
+  --paper: #fff;
+  --stage-bg: #fff;
+  --scrim-soft: #0006;
+  --scrim-mid: #0007;
+  --scrim: #0009;
+  --scrim-detail: rgba(26, 24, 20, .4);
+
+  /* The overlay ladder: every fixed-position surface takes its layer from
+     here, so the whole stacking order is readable (and changeable) in one
+     screen. Values are the historical ones, unchanged; the tie at 90 is
+     deliberate (a tooltip may sit on the update shade). Component-internal
+     stacking (z-index -1..6 inside a relative parent) stays literal -- it
+     is scoped to its own stacking context and is not part of this ladder. */
+  --z-pop: 15;
+  --z-page: 24;
+  --z-detail: 26;
+  --z-rail-handle: 30;
+  --z-veil: 40;
+  --z-menu: 42;
+  --z-palette: 45;
+  --z-picker: 46;
+  --z-toast: 50;
+  --z-takeover: 60;
+  --z-scrollbars: 88;
+  --z-shade: 90;
+  --z-tip: 90;
+  --z-lightbox: 95;
+  --z-failbar: 99;
+  --z-onboarding: 110;
+  --z-splash: 120;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -88,11 +123,13 @@
     --elev:     0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
     --elev-up:  0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
     --seam:     -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
+    --scrim-detail: rgba(6, 6, 8, .55);
   }
 }
 
 /* the viewer's toggle must win over the media query, both directions */
 :root[data-theme="dark"] {
+  --stage-bg: #0e0e11;
   --ink: #16150f; --surface: #1e1c14; --raised: #272419; --line: #3a3527;
   --line-soft: #2c2819; --text: #f7f2e4; --muted: #a39b82; --faint: #736c58;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
@@ -100,8 +137,10 @@
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
   --elev-up: 0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
   --seam: -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
+  --scrim-detail: rgba(6, 6, 8, .55);
 }
 :root[data-theme="light"] {
+  --bdg-ink: #faf7ee;
   --ink: #ffffff; --surface: #f7f7f7; --raised: #f0f0f0; --line: #e7e7e7;
   --line-soft: #f0f0f0; --text: #1a1a1a; --muted: #6b6b6b; --faint: #9d9d9d;
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
@@ -110,6 +149,7 @@
   --elev: 0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
   --elev-up: 0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
   --seam: -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
+  --scrim-detail: rgba(26, 24, 20, .4);
 }
 
 * { box-sizing: border-box; }
@@ -151,7 +191,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    context, would be clipped by the very thing it belongs to. */
 * { scrollbar-width: none; }
 ::-webkit-scrollbar { width: 0; height: 0; }
-.sbars { position: fixed; inset: 0; z-index: 88; pointer-events: none; }
+.sbars { position: fixed; inset: 0; z-index: var(--z-scrollbars); pointer-events: none; }
 .sbar {
   position: fixed; border-radius: 4px; opacity: 0; pointer-events: auto;
   background: color-mix(in oklab, var(--faint) 60%, transparent);
@@ -224,7 +264,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    Skills / Plugins / Memory painted over the way out and left no way to reach
    another module at all. It keeps the exact spot its twin in the rail occupies,
    so the icon never moves under the pointer that just clicked it. */
-#railShow { position: fixed; left: var(--edge); top: 27px; transform: translateY(-50%); z-index: 30; }
+#railShow { position: fixed; left: var(--edge); top: 27px; transform: translateY(-50%); z-index: var(--z-rail-handle); }
 :root[data-shell="1"] #railShow { left: var(--tl-pad, 78px); top: calc(var(--tl-row, 38px) / 2); }
 :root[data-shell="1"][data-rail="off"] .top { padding-left: calc(var(--tl-pad, 78px) + 35px); }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
@@ -478,7 +518,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   background: var(--gold); color: var(--ink); border-radius: 9px; padding: 1px 6px;
 }
-:root[data-theme="light"] .bdg { color: #faf7ee; }
+:root[data-theme="light"] .bdg { color: var(--bdg-ink); }
 /* An attention badge counts real state. In live mode the demo's mock counts are
    painted by boot before the first RPC resolves, which flashed a badge on the
    rail on every refresh -- live.js marks the counts pending until they land,
@@ -914,7 +954,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    still until serve answers again. A bar and one line -- there is nothing to
    decide while an install runs, and nothing the reader can do to hurry it. */
 .upshade {
-  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
+  position: fixed; inset: 0; z-index: var(--z-shade); display: grid; place-items: center;
   background: color-mix(in oklab, var(--ink) 72%, transparent); backdrop-filter: blur(3px);
 }
 /* `upcard`, not `card`: the rail's .card is a three-column grid and would lay
@@ -1029,14 +1069,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .pile .cnt {
   position: absolute; right: 5px; top: 5px; min-width: 21px; height: 18px; padding: 0 5px;
   display: flex; align-items: center; justify-content: center; border-radius: 9px;
-  background: color-mix(in oklab, var(--ink) 76%, transparent); color: #fff;
+  background: color-mix(in oklab, var(--ink) 76%, transparent); color: var(--ink-on-accent);
   font-family: var(--mono); font-size: 11px; line-height: 1;
 }
 .pile .cnt::before { content: '\00d7'; margin-right: 1px; opacity: .7; }
 
 /* one way to look at an image, wherever it was clicked from */
 .lightbox {
-  position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: 32px;
+  position: fixed; inset: 0; z-index: var(--z-lightbox); display: grid; place-items: center; padding: 32px;
   background: color-mix(in oklab, var(--ink) 82%, transparent); backdrop-filter: blur(4px);
   cursor: zoom-out; border: 0;
 }
@@ -1116,7 +1156,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    single layer beats every one of those: nothing on the page outranks it, and
    the placer clamps it to the viewport. */
 .tipp {
-  position: fixed; z-index: 90; background: var(--text); color: var(--ink);
+  position: fixed; z-index: var(--z-tip); background: var(--text); color: var(--ink);
   font: 400 11px/1.4 var(--sans); letter-spacing: 0; padding: 3px 7px; border-radius: 6px;
   white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s;
   max-width: calc(100vw - 16px); overflow: hidden; text-overflow: ellipsis;
@@ -1544,7 +1584,7 @@ textarea:focus, textarea:focus-visible,
   transition: opacity .15s, background .15s;
 }
 .go:disabled { opacity: .22; cursor: default; }
-.go.halt { background: var(--clay); color: #fff; }
+.go.halt { background: var(--clay); color: var(--ink-on-accent); }
 
 /* wraps instead of pushing the usage line past the edge on a narrow window */
 .under { display: flex; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 0 4px 1px 6px; flex-wrap: wrap; }
@@ -1565,7 +1605,7 @@ textarea:focus, textarea:focus-visible,
 /* model picker: provider column + model column, fixed height so a provider
    with 100+ models cannot grow the popover past the window */
 .mpick {
-  position: fixed; z-index: 46; width: 520px; max-width: calc(100% - 32px);
+  position: fixed; z-index: var(--z-picker); width: 520px; max-width: calc(100% - 32px);
   border-radius: 12px; overflow: hidden;
   display: grid; grid-template-rows: auto 262px auto; animation: up .16s ease both;
 }
@@ -1597,7 +1637,7 @@ textarea:focus, textarea:focus-visible,
 .mpick .foot .hint { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 
 .pop {
-  position: absolute; bottom: calc(100% + 8px); right: 0; width: 296px; z-index: 15;
+  position: absolute; bottom: calc(100% + 8px); right: 0; width: 296px; z-index: var(--z-pop);
   border-radius: 11px; padding: 6px; display: none;
 }
 .pop[data-open="true"] { display: block; animation: up .16s ease both; }
@@ -1766,7 +1806,7 @@ textarea:focus, textarea:focus-visible,
 /* The state sits on .split because the seam grip it has to hide lives in the
    chat column, not in the panel. */
 .split[data-full="true"] .ws {
-  position: fixed; inset: 0; z-index: 60;
+  position: fixed; inset: 0; z-index: var(--z-takeover);
   animation: up .16s ease both;
 }
 .split[data-full="true"] #wsGrip { display: none; }
@@ -1961,8 +2001,7 @@ textarea:focus, textarea:focus-visible,
 }
 .berr .h { font-size: 13.5px; font-weight: 600; }
 .berr .w { font-size: 12px; color: var(--muted); max-width: 46ch; line-height: 1.7; overflow-wrap: anywhere; }
-.bstage { position: relative; background: #fff; min-height: 0; overflow: hidden; touch-action: none; }
-:root[data-theme="dark"] .bstage { background: #0e0e11; }
+.bstage { position: relative; background: var(--stage-bg); min-height: 0; overflow: hidden; touch-action: none; }
 /* The live view: the panel body stops scrolling and the stage takes all of it.
    The page's viewport is resized to the stage, so the frame fits 1:1; contain
    only matters for the beat between a resize and the restream. */
@@ -2229,7 +2268,7 @@ textarea:focus, textarea:focus-visible,
 /* The response carries `Content-Security-Policy: sandbox`, so the frame already
    has an opaque origin; the attribute repeats it for the same reason a lock has
    two turns, and withholding allow-scripts keeps an artifact from running. */
-.fview iframe { width: 100%; height: min(72vh, 720px); border: 0; background: #fff; display: block; }
+.fview iframe { width: 100%; height: min(72vh, 720px); border: 0; background: var(--paper); display: block; }
 .fview .csvw { overflow-x: auto; padding: 12px 14px 26px; }
 .fview table.csvt { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .fview table.csvt th, .fview table.csvt td {
@@ -2287,7 +2326,7 @@ details[open] summary { margin-bottom: 8px; }
 /* Modules replace the conversation, not the whole window: the rail stays put
    so you never lose your place in the session list. */
 .page {
-  position: fixed; inset: 0 0 0 var(--rail); z-index: 24; background: var(--ink);
+  position: fixed; inset: 0 0 0 var(--rail); z-index: var(--z-page); background: var(--ink);
   display: none; flex-direction: column;
 }
 :root[data-rail="off"] .page { left: 0; }
@@ -2545,7 +2584,7 @@ details[open] summary { margin-bottom: 8px; }
 }
 .pminstbtn:hover { color: var(--text); background: var(--raised); }
 .pmbdg {
-  min-width: 15px; height: 15px; border-radius: 8px; background: var(--clay); color: #fff;
+  min-width: 15px; height: 15px; border-radius: 8px; background: var(--clay); color: var(--ink-on-accent);
   font-size: 10px; font-weight: 600; display: inline-flex; align-items: center;
   justify-content: center; padding: 0 4px;
 }
@@ -2698,14 +2737,10 @@ details[open] summary { margin-bottom: 8px; }
 /* capability detail: a floating sheet centered over the page. The scrim owns
    the click-away; the panel settles in with a short lift, never a slide. */
 .detail {
-  position: fixed; inset: 0; z-index: 26; display: flex;
+  position: fixed; inset: 0; z-index: var(--z-detail); display: flex;
   align-items: center; justify-content: center; padding: 4vh 18px;
-  background: rgba(26, 24, 20, .4);
+  background: var(--scrim-detail);
   opacity: 0; pointer-events: none; transition: opacity .22s ease;
-}
-:root[data-theme="dark"] .detail { background: rgba(6, 6, 8, .55); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .detail { background: rgba(6, 6, 8, .55); }
 }
 .detail[data-open="true"] { opacity: 1; pointer-events: auto; }
 .detail .dpanel {
@@ -2752,7 +2787,7 @@ details[open] summary { margin-bottom: 8px; }
 
 /* settings — a dialog with its own two panes: the nav and the panel scroll
    independently, so a long panel never drags the section list off screen. */
-.setveil { background: #0006; backdrop-filter: blur(3px); }
+.setveil { background: var(--scrim-soft); backdrop-filter: blur(3px); }
 .smodal {
   width: min(1000px, 94vw); height: min(680px, 88vh);
   display: grid; grid-template-columns: 208px 1fr;
@@ -3013,7 +3048,7 @@ details[open] summary { margin-bottom: 8px; }
 .nlmsg { grid-column: 1 / -1; font-size: 12px; color: var(--clay); margin-top: 2px; }
 /* One bar for both boot failures, so neither is styled inline at the call. */
 .topfail {
-  position: fixed; left: 0; right: 0; top: 0; z-index: 99; background: var(--clay); color: #fff;
+  position: fixed; left: 0; right: 0; top: 0; z-index: var(--z-failbar); background: var(--clay); color: var(--ink-on-accent);
   font: 13px/1.6 var(--mono); padding: 10px 16px; text-align: center; white-space: pre-wrap;
 }
 .rov.dim { color: var(--faint); }
@@ -3368,7 +3403,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .dsheet .edge.inst { stroke-dasharray: 4 3; }
 .dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 1; min-width: 0; }
 
-.veil { position: fixed; inset: 0; background: #0009; display: none; place-items: center; z-index: 40; }
+.veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }
 /* Bounded, and the fields scroll inside it. A channel's form is as long as that
    channel has fields -- slack specs nine, three of them nested -- and an
@@ -3389,7 +3424,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .qrbox { display: grid; justify-items: center; gap: 10px; padding: 4px 0 18px;
   border-bottom: 1px solid var(--line-soft); margin-bottom: 16px; }
 .qrshot { width: 168px; height: 168px; display: grid; place-items: center;
-  background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
 .qrshot img { width: 152px; height: 152px; image-rendering: pixelated; }
 .qrsay { font-size: 12.5px; color: var(--muted); text-align: center; max-width: 30ch; }
 .qrsay.ok { color: var(--moss); }
@@ -3411,10 +3446,10 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .btn { border: 1px solid var(--line); border-radius: 7px; padding: 7px 15px; font-size: 13px; }
 .btn:hover { border-color: var(--faint); }
 .btn.key { background: var(--text); border-color: var(--text); font-weight: 600; color: var(--ink); }
-.btn.bad { background: var(--clay); border-color: var(--clay); color: #fff; font-weight: 600; }
+.btn.bad { background: var(--clay); border-color: var(--clay); color: var(--ink-on-accent); font-weight: 600; }
 
 .toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
-  z-index: 50; display: grid; gap: 8px; justify-items: center; pointer-events: none; }
+  z-index: var(--z-toast); display: grid; gap: 8px; justify-items: center; pointer-events: none; }
 .toast {
   pointer-events: auto; display: flex; align-items: center; gap: 12px;
   background: var(--raised); border: 1px solid var(--line); border-radius: 9px;
@@ -3426,7 +3461,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .toast button { color: var(--amber); font-size: 12.5px; white-space: nowrap; }
 .toast button:hover { text-decoration: underline; }
 
-.pal { position: fixed; inset: 0; z-index: 45; background: #0007; display: none; }
+.pal { position: fixed; inset: 0; z-index: var(--z-palette); background: var(--scrim-mid); display: none; }
 .pal[data-open="true"] { display: block; }
 .palbox {
   width: min(560px, 92vw); margin: 12vh auto 0; background: var(--surface);
@@ -3445,7 +3480,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 /* context menu -- geometry only; the glass itself comes from the shared
    floating-surface rule beside .morefly, which this menu's recipe seeded. */
 .menu {
-  position: fixed; z-index: 42; min-width: 178px; padding: 5px;
+  position: fixed; z-index: var(--z-menu); min-width: 178px; padding: 5px;
   border-radius: 12px;
   display: none;
 }
@@ -3494,7 +3529,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    One character, one name, one thin line of motion. Same white ground as
    the app so the fade-out reads as the page settling, not a scene change. */
 #splash {
-  position: fixed; inset: 0; z-index: 120;
+  position: fixed; inset: 0; z-index: var(--z-splash);
   display: grid; place-items: center;
   background: var(--ink);
   transition: opacity .5s ease;
@@ -3525,7 +3560,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    with no gap. Same ground as the page: the flow is the app's own first
    page, not a modal parked on top of one. */
 #onb {
-  position: fixed; inset: 0; z-index: 110;
+  position: fixed; inset: 0; z-index: var(--z-onboarding);
   display: grid; place-items: center;
   background: var(--ink);
   transition: opacity .45s ease;
