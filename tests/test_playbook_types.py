@@ -13,7 +13,7 @@ def _dag(**over):
         description="research one competitor on the market and technology fronts in parallel",
         mode="dag",
         triggers=Triggers(keywords=["competitor"]),
-        nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="research ${params.target}")],
+        nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="research ${params.target}")],
         params={"target": ParamSpec(required=True, description="which competitor should be scanned?")},
     )
     base.update(over)
@@ -57,7 +57,7 @@ def test_triggers_need_at_least_one_keyword():
 
 def test_camel_aliases_round_trip():
     node = NodeSpec.model_validate(
-        {"id": "a", "agent": "code-raven", "promptTemplate": "do the work", "dependsOn": [], "mcps": ["github"]}
+        {"id": "a", "subagent": "code-raven", "promptTemplate": "do the work", "dependsOn": [], "mcps": ["github"]}
     )
     assert node.prompt_template == "do the work"
     dumped = node.model_dump(by_alias=True)

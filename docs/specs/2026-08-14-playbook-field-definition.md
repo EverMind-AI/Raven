@@ -2,7 +2,7 @@
 
 日期：2026-08-14
 状态：已定稿，实现对齐中（本文标注了本期不予支持的字段）
-相关：`2026-08-11-external-agent-registry-design.md`（`nodes[].agent` 解析到的那张表）
+相关：`2026-08-11-external-agent-registry-design.md`（`nodes[].subagent` 解析到的那张表）
 
 一个 playbook = 一个目录，目录里一个 `playbook.md`，分三区。
 
@@ -124,7 +124,7 @@ name / description                     # 身份信封
 | 字段 | 类型 | 必填/默认 | 说明 |
 |---|---|---|---|
 | `id` | string | 必填 | `^[A-Za-z0-9_-]+$`，图内唯一，会成为产物文件名 |
-| `agent` | string | 必填 | agent 注册表里的 name。接入方式（cli / acp / 进程内）、密钥、能力参数都在注册表，playbook 不重复声明 |
+| `subagent` | string | 必填 | agent 注册表里的 name。接入方式（cli / acp / 进程内）、密钥、能力参数都在注册表，playbook 不重复声明 |
 | `promptTemplate` | string | 必填 | 本步任务书，占位符见 §6 |
 | `dependsOn` | list[string] | 默认 `[]` | 依赖的节点 id；同时是引用白名单 |
 | `skills` | list[string] | 可选 | 本步注入的 skills |
@@ -136,9 +136,9 @@ name / description                     # 身份信封
 
 ```yaml
 nodes:
-  - {id: a1, agent: research-raven, dependsOn: [],   skills: [市场调研]}
-  - {id: b,  agent: code-raven,     dependsOn: [a1]}
-  - {id: a2, agent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
+  - {id: a1, subagent: research-raven, dependsOn: [],   skills: [市场调研]}
+  - {id: b,  subagent: code-raven,     dependsOn: [a1]}
+  - {id: a2, subagent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
 ```
 
 `confirm` 两级的分工：顶层管"这个 playbook 要不要跑"，节点级管"这一步不可逆动作要不要放行"。
@@ -210,7 +210,7 @@ per-playbook 并发上限（由 runner 全局配置管）。
 |---|---|
 | 1 | `mode: dag` → `nodes` 非空且无 `prompts`；`mode: prompt` → 有 `prompts` 且无 `nodes` |
 | 2 | `frontmatter.name` = 目录名，且目录位于 `playbooks/` 扫描根下 |
-| 3 | `nodes[].agent` 必须在注册表里，缺失即报"需要先注册 X"，不等到跑那一步才炸 |
+| 3 | `nodes[].subagent` 必须在注册表里，缺失即报"需要先注册 X"，不等到跑那一步才炸 |
 | 4 | 图无环，且所有节点从起点可达 |
 | 5 | `{{ x.output }}` 的 `x` 必须在本节点 `dependsOn` 内 |
 | 6 | `${params.x}` 的 `x` 必须在 `params` 里声明 |

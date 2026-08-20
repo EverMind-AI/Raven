@@ -1332,7 +1332,7 @@ class BuiltinAgentConfig(Base):
     (:class:`RavenLoopBackend`), differing only in which skills and tools it may
     reach. It is on the same table as the external agents so that ``spawn`` and a
     DAG node pick from one roster: a built-in agent that is only reachable by
-    omitting the ``agent`` argument is an agent the model cannot be told about.
+    omitting the ``subagent`` argument is an agent the model cannot be told about.
 
     A row here is an *override* of the package's own seed rows (see
     ``raven.agent.subagent.builtin_agents``), matched by ``name`` -- writing one
@@ -1403,9 +1403,17 @@ class PlaybookConfig(Base):
     matching cost any more: the model decides whether to use a playbook, from the
     same tool table it decides everything else from, so nothing runs ahead of the
     turn and no gate call is spent on a message that mentions a trigger word.
+
+    On by default. What that costs is measurable and fixed: the two entry tools
+    add about 848 tokens of definition per request (``available_history`` on a
+    200k window moves from 130.0k to 129.2k), and nothing else -- no pre-turn
+    work, no LLM call, no matching. What it buys is that the builtin library is
+    reachable at all; ``load_playbook`` registers only when the library is
+    non-empty, and the builtin layer ships two playbooks, so in practice it is
+    always offered. Turn it off with ``playbooks.enabled: false``.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     dir: str | None = None
     """Override for the user layer of the library; defaults to
     ``<agent_home>/playbooks``. The builtin layer ships with the package and

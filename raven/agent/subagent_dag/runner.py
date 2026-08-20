@@ -198,7 +198,7 @@ async def run_dag(
         for node in spec.nodes:
             resolved = resolve(node)
             if resolved is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.agent}'")
+                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
             node_backends[node.id] = resolved
 
         store = DagRunStore(backend, run_root, run_id or make_run_id())
@@ -239,7 +239,7 @@ async def run_dag(
                 "nodes": [
                     {
                         "id": node.id,
-                        "subagent": node.agent,
+                        "subagent": node.subagent,
                         "depends_on": node.depends_on,
                         "instance": node.instance,
                     }
@@ -265,7 +265,7 @@ async def run_dag(
                     "dag_node_updated",
                     {"run_id": store.run_id, "node": nid, "status": st},
                 )
-                await _write_node_status(session_key, store.run_id, nid, by_id[nid].agent, st)
+                await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
             ready = [
                 nid
                 for nid, st in status.items()
@@ -543,7 +543,7 @@ async def _run_node(
             "dag_node_updated",
             {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.agent, "running")
+        await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
         try:
             prompt = await render_prompt(
                 node,
@@ -563,7 +563,7 @@ async def _run_node(
             # that conversation; without this it started from empty and wrote
             # nothing back, so the handle bought nothing.
             node_state = (
-                state_for(session_key or "", node.agent, node.instance)
+                state_for(session_key or "", node.subagent, node.instance)
                 if (state_for is not None and node.instance)
                 else None
             )
@@ -587,7 +587,7 @@ async def _run_node(
             # then occupies a concurrency slot while it waits, which is a scheduling
             # cost, whereas taking it first would hold the handle while queueing for
             # a slot -- blocking every other run's nodes on that handle for longer.
-            async with hold_handle(session_key or "", node.agent, node.instance or node.id):
+            async with hold_handle(session_key or "", node.subagent, node.instance or node.id):
                 state_kwargs = (
                     {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
                 )
@@ -625,7 +625,7 @@ async def _run_node(
                 "ended_at": ended_at_ms,
             },
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.agent, status[node.id])
+        await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
 
 
 async def _finalize(
@@ -665,7 +665,7 @@ async def _finalize(
         files.append(
             {
                 "node": nid,
-                "subagent": node.agent,
+                "subagent": node.subagent,
                 "depends_on": node.depends_on,
                 "instance": node.instance,
                 "instance_auto": nid in auto_instances,
@@ -679,7 +679,7 @@ async def _finalize(
         )
         manifest[nid] = {
             "status": status[nid],
-            "subagent": node.agent,
+            "subagent": node.subagent,
             "depends_on": node.depends_on,
             "instance": node.instance,
             "instance_auto": nid in auto_instances,
@@ -701,7 +701,7 @@ async def _finalize(
         # timeout window regardless of node count.
         await asyncio.gather(
             *(
-                _write_node_status(session_key, store.run_id, node.id, node.agent, status[node.id])
+                _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
                 for node in spec.nodes
             )
         )

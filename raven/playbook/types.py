@@ -45,7 +45,8 @@ NodeSpec = DagNodeSpec
 
 A playbook's ``nodes[]`` used to be declared here, and the two drifted: neither
 was a superset (this one had ``skills`` / ``mcps`` / ``confirm``, the DAG's had
-``inputs``), the agent field was spelled ``agent`` here and ``subagent`` there,
+``inputs``), the step's target field was spelled ``agent`` here and ``subagent``
+there,
 and a field a playbook could write but no graph could carry was silently dropped
 at dispatch. The subset discipline the two are supposed to have -- a playbook's
 fields are a subset of a graph's -- is now structural rather than a rule someone

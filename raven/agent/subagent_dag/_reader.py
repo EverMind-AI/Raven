@@ -110,13 +110,12 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
         files.append(
             {
                 "node": nid,
-                # Both spellings, on both sides. The node field is ``agent`` now,
-                # so a graph.json written today carries that; the per-node status
-                # entry still writes ``subagent``, which is the key the web UI and
-                # every run already on disk read. Reading either keeps a run
-                # recorded before the rename openable, and this reader is the one
-                # place that has to know.
-                "subagent": entry.get("subagent") or entry.get("agent") or node.get("agent") or node.get("subagent"),
+                # One spelling on both sides now -- the node field, the status
+                # entry, the event payload and the web UI all say ``subagent``.
+                # The ``agent`` fallback covers the one release where the node
+                # field carried that name: a graph.json written then is still on
+                # disk, and this reader is the only place that has to know.
+                "subagent": entry.get("subagent") or node.get("subagent") or entry.get("agent") or node.get("agent"),
                 "depends_on": entry.get("depends_on") or node.get("depends_on") or [],
                 "instance": entry.get("instance", node.get("instance")),
                 "status": entry.get("status", "pending"),

@@ -2,12 +2,13 @@
 
 > **实现状态（2026-08-20，`refactor/unified_agent_registry`）**：节点定义已与 dag 收成一份
 > （`DagNodeSpec`，camelCase 与 snake_case 两种 wire 拼写都留）。相对本文的三处变化：
-> 节点级 `confirm` **字段删除**（闸只在图级）；`skills` / `mcps` 改为三态
-> （不写 = agent 自己的菜单 / `[]` = 一个都不给 / 列表 = 收窄），空列表不再被折成"全集"；
-> `instance` **真的生效**了（内置 agent 恒 stateful），限制改为"同句柄的非链头节点不得写
-> skills/mcps"。`triggers` 与顶层 `confirm` 的职责改造（J 组）**也已落地**：漏斗与 LLM 门控
+> 节点级 `confirm` **字段删除**（闸只在图级）；`skills` / `mcps` 成为 **playbook 独有、引擎消费**
+> 的字段（dag 工具已无此参数，`skills` 派发前折进 `promptTemplate`），三态
+> （不写与 `[]` 都是"没有要推荐的" / 列表 = 在 prompt 里点出这几个相关）；
+> `instance` **真的生效**了（内置 agent 恒 stateful），而"同句柄的非链头节点不得写 skills"那条
+> 限制随旧机制一起删除（`skills` 现在落在每节点都追加的 user message 上）。`triggers` 与顶层 `confirm` 的职责改造（J 组）**也已落地**：漏斗与 LLM 门控
 > 删除，入口是 `load_playbook` 一个工具，`confirm` 落在 dag 的图级参数上。
-> 另外本文之外的新增：`agent` / `promptTemplate` 可以留空，由调用方用 `fills` 补齐，
+> 另外本文之外的新增：`subagent` / `promptTemplate` 可以留空，由调用方用 `fills` 补齐，
 > 见 §5 末。
 
 一个 playbook = 一个目录，目录里一个 `playbook.md`，分三区。
@@ -112,11 +113,11 @@ keywords 只影响排序与召回。
 | 字段 | 类型 | 必填/默认 | 说明 |
 |---|---|---|---|
 | `id` | string | 必填 | `^[A-Za-z0-9_-]+$`，图内唯一，会成为产物文件名 |
-| `agent` | string | 必填 | agent 注册表里的 name。接入方式（cli / acp / 进程内）、密钥、能力元数据全住注册表，playbook 不重复声明 |
+| `subagent` | string | 必填 | agent 注册表里的 name。接入方式（cli / acp / 进程内）、密钥、能力元数据全住注册表，playbook 不重复声明 |
 | `promptTemplate` | string | 必填 | 本步任务书，占位符见 §6 |
 | `dependsOn` | list[string] | 默认 `[]` | 依赖的节点 id，同时是引用白名单 |
-| `skills` | list[string] | 可选 | 注入这个节点的 skills（只能从本机已有目录里挑，是收窄不是装载） |
-| `mcps` | list[string] | 可选 | 注入这个节点的 mcp |
+| `skills` | list[string] | 可选 | 跟这一步**相关**的 skills，供跑这一步的 agent 优先考虑（只能从本机已有目录里挑）。**playbook 独有、引擎消费**：派发前折进这一步的 `promptTemplate`，dag 工具没有这个参数。不是"只能看见这几个"，也不是"必须用" |
+| `mcps` | list[string] | 可选 | 这一步想挂的 mcp。**playbook 独有,且今天不生效**：subagent 没有 mcp 通路，派发时明确回报被忽略，不写进 prompt（写了就是一句它没工具可执行的假指令） |
 | `instance` | string | 可选 | 会话句柄，同句柄的节点共享一个 agent 会话 |
 | `inputs` | map | 可选 | 每键为字面量字符串、`{file: 路径}` 或 `{node: id}`——**只有这三种，没有 run 限定符**（钉住某一次运行用 `{{ ref:@runs/<run_id>/… }}` 的文件形式，见 §6）。价值是**结构化**而非独有能力：`{{ inputs.k }}` 引用的 key 必须先声明（default-deny，内联的 `{{ ref: }}` 校验不了这一层），且看节点定义就知道它读什么，不必通读 prompt |
 
@@ -128,17 +129,17 @@ playbook 加载后节点直接注入 dag 工具，所以模型直接调 dag 时�
 `instance` 只管一件事：**要不要延续上下文**。`promptTemplate` 就是注入的那段 prompt，
 不另设字段，延续上下文时照样能注入新的一段。
 
-`skills` / `mcps` 当前只在会话启动那次生效（实现限制），所以只允许写在 `instance` 链的
-**头节点**上——见校验规则 9。
+`skills` 折进这一步的 `promptTemplate`（每个节点都追加的 user message），所以 `instance` 链上
+任何一个节点写了都生效——早先"只允许写在头节点"那条限制随旧机制一起删了，见校验规则 9。
 
 配置挂节点不挂角色，因为同一个 agent 可以在一张图里跑多步、每步任务不同——
 那只是两个任务、两份上下文，用了同一个 agent、同一份调用方式：
 
 ```yaml
 nodes:
-  - {id: a1, agent: research-raven, dependsOn: [],   skills: [市场调研]}
-  - {id: b,  agent: code-raven,     dependsOn: [a1]}
-  - {id: a2, agent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
+  - {id: a1, subagent: research-raven, dependsOn: [],   skills: [市场调研]}
+  - {id: b,  subagent: code-raven,     dependsOn: [a1]}
+  - {id: a2, subagent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
 ```
 
 **加载只有一个工具 `load_playbook(name, params, fills?)`，`mode` 决定加载之后怎么走**（模型不需要分辨 mode，清单里两种混在一起列）。两条执行面的保证强度不同：
@@ -152,7 +153,7 @@ nodes:
 
 ### 5.1 留空与 `fills`（已实现）
 
-`agent` 与 `promptTemplate` 可以留空，意思是"这一处我不定，由调用方按上下文写"。只有这两个算**缺口**——
+`subagent` 与 `promptTemplate` 可以留空，意思是"这一处我不定，由调用方按上下文写"。只有这两个算**缺口**——
 不写 `skills` 的意思是"用这个 agent 自己的菜单"，那是个完整答案，把它当缺口会让库里每张写得好的剧本
 都先弹一个问题。
 
@@ -161,7 +162,7 @@ nodes:
 | 缺口的报法 | 缺的 `params` 与留空的节点字段**一起报**，且**零派发**。分两轮报等于让调用方花两次往返学一件事 |
 | 补法 | `fills = {"<作者写的 node id>": {"promptTemplate": "..."}}`。键是**文件里的 id**，不是加了运行前缀的那个——前缀是之后加的，调用方从没见过它 |
 | 硬规矩 | **`fills` 指向一个已写字段就整体拒**。没有这条，`fills` 就是个通用字段编辑器：改任意 prompt、把节点指到别的 agent、把 skills 拿掉，git 里的文件就不再描述真正跑了什么 |
-| `skills: []` 不算留空 | 它是**写明了**的"一个都不给"。当成留空，调用方就能悄悄放宽这一步能碰的东西 |
+| `skills: []` 仍不算留空 | 它对 `fills` 来说是**写过的**字段，所以调用方补不了它。语义上它已经与不写同义（见下节），但"作者写过"与"作者没写"是两件事：把它当留空，调用方就能往一个作者动过手的字段里塞东西 |
 | 回路上限 | 同一(会话, 剧本)最多报 2 轮缺口，超了返回终止语。"补不齐→再问→还是补不齐"是调用方能在一轮里空转掉的循环 |
 | CLI | 没有模型可补，所以 `raven playbook run` 加了 `--fill NODE.FIELD=VALUE`；不给就报"这张剧本要在运行时补值"，不静默跑一张缺字段的图 |
 
@@ -177,13 +178,21 @@ nodes:
 
 | 字段 | 不写等于什么 |
 |---|---|
-| `skills` | **完整菜单**（不收窄），不是"无技能"。`skills` 是菜单过滤器不是装载器：写了是缩小候选集，不写是给全集，**两种情况下这一步实际用哪个技能都由跑这一步的 agent 现场按上下文决定** |
+| `skills` | prompt 里不提技能。写了则在 prompt 里点出这几个相关、供优先考虑。`[]` 与不写同义（见下）|
 | `instance` | 运行时自动铸一个句柄、独立上下文，并在运行摘要里回报，后续可续用 |
 | `mcps` | 不挂额外 mcp |
 | `dependsOn` | 起点节点，与其他起点并发 |
 | `inputs` | 无声明输入（`promptTemplate` 里仍可用 `{{ ref: }}` 直接读文件） |
 
-所以"这一步挂什么技能留给模型按上下文挑"不需要特殊写法——省略 `skills` 就是它。反过来，**"这一步必须用某个技能"目前表达不了**：`skills` 只过滤菜单、不强制使用，只能在 `promptTemplate` 里用文字要求。
+所以"这一步挂什么技能留给模型按上下文挑"不需要特殊写法——省略 `skills` 就是它。
+
+**`skills` 是一句建议，不是一道闸。** 它折进这一步的 `promptTemplate`，随任务描述一起交给跑这一步的
+agent，说的是"这几个跟这活相关，优先考虑"。它**不**表达"只能看见这几个"（菜单不再被过滤，其余技能照样
+在它眼前），也**不**表达"必须用某个"（用哪个始终是那个 agent 现场按上下文定的）。
+
+所以 `skills: []` 没有含义了 —— 它既不是"只看见零个"（限制），也不是"禁止用"（命令），就是"没有要
+推荐的"，与不写同义。**但不静默**：派发时明确回报一句，因为文件里写着 `skills: []` 看起来是提了要求的。
+真要表达"这一步别用技能"，写在 `promptTemplate` 里。
 
 `mode: prompt` 是这套分层的极端情形：文件里一个节点都没有，全部节点字段由执行时那次 compose 调用产出，再过与 `mode: dag` 相同的校验（规则 12）。
 
@@ -260,13 +269,13 @@ scan_tech ───┘
 |---|---|
 | 1 | `mode: dag` → `nodes` 非空且无 `prompts`；`mode: prompt` → 有 `prompts` 且无 `nodes` |
 | 2 | `frontmatter.name` = 目录名，且目录位于 `playbooks/` 扫描根下 |
-| 3 | `nodes[].agent` 必须在注册表里，缺失则报"需要先注册 X"，不等到跑那一步才炸 |
+| 3 | `nodes[].subagent` 必须在注册表里，缺失则报"需要先注册 X"，不等到跑那一步才炸 |
 | 4 | 图无环，且所有节点从起点可达 |
 | 5 | `{{ x.output }}` 的 `x` 必须在本节点 `dependsOn` 内 |
 | 6 | `${params.x}` 的 `x` 必须在 `params` 里声明 |
 | 7 | `instance` 仅注册表标 `stateful` 的 agent 可用。**这条今天名存实亡**：只有生成器与 `raven playbook validate` 跑它，手写后直接运行会被静默丢弃（见统一注册表方案 §9） |
 | 8 | 同 `instance` 的节点之间必须存在依赖链——共享会话不能并发，会互相踩上下文 |
-| 9 | 同 `instance` 的**非链头**节点禁止出现 `skills` / `mcps` —— 会话启动后换不了，写了也只会静默失效。链头可静态判定（同 instance 成员必须构成依赖链，见规则 8）。`promptTemplate` 不受限，延续上下文时照样注入 |
+| 9 | **已删除**。它的依据是"会话启动后 system prompt 换不了，所以只有链头的 `skills` 生效"；而 `skills` 现在折进 `promptTemplate`，那是每个节点都追加的 user message，链上任何一个节点写了都生效。留着就是一条会拒掉合法图的假规则 |
 | 10 | 同一个 `instance` 的成员必须是**同一个 agent**——不同 agent 共用句柄根本不共享会话（现有规则，沿用） |
 | 11 | `{{ dep.output_path }}` 仅当注册表标该 agent `readsLocalFiles` 时可用 |
 | 12 | `mode: prompt` 组出的图，执行前过 4-11 全部规则；不合法则重组，仍不合法则报错，不降级硬跑 |
@@ -301,7 +310,7 @@ params:
 
 nodes:
   - id: scan_market
-    agent: research-raven
+    subagent: research-raven
     dependsOn: []
     skills: [web-search, source-credibility-check]
     mcps: [exa]
@@ -310,7 +319,7 @@ nodes:
       每个维度不超过 3 条要点，每条附来源。不碰技术细节。
 
   - id: scan_tech
-    agent: research-raven
+    subagent: research-raven
     dependsOn: []
     skills: [web-search, repo-analysis]
     mcps: [exa, github]
@@ -375,7 +384,7 @@ prompts: |
   为 ${params.target} 组一张三层的尽调图，侧重 ${params.focus}。
 
   第一层，一个节点：
-    agent: research-raven，skills: [web-search]
+    subagent: research-raven，skills: [web-search]
     任务是广度扫描，产出"已知 / 未知 / 存疑"三栏。
 
   第二层，按 focus 铺开，全部 dependsOn 第一层，彼此并行：

@@ -7,15 +7,20 @@ import type { TFunction, ToolCallWithResult, ToolRenderer } from './types';
 
 /**
  * The sub-agent this call delegates to. Raven registers one `spawn` tool for
- * every prototype and names the target in `agent`, so the tool name says
+ * every prototype and names the target in an argument, so the tool name says
  * nothing — without this, two calls to different sub-agents render identically.
  *
- * `agent` is absent when no third-party sub-agent is configured (the tool then
- * omits the argument entirely), which is the only case that falls back to the
- * tool name.
+ * Both spellings: the argument was renamed `agent` → `subagent` when the field
+ * was unified across the agent table, and these are the model's own arguments
+ * recorded with the call, so a conversation opened from history hands us calls
+ * written before the rename for as long as those transcripts exist. Reading only
+ * one name made the fallback fire on *every* call rather than on the rare
+ * unconfigured one, which is precisely the failure the paragraph above says this
+ * function exists to prevent.
  */
 export function spawnAgentName(call: ToolCallBlock): string {
-	const agent = parseInput(call.input).agent;
+	const input = parseInput(call.input);
+	const agent = input.subagent ?? input.agent;
 	return typeof agent === 'string' && agent ? agent : call.name;
 }
 

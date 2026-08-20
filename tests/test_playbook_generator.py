@@ -49,13 +49,13 @@ GOOD_DAG = {
     "nodes": [
         {
             "id": "pull",
-            "agent": "data-raven",
+            "subagent": "data-raven",
             "promptTemplate": "pull the feedback for ${params.week_of}",
             "skills": ["sql-queries"],
         },
         {
             "id": "report",
-            "agent": "content-raven",
+            "subagent": "content-raven",
             "promptTemplate": "write the weekly report from {{ pull.output }}",
             "dependsOn": ["pull"],
         },

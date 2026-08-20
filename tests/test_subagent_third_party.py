@@ -687,14 +687,14 @@ def test_spawn_tool_exposes_agent_param_when_configured(tmp_path: Path) -> None:
     cli = ThirdPartyCliSubagentConfig(name="claude_code", command="claude -p {prompt}", description="Claude Code")
     tool = SpawnTool(manager=_mgr(tmp_path, [cli]))
     params = tool.parameters
-    assert "agent" in params["properties"]
+    assert "subagent" in params["properties"]
     # The enum is the whole table: the built-in agents are choices too, which is
     # the point of them being on it.
-    assert "claude_code" in params["properties"]["agent"]["enum"]
-    assert "research-raven" in params["properties"]["agent"]["enum"]
+    assert "claude_code" in params["properties"]["subagent"]["enum"]
+    assert "research-raven" in params["properties"]["subagent"]["enum"]
     # And required, so every spawn names its agent rather than falling into a
     # default the model was never told about.
-    assert "agent" in params["required"]
+    assert "subagent" in params["required"]
     assert "claude_code" in tool.description
 
 
@@ -707,8 +707,8 @@ def test_spawn_tool_offers_the_builtin_rows_with_no_config_at_all(tmp_path: Path
     """
     tool = SpawnTool(manager=_mgr(tmp_path, []))
     params = tool.parameters
-    assert "research-raven" in params["properties"]["agent"]["enum"]
-    assert "agent" in params["required"]
+    assert "research-raven" in params["properties"]["subagent"]["enum"]
+    assert "subagent" in params["required"]
 
 
 def test_spawn_tool_points_at_the_dag_when_a_roster_exists(tmp_path: Path) -> None:
@@ -737,7 +737,7 @@ async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", agent="claude_code")
+    await tool.execute(task="do it", subagent="claude_code")
     assert captured["agent"] == "claude_code"
     assert captured["task"] == "do it"
 
@@ -797,7 +797,7 @@ class TestSpawnInstanceGate:
         spawned: list[dict] = []
         tool._manager.spawn = lambda **kw: spawned.append(kw)  # type: ignore[method-assign]
 
-        out = await tool.execute(task="do it", agent="codex", instance="author")
+        out = await tool.execute(task="do it", subagent="codex", instance="author")
 
         assert out.startswith("Error:")
         assert "stateless" in out
@@ -830,7 +830,7 @@ class TestSpawnInstanceGate:
             return "started"
 
         tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
-        out = await tool.execute(task="do it", agent="claude_code", instance="author")
+        out = await tool.execute(task="do it", subagent="claude_code", instance="author")
 
         assert out == "started"
         assert captured["instance"] == "author"
@@ -844,7 +844,7 @@ class TestSpawnInstanceGate:
             return "started"
 
         tool._manager.spawn = fake_spawn  # type: ignore[method-assign]
-        assert await tool.execute(task="do it", agent="codex") == "started"
+        assert await tool.execute(task="do it", subagent="codex") == "started"
         assert captured["instance"] is None
 
 
@@ -879,9 +879,9 @@ async def test_spawn_marks_a_minted_instance_as_automatic(tmp_path: Path) -> Non
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", agent="claude_code")
+    await tool.execute(task="do it", subagent="claude_code")
     assert captured["instance_auto"] is True
-    await tool.execute(task="do it", agent="claude_code", instance="author")
+    await tool.execute(task="do it", subagent="claude_code", instance="author")
     assert captured["instance_auto"] is False
 
 
@@ -896,7 +896,7 @@ async def test_spawn_hands_the_minted_handle_to_the_turn_stream(tmp_path: Path) 
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", label="Refactor Auth", agent="claude_code")
+    await tool.execute(task="do it", label="Refactor Auth", subagent="claude_code")
     meta = tool.take_metadata()
     assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", meta["instance"])
     assert meta["instance_auto"] is True
@@ -912,7 +912,7 @@ async def test_spawn_publishes_no_metadata_for_a_stateless_agent(tmp_path: Path)
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", agent="oneshot")
+    await tool.execute(task="do it", subagent="oneshot")
     assert tool.take_metadata() is None
 
 
@@ -932,8 +932,8 @@ async def test_spawn_does_not_leak_an_uncollected_handle_to_a_later_stateless_ca
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
     tool = SpawnTool(manager=mgr)
-    await tool.execute(task="do it", agent="claude_code")
-    await tool.execute(task="do it", agent="oneshot")
+    await tool.execute(task="do it", subagent="claude_code")
+    await tool.execute(task="do it", subagent="oneshot")
     assert tool.take_metadata() is None
 
 
@@ -3010,7 +3010,7 @@ async def test_spawn_mints_an_instance_for_a_stateful_agent(tmp_path: Path) -> N
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", label="Refactor Auth", agent="claude_code")
+    await SpawnTool(manager=mgr).execute(task="do it", label="Refactor Auth", subagent="claude_code")
     assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", captured["instance"])
 
 
@@ -3024,7 +3024,7 @@ async def test_spawn_leaves_a_stateless_agent_without_an_instance(tmp_path: Path
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", agent="oneshot")
+    await SpawnTool(manager=mgr).execute(task="do it", subagent="oneshot")
     assert captured["instance"] is None
 
 
@@ -3040,7 +3040,7 @@ async def test_spawn_never_overwrites_an_instance_the_model_chose(tmp_path: Path
         return "started"
 
     mgr.spawn = fake_spawn  # type: ignore[method-assign]
-    await SpawnTool(manager=mgr).execute(task="do it", agent="claude_code", instance="author")
+    await SpawnTool(manager=mgr).execute(task="do it", subagent="claude_code", instance="author")
     assert captured["instance"] == "author"
 
 
@@ -3138,3 +3138,28 @@ def test_the_registered_dag_tool_can_reach_a_human_for_the_confirm_gate(tmp_path
     assert tool._ask is not None, "the model-facing DAG tool has no route to a human"
     # The same asker the playbook path uses, so one answer means one thing.
     assert tool._ask == loop._confirm_graph
+
+
+async def test_the_old_agent_keyword_still_names_the_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-rename spelling must not resolve to a different agent in silence.
+
+    ``execute`` takes ``**kwargs``, so ``agent=`` from a stale caller lands there
+    and leaves ``subagent`` unset -- which the manager reads as "no name given"
+    and answers with the generic built-in row. The task then runs, reports
+    success, and was carried out by an agent nobody asked for. Two of this file's
+    own call sites did exactly that and stayed green, which is why the case is
+    worth a test rather than a comment.
+    """
+    captured: dict[str, Any] = {}
+
+    class _Mgr:
+        def list_agents(self):
+            return [third_party_agent_meta(ThirdPartyCliSubagentConfig(name="claude_code", command="cat"))]
+
+        async def spawn(self, **kw):
+            captured.update(kw)
+            return "started"
+
+    tool = SpawnTool(manager=_Mgr())
+    assert await tool.execute(task="do it", agent="claude_code") == "started"
+    assert captured["agent"] == "claude_code"

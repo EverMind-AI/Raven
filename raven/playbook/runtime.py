@@ -99,6 +99,11 @@ class PlaybookRuntime:
         )
 
     @property
+    def dag_tool(self) -> Any:
+        """The executor's private graph tool, for hosts wiring live-run concerns."""
+        return self._executor.dag_tool
+
+    @property
     def empty(self) -> bool:
         """Whether there is anything to offer. Disabled entries do not count:
         the tool exists to be called, and one that can only answer "that is

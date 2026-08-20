@@ -356,7 +356,27 @@ function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
 let dagPending: { lane: Lane; call: CallData } | null = null
 const dagLive = new Map<string, { lane: Lane; call: CallData }>()
 
-export function dagFeed(type: string, p: { run_id?: string; node?: string; status?: string; files?: Array<{ node: string; status: string }> } | null): void {
+/* Which agent a spawn named, from the model's own arguments. Both spellings:
+   the field was renamed `agent` -> `subagent`, and these arguments are recorded
+   with the call, so a conversation opened from history hands us calls written
+   before the rename for as long as those transcripts exist. Reading only the new
+   name dropped the agent out of every delegated row -- the label fell back to
+   "raven" whichever agent had actually run. Same tolerance the reader and the
+   spawn tool itself already carry. */
+export const spawnAgentOf = (a: Record<string, unknown>): string =>
+  String(a.subagent || a.agent || '')
+
+/* The graph as a run-started payload carries it. Same shape the arguments path
+   builds, so one renderer draws both. */
+function chipsFromPayload(p: { nodes?: Array<{ id?: string; subagent?: string; instance?: string }> } | null): DagChip[] {
+  return (p?.nodes || [])
+    .filter((n) => n && n.id)
+    .map((n): DagChip => ({
+      id: String(n.id), subagent: n.subagent || null, instance: n.instance || null, st: 'pending',
+    }))
+}
+
+export function dagFeed(type: string, p: { run_id?: string; node?: string; status?: string; files?: Array<{ node: string; status: string }>; nodes?: Array<{ id?: string; subagent?: string; instance?: string }> } | null): void {
   if (!p) return
   if (type === 'dag.run_started' && dagPending) {
     dagLive.set(String(p.run_id), dagPending)
@@ -368,6 +388,14 @@ export function dagFeed(type: string, p: { run_id?: string; node?: string; statu
   if (type === 'dag.run_started') {
     call.runId = String(p.run_id)
     call.chipsLive = true
+    /* From the payload when the call's own arguments had none. A dag call the
+       model made carries `nodes`, so `newCallData` builds the chips from the
+       arguments; the load of a `mode: dag` playbook carries `{name, params,
+       fills}` and the graph is only known once the engine has assembled it --
+       which is this event. Without this the card was typed dag, took the run id,
+       and then dropped every `node_updated`, because `setChip` is update-only:
+       no chip strip, and no way from the trail back to the graph. */
+    if (!call.chips.length) call.chips = chipsFromPayload(p)
     bump(lane, call)
   } else if (type === 'dag.node_updated') {
     setChip(lane, call, String(p.node), String(p.status))
@@ -395,6 +423,18 @@ function hydrateDag(lane: Lane, call: CallData): void {
   const rows = source().dagRows
   if (!rows) return
   rows(id).then((list) => {
+    /* Built here when the call had none. `setChip` only updates chips that are
+       already there, and a `load_playbook` card has none -- its arguments are
+       `{name, params}` and the graph existed only inside the engine. Without
+       this the restored card kept the run id and showed no strip, which is the
+       case the receipt's run-id lead exists to serve. */
+    if (!call.chips.length) {
+      call.chips = (list || []).map((r): DagChip => ({
+        id: String(r.node), subagent: r.subagent || null, instance: r.instance || null, st: r.status || 'pending',
+      }))
+      bump(lane, call)
+      return
+    }
     ;(list || []).forEach((r) => setChip(lane, call, r.node, r.status))
   }).catch(() => { /* a run whose dir is gone still lists its nodes */ })
 }
@@ -410,7 +450,7 @@ function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], displ
     open: false, t0: Date.now(), runId: null, chips: [], chipsLive: false,
   }
   if (kind === 'spawn') {
-    const who = a.agent ? String(a.agent) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
+    const who = spawnAgentOf(a) ? String(spawnAgentOf(a)) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
     c.rowLabel = c.label ? `${who} · ${c.label}` : who
   }
   if (kind === 'dag') {
@@ -419,9 +459,13 @@ function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], displ
     c.chips = nodes.map((n): DagChip => ({
       id: String(n.id), subagent: n.subagent || null, instance: n.instance || null, st: 'pending',
     }))
-    c.label = nodes.length
-      ? t('gui.deleg.dag_meta', { n: String(nodes.length), m: String(agents.length || 1) }) : ''
-    c.rowLabel = c.label
+    // Only when the arguments described a graph. A playbook load has none, and
+    // overwriting here threw away the name `actLabel` had produced -- the row
+    // stopped saying which playbook was loaded and read as a generic dag.
+    if (nodes.length) {
+      c.label = t('gui.deleg.dag_meta', { n: String(nodes.length), m: String(agents.length || 1) })
+      c.rowLabel = c.label
+    }
   }
   return c
 }
@@ -532,7 +576,16 @@ export function newStep(lane: Lane): StepHandle {
     tool(name: string, args: unknown, display?: string | null): CallHandle {
       thinkDone()
       const id = actId(name || 'tool', args)
-      const kind: CallData['kind'] = id.name === 'spawn' ? 'spawn' : id.name === 'run_subagent_dag' ? 'dag' : 'plain'
+      // `load_playbook` is a dag call too, from the card's point of view: a
+      // `mode: dag` playbook is dispatched by the engine, so the only call the
+      // model makes is the load, and the graph is what that call produced.
+      // Keyed on the tool name alone, the run's events arrived with no card
+      // waiting for them and every one of them was dropped -- the sheet drew
+      // the graph while the trail showed a plain call that had somehow started
+      // six sub-agents. A `mode: prompt` load starts no run and leaves the
+      // pending slot unclaimed, which `callDone` clears.
+      const DAG_CALLS = ['run_subagent_dag', 'load_playbook']
+      const kind: CallData['kind'] = id.name === 'spawn' ? 'spawn' : DAG_CALLS.includes(id.name) ? 'dag' : 'plain'
       const c = newCallData(id, kind, display)
       const grew = seg.calls.length === 1
       seg.calls.push(c)

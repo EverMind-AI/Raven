@@ -352,3 +352,55 @@ async def test_history_orders_every_source_by_when_it_started(tmp_path: Path) ->
     turns = await _history(session_dir, "Coder", "notes")
 
     assert [t["content"] for t in turns] == ["spawned", "s-out", "dagged", "d-out", "typed", "t-out"]
+
+
+async def test_a_playbook_dispatched_node_is_not_reported_dead(_isolated_registry: Any) -> None:
+    """Liveness comes from every graph tool, not only the registered one.
+
+    A ``mode: dag`` playbook is dispatched by the engine's private graph tool, so
+    asking the registered one alone found nothing in flight and every running
+    node of that run was rewritten to ``interrupted`` -- the panel showed a node
+    as failed while its elapsed time went on climbing, which is the shape of the
+    report that found this.
+    """
+    await _isolated_registry.upsert_dag_node("s1", "run-7", "brief", "content-raven", "running")
+
+    class _LoopWithBothTools(_FakeLoop):
+        def active_dag_run_ids(self) -> set[str]:
+            return {"run-7"}
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_LoopWithBothTools(_FakeManager())))
+
+    assert out["instances"][0]["status"] == "running"
+
+
+async def test_a_node_whose_run_really_ended_is_still_reported_interrupted(_isolated_registry: Any) -> None:
+    """The negative half: "always live" would pass the test above on its own."""
+    await _isolated_registry.upsert_dag_node("s1", "run-7", "brief", "content-raven", "running")
+
+    class _LoopWithNothingLive(_FakeLoop):
+        def active_dag_run_ids(self) -> set[str]:
+            return set()
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_LoopWithNothingLive(_FakeManager())))
+
+    assert out["instances"][0]["status"] == "interrupted"
+
+
+async def test_a_loop_that_cannot_answer_liveness_degrades_to_not_live(_isolated_registry: Any) -> None:
+    """The callable runs lazily -- only for a dag-node row that still reads
+    running -- so a loop without the method would raise from a branch most
+    callers never reach. Answering "nothing live" is the same thing a missing
+    tool already meant.
+    """
+    await _isolated_registry.upsert_dag_node("s1", "run-7", "brief", "content-raven", "running")
+
+    class _Exploding(_FakeLoop):
+        def active_dag_run_ids(self) -> set[str]:
+            raise RuntimeError("no tool")
+
+    plain = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+    boom = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_Exploding(_FakeManager())))
+
+    assert plain["instances"][0]["status"] == "interrupted"
+    assert boom["instances"][0]["status"] == "interrupted"

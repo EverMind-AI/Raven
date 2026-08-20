@@ -31,7 +31,7 @@ def _by_name(mapping):
     lists. Tests still describe their fleet by name, so this adapts one to the
     other.
     """
-    return lambda node: mapping.get(node.agent)
+    return lambda node: mapping.get(node.subagent)
 
 
 @pytest.fixture(autouse=True)
@@ -102,10 +102,10 @@ async def test_run_dag_runs_a_sub_agent_whose_name_has_a_space() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "General Audit", "prompt_template": "hello"},
+                {"id": "a", "subagent": "General Audit", "prompt_template": "hello"},
                 {
                     "id": "b",
-                    "agent": "General Audit",
+                    "subagent": "General Audit",
                     "prompt_template": "{{ a.output }}",
                     "depends_on": ["a"],
                 },
@@ -128,8 +128,8 @@ async def test_run_dag_passes_output_downstream_and_emits_progress() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hello"},
-                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "x", "prompt_template": "hello"},
+                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -166,8 +166,8 @@ async def test_run_dag_threads_session_key_and_node_instance_to_backend() -> Non
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hi", "instance": "refactor-auth"},
-                {"id": "b", "agent": "x", "prompt_template": "hi again"},
+                {"id": "a", "subagent": "x", "prompt_template": "hi", "instance": "refactor-auth"},
+                {"id": "b", "subagent": "x", "prompt_template": "hi again"},
             ]
         }
     )
@@ -191,8 +191,8 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hi"},
-                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "x", "prompt_template": "hi"},
+                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -225,8 +225,8 @@ async def test_run_dag_writes_node_status_transitions_to_registry(
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hello"},
-                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "x", "prompt_template": "hello"},
+                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -262,9 +262,9 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hi-a"},
-                {"id": "b", "agent": "x", "prompt_template": "hi-b"},
-                {"id": "c", "agent": "x", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
+                {"id": "a", "subagent": "x", "prompt_template": "hi-a"},
+                {"id": "b", "subagent": "x", "prompt_template": "hi-b"},
+                {"id": "c", "subagent": "x", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
             ]
         }
     )
@@ -354,7 +354,7 @@ async def test_an_injected_semaphore_bounds_concurrent_runs_together() -> None:
 
     def _independent_nodes(prefix: str) -> Any:
         return parse_dag_spec(
-            {"nodes": [{"id": f"{prefix}{i}", "agent": "x", "prompt_template": "hi"} for i in range(3)]}
+            {"nodes": [{"id": f"{prefix}{i}", "subagent": "x", "prompt_template": "hi"} for i in range(3)]}
         )
 
     gate = asyncio.Semaphore(2)
@@ -392,8 +392,8 @@ async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "hi"},
-                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "x", "prompt_template": "hi"},
+                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -425,7 +425,7 @@ async def test_run_dag_without_session_key_writes_nothing_to_registry(
     monkeypatch.setattr(reg, "upsert_dag_node", recording_upsert)
     monkeypatch.setattr(instances_mod, "_registry", reg)
 
-    spec = parse_dag_spec({"nodes": [{"id": "a", "agent": "x", "prompt_template": "hi"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi"}]})
     result = await run_dag(
         spec, resolve=_by_name({"x": _FakeExec()}), backend=_InMemBackend(), workdir="/w", run_root="/hist/mas_dag"
     )
@@ -472,8 +472,8 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
 
     out = await tool.execute(
         nodes=[
-            {"id": "a", "agent": "echo", "prompt_template": "hello world"},
-            {"id": "b", "agent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+            {"id": "a", "subagent": "echo", "prompt_template": "hello world"},
+            {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
         ],
         background=False,
     )
@@ -493,7 +493,7 @@ async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path:
     assert "General Audit" in tool.description
 
     out = await tool.execute(
-        nodes=[{"id": "a", "agent": "General Audit", "prompt_template": "hello world"}], background=False
+        nodes=[{"id": "a", "subagent": "General Audit", "prompt_template": "hello world"}], background=False
     )
     assert "1 completed" in out.model_text
     assert "hello world" in out.model_text
@@ -518,8 +518,8 @@ class TestBackgroundRun:
 
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "echo", "prompt_template": "hello world"},
-                {"id": "b", "agent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "echo", "prompt_template": "hello world"},
+                {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         )
 
@@ -559,13 +559,13 @@ class TestBackgroundRun:
 
         tool.set_context("web", "one", "web:sess1")
         tool.set_tool_call_id("call-1")
-        first = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        first = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         await asyncio.wait_for(started.wait(), 10)
 
         started.clear()
         tool.set_context("web", "two", "web:sess2")
         tool.set_tool_call_id("call-2")
-        second = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        second = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         await asyncio.wait_for(started.wait(), 10)
 
         release.set()
@@ -584,7 +584,7 @@ class TestBackgroundRun:
         announces = _Announces()
         tool = self._tool(tmp_path, announces)
 
-        out = await tool.execute(nodes=[{"id": "a", "agent": "nope", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "nope", "prompt_template": "hi"}])
 
         assert out.startswith("Error: invalid DAG")
         assert announces.calls == []
@@ -637,7 +637,7 @@ class TestBackgroundRun:
                 await release.wait()
 
         tool.set_progress_sink(sink)
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
         await asyncio.wait_for(started.wait(), 10)
 
@@ -669,7 +669,7 @@ class TestBackgroundRun:
                 await release.wait()
 
         tool.set_progress_sink(sink)
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
         await asyncio.wait_for(started.wait(), 10)
 
@@ -704,7 +704,7 @@ class TestBackgroundRun:
         # one would refuse the graph before it ever reached the budget, which is
         # what this test is about.
         def node(nid: str) -> dict:
-            return {"id": nid, "agent": "echo", "prompt_template": "hi"}
+            return {"id": nid, "subagent": "echo", "prompt_template": "hi"}
 
         first = await tool.execute(nodes=[node("a")])
         second = await tool.execute(nodes=[node("b")], background=False)
@@ -716,7 +716,7 @@ class TestBackgroundRun:
         assert charged == ["web:sess1"] * 3
 
         # A graph that never passes validation must not spend budget either.
-        await tool.execute(nodes=[{"id": "d", "agent": "nope", "prompt_template": "hi"}])
+        await tool.execute(nodes=[{"id": "d", "subagent": "nope", "prompt_template": "hi"}])
         assert len(charged) == 3
 
     async def test_a_collapsed_run_closes_the_graph_it_drew(
@@ -751,7 +751,7 @@ class TestBackgroundRun:
         )
         tool.set_context("web", "default", "web:sess1")
 
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
         await announces.wait()
 
@@ -795,7 +795,7 @@ class TestBackgroundRun:
         )
         tool.set_context("web", "default", "web:sess1")
 
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
         await drawn.wait()
 
@@ -827,7 +827,7 @@ class TestBackgroundRun:
         announces = _Announces()
         tool = self._tool(tmp_path, announces)
         tool.set_context("web", "default", "web:sess1")
-        node = {"id": "a", "agent": "echo", "prompt_template": "hi"}
+        node = {"id": "a", "subagent": "echo", "prompt_template": "hi"}
 
         out = await tool.execute(nodes=[dict(node)])
         run_id = str(out.model_text).split()[2]
@@ -845,7 +845,7 @@ class TestBackgroundRun:
         """Hosts that never wire one (the CLI before its scheduler exists, tests)
         must not turn a finished graph into an unretrievable crash."""
         tool = self._tool(tmp_path, None)
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
 
         for _ in range(100):
@@ -864,7 +864,7 @@ class TestBackgroundRun:
         tool = self._tool(tmp_path, announces)
         tool.set_context("web", "default", "web:sess1")
 
-        out = await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}])
         run_id = str(out.model_text).split()[2]
         await announces.wait()
 
@@ -975,7 +975,7 @@ class TestSubagentEnum:
     typo costs the entire call. Constrain it in the schema instead."""
 
     def _subagent_field(self, tool: SubAgentDagTool) -> dict:
-        return tool.parameters["properties"]["nodes"]["items"]["properties"]["agent"]
+        return tool.parameters["properties"]["nodes"]["items"]["properties"]["subagent"]
 
     def test_enum_lists_the_configured_roster(self, tmp_path: Path) -> None:
         tool = SubAgentDagTool(
@@ -1011,7 +1011,7 @@ class TestSubagentEnum:
         )
         tool.parameters  # noqa: B018 - the property is what would mutate
 
-        assert "enum" not in _NODE_SCHEMA["properties"]["agent"]
+        assert "enum" not in _NODE_SCHEMA["properties"]["subagent"]
         fresh = SubAgentDagTool(workspace=tmp_path, agents=[])
         assert "Coder" not in self._subagent_field(fresh)["enum"]
 
@@ -1088,7 +1088,7 @@ class TestGuideSkillPointer:
 
 async def test_run_subagent_dag_tool_unknown_subagent(tmp_path: Path) -> None:
     tool = SubAgentDagTool(workspace=tmp_path, agents=[])
-    out = await tool.execute(nodes=[{"id": "a", "agent": "nope", "prompt_template": "x"}])
+    out = await tool.execute(nodes=[{"id": "a", "subagent": "nope", "prompt_template": "x"}])
     assert out.startswith("Error")
 
 
@@ -1107,8 +1107,8 @@ async def test_run_subagent_dag_tool_fans_progress_to_sink(tmp_path: Path) -> No
     tool.set_progress_sink(sink)
     await tool.execute(
         nodes=[
-            {"id": "a", "agent": "echo", "prompt_template": "hi"},
-            {"id": "b", "agent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+            {"id": "a", "subagent": "echo", "prompt_template": "hi"},
+            {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
         ],
         background=False,
     )
@@ -1144,9 +1144,9 @@ class TestCallAndResultLabels:
         label = self._tool(tmp_path).display_call(
             {
                 "nodes": [
-                    {"id": "fetch", "agent": "echo", "prompt_template": "x"},
-                    {"id": "parse", "agent": "echo", "prompt_template": "x"},
-                    {"id": "report", "agent": "echo", "prompt_template": "x"},
+                    {"id": "fetch", "subagent": "echo", "prompt_template": "x"},
+                    {"id": "parse", "subagent": "echo", "prompt_template": "x"},
+                    {"id": "report", "subagent": "echo", "prompt_template": "x"},
                 ]
             }
         )
@@ -1154,7 +1154,7 @@ class TestCallAndResultLabels:
 
     def test_display_call_elides_a_long_roster(self, tmp_path: Path) -> None:
         label = self._tool(tmp_path).display_call(
-            {"nodes": [{"id": f"n{i}", "agent": "echo", "prompt_template": "x"} for i in range(6)]}
+            {"nodes": [{"id": f"n{i}", "subagent": "echo", "prompt_template": "x"} for i in range(6)]}
         )
         assert label == "6 nodes: n0, n1, n2 (+3 more)"
 
@@ -1169,8 +1169,8 @@ class TestCallAndResultLabels:
     async def test_result_preview_names_the_run_and_its_tally(self, tmp_path: Path) -> None:
         out = await self._tool(tmp_path).execute(
             nodes=[
-                {"id": "a", "agent": "echo", "prompt_template": "hi"},
-                {"id": "b", "agent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "echo", "prompt_template": "hi"},
+                {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ],
             background=False,
         )
@@ -1193,8 +1193,8 @@ class TestCallAndResultLabels:
         )
         out = await tool.execute(
             nodes=[
-                {"id": "boom", "agent": "broken", "prompt_template": "x"},
-                {"id": "after", "agent": "echo", "prompt_template": "{{ boom.output }}", "depends_on": ["boom"]},
+                {"id": "boom", "subagent": "broken", "prompt_template": "x"},
+                {"id": "after", "subagent": "echo", "prompt_template": "{{ boom.output }}", "depends_on": ["boom"]},
             ],
             background=False,
         )
@@ -1219,7 +1219,7 @@ async def test_run_subagent_dag_tool_stamps_tool_call_id_on_every_event(tmp_path
         events.append((name, payload))
 
     tool.set_progress_sink(sink)
-    await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}], background=False)
+    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}], background=False)
 
     assert events, "expected at least one progress event"
     assert all(p.get("tool_call_id") == "call-42" for _, p in events)
@@ -1240,7 +1240,7 @@ async def test_run_subagent_dag_tool_omits_tool_call_id_when_host_sets_none(tmp_
         events.append(payload)
 
     tool.set_progress_sink(sink)
-    await tool.execute(nodes=[{"id": "a", "agent": "echo", "prompt_template": "hi"}], background=False)
+    await tool.execute(nodes=[{"id": "a", "subagent": "echo", "prompt_template": "hi"}], background=False)
 
     assert events
     assert all("tool_call_id" not in p for p in events)
@@ -1270,8 +1270,8 @@ class TestCapabilityGate:
         tool = self._tool(tmp_path)
         out = await tool.execute(
             nodes=[
-                {"id": "draft", "agent": "stateless_local", "prompt_template": "write", "instance": "author"},
-                {"id": "revise", "agent": "stateless_local", "prompt_template": "revise", "instance": "author"},
+                {"id": "draft", "subagent": "stateless_local", "prompt_template": "write", "instance": "author"},
+                {"id": "revise", "subagent": "stateless_local", "prompt_template": "revise", "instance": "author"},
             ]
         )
 
@@ -1285,10 +1285,10 @@ class TestCapabilityGate:
         tool = self._tool(tmp_path)
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "stateless_local", "prompt_template": "upstream"},
+                {"id": "a", "subagent": "stateless_local", "prompt_template": "upstream"},
                 {
                     "id": "b",
-                    "agent": "boxed",
+                    "subagent": "boxed",
                     "prompt_template": "read {{ a.output_path }}",
                     "depends_on": ["a"],
                 },
@@ -1304,8 +1304,8 @@ class TestCapabilityGate:
         tool = self._tool(tmp_path)
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "stateless_local", "prompt_template": "hello world"},
-                {"id": "b", "agent": "boxed", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "stateless_local", "prompt_template": "hello world"},
+                {"id": "b", "subagent": "boxed", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ],
             background=False,
         )
@@ -1319,10 +1319,10 @@ class TestCapabilityGate:
         tool = self._tool(tmp_path)
         out = await tool.execute(
             nodes=[
-                {"id": "draft", "agent": "resumable", "prompt_template": "write", "instance": "author"},
+                {"id": "draft", "subagent": "resumable", "prompt_template": "write", "instance": "author"},
                 {
                     "id": "revise",
-                    "agent": "resumable",
+                    "subagent": "resumable",
                     "prompt_template": "{{ draft.output }}",
                     "depends_on": ["draft"],
                     "instance": "author",
@@ -1347,8 +1347,8 @@ class TestCapabilityGate:
         assert "agent [stateless, no-local-files, no-progress]" in tool.description
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "agent", "prompt_template": "upstream"},
-                {"id": "b", "agent": "agent", "prompt_template": "{{ a.output_path }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "agent", "prompt_template": "upstream"},
+                {"id": "b", "subagent": "agent", "prompt_template": "{{ a.output_path }}", "depends_on": ["a"]},
             ]
         )
         assert out.startswith("Error: invalid DAG")
@@ -1366,8 +1366,8 @@ class TestValidationErrorGuidesRetry:
         )
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "echo", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
-                {"id": "b", "agent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "subagent": "echo", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
+                {"id": "b", "subagent": "echo", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         )
 
@@ -1382,7 +1382,7 @@ class TestValidationErrorGuidesRetry:
             agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
             guide_skill_id=None,
         )
-        out = await tool.execute(nodes=[{"id": "a", "agent": "nope", "prompt_template": "hi"}])
+        out = await tool.execute(nodes=[{"id": "a", "subagent": "nope", "prompt_template": "hi"}])
 
         assert out.startswith("Error: invalid DAG")
         assert "read_skill" not in out
@@ -1396,8 +1396,8 @@ class TestValidationErrorGuidesRetry:
         )
         out = await tool.execute(
             nodes=[
-                {"id": "a", "agent": "echo", "prompt_template": "hi"},
-                {"id": "a", "agent": "echo", "prompt_template": "hi"},
+                {"id": "a", "subagent": "echo", "prompt_template": "hi"},
+                {"id": "a", "subagent": "echo", "prompt_template": "hi"},
             ]
         )
 
@@ -1413,7 +1413,7 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
     # without it a chain of graphs in one conversation can pass nothing along.
     backend = _InMemBackend()
     first = await run_dag(
-        parse_dag_spec({"nodes": [{"id": "plan", "agent": "x", "prompt_template": "draft it"}]}),
+        parse_dag_spec({"nodes": [{"id": "plan", "subagent": "x", "prompt_template": "draft it"}]}),
         resolve=_by_name({"x": _FakeExec()}),
         backend=backend,
         workdir="/w",
@@ -1426,7 +1426,7 @@ async def test_a_later_run_reads_an_earlier_runs_output() -> None:
                 "nodes": [
                     {
                         "id": "build",
-                        "agent": "x",
+                        "subagent": "x",
                         "prompt_template": f"earlier: {{{{ ref:@runs/{first.run_id}/plan.out.md }}}}",
                     }
                 ]
@@ -1449,7 +1449,7 @@ async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
             "nodes": [
                 {
                     "id": "n",
-                    "agent": "x",
+                    "subagent": "x",
                     "prompt_template": "{{ ref:/hist/spawn/call1/result.md }}",
                 }
             ]
@@ -1488,7 +1488,7 @@ async def test_a_reference_under_the_history_root_needs_the_grant() -> None:
     ],
 )
 async def test_the_grant_stops_at_this_conversations_history(path: str) -> None:
-    spec = parse_dag_spec({"nodes": [{"id": "n", "agent": "x", "prompt_template": f"{{{{ ref:{path} }}}}"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "n", "subagent": "x", "prompt_template": f"{{{{ ref:{path} }}}}"}]})
     backend = _InMemBackend()
     backend.files[path] = b"SHOULD NOT BE READABLE"
     with pytest.raises(DagValidationError, match="outside"):
@@ -1526,7 +1526,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
         # Foreground, so the outcome is this call's own result: what is asserted
         # is that the node ran and read the file, not that it was accepted.
         ok = await tool.execute(
-            nodes=[{"id": "reads_workdir", "agent": "echo", "prompt_template": f"{{{{ ref:{ws / 'brief.md'} }}}}"}],
+            nodes=[{"id": "reads_workdir", "subagent": "echo", "prompt_template": f"{{{{ ref:{ws / 'brief.md'} }}}}"}],
             background=False,
         )
         assert "1 completed" in ok.model_text
@@ -1537,7 +1537,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
             nodes=[
                 {
                     "id": "reads_history",
-                    "agent": "echo",
+                    "subagent": "echo",
                     "prompt_template": f"{{{{ ref:{run_dir / 'reads_workdir.out.md'} }}}}",
                 }
             ],
@@ -1553,7 +1553,7 @@ async def test_the_tool_grants_this_conversations_history_and_nothing_wider(tmp_
             ("reads_above", tmp_path / "outside.md"),
         ):
             refused = await tool.execute(
-                nodes=[{"id": nid, "agent": "echo", "prompt_template": f"{{{{ ref:{target} }}}}"}]
+                nodes=[{"id": nid, "subagent": "echo", "prompt_template": f"{{{{ ref:{target} }}}}"}]
             )
             assert "invalid DAG" in refused, nid
             assert "outside the session workdir and its sub-agent history" in refused, nid
@@ -1575,13 +1575,13 @@ async def _run(spec_nodes: list[dict], backend, root: str, history: str = "/hist
 
 async def test_a_bare_node_id_reaches_an_earlier_run_with_no_depends_on() -> None:
     backend = _InMemBackend()
-    first = await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    first = await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     second = await _run(
         [
             {
                 "id": "build",
-                "agent": "x",
+                "subagent": "x",
                 "prompt_template": "text={{ plan.output }} path={{ plan.output_path }}",
             }
         ],
@@ -1600,13 +1600,13 @@ async def test_depends_on_may_name_a_node_an_earlier_run_completed() -> None:
     # reads as a whole either way, and a model that writes the edge defensively
     # should not have its whole graph refused for it.
     backend = _InMemBackend()
-    first = await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    first = await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     second = await _run(
         [
             {
                 "id": "build",
-                "agent": "x",
+                "subagent": "x",
                 "depends_on": ["plan"],
                 "prompt_template": "text={{ plan.output }} path={{ plan.output_path }}",
             }
@@ -1626,10 +1626,10 @@ async def test_a_cross_run_dependency_neither_blocks_nor_unterminals_a_node() ->
     # has none, so it must not be waited on (the node would never become
     # ready) nor counted as a dependent (the node would stop being terminal).
     backend = _InMemBackend()
-    await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     second = await _run(
-        [{"id": "build", "agent": "x", "depends_on": ["plan"], "prompt_template": "no placeholder"}],
+        [{"id": "build", "subagent": "x", "depends_on": ["plan"], "prompt_template": "no placeholder"}],
         backend,
         "/hist/mas_dag",
     )
@@ -1644,12 +1644,12 @@ async def test_a_cross_run_dependency_does_not_read_as_a_cycle() -> None:
     # Kahn counts unmet in-edges. Counting the out-of-graph one would leave
     # every node's indegree above zero and report the graph as cyclic.
     backend = _InMemBackend()
-    await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     second = await _run(
         [
-            {"id": "a", "agent": "x", "depends_on": ["plan"], "prompt_template": "{{ plan.output }}"},
-            {"id": "b", "agent": "x", "depends_on": ["a", "plan"], "prompt_template": "{{ a.output }}"},
+            {"id": "a", "subagent": "x", "depends_on": ["plan"], "prompt_template": "{{ plan.output }}"},
+            {"id": "b", "subagent": "x", "depends_on": ["a", "plan"], "prompt_template": "{{ a.output }}"},
         ],
         backend,
         "/hist/mas_dag",
@@ -1663,16 +1663,16 @@ async def test_a_local_failure_still_cascades_past_a_cross_run_dependency() -> N
     # `b` has one satisfied edge and one failing one. The out-of-graph edge
     # must not shadow the in-graph one when failures are propagated.
     backend = _InMemBackend()
-    await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     result = await run_dag(
         parse_dag_spec(
             {
                 "nodes": [
-                    {"id": "a", "agent": "x", "prompt_template": "hi"},
+                    {"id": "a", "subagent": "x", "prompt_template": "hi"},
                     {
                         "id": "b",
-                        "agent": "x",
+                        "subagent": "x",
                         "depends_on": ["a", "plan"],
                         "prompt_template": "{{ a.output }} {{ plan.output }}",
                     },
@@ -1706,7 +1706,7 @@ async def test_depends_on_a_node_that_produced_nothing_is_refused(state: str, ex
 
     with pytest.raises(DagValidationError, match=expected):
         await _run(
-            [{"id": "build", "agent": "x", "depends_on": ["plan"], "prompt_template": "hi"}],
+            [{"id": "build", "subagent": "x", "depends_on": ["plan"], "prompt_template": "hi"}],
             backend,
             "/hist/mas_dag",
         )
@@ -1715,7 +1715,7 @@ async def test_depends_on_a_node_that_produced_nothing_is_refused(state: str, ex
 async def test_depends_on_an_id_no_run_has_produced_is_still_refused() -> None:
     with pytest.raises(DagValidationError, match="depends on unknown 'ghost'"):
         await _run(
-            [{"id": "build", "agent": "x", "depends_on": ["ghost"], "prompt_template": "hi"}],
+            [{"id": "build", "subagent": "x", "depends_on": ["ghost"], "prompt_template": "hi"}],
             _InMemBackend(),
             "/hist/mas_dag",
         )
@@ -1727,7 +1727,7 @@ async def test_there_is_no_run_qualifier_on_a_node_reference() -> None:
     # Pinning a run is the ``ref:@runs/`` file form's job.
     with pytest.raises(DagValidationError, match="unrecognized placeholder"):
         await _run(
-            [{"id": "build", "agent": "x", "prompt_template": "{{ @runs/some-run/plan.output }}"}],
+            [{"id": "build", "subagent": "x", "prompt_template": "{{ @runs/some-run/plan.output }}"}],
             _InMemBackend(),
             "/hist/mas_dag",
         )
@@ -1739,7 +1739,7 @@ async def test_a_node_input_rejects_a_run_key() -> None:
             [
                 {
                     "id": "build",
-                    "agent": "x",
+                    "subagent": "x",
                     "prompt_template": "{{ inputs.prev }}",
                     "inputs": {"prev": {"node": "plan", "run": "some-run"}},
                 }
@@ -1773,11 +1773,11 @@ async def test_the_file_form_pins_a_run_a_bare_id_cannot_reach() -> None:
         ],
     )
 
-    bare = await _run([{"id": "n1", "agent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
+    bare = await _run([{"id": "n1", "subagent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
     assert "FROM-RUNB" in backend.files[f"/hist/mas_dag/{bare.run_id}/n1.prompt.md"].decode()
 
     pinned = await _run(
-        [{"id": "n2", "agent": "x", "prompt_template": "{{ ref:@runs/runA/plan.out.md }}"}],
+        [{"id": "n2", "subagent": "x", "prompt_template": "{{ ref:@runs/runA/plan.out.md }}"}],
         backend,
         "/hist/mas_dag",
     )
@@ -1793,12 +1793,12 @@ async def test_a_run_that_recorded_no_outcome_is_not_addressable_by_id() -> None
     _seed_history(backend, [{"run_id": "runOld", "nodes": ["plan"], "summary": {"completed": 1}}])
 
     with pytest.raises(DagValidationError, match="recorded no outcome for it"):
-        await _run([{"id": "n1", "agent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
+        await _run([{"id": "n1", "subagent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
     with pytest.raises(DagValidationError, match="already used by run"):
-        await _run([{"id": "plan", "agent": "x", "prompt_template": "retry"}], backend, "/hist/mas_dag")
+        await _run([{"id": "plan", "subagent": "x", "prompt_template": "retry"}], backend, "/hist/mas_dag")
 
     ok = await _run(
-        [{"id": "n2", "agent": "x", "prompt_template": "{{ ref:@runs/runOld/plan.out.md }}"}],
+        [{"id": "n2", "subagent": "x", "prompt_template": "{{ ref:@runs/runOld/plan.out.md }}"}],
         backend,
         "/hist/mas_dag",
     )
@@ -1807,13 +1807,13 @@ async def test_a_run_that_recorded_no_outcome_is_not_addressable_by_id() -> None
 
 async def test_a_node_input_takes_another_runs_output() -> None:
     backend = _InMemBackend()
-    first = await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    first = await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     result = await _run(
         [
             {
                 "id": "build",
-                "agent": "x",
+                "subagent": "x",
                 "prompt_template": "text={{ inputs.prev }} path={{ inputs.prev.path }}",
                 "inputs": {"prev": {"node": "plan"}},
             }
@@ -1830,10 +1830,10 @@ async def test_a_node_input_may_also_name_a_dependency_of_this_graph() -> None:
     backend = _InMemBackend()
     result = await _run(
         [
-            {"id": "up", "agent": "x", "prompt_template": "hello"},
+            {"id": "up", "subagent": "x", "prompt_template": "hello"},
             {
                 "id": "down",
-                "agent": "x",
+                "subagent": "x",
                 "prompt_template": "{{ inputs.from_up }}",
                 "depends_on": ["up"],
                 "inputs": {"from_up": {"node": "up"}},
@@ -1849,10 +1849,10 @@ async def test_a_node_input_may_also_name_a_dependency_of_this_graph() -> None:
 
 async def test_reusing_a_node_id_from_an_earlier_run_is_refused() -> None:
     backend = _InMemBackend()
-    await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
+    await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it"}], backend, "/hist/mas_dag")
 
     with pytest.raises(DagValidationError, match="already used by run"):
-        await _run([{"id": "plan", "agent": "x", "prompt_template": "draft it again"}], backend, "/hist/mas_dag")
+        await _run([{"id": "plan", "subagent": "x", "prompt_template": "draft it again"}], backend, "/hist/mas_dag")
 
 
 async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_it() -> None:
@@ -1870,7 +1870,7 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
 
     first = asyncio.create_task(
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "plan", "agent": "s", "prompt_template": "hi"}]}),
+            parse_dag_spec({"nodes": [{"id": "plan", "subagent": "s", "prompt_template": "hi"}]}),
             resolve=_by_name({"s": _Slow()}),
             backend=backend,
             workdir="/w",
@@ -1880,7 +1880,7 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
     await started.wait()
     try:
         with pytest.raises(DagValidationError, match="already used by run"):
-            await _run([{"id": "plan", "agent": "x", "prompt_template": "mine now"}], backend, "/hist/mas_dag")
+            await _run([{"id": "plan", "subagent": "x", "prompt_template": "mine now"}], backend, "/hist/mas_dag")
     finally:
         release.set()
         await first
@@ -1889,7 +1889,7 @@ async def test_an_id_is_claimed_at_run_start_so_a_concurrent_graph_cannot_take_i
 async def test_a_node_that_no_run_produced_is_still_refused() -> None:
     with pytest.raises(DagValidationError, match="undeclared dependency"):
         await _run(
-            [{"id": "build", "agent": "x", "prompt_template": "{{ ghost.output }}"}],
+            [{"id": "build", "subagent": "x", "prompt_template": "{{ ghost.output }}"}],
             _InMemBackend(),
             "/hist/mas_dag",
         )
@@ -1904,11 +1904,11 @@ async def _seeded_outcomes(backend: _InMemBackend) -> None:
         parse_dag_spec(
             {
                 "nodes": [
-                    {"id": "ok_node", "agent": "x", "prompt_template": "fine"},
-                    {"id": "bad_node", "agent": "x", "prompt_template": "explode"},
+                    {"id": "ok_node", "subagent": "x", "prompt_template": "fine"},
+                    {"id": "bad_node", "subagent": "x", "prompt_template": "explode"},
                     {
                         "id": "downstream",
-                        "agent": "x",
+                        "subagent": "x",
                         "prompt_template": "{{ bad_node.output }}",
                         "depends_on": ["bad_node"],
                     },
@@ -1943,7 +1943,7 @@ async def test_referencing_a_node_with_no_output_is_refused_before_dispatch(
 
     with pytest.raises(DagValidationError, match=expected):
         await _run(
-            [{"id": "later", "agent": "x", "prompt_template": template, "inputs": inputs}],
+            [{"id": "later", "subagent": "x", "prompt_template": template, "inputs": inputs}],
             backend,
             "/hist/mas_dag",
         )
@@ -1955,14 +1955,14 @@ async def test_a_failed_nodes_id_stays_taken() -> None:
     backend = _InMemBackend()
     await _seeded_outcomes(backend)
     with pytest.raises(DagValidationError, match="already used by run"):
-        await _run([{"id": "bad_node", "agent": "x", "prompt_template": "retry"}], backend, "/hist/mas_dag")
+        await _run([{"id": "bad_node", "subagent": "x", "prompt_template": "retry"}], backend, "/hist/mas_dag")
 
 
 async def test_a_completed_sibling_of_a_failed_node_is_still_readable() -> None:
     backend = _InMemBackend()
     await _seeded_outcomes(backend)
     result = await _run(
-        [{"id": "later", "agent": "x", "prompt_template": "{{ ok_node.output }}"}], backend, "/hist/mas_dag"
+        [{"id": "later", "subagent": "x", "prompt_template": "{{ ok_node.output }}"}], backend, "/hist/mas_dag"
     )
     assert "OUT[ok_node]:fine" in backend.files[f"/hist/mas_dag/{result.run_id}/later.prompt.md"].decode()
 
@@ -1979,7 +1979,7 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
 
     first = asyncio.create_task(
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "slow_node", "agent": "s", "prompt_template": "hi"}]}),
+            parse_dag_spec({"nodes": [{"id": "slow_node", "subagent": "s", "prompt_template": "hi"}]}),
             resolve=_by_name({"s": _Slow()}),
             backend=backend,
             workdir="/w",
@@ -1990,7 +1990,7 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
     try:
         with pytest.raises(DagValidationError, match="has not finished writing") as caught:
             await _run(
-                [{"id": "later", "agent": "x", "prompt_template": "{{ slow_node.output }}"}],
+                [{"id": "later", "subagent": "x", "prompt_template": "{{ slow_node.output }}"}],
                 backend,
                 "/hist/mas_dag",
             )
@@ -1998,13 +1998,13 @@ async def test_referencing_an_in_flight_node_does_not_suggest_re_creating_it() -
         # uniqueness check refuses; the message must not offer it.
         assert "depends_on" not in str(caught.value)
         with pytest.raises(DagValidationError, match="already used by run"):
-            await _run([{"id": "slow_node", "agent": "x", "prompt_template": "mine"}], backend, "/hist/mas_dag")
+            await _run([{"id": "slow_node", "subagent": "x", "prompt_template": "mine"}], backend, "/hist/mas_dag")
     finally:
         release.set()
         await first
 
     after = await _run(
-        [{"id": "later2", "agent": "x", "prompt_template": "{{ slow_node.output }}"}], backend, "/hist/mas_dag"
+        [{"id": "later2", "subagent": "x", "prompt_template": "{{ slow_node.output }}"}], backend, "/hist/mas_dag"
     )
     assert "eventually" in backend.files[f"/hist/mas_dag/{after.run_id}/later2.prompt.md"].decode()
 
@@ -2019,7 +2019,7 @@ async def test_a_missing_file_reads_the_same_for_both_ref_forms(node_id: str, te
     # them collide often enough to matter -- and a collision fails on the
     # uniqueness rule instead of on what this test is about.
     result = await _run(
-        [{"id": node_id, "agent": "x", "prompt_template": template}],
+        [{"id": node_id, "subagent": "x", "prompt_template": template}],
         _InMemBackend(),
         "/hist/mas_dag",
     )
@@ -2043,7 +2043,7 @@ async def test_a_cancellation_on_the_run_started_publish_is_covered_too() -> Non
     backend = _InMemBackend()
     task = asyncio.create_task(
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "plan", "agent": "x", "prompt_template": "hi"}]}),
+            parse_dag_spec({"nodes": [{"id": "plan", "subagent": "x", "prompt_template": "hi"}]}),
             resolve=_by_name({"x": _FakeExec()}),
             backend=backend,
             workdir="/w",
@@ -2079,7 +2079,7 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
     backend = _InMemBackend()
     task = asyncio.create_task(
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "plan", "agent": "x", "prompt_template": "hi"}]}),
+            parse_dag_spec({"nodes": [{"id": "plan", "subagent": "x", "prompt_template": "hi"}]}),
             resolve=_by_name({"x": _Blocking()}),
             backend=backend,
             workdir="/w",
@@ -2102,9 +2102,9 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
     # And the advice the two refusals give no longer contradict: neither offers
     # a reference that the other denies.
     with pytest.raises(DagValidationError, match="no output, so there is nothing to reference either"):
-        await _run([{"id": "plan", "agent": "x", "prompt_template": "again"}], backend, "/hist/mas_dag")
+        await _run([{"id": "plan", "subagent": "x", "prompt_template": "again"}], backend, "/hist/mas_dag")
     with pytest.raises(DagValidationError, match="was stopped mid-run"):
-        await _run([{"id": "other", "agent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
+        await _run([{"id": "other", "subagent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
 
 
 # --- the index is the uniqueness guarantee, so its writes are serialized ------
@@ -2148,7 +2148,7 @@ async def test_concurrent_runs_cannot_both_claim_one_node_id() -> None:
     backend = _SuspendingBackend()
     graphs = [
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "plan", "agent": "y", "prompt_template": "go"}]}),
+            parse_dag_spec({"nodes": [{"id": "plan", "subagent": "y", "prompt_template": "go"}]}),
             resolve=_by_name({"y": _Yielding()}),
             backend=backend,
             workdir="/w",
@@ -2173,7 +2173,7 @@ async def test_concurrent_runs_do_not_drop_each_others_index_entries() -> None:
     await asyncio.gather(
         *[
             run_dag(
-                parse_dag_spec({"nodes": [{"id": node_id, "agent": "y", "prompt_template": "go"}]}),
+                parse_dag_spec({"nodes": [{"id": node_id, "subagent": "y", "prompt_template": "go"}]}),
                 resolve=_by_name({"y": _Yielding()}),
                 backend=backend,
                 workdir="/w",
@@ -2206,7 +2206,7 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
     (tmp_path / "wd").mkdir()
 
     first = await run_dag(
-        parse_dag_spec({"nodes": [{"id": "seed", "agent": "x", "prompt_template": "make it"}]}), **common
+        parse_dag_spec({"nodes": [{"id": "seed", "subagent": "x", "prompt_template": "make it"}]}), **common
     )
     assert (root / first.run_id / "seed.out.md").is_file()
 
@@ -2216,7 +2216,7 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
                 "nodes": [
                     {
                         "id": "consumer",
-                        "agent": "x",
+                        "subagent": "x",
                         # The out-of-graph edge belongs on the real backend too:
                         # it is the scheduler that has to treat it as satisfied,
                         # and a run that never becomes ready writes no prompt.
@@ -2242,7 +2242,9 @@ async def test_cross_run_reference_works_over_the_real_file_backend(tmp_path: Pa
 
     # And the id stays taken on the real backend too.
     with pytest.raises(DagValidationError, match="already used by run"):
-        await run_dag(parse_dag_spec({"nodes": [{"id": "seed", "agent": "x", "prompt_template": "again"}]}), **common)
+        await run_dag(
+            parse_dag_spec({"nodes": [{"id": "seed", "subagent": "x", "prompt_template": "again"}]}), **common
+        )
 
 
 # --- what a node did on the way ------------------------------------------
@@ -2270,7 +2272,7 @@ class _PublishingExec(_FakeExec):
 
 
 async def test_a_node_writes_down_its_own_transcript() -> None:
-    spec = parse_dag_spec({"nodes": [{"id": "a", "agent": "x", "prompt_template": "hello"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
     exec_ = _PublishingExec()
     exec_.run_id = ""
     backend = _InMemBackend()
@@ -2290,7 +2292,7 @@ async def test_a_node_writes_down_its_own_transcript() -> None:
 async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
     """The transcript file is written when the node ends, and a reader watching
     a node that is still going needs an answer before then."""
-    spec = parse_dag_spec({"nodes": [{"id": "a", "agent": "x", "prompt_template": "hello"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
     exec_ = _PublishingExec()
     backend = _InMemBackend()
 
@@ -2319,7 +2321,7 @@ async def test_the_live_index_does_not_outlive_the_node() -> None:
     from raven.agent.subagent import activity
     from raven.agent.subagent_dag._store import node_live_key
 
-    spec = parse_dag_spec({"nodes": [{"id": "a", "agent": "x", "prompt_template": "hello"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hello"}]})
     result = await run_dag(
         spec,
         resolve=_by_name({"x": _FakeExec()}),
@@ -2350,8 +2352,8 @@ class _BlockingExec(_FakeExec):
 def _two_node_spec() -> dict:
     return {
         "nodes": [
-            {"id": "a", "agent": "x", "prompt_template": "hi"},
-            {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+            {"id": "a", "subagent": "x", "prompt_template": "hi"},
+            {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
         ]
     }
 
@@ -2475,7 +2477,7 @@ async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() ->
 
     task = asyncio.create_task(
         run_dag(
-            parse_dag_spec({"nodes": [{"id": "a", "agent": "x", "prompt_template": "hi"}]}),
+            parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi"}]}),
             resolve=_by_name({"x": agent}),
             backend=backend,
             workdir="/w",
@@ -2490,7 +2492,7 @@ async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() ->
 
     with pytest.raises(DagValidationError, match="was stopped mid-run"):
         await _run(
-            [{"id": "next", "agent": "x", "prompt_template": "{{ a.output }}"}],
+            [{"id": "next", "subagent": "x", "prompt_template": "{{ a.output }}"}],
             backend,
             "/hist/mas_dag",
         )
@@ -2499,7 +2501,7 @@ async def test_referencing_a_cancelled_node_says_it_was_stopped_not_skipped() ->
 def test_dag_mints_an_instance_for_a_stateful_node(tmp_path: Path) -> None:
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
-    spec = parse_dag_spec({"nodes": [{"id": "research", "agent": "worker", "prompt_template": "go"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]})
     minted_spec, auto = tool._mint_missing_instances(spec, tool._capability_map())
     assert auto == frozenset({"research"})
     assert re.fullmatch(r"research-[0-9a-f]{6}", minted_spec.nodes[0].instance)
@@ -2508,7 +2510,7 @@ def test_dag_mints_an_instance_for_a_stateful_node(tmp_path: Path) -> None:
 def test_dag_leaves_a_stateless_node_without_an_instance(tmp_path: Path) -> None:
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
-    spec = parse_dag_spec({"nodes": [{"id": "research", "agent": "worker", "prompt_template": "go"}]})
+    spec = parse_dag_spec({"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]})
     minted_spec, auto = tool._mint_missing_instances(spec, tool._capability_map())
     assert auto == frozenset()
     assert minted_spec.nodes[0].instance is None
@@ -2518,7 +2520,7 @@ def test_dag_never_overwrites_an_instance_the_model_chose(tmp_path: Path) -> Non
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
     spec = parse_dag_spec(
-        {"nodes": [{"id": "research", "agent": "worker", "prompt_template": "go", "instance": "author"}]}
+        {"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go", "instance": "author"}]}
     )
     minted_spec, auto = tool._mint_missing_instances(spec, tool._capability_map())
     assert auto == frozenset()
@@ -2530,7 +2532,7 @@ def test_dag_minting_does_not_repeat_across_two_submissions(tmp_path: Path) -> N
     an id must not share a session."""
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
-    raw = {"nodes": [{"id": "research", "agent": "worker", "prompt_template": "go"}]}
+    raw = {"nodes": [{"id": "research", "subagent": "worker", "prompt_template": "go"}]}
     first, _ = tool._mint_missing_instances(parse_dag_spec(raw), tool._capability_map())
     second, _ = tool._mint_missing_instances(parse_dag_spec(raw), tool._capability_map())
     assert first.nodes[0].instance != second.nodes[0].instance
@@ -2540,8 +2542,8 @@ async def test_run_dag_records_whether_each_instance_was_minted() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "agent": "x", "prompt_template": "go", "instance": "chosen"},
-                {"id": "b", "agent": "x", "prompt_template": "go", "instance": "b-abc123"},
+                {"id": "a", "subagent": "x", "prompt_template": "go", "instance": "chosen"},
+                {"id": "b", "subagent": "x", "prompt_template": "go", "instance": "b-abc123"},
             ]
         }
     )
@@ -2564,7 +2566,7 @@ async def test_dag_summary_names_each_stateful_node_handle(tmp_path: Path) -> No
     cfg = ThirdPartyCliSubagentConfig(name="worker", command="cat {agent_id}", resume_command="cat --resume {agent_id}")
     tool = SubAgentDagTool(workspace=tmp_path, agents=[cfg])
     result = await tool.execute(
-        nodes=[{"id": "research", "agent": "worker", "prompt_template": "go"}],
+        nodes=[{"id": "research", "subagent": "worker", "prompt_template": "go"}],
         background=False,
     )
     assert re.search(r"- research \[\w+\] \(instance: research-[0-9a-f]{6}\):", str(result))
@@ -2579,7 +2581,7 @@ async def test_dag_summary_names_each_stateful_node_handle(tmp_path: Path) -> No
 
 
 def _one_node() -> list[dict]:
-    return [{"id": "publish", "agent": "on", "prompt_template": "ship it"}]
+    return [{"id": "publish", "subagent": "on", "prompt_template": "ship it"}]
 
 
 def _confirming_tool(tmp_path: Path, answer, asked: list[str]):
@@ -2645,8 +2647,8 @@ async def test_the_question_names_every_step(tmp_path: Path) -> None:
     tool._registry._backends["on"] = _FakeExec()
 
     nodes = [
-        {"id": "draft", "agent": "on", "prompt_template": "write"},
-        {"id": "publish", "agent": "on", "prompt_template": "ship", "depends_on": ["draft"]},
+        {"id": "draft", "subagent": "on", "prompt_template": "write"},
+        {"id": "publish", "subagent": "on", "prompt_template": "ship", "depends_on": ["draft"]},
     ]
     await tool.execute(nodes, background=False, confirm=True)
 
@@ -2695,3 +2697,21 @@ async def test_a_refused_graph_is_not_charged(tmp_path: Path) -> None:
     await tool.execute(_one_node(), background=False, confirm=True)
 
     assert charged == []
+
+
+async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run() -> None:
+    """Refused up front, not when the scheduler reaches that node.
+
+    ``resolve`` answering ``None`` is how "this name is on no table" arrives, and
+    a graph half-run before it surfaces leaves nodes whose output later nodes
+    were written to read. The tool checks the same thing against the registry for
+    the model's benefit; this one guards the runner against any caller.
+    """
+    with pytest.raises(DagValidationError, match="names unknown sub-agent"):
+        await run_dag(
+            parse_dag_spec({"nodes": [{"id": "a", "subagent": "ghost", "prompt_template": "hi"}]}),
+            resolve=_by_name({}),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+        )

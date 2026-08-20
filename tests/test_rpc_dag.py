@@ -491,3 +491,52 @@ def test_the_dag_event_models_accept_a_cancelled_node() -> None:
     )
     assert payload.summary.cancelled == 1
     assert payload.files[0].status == "cancelled"
+
+
+class _EngineOwnedRun(_Agent):
+    """A loop whose *private* graph tool owns the run.
+
+    Which is what a `mode: dag` playbook produces: the registered tool -- the
+    only one `_Agent` exposes -- has never heard of the run, because
+    `active_run_ids` reads a per-instance cancel map.
+    """
+
+    def __init__(self, tool: object | None) -> None:
+        super().__init__(tool)
+
+    def active_dag_run_ids(self) -> set[str]:
+        return {RUN_ID}
+
+
+async def test_dag_get_asks_liveness_of_every_graph_tool() -> None:
+    """A run the playbook engine dispatched is live, and its nodes say running.
+
+    The registered tool answers "not executing that" for it, and the overlay
+    turns every unfinished node into ``interrupted`` -- so a backgrounded
+    playbook run, reopened from history, came back as a graph of failures with
+    the clock still running on them. Fixed for the instance rows first; this is
+    the path that reads a run back, and it took liveness off the tool it was
+    handed rather than off the loop.
+    """
+    await instances_mod.get_registry().upsert_dag_node("tui:s1", RUN_ID, "node-a", "research-raven", "running")
+
+    result = await dag_get(
+        {"run_id": RUN_ID, "session_key": "tui:s1"},
+        # The tool says the run is not its own; the loop knows better.
+        agent_loop_factory=lambda: _EngineOwnedRun(_FakeDagTool(finalized=False, live=False)),
+    )
+
+    by_node = {f["node"]: f for f in result["run"]["files"]}
+    assert by_node["node-a"]["status"] == "running", "the engine's run is live even so"
+
+
+async def test_a_loop_that_cannot_answer_still_falls_back_to_the_tool() -> None:
+    """The negative half. Without it, "always live" passes the test above."""
+    await instances_mod.get_registry().upsert_dag_node("tui:s1", RUN_ID, "node-a", "research-raven", "running")
+
+    result = await dag_get(
+        {"run_id": RUN_ID, "session_key": "tui:s1"},
+        agent_loop_factory=_factory(_FakeDagTool(finalized=False, live=False)),
+    )
+
+    assert {f["node"]: f for f in result["run"]["files"]}["node-a"]["status"] == "interrupted"

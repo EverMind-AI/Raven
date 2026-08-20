@@ -159,6 +159,14 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
     load error as a warning and drops the playbook out of the library, so a user's
     saved procedure simply stops existing.
 
+    The step's target field is ``subagent``; a stored file spells it ``agent``.
+    That one is unconditional and not tied to any marker, because *every*
+    playbook ever written spells it that way -- the field was ``agent`` on the
+    playbook side long before the two node definitions merged, so its presence
+    dates nothing. Rewritten only when the file does not already carry
+    ``subagent``, so a hand-edited file holding both is left for the node model
+    to reject rather than silently half-honoured.
+
     ``confirm`` on a node is gone (the gate is graph-level), and the node model
     forbids unknown keys. Every playbook the previous release saved carries it:
     ``block_dump`` is ``exclude_none``, not ``exclude_defaults``, so ``False`` was
@@ -180,23 +188,27 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
     if not isinstance(nodes, list):
         return data
     migrated: list = []
-    touched = False
+    reasons: set[str] = set()
     for node in nodes:
-        if not isinstance(node, dict) or "confirm" not in node:
+        if not isinstance(node, dict):
             migrated.append(node)
             continue
-        touched = True
-        node = {k: v for k, v in node.items() if k != "confirm"}
-        for field in ("skills", "mcps"):
-            if node.get(field) == []:
-                node.pop(field)
+        if "agent" in node and "subagent" not in node:
+            node = {("subagent" if k == "agent" else k): v for k, v in node.items()}
+            reasons.add("renaming 'agent' to 'subagent'")
+        if "confirm" in node:
+            node = {k: v for k, v in node.items() if k != "confirm"}
+            for field in ("skills", "mcps"):
+                if node.get(field) == []:
+                    node.pop(field)
+            reasons.add("dropping node-level 'confirm' and reading empty skills/mcps lists as unset")
         migrated.append(node)
-    if not touched:
+    if not reasons:
         return data
     logger.info(
-        "Playbook {!r} was written by an older release; dropping node-level 'confirm' and "
-        "reading empty skills/mcps lists as unset",
+        "Playbook {!r} was written by an older release; {}",
         name,
+        "; ".join(sorted(reasons)),
     )
     return {**data, "nodes": migrated}
 

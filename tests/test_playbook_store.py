@@ -31,7 +31,7 @@ def _spec(description: str) -> PlaybookSpec:
         description=description,
         mode="dag",
         triggers=Triggers(keywords=[_CJK_WORD]),
-        nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="research ${params.target}")],
+        nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="research ${params.target}")],
         params={"target": ParamSpec(required=True, description="which competitor should be scanned?")},
     )
 

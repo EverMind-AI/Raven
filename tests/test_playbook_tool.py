@@ -40,7 +40,7 @@ def _spec(name="weekly-feedback", **over):
         mode="dag",
         triggers=Triggers(keywords=["user feedback"]),
         params={"week_of": ParamSpec(required=True, description="which week should be analyzed?")},
-        nodes=[NodeSpec(id="pull", agent="data-raven", prompt_template="pull ${params.week_of}")],
+        nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="pull ${params.week_of}")],
     )
     base.update(over)
     return PlaybookSpec(**base)

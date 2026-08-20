@@ -132,6 +132,21 @@ const dagGist = (d) => RavenIslands.dag.gist(d);
 const dagSummary = (d) => RavenIslands.dag.summary(d);
 const dagTook = (n) => RavenIslands.dag.took(n, Date.now());
 
+/* The longest prefix every id shares, cut back to a separator so a label never
+   starts mid-word. Empty for fewer than two ids, for ids that share nothing, and
+   for a prefix that would leave a label empty -- in each of those the ids are
+   already telling them apart. */
+function dagSharedPrefix(ids) {
+  if (ids.length < 2) return '';
+  let n = 0;
+  while (n < ids[0].length && ids.every((s) => s[n] === ids[0][n])) n += 1;
+  const head = ids[0].slice(0, n);
+  const cut = Math.max(head.lastIndexOf('-'), head.lastIndexOf('_'));
+  if (cut < 0) return '';
+  const prefix = head.slice(0, cut + 1);
+  return ids.every((s) => s.length > prefix.length) ? prefix : '';
+}
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function svgEl(tag, attrs, cls) {
@@ -198,6 +213,9 @@ function dagSvg(d) {
 
   d.els = new Map();
   const sel = RavenIslands.subagents.sel();
+  const held = new Map();
+  nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1); });
+  const shared = new Set([...held.entries()].filter(([, c]) => c > 1).map(([h]) => h));
   nodes.forEach((n) => {
     const p = at.get(n.id);
     const g = svgEl('g', { transform: `translate(${p.x} ${p.y})`, role: 'button', tabindex: '0' }, 'nd');
@@ -210,7 +228,12 @@ function dagSvg(d) {
     const id = svgEl('text', { x: 31, y: 19 }, 'id');
     id.textContent = n.id;
     const ag = svgEl('text', { x: 31, y: 32 }, 'ag');
-    ag.textContent = n.subagent + (n.instance ? ' @' + n.instance : '');
+    /* The handle earns its place only when it is shared: what it tells a reader
+       is "these steps continue one session". A handle held by a single node is
+       minted, one per node, and reads as a mangled copy of the id right above
+       it -- noise in the line whose whole job is saying who is doing this. The
+       title below still carries it, for the one node being pointed at. */
+    ag.textContent = n.subagent + (shared.has(n.instance) ? ' @' + n.instance : '');
     // Always present, even while empty: the clock below writes into it every
     // second, and a node that starts running must not have to be redrawn to
     // grow somewhere to put its time.
@@ -312,8 +335,23 @@ function drawDag() {
      the sheet is in the document: a long node id used to run under the clock
      in its own corner. The clock's column is reserved whether or not a time
      is showing yet -- a node that starts running must not need a re-fit. */
-  sheet.querySelectorAll('.nd .id').forEach((el) => {
-    const max = DAG_W - 31 - 40;
+  const idEls = [...sheet.querySelectorAll('.nd .id')];
+  const max = DAG_W - 31 - 40;
+  /* A playbook namespaces every node id with its own name and run tag, so the
+     first twenty-odd characters are identical across the graph -- and cutting
+     from the tail removed the only part that told the nodes apart, leaving
+     three boxes all reading the same. Dropping the prefix they all share is
+     what makes them legible, and it is decided for the whole graph at once so
+     the labels stay comparable: applied per node, one would keep its namespace
+     while its neighbour lost it.
+
+     Only when something actually overflows. An id that fits is shown as its
+     author wrote it. */
+  if (idEls.some((el) => el.getComputedTextLength() > max)) {
+    const prefix = dagSharedPrefix(idEls.map((el) => el.textContent));
+    if (prefix) idEls.forEach((el) => { el.textContent = el.textContent.slice(prefix.length); });
+  }
+  idEls.forEach((el) => {
     let s = el.textContent;
     while (s.length > 1 && el.getComputedTextLength() > max) {
       s = s.slice(0, -1);
@@ -398,8 +436,16 @@ delegOpenNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
 /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from
    history shows what actually happened rather than a row of pending dots. */
+/* Node, status, and who ran it. The agent and handle come along because a card
+   restored from history has no `run_started` event to build its chips from, and
+   for a playbook load the call's own arguments never carried the graph -- so
+   this read is the only place the nodes can come from. `dag.get` already returns
+   both per file; dropping them here is what left that card with a run id and an
+   empty strip. */
 delegReadDag = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
-  .then((r) => ((r && r.run && r.run.files) || []).map((f) => ({ node: f.node, status: f.status })));
+  .then((r) => ((r && r.run && r.run.files) || []).map((f) => ({
+    node: f.node, status: f.status, subagent: f.subagent || null, instance: f.instance || null,
+  })));
 
 /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a

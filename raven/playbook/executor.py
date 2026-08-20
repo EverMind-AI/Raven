@@ -48,7 +48,7 @@ _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}
 #: cannot run without. Deliberately short: ``skills`` absent means "this agent's
 #: own menu", which is a finished answer, so counting it as a gap would put a
 #: question in front of every well-formed playbook.
-FILLABLE_REQUIRED = ("agent", "prompt_template")
+FILLABLE_REQUIRED = ("subagent", "prompt_template")
 
 
 @dataclass(frozen=True)
@@ -275,6 +275,47 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
     ]
 
 
+_RUN_ID_IN_RECEIPT = re.compile(r"^DAG\s+(?:run\s+)?(\S+?)[:\s]")
+
+
+def _run_id_of(receipt: str) -> str | None:
+    """The run id out of the graph tool's receipt, or None if it is not one.
+
+    Read from the text rather than threaded through as a field because the tool
+    hands back one object whose model-facing string is the contract both this
+    and the clients already parse; a second channel for the same fact is a
+    second thing to keep in step.
+    """
+    m = _RUN_ID_IN_RECEIPT.match(receipt or "")
+    return m.group(1) if m else None
+
+
+def _with_skills(node: NodeSpec) -> str:
+    """The node's prompt with its ``skills`` folded in as a suggestion.
+
+    ``skills`` is a playbook-only field: the graph tool has no such parameter,
+    so the engine spends it here and the list travels with the task description
+    the sub-agent reads. What it says is *these are relevant, prefer them* --
+    nothing narrower. It cannot mean "only these are visible" (the menu is not
+    filtered any more) and it does not mean "you must use one": which skill a
+    step actually uses was always the sub-agent's call, made against the task in
+    front of it.
+
+    An empty list is therefore the same input as no list: no skills to point at,
+    so nothing is said. It is not a dropped instruction -- under the old filter
+    ``[]`` meant "no skills at all", but a suggestion cannot forbid anything, so
+    there is nothing here to lose. Writing ``skills: []`` has no purpose either
+    way; leaving the field out is how a step with nothing to recommend reads.
+    """
+    if not node.skills:
+        return node.prompt_template
+    named = ", ".join(node.skills)
+    return (
+        f"{node.prompt_template}\n\nSkills relevant to this step: {named}. "
+        f"Prefer them where they fit -- read a skill's SKILL.md with read_file before acting on it."
+    )
+
+
 class PlaybookExecutor:
     """Turn a matched playbook into a running graph."""
 
@@ -302,6 +343,18 @@ class PlaybookExecutor:
         #: error it can fix, rather than through a private two-round repair loop
         #: working from a cached roster and no history.
         self._compose_prompt_mode = compose_prompt_mode
+
+    @property
+    def dag_tool(self) -> Any:
+        """The private graph tool this executor dispatches through, if any.
+
+        Exposed so the host can treat it as one more live instance rather than a
+        hidden one. Everything a consumer asks a graph tool -- is this run live,
+        cancel it, send its progress somewhere -- has to answer the same for a
+        run a playbook started as for one the model composed; reaching only for
+        the registered instance answers "not happening" to all three.
+        """
+        return self._dag_tool
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
         """Address this turn's dispatch (progress + announce) like the loop
@@ -417,23 +470,22 @@ class PlaybookExecutor:
         could not work.
         """
         notes: list[str] = []
-        tool_nodes: list[dict[str, Any]] = [
-            {
-                "id": run_node.id,
-                "agent": run_node.agent,
-                "prompt_template": run_node.prompt_template,
-                "depends_on": list(run_node.depends_on),
-                # Passed through only when the author wrote them, because absent
-                # and empty mean different things: no ``skills`` key is "this
-                # agent's own menu", ``skills: []`` is "no skills at all". Sending
-                # ``[]`` for both is how a playbook asking for no skills used to
-                # get all of them.
-                **({"skills": run_node.skills} if run_node.skills is not None else {}),
-                **({"mcps": run_node.mcps} if run_node.mcps is not None else {}),
-                **({"instance": run_node.instance} if run_node.instance else {}),
-            }
-            for run_node in _namespace_run(spec.name, nodes)
-        ]
+        tool_nodes: list[dict[str, Any]] = []
+        for run_node in _namespace_run(spec.name, nodes):
+            tool_nodes.append(
+                {
+                    "id": run_node.id,
+                    "subagent": run_node.subagent,
+                    "prompt_template": _with_skills(run_node),
+                    "depends_on": list(run_node.depends_on),
+                    **({"instance": run_node.instance} if run_node.instance else {}),
+                }
+            )
+            if run_node.mcps:
+                notes.append(
+                    f"step '{run_node.id}' asks for mcp servers {sorted(run_node.mcps)}, and attaching "
+                    f"one to a sub-agent session is not implemented yet, so they are ignored"
+                )
 
         receipt = await self._dag_tool.execute(
             tool_nodes,
@@ -449,8 +501,17 @@ class PlaybookExecutor:
             return ExecutionPlan(kind="questions", reply=f"Failed to start the run: {text}", notes=notes)
         logger.info("playbook {} dispatched as a DAG run ({} nodes)", spec.name, len(tool_nodes))
         if self._background:
+            # Leads with the run id in the graph tool's own shape. A client
+            # restoring this card from history has no events to replay and
+            # recovers the run from the result line, so a receipt that names only
+            # the playbook left a reopened conversation with a dispatch it could
+            # not connect to any run -- no node chips, no way back to the graph.
+            # The model gets a handle on the run out of the same change.
+            run = _run_id_of(text)
+            lead = f"DAG {run}: " if run else ""
             reply = (
-                f"Started '{spec.name}' ({len(tool_nodes)} steps); results will be delivered when the run completes."
+                f"{lead}started '{spec.name}' ({len(tool_nodes)} steps); "
+                f"results will be delivered when the run completes."
             )
         else:
             reply = text

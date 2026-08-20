@@ -76,8 +76,8 @@ def validate_graph_nodes(
     known_ids = set(ids)
 
     for node in nodes:
-        if agents is not None and node.agent not in agents:
-            errors.append(f"node {node.id!r}: agent {node.agent!r} is not registered (known: {sorted(agents)})")
+        if agents is not None and node.subagent not in agents:
+            errors.append(f"node {node.id!r}: agent {node.subagent!r} is not registered (known: {sorted(agents)})")
         for dep in node.depends_on:
             if dep not in known_ids:
                 errors.append(f"node {node.id!r}: dependsOn {dep!r} names unknown node")
@@ -98,52 +98,34 @@ def validate_graph_nodes(
     # claim the field was stripped at execution time instead.
     stateful = None if stateful_agents is None else set(stateful_agents)
     for node in nodes:
-        if node.instance and stateful is not None and node.agent not in stateful:
+        if node.instance and stateful is not None and node.subagent not in stateful:
             errors.append(
                 f"node {node.id!r}: instance {node.instance!r} needs a stateful agent, "
-                f"and {node.agent!r} cannot hold a session -- drop the handle"
+                f"and {node.subagent!r} cannot hold a session -- drop the handle"
             )
 
-    # Rules 8/9: nodes sharing an instance continue one session — they must be
-    # the same agent (two agents sharing a handle share no session), must form a
-    # dependency chain (a shared session cannot run concurrently), and only the
-    # node that opens the session may set its skills.
+    # Rule 8: nodes sharing an instance continue one session — they must be the
+    # same agent (two agents sharing a handle share no session) and must form a
+    # dependency chain (a shared session cannot run concurrently).
+    #
+    # There was a rule 9 here: only the node opening the session could declare
+    # `skills`, because a resumed raven-loop session keeps the system prompt --
+    # and therefore the skill menu -- it was opened with. It is gone because its
+    # premise is: `skills` is no longer a menu filter carried into that first
+    # prompt. The engine folds it into the step's own prompt, which is a user
+    # message appended on every node, resumed or not, so a continuation node
+    # declaring skills now says something that takes effect.
     by_instance: dict[str, list[NodeSpec]] = {}
     for node in nodes:
         if node.instance:
             by_instance.setdefault(node.instance, []).append(node)
     for handle, members in sorted(by_instance.items()):
-        if len({m.agent for m in members}) > 1:
+        if len({m.subagent for m in members}) > 1:
             errors.append(f"instance {handle!r} is shared across different agents")
         if len(members) > 1 and not _forms_chain(members, nodes):
             errors.append(
                 f"instance {handle!r}: members have no dependency chain between them (they would run concurrently)"
             )
-        elif len(members) > 1:
-            # Stated as "do not write it after the first" rather than the older
-            # "every member must declare the same": a resumed session keeps the
-            # skill menu it was opened with, so repeating the list on members 2
-            # and 3 satisfied the old rule while having no effect -- the file read
-            # as if each step configured its own tools.
-            #
-            # ``None`` rather than a bare ``next()``: a cycle among the members
-            # leaves no head, and an unguarded generator raised ``StopIteration``
-            # out of an LLM compose/repair loop instead of the cycle error that
-            # ``_cycle_errors`` produces a few lines below.
-            member_ids = {m.id for m in members}
-            reach = _ancestors(nodes)
-            head = next((m for m in members if not (reach.get(m.id, set()) & (member_ids - {m.id}))), None)
-            late = (
-                []
-                if head is None
-                else sorted(m.id for m in members if m.id != head.id and (m.skills is not None or m.mcps is not None))
-            )
-            if late:
-                errors.append(
-                    f"instance {handle!r}: nodes {late} declare skills/mcps while continuing the session "
-                    f"node {head.id!r} opens -- a resumed session keeps the menu it opened with, so move "
-                    f"them onto {head.id!r} or give these nodes their own instance"
-                )
 
     errors.extend(_cycle_errors(nodes))
     return errors

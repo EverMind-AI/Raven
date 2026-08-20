@@ -365,7 +365,7 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   const state = c.done ? (c.ok ? 'ok' : 'bad') : 'run'
   const cost = c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
   const a = c.args as { agent?: string; instance?: string; task?: string }
-  const who = a.agent ? String(a.agent) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
+  const who = store.spawnAgentOf(a) ? store.spawnAgentOf(a) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
   let extra = ''
   if (c.kind === 'dag' && c.done && c.ok) {
     const n = { ok: 0, bad: 0, skip: 0 }
@@ -384,7 +384,7 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
     extra = bits.join(' · ')
   }
   const openTask = (): void => {
-    if (c.kind === 'spawn') store.openSpawn(a.agent ? String(a.agent) : '', c.label || '')
+    if (c.kind === 'spawn') store.openSpawn(store.spawnAgentOf(a), c.label || '')
   }
   const grid: ReactNode[] = []
   const kv = (key: string, label: string, v: ReactNode, gov?: boolean): void => {

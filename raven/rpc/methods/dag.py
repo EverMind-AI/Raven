@@ -23,6 +23,7 @@ from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._reader import DagReadError
 from raven.agent.subagent_dag._resume import read_run_reconciled
 from raven.agent.subagent_dag._store import node_live_key
+from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root
 from raven.rpc.errors import InternalError
 from raven.rpc.methods.session import _map_to_wire
@@ -40,7 +41,11 @@ def _dag_tool(agent_loop_factory: "AgentLoopFactory | None") -> Any:
     "not configured" is a normal state -- but one the client can do nothing about
     mid-call, and it must not read as an empty run.
     """
-    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    return _dag_tool_of(agent_loop_factory() if agent_loop_factory is not None else None)
+
+
+def _dag_tool_of(loop: Any) -> Any:
+    """Same, for a caller that already resolved the loop and needs both."""
     tools = getattr(loop, "tools", None) if loop is not None else None
     tool = tools.get("run_subagent_dag") if tools is not None else None
     if tool is None:
@@ -50,12 +55,22 @@ def _dag_tool(agent_loop_factory: "AgentLoopFactory | None") -> Any:
 
 async def dag_get(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """One run's structure and per-node state, read back off disk."""
-    tool = _dag_tool(agent_loop_factory)
+    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    tool = _dag_tool_of(loop)
     # The reader raises its own ValueError subclass for a malformed id or a run
     # dir that is gone. Untyped, that reaches the client as a -32603 traceback
     # instead of a message it can show.
     try:
-        run = await read_run_reconciled(tool, params.get("run_id", ""), params.get("session_key"))
+        run = await read_run_reconciled(
+            tool,
+            params.get("run_id", ""),
+            params.get("session_key"),
+            # Across every graph tool. The registered one does not know a run the
+            # playbook engine dispatched, and answering "not live" overlays
+            # interrupted on every node of it that had not finished -- the same
+            # symptom the instance rows had, on the path that reads a run back.
+            live_runs=lambda: live_run_ids(loop),
+        )
     except (DagReadError, DagValidationError) as exc:
         raise InternalError(str(exc)) from exc
     return {"run": run}

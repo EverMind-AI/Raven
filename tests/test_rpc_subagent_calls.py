@@ -472,8 +472,8 @@ def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None) ->
         json.dumps(
             {
                 "nodes": [
-                    {"id": "survey", "agent": "Researcher", "depends_on": []},
-                    {"id": "write", "agent": "Writer", "depends_on": ["survey"]},
+                    {"id": "survey", "subagent": "Researcher", "depends_on": []},
+                    {"id": "write", "subagent": "Writer", "depends_on": ["survey"]},
                 ]
             }
         ),

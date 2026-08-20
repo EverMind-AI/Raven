@@ -662,14 +662,8 @@ class AgentLoop:
         self._debug_server: SandboxDebugServer | None = None
 
         self.router = router
-        # Playbook funnel (opt-in): matching failures must never break a turn,
-        # and a runtime that fails to build just leaves the feature off.
         self._playbooks = None
-        if playbook_config is not None and playbook_config.enabled:
-            try:
-                self._playbooks = self._build_playbook_runtime(playbook_config)
-            except Exception:
-                logger.opt(exception=True).warning("Playbook runtime failed to build; feature disabled")
+        self._playbook_config = playbook_config
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
@@ -751,6 +745,13 @@ class AgentLoop:
             self.hooks.append(ResponseModifierAdapter(response_modifier))
 
         self._register_default_tools()
+        # After the registry is populated, and after ``_mcp_servers`` is set: the
+        # runtime reads both to build the generator's inventory of what this
+        # install can actually offer. Built here rather than beside the other
+        # fields above because it is the only assembly in this constructor with
+        # that dependency, and the two orderings are not compatible -- see
+        # ``_build_playbook_runtime``.
+        self._build_playbooks()
         self._apply_disabled_tools()
 
         # LazyProvider defers the litellm import behind a background prewarm
@@ -982,22 +983,6 @@ class AgentLoop:
                 ask=self._confirm_graph,
             )
         )
-        # The only entry into the playbook library. Registered whenever the
-        # library has something to offer -- it is how a playbook gets used at all
-        # now, not a back door for the cases a matcher missed.
-        if self._playbooks is not None and not self._playbooks.empty:
-            from raven.agent.tools.load_playbook import LoadPlaybookTool
-
-            self.tools.register(LoadPlaybookTool(self._playbooks))
-        # Creation registers whenever the feature is on -- an empty library is
-        # exactly when capturing the first workflow matters.
-        if self._playbooks is not None:
-            from raven.agent.tools.create_playbook import CreatePlaybookTool
-            from raven.config.update import set_playbook_disabled
-
-            self.tools.register(
-                CreatePlaybookTool(self._playbook_generator, self._playbook_store, set_playbook_disabled)
-            )
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -1089,6 +1074,50 @@ class AgentLoop:
                 ),
                 first=True,
             )
+
+    def _build_playbooks(self) -> None:
+        """Build the playbook runtime and register its two entry tools.
+
+        Runs after ``_register_default_tools`` because the runtime's generator
+        needs a real inventory of what this install offers, and that is
+        ``self._mcp_servers`` plus a *populated* tool registry. Registering the
+        two playbook tools from inside ``_register_default_tools`` was what made
+        the two orderings look compatible: the runtime had to exist before
+        registration, yet could not be built until after it.
+
+        It read ``self._mcp_servers`` several assignments before that field
+        existed, so ``enabled: true`` raised ``AttributeError``, the guard below
+        swallowed it, and the whole feature was off on every install that asked
+        for it -- with one warning line as the only trace. No test caught it
+        because none of them construct an ``AgentLoop`` with a playbook config;
+        they assemble the runtime directly, which is the one path production
+        never takes.
+
+        A failure to build still leaves the feature off rather than breaking the
+        loop: a library that cannot load is not a reason for the agent to refuse
+        every turn.
+        """
+        cfg = self._playbook_config
+        if cfg is None or not cfg.enabled:
+            return
+        try:
+            self._playbooks = self._build_playbook_runtime(cfg)
+        except Exception:
+            logger.opt(exception=True).warning("Playbook runtime failed to build; feature disabled")
+            return
+        # The only entry into the library. Registered whenever it has something
+        # to offer -- it is how a playbook gets used at all now, not a back door
+        # for the cases a matcher missed.
+        if not self._playbooks.empty:
+            from raven.agent.tools.load_playbook import LoadPlaybookTool
+
+            self.tools.register(LoadPlaybookTool(self._playbooks))
+        # Creation registers whenever the feature is on -- an empty library is
+        # exactly when capturing the first workflow matters.
+        from raven.agent.tools.create_playbook import CreatePlaybookTool
+        from raven.config.update import set_playbook_disabled
+
+        self.tools.register(CreatePlaybookTool(self._playbook_generator, self._playbook_store, set_playbook_disabled))
 
     def _build_playbook_runtime(self, cfg: "PlaybookConfig"):
         """Assemble the playbook funnel from pieces this loop already owns.
@@ -2130,12 +2159,54 @@ class AgentLoop:
                 channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
             )
 
+    def dag_tools(self) -> list[Any]:
+        """Every live graph tool: the registered one, plus the playbook engine's.
+
+        Two instances exist by design -- one on the model's tool table, one
+        private to the playbook executor, because a ``mode: dag`` playbook is
+        dispatched by the engine rather than by the model. They share the agent
+        table, the dispatch gate, the quota and the announce path, and everything
+        a *consumer* asks about a run has to be shared the same way: whether it
+        is live, cancelling it, where its progress goes. Reaching only for the
+        registered instance answers "not happening" to all three for a run a
+        playbook started -- no progress events reach the page, so the graph never
+        appears in the conversation at all; the cancel button reports False; and
+        the instance rows read the handle as finished.
+
+        Which of the two dispatched a run is not a distinction any consumer
+        should be able to observe, so the list is what they are given.
+        """
+        tools = []
+        if (registered := self.tools.get("run_subagent_dag")) is not None:
+            tools.append(registered)
+        if self._playbooks is not None and (private := self._playbooks.dag_tool) is not None:
+            tools.append(private)
+        return tools
+
+    def active_dag_run_ids(self) -> set[str]:
+        """Run ids in flight across every graph tool instance."""
+        live: set[str] = set()
+        for tool in self.dag_tools():
+            try:
+                live.update(tool.active_run_ids())
+            except Exception:  # noqa: BLE001 - liveness is advisory, never fatal
+                continue
+        return live
+
+    def cancel_dag_run(self, run_id: str) -> bool:
+        """Stop one in-flight run, whichever instance owns it."""
+        return any(tool.request_cancel(run_id) for tool in self.dag_tools())
+
     def set_dag_progress_sink(self, sink) -> None:
-        """Late-bind the DAG tool's progress sink (host wires it to the web
-        channel's emitter so run_subagent_dag events reach the web UI)."""
+        """Late-bind the graph tools' progress sink (host wires it to the web
+        channel's emitter so a run's events reach the web UI).
+
+        Every instance, not just the registered one -- see :meth:`dag_tools`.
+        """
         self._dag_progress_sink = sink
-        if (tool := self.tools.get("run_subagent_dag")) is not None and hasattr(tool, "set_progress_sink"):
-            tool.set_progress_sink(sink)
+        for tool in self.dag_tools():
+            if hasattr(tool, "set_progress_sink"):
+                tool.set_progress_sink(sink)
 
     def set_skills_sink(self, sink) -> None:
         """Late-bind the sink that reports SkillForge-injected skills to the web

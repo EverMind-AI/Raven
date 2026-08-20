@@ -106,7 +106,7 @@ ${params.<key>}. Anything fixable at generation time must not be a param.
 
 # nodes (dag mode)
 
-- `agent` must come from the available-agents list below.
+- `subagent` must come from the available-agents list below.
 - Configuration hangs on the node, not the role: `skills`/`mcps` are what
   this step injects; the same agent on several steps may differ per step.
   Skills may only reference names from the candidate list.
@@ -189,7 +189,7 @@ def build_generation_prompt(
     """
     roster = "\n".join(f"- {name}: {desc}" for name, desc in agent_roster.items())
     parts = [
-        "# Available agents (the only valid nodes[].agent values)\n" + roster,
+        "# Available agents (the only valid nodes[].subagent values)\n" + roster,
         "# Candidate skills (the only referencable names)\n" + _render_skills(skill_candidates, user_pinned_skills),
         "# Available mcp\n" + (", ".join(known_mcp) if known_mcp else "(none; leave mcps empty)"),
     ]
@@ -223,13 +223,49 @@ def build_revise_prompt(current: PlaybookSpec, user_feedback: str) -> str:
     )
 
 
+def _node_schema_of(schema: dict[str, Any]) -> dict[str, Any]:
+    """The node definition a spec's ``nodes`` points at, whatever it is titled.
+
+    Found by following the reference rather than by name: ``nodes`` is optional,
+    so pydantic wraps it in ``anyOf`` and the ``$ref`` sits a level down, and the
+    definition is titled after the class the alias points at. Both are shapes a
+    name-and-one-level lookup gets wrong by returning ``{}`` -- silently, which
+    is how an empty ``items`` reached the model.
+    """
+
+    def first_ref(node: Any) -> str:
+        if isinstance(node, dict):
+            if isinstance(node.get("$ref"), str):
+                return node["$ref"]
+            for v in node.values():
+                if found := first_ref(v):
+                    return found
+        elif isinstance(node, list):
+            for v in node:
+                if found := first_ref(v):
+                    return found
+        return ""
+
+    ref = first_ref((schema.get("properties") or {}).get("nodes"))
+    return (schema.get("$defs") or {}).get(ref.rsplit("/", 1)[-1]) or {}
+
+
 COMPOSE_TOOL_NAME = "emit_graph"
 
 
 def compose_tool() -> list[dict[str, Any]]:
-    """Forced-call schema for prompt-mode graph composition: a bare node list."""
+    """Forced-call schema for prompt-mode graph composition: a bare node list.
+
+    The node schema is found through the model's own reference rather than by
+    name. ``NodeSpec`` is an alias of ``DagNodeSpec`` since the two definitions
+    merged, so pydantic titles the definition ``DagNodeSpec`` and a lookup by the
+    alias returned ``{}`` -- ``items`` went out empty, leaving the prose in
+    ``build_compose_prompt`` as the only field guidance the call had. That was
+    survivable while the two agreed; a model following prose that names a field
+    the model forbids gets one repair round holding nothing but "not permitted".
+    """
     schema = PlaybookSpec.model_json_schema(by_alias=True)
-    node_schema = schema.get("$defs", {}).get("NodeSpec", {})
+    node_schema = _node_schema_of(schema)
     return [
         {
             "type": "function",
@@ -252,8 +288,8 @@ def build_compose_prompt(prompts_filled: str, agent_roster: dict[str, str], para
     return (
         "Assemble a task graph following the guidance below and submit the "
         "node list through emit_graph (camelCase fields:\n"
-        "id / agent / promptTemplate / dependsOn / skills / mcps / instance / confirm).\n"
-        "Rules: agent must come from the available list; every "
+        "id / subagent / promptTemplate / dependsOn / inputs / instance).\n"
+        "Rules: subagent must come from the available list; every "
         "{{ <upstreamId>.output }} reference must have that upstream in the "
         "node's dependsOn;\n"
         "nodes with no dependency between them run in parallel; the graph is "

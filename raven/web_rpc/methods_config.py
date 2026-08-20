@@ -113,6 +113,7 @@ def register_config_methods(
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
     from raven.agent.subagent.test_state import TestStateStore
     from raven.agent.subagent_dag._resume import read_run_reconciled
+    from raven.agent.subagent_dag.live import cancel_run, live_run_ids
     from raven.agent.workdir import validate_override
     from raven.config.schema import SubagentsConfig
     from raven.config.update_subagents import (
@@ -197,12 +198,11 @@ def register_config_methods(
 
     async def _instances(params: dict) -> dict:
         manager = _subagent_manager()
-        dag_tool = _dag_tool()
         return {
             "instances": reconcile_instance_rows(
                 get_registry().list_instances(params.get("session_key")),
                 live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
-                active_run_ids=(lambda: set(dag_tool.active_run_ids()) if dag_tool is not None else set()),
+                active_run_ids=(lambda: live_run_ids(agent)),
             )
         }
 
@@ -210,16 +210,23 @@ def register_config_methods(
         return {"removed": await get_registry().delete_session(params.get("session_key", ""))}
 
     async def _dag_cancel(params: dict) -> dict:
-        tool = _dag_tool()
-        if tool is None:
-            return {"cancelled": False}
-        return {"cancelled": bool(tool.request_cancel(params.get("run_id", "")))}
+        # Across every instance: a playbook's run is dispatched by the engine's
+        # private graph tool, so asking only the registered one reported False
+        # for a run that was live -- the page's stop button did nothing.
+        return {"cancelled": cancel_run(agent, params.get("run_id", ""))}
 
     async def _dag_get(params: dict) -> dict:
         tool = _dag_tool()
         if tool is None:
             raise RuntimeError("raven.subagents.dag.get requires a live run_subagent_dag tool")
-        return {"run": await read_run_reconciled(tool, params.get("run_id", ""), params.get("session_key"))}
+        return {
+            "run": await read_run_reconciled(
+                tool,
+                params.get("run_id", ""),
+                params.get("session_key"),
+                live_runs=lambda: live_run_ids(agent),
+            )
+        }
 
     async def _dag_node(params: dict) -> dict:
         tool = _dag_tool()

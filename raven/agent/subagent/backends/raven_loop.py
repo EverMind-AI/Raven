@@ -15,7 +15,11 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, SubagentActionAbortedError
+from raven.agent.subagent.backends.base import (
+    IN_SUBAGENT_RUN,
+    SubagentActionAbortedError,
+    SubagentNoAnswerError,
+)
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
@@ -254,6 +258,11 @@ class RavenLoopBackend:
             ]
         )
         messages.append({"role": "user", "content": task})
+        # Where this run's own turns begin. Taken here rather than assumed to be
+        # index 2, because a resumed instance arrives with its whole history in
+        # front of the task -- slicing from a constant would replay every earlier
+        # node's work as this node's.
+        own_turns_from = len(messages)
 
         iteration = 0
         final_result: str | None = None
@@ -313,6 +322,11 @@ class RavenLoopBackend:
                             "content": wrap_untrusted(result, source=tool_call.name),
                         }
                     )
+                    # In flight, not at the end: the collector is how a panel
+                    # watches a running node, and an account that only exists
+                    # once the answer does is not a live view of anything. Same
+                    # reason the acp lane republishes on every update.
+                    activity.note_transcript(messages[own_turns_from:])
                     if getattr(result, "abort_action", False):
                         raise SubagentActionAbortedError
             else:
@@ -320,8 +334,45 @@ class RavenLoopBackend:
                 break
 
         if final_result is None:
-            final_result = "Task completed but no final response was generated."
+            # The rounds ran out while the model was still calling tools. What it
+            # gathered is all in ``messages``, so ask once more with no tools at
+            # all: unable to call another, it answers from what it has. Observed
+            # need -- a research node spent all fifteen rounds on web_fetch and
+            # wrote nothing, and the run's whole output was the placeholder that
+            # used to sit here.
+            logger.warning(
+                "Subagent [{}] used all {} rounds without answering; asking once with no tools",
+                task_id,
+                self._MAX_ITERATIONS,
+            )
+            wrap_up = await provider.chat_with_retry(
+                messages=[
+                    *messages,
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have used the whole tool budget for this task. Answer now from what "
+                            "you already gathered above -- no more tool calls are available. If it is "
+                            "incomplete, say what you have and name what is missing."
+                        ),
+                    },
+                ],
+                model=model,
+            )
+            final_result = (wrap_up.content or "").strip() or None
+            activity.note_usage(wrap_up.usage)
+        if final_result is None:
+            # Nothing to hand back. Raised rather than returned, so the node
+            # fails instead of completing with a sentence the next step would
+            # merge as if it were the work.
+            raise SubagentNoAnswerError(f"sub-agent used all {self._MAX_ITERATIONS} rounds and produced no answer")
         logger.info("Subagent [{}] completed successfully", task_id)
+        # The final state of the account, for whoever opens the node later. The
+        # loop above already republished it after every tool result, so this call
+        # only matters for a run that answered without calling anything -- and
+        # for keeping the last write the complete one. The reader supplies the
+        # prompt and the answer itself, so only the middle goes here.
+        activity.note_transcript(messages[own_turns_from:])
         if on_messages is not None:
             messages.append({"role": "assistant", "content": final_result})
             on_messages(messages)

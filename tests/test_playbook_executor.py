@@ -49,13 +49,13 @@ def _dag_spec(**over):
         nodes=[
             NodeSpec(
                 id="pull",
-                agent="data-raven",
+                subagent="data-raven",
                 prompt_template="pull the feedback for ${params.week_of}",
                 skills=["sql-queries"],
             ),
             NodeSpec(
                 id="report",
-                agent="content-raven",
+                subagent="content-raven",
                 prompt_template="write the weekly report for ${params.audience} from {{ pull.output_path }}",
                 depends_on=["pull"],
                 mcps=["slack"],
@@ -103,7 +103,7 @@ async def test_a_blank_node_field_is_a_gap_and_fills_closes_it():
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
         nodes=[
-            NodeSpec(id="draft", agent="content-raven", prompt_template=""),
+            NodeSpec(id="draft", subagent="content-raven", prompt_template=""),
         ]
     )
 
@@ -154,7 +154,7 @@ async def test_an_empty_skills_list_is_written_not_blank():
     reach, which is the opposite of what the author asked for.
     """
     ex = PlaybookExecutor(dag_tool=FakeDagTool())
-    spec = _dag_spec(nodes=[NodeSpec(id="pull", agent="data-raven", prompt_template="go", skills=[])])
+    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", skills=[])])
 
     plan = await ex.execute(spec, params={"week_of": "w"}, fills={"pull": {"skills": ["anything"]}})
 
@@ -179,14 +179,17 @@ async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
     assert nodes["report"]["depends_on"] == [nodes["pull"]["id"]]
     # The agent the author named reaches the graph tool as the node's own field:
     # no backend is built here and no synthetic per-node agent name is invented.
-    assert nodes["pull"]["agent"] == "data-raven"
-    assert nodes["report"]["agent"] == "content-raven"
-    # Per-node configuration travels as node fields too, and only where written:
-    # a node that declared no skills must not arrive carrying an empty list,
-    # which the registry would read as "no skills at all".
-    assert nodes["pull"]["skills"] == ["sql-queries"]
-    assert "skills" not in nodes["report"]
-    assert nodes["report"]["mcps"] == ["slack"]
+    assert nodes["pull"]["subagent"] == "data-raven"
+    assert nodes["report"]["subagent"] == "content-raven"
+    # skills is a playbook-only field now: the graph tool has no such parameter,
+    # so the engine spends it into the step's prompt and passes neither it nor
+    # mcps on. A node that declared none must not gain a sentence about them.
+    assert "skills" not in nodes["pull"] and "mcps" not in nodes["report"]
+    assert "sql-queries" in nodes["pull"]["prompt_template"]
+    assert "skills" not in nodes["report"]["prompt_template"].lower()
+    # mcps cannot be honoured at all, so it is reported rather than written into
+    # the prompt as an instruction the sub-agent has no tool to follow.
+    assert any("mcp" in n and "slack" in n for n in plan.notes)
 
 
 async def test_executor_namespaces_the_instance_handle_per_run():
@@ -195,8 +198,8 @@ async def test_executor_namespaces_the_instance_handle_per_run():
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
         nodes=[
-            NodeSpec(id="a", agent="data-raven", prompt_template="one", instance="shared"),
-            NodeSpec(id="b", agent="data-raven", prompt_template="two", depends_on=["a"], instance="shared"),
+            NodeSpec(id="a", subagent="data-raven", prompt_template="one", instance="shared"),
+            NodeSpec(id="b", subagent="data-raven", prompt_template="two", depends_on=["a"], instance="shared"),
         ]
     )
 
@@ -257,10 +260,10 @@ def _prompt_spec():
 
 GOOD_GRAPH = {
     "nodes": [
-        {"id": "scan", "agent": "research-raven", "promptTemplate": "breadth-scan AcmeAI"},
+        {"id": "scan", "subagent": "research-raven", "promptTemplate": "breadth-scan AcmeAI"},
         {
             "id": "sum",
-            "agent": "content-raven",
+            "subagent": "content-raven",
             "promptTemplate": "summarize {{ scan.output }}",
             "dependsOn": ["scan"],
         },
@@ -306,7 +309,7 @@ async def test_prompt_mode_composes_when_there_is_no_caller_to_hand_it_to():
 
 
 async def test_prompt_mode_bad_graph_gets_one_repair_then_degrades():
-    bad = {"nodes": [{"id": "a", "agent": "research-raven", "promptTemplate": "use {{ ghost.output }}"}]}
+    bad = {"nodes": [{"id": "a", "subagent": "research-raven", "promptTemplate": "use {{ ghost.output }}"}]}
     provider = ComposeProvider([json.dumps(bad), json.dumps(bad)])
     ex = PlaybookExecutor(dag_tool=FakeDagTool(), provider=provider, compose_prompt_mode=True)
     plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
@@ -421,7 +424,7 @@ async def test_the_listing_carries_what_a_caller_cannot_guess(tmp_path: Path):
 async def test_the_listing_names_the_fields_left_blank(tmp_path: Path):
     rt = _runtime(
         tmp_path,
-        [_dag_spec(nodes=[NodeSpec(id="draft", agent="content-raven", prompt_template="")])],
+        [_dag_spec(nodes=[NodeSpec(id="draft", subagent="content-raven", prompt_template="")])],
     )
     detail = dict(rt.listing())["weekly-feedback"]
 
@@ -515,8 +518,10 @@ async def test_node_ids_and_references_are_rewritten_in_step():
     assert report["depends_on"] == [pull["id"]]
     assert ("{{ %s.output_path }}" % pull["id"]) in report["prompt_template"]
     assert "{{ pull.output_path }}" not in report["prompt_template"]
-    # Params were already compiled in; the rewrite must not disturb them.
-    assert "pull the feedback for 2026-08-10" == pull["prompt_template"]
+    # Params were already compiled in; the rewrite must not disturb them. The
+    # skills sentence the engine folds in sits after the author's prompt, so the
+    # prompt still starts with exactly what the playbook wrote.
+    assert pull["prompt_template"].startswith("pull the feedback for 2026-08-10")
 
 
 async def test_rewrite_leaves_foreign_references_alone():
@@ -526,7 +531,7 @@ async def test_rewrite_leaves_foreign_references_alone():
         nodes=[
             NodeSpec(
                 id="pull",
-                agent="data-raven",
+                subagent="data-raven",
                 prompt_template="read {{ ref:notes/summary.md }} then {{ elsewhere.output }}",
             )
         ]
@@ -539,3 +544,61 @@ async def test_rewrite_leaves_foreign_references_alone():
     # An id outside this graph is not ours to rewrite; the runner's own
     # whitelist decides what happens to it.
     assert "{{ elsewhere.output }}" in template
+
+
+async def test_an_empty_skills_list_is_the_same_input_as_no_list():
+    """``skills: []`` adds nothing to the prompt, and is not worth a note either.
+
+    The field points at skills that may help; an empty list points at none, which
+    is what leaving the field out already says. Nothing was declared and dropped
+    -- there is no instruction here to lose -- so the step's prompt is the
+    author's prompt, unchanged and unannotated.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", skills=[])])
+
+    plan = await ex.execute(spec, params={"week_of": "w"})
+
+    assert plan.kind == "dag"
+    assert tool.calls[0]["nodes"][0]["prompt_template"] == "go"
+    assert not [n for n in plan.notes if "skill" in n.lower()]
+
+
+async def test_mcps_are_reported_rather_than_written_into_the_prompt():
+    """A step cannot be told to use a tool it will not have.
+
+    The sub-agent registry has no mcp path at all, so a sentence naming a server
+    would be an instruction with nothing behind it -- worse than the note,
+    because the sub-agent would either refuse or invent. Reported so a wrong
+    result stays attributable.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(nodes=[NodeSpec(id="pull", subagent="data-raven", prompt_template="go", mcps=["github"])])
+
+    plan = await ex.execute(spec, params={"week_of": "w"})
+
+    assert plan.kind == "dag"
+    node = tool.calls[0]["nodes"][0]
+    assert "mcps" not in node
+    assert "github" not in node["prompt_template"]
+    assert any("github" in n and "not implemented" in n for n in plan.notes)
+
+
+async def test_the_dispatch_receipt_names_the_run() -> None:
+    """A client restoring the card from history has no events, only this line.
+
+    It recovers the run from the result text, in the graph tool's own shape, so a
+    receipt naming only the playbook left a reopened conversation showing a
+    dispatch it could not connect to any run: no node states, no way back to the
+    graph. The model gets a handle on the run out of the same line.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+
+    plan = await ex.execute(_dag_spec(), params={"week_of": "w"})
+
+    assert plan.kind == "dag"
+    assert plan.reply.startswith("DAG "), plan.reply
+    assert "weekly-feedback" in plan.reply and "2 steps" in plan.reply

@@ -43,6 +43,7 @@ from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root, spawn_root
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
@@ -210,14 +211,10 @@ def _live_dag_run_ids(agent_loop_factory: "AgentLoopFactory | None") -> set[str]
     this to decide whether a non-terminal node can still make progress.
     """
     loop = _safe_invoke_factory(agent_loop_factory)
-    tools = getattr(loop, "tools", None) if loop is not None else None
-    tool = tools.get("run_subagent_dag") if tools is not None else None
-    if tool is None:
-        return set()
-    try:
-        return set(tool.active_run_ids())
-    except Exception:  # noqa: BLE001 - liveness is advisory, never fatal
-        return set()
+    # Through the loop rather than the tool registry: a playbook's run is
+    # dispatched by the engine's private graph tool, which is not on that
+    # registry, so reading it alone reported a live run as finished.
+    return live_run_ids(loop)
 
 
 def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str, Any]]:

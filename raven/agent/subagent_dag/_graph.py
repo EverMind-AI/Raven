@@ -31,7 +31,7 @@ _AGENT_PATTERN = r"^(?:\S(?:.*\S)?)?$"
 # Fields a node cannot run without. A playbook may leave one blank on purpose --
 # ``load_playbook`` reports it as a gap for the model to fill -- so "blank" has to
 # survive parsing and be caught here instead.
-_REQUIRED_NON_BLANK = ("agent", "prompt_template")
+_REQUIRED_NON_BLANK = ("subagent", "prompt_template")
 
 
 class DagNodeSpec(BaseModel):
@@ -52,11 +52,14 @@ class DagNodeSpec(BaseModel):
         id (`str`):
             Node id, unique across the session rather than just this
             graph -- it is how a later graph names this node's output.
-        agent (`str`):
+        subagent (`str`):
             Which agent runs this node: a name on the agent table, exactly as the
             roster advertises it. Any kind will do -- a built-in raven agent, a
-            cli agent, an acp one -- which is what the rename from ``subagent``
-            records: the field no longer means "a third-party agent".
+            cli agent, an acp one. The field names a role rather than a
+            provenance: whichever row it points at, that row runs this step as a
+            child of the calling turn. The table it indexes is spelled
+            ``subagents.agents[]`` -- the container lists identities, this field
+            says which one performs the step.
         prompt_template (`str`):
             Template rendered into the node's prompt file.
         depends_on (`list[str]`):
@@ -89,7 +92,7 @@ class DagNodeSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
 
     id: str = Field(pattern=_ID_PATTERN)
-    agent: str = Field(default="", pattern=_AGENT_PATTERN)
+    subagent: str = Field(default="", pattern=_AGENT_PATTERN)
     prompt_template: str = ""
     depends_on: list[str] = Field(default_factory=list)
     skills: list[str] | None = None

@@ -158,7 +158,10 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "one, and to re-do work under the same name give the node a new id."
             ),
         },
-        "agent": {"type": "string", "description": "Name of the agent that runs this node, from the roster."},
+        "subagent": {
+            "type": "string",
+            "description": "Name of the agent that runs this node, from the roster.",
+        },
         "prompt_template": {
             "type": "string",
             "description": (
@@ -189,37 +192,21 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
             ),
         },
-        "skills": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Optional: narrow this node's session to these skills. Only a built-in raven agent "
-                "can take them; elsewhere the field is reported ignored. An empty list means no "
-                "skills at all. On a node that continues another node's `instance`, leave it out -- "
-                "a resumed session keeps the menu it opened with."
-            ),
-        },
-        "mcps": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": (
-                "Optional: mcp servers for this node's session. Declaring them is accepted, but "
-                "attaching one is not implemented yet, so the list is reported ignored."
-            ),
-        },
         "instance": {
             "type": "string",
             "description": (
                 "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
                 "session, including across separate runs in this conversation. Only give the same "
                 "handle to several nodes of a sub-agent the roster tags [stateful] -- elsewhere it "
-                "carries no context and the graph is rejected. Omit it and one is assigned "
-                "automatically and reported in the run summary when the node finishes, so any node "
-                "can be continued later. To order nodes without sharing a session, use depends_on."
+                "carries no context and the graph is rejected. Omit it and a [stateful] "
+                "sub-agent's node is given one automatically, reported in the run summary when "
+                "the node finishes, so that node can be continued later; a node on any other "
+                "sub-agent gets none and cannot be continued. To order nodes without sharing a "
+                "session, use depends_on."
             ),
         },
     },
-    "required": ["id", "agent", "prompt_template"],
+    "required": ["id", "subagent", "prompt_template"],
     "additionalProperties": False,
 }
 
@@ -606,7 +593,7 @@ class SubAgentDagTool(Tool):
         }
 
     def _node_schema(self) -> dict[str, Any]:
-        """Node schema with ``agent`` constrained to the agent table.
+        """Node schema with ``subagent`` constrained to the agent table.
 
         A misspelled name is only caught in ``run_dag``, and it rejects the
         whole graph, so one typo costs the entire call; the enum moves that to
@@ -621,7 +608,7 @@ class SubAgentDagTool(Tool):
         """
         schema = deepcopy(_NODE_SCHEMA)
         if names := self._registry.names():
-            schema["properties"]["agent"]["enum"] = names
+            schema["properties"]["subagent"]["enum"] = names
         return schema
 
     def _resolve_node(self, node: DagNodeSpec) -> Any:
@@ -635,7 +622,7 @@ class SubAgentDagTool(Tool):
         every playbook node unattributable in a trace.
         """
         build = _NodeBuild(skills_allow=node.skills) if node.skills is not None else None
-        return self._registry.backend(node.agent, build=build)
+        return self._registry.backend(node.subagent, build=build)
 
     def _validation_error(self, exc: DagValidationError) -> str:
         """Render a rejected graph as the tool result, with the way back.
@@ -677,7 +664,7 @@ class SubAgentDagTool(Tool):
         minted: set[str] = set()
         nodes: list[DagNodeSpec] = []
         for node in spec.nodes:
-            caps = capabilities.get(node.agent, AgentCapabilities())
+            caps = capabilities.get(node.subagent, AgentCapabilities())
             if node.instance or not caps.stateful:
                 nodes.append(node)
                 continue
@@ -725,11 +712,11 @@ class SubAgentDagTool(Tool):
             # as well so a misspelled name is still a refusal the model can fix
             # in the same turn, not an announcement a turn later.
             for node in spec.nodes:
-                if self._registry.get(node.agent) is None:
-                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.agent}'")
-                if not self._registry.get(node.agent).enabled:  # type: ignore[union-attr]
+                if self._registry.get(node.subagent) is None:
+                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+                if not self._registry.get(node.subagent).enabled:  # type: ignore[union-attr]
                     raise DagValidationError(
-                        f"node '{node.id}' names agent '{node.agent}', which is turned off on this "
+                        f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
                         f"machine -- enable it in the agents settings, or point the node at another agent"
                     )
         except DagValidationError as exc:
@@ -787,9 +774,17 @@ class SubAgentDagTool(Tool):
 
         The gate is graph-level and there is exactly one of it, which puts a
         requirement on what the question shows: approving a graph means approving
-        every step in it, so the steps that reach outside this machine have to be
-        visible in the question. Hence the per-node lines rather than a bare
-        "run 6 nodes?".
+        every step in it. The per-node lines are what that buys so far -- an id
+        and an agent name per step, rather than a bare "run 6 nodes?".
+
+        Not yet what the design asks for. It calls for marking the steps whose
+        effects reach outside this machine, so a yes is informed; that is still
+        missing, and the honest reason is that the criterion it proposes -- the
+        node's agent holding a write-capable tool or mcp -- cannot discriminate
+        today. Every built-in agent carries write_file / edit_file / exec, so the
+        mark would land on every node of a typical graph and inform nobody. It
+        needs a narrower notion of "reaches outside" (publishing, sending,
+        spending) than "can write", and that notion does not exist yet.
 
         With no ask channel wired the graph runs. Not every surface has a way to
         put a question to a human (a cron trigger, an IM channel with no
@@ -804,7 +799,7 @@ class SubAgentDagTool(Tool):
                 len(spec.nodes),
             )
             return True
-        lines = [f"- {node.id}: {node.agent}" for node in spec.nodes]
+        lines = [f"- {node.id}: {node.subagent}" for node in spec.nodes]
         question = "Run this {} step graph?\n{}".format(len(spec.nodes), "\n".join(lines))
         try:
             answer = await self._ask(origin.conversation, question)
