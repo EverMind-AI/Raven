@@ -21,7 +21,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(install_mod, "_config_path", lambda: cfg_path)
     monkeypatch.setattr(ledger_mod, "_plugins_dir", lambda: tmp_path / "plugins")
     (tmp_path / "plugins").mkdir()
-    import raven.agent.tools.mcp_oauth as oauth
+    import raven.mcp.oauth as oauth
 
     monkeypatch.setattr(oauth, "delete_credentials", lambda server: None)
     # The handlers read the loader's own config path (language, configured
@@ -84,7 +84,7 @@ class _FakeLoop:
     def __init__(self, name: str, state: str):
         self.mcp_manager = _FakeManager(name, state)
 
-    async def sync_mcp(self, servers) -> None:
+    async def apply_mcp_config(self, servers) -> None:
         pass
 
     async def _mcp_executor(self):
@@ -97,7 +97,7 @@ def _factory(loop):
 
 def _own_attrs(obj) -> list[str]:
     """Everything the fake itself defines: instance attributes *and* the methods
-    on its class. The original bug shipped as fake *methods* (`sync_mcp`,
+    on its class. The original bug shipped as fake *methods* (`apply_mcp_config`,
     `_mcp_executor`), so an instance-only check would have missed it."""
     from_class = [k for k, v in vars(type(obj)).items() if not k.startswith("__")]
     return sorted(set(vars(obj)) | set(from_class))
@@ -110,7 +110,7 @@ def test_the_fake_loop_does_not_invent_a_contract() -> None:
     for attr in _own_attrs(fake):
         assert hasattr(AgentLoop, attr), f"_FakeLoop.{attr} does not exist on AgentLoop"
 
-    for attr in ("sync_mcp", "_mcp_executor", "mcp_manager"):
+    for attr in ("apply_mcp_config", "_mcp_executor", "mcp_manager"):
         assert hasattr(AgentLoop, attr), f"AgentLoop is missing {attr}"
 
 
@@ -122,7 +122,7 @@ def test_the_fake_manager_does_not_invent_a_contract() -> None:
     Methods only -- a fake's instance attributes are its own bookkeeping (what it
     recorded, what it was told to answer), which the real manager has no reason
     to carry."""
-    from raven.agent.tools.mcp_manager import MCPConnectionManager
+    from raven.mcp.manager import MCPConnectionManager
 
     methods = [k for k, v in vars(_FakeManager).items() if not k.startswith("__") and callable(v)]
     assert methods, "the guard would pass vacuously"
@@ -179,7 +179,7 @@ async def test_a_connect_parked_at_the_browser_is_pending_not_a_failure(monkeypa
     """
     entry = _entry("oauth")
     _patch_catalog(monkeypatch, entry)
-    monkeypatch.setattr("raven.agent.tools.mcp_oauth.auth_wait_servers", lambda: {"svc"})
+    monkeypatch.setattr("raven.mcp.oauth.auth_wait_servers", lambda: {"svc"})
     loop = _FakeLoop("svc", "auth_required")
 
     r = await rpc_plughub.plug_install({"id": "svc"}, agent_loop_factory=_factory(loop))
@@ -281,7 +281,7 @@ async def test_auth_returns_as_soon_as_the_flow_reaches_the_browser(_isolated, m
     )
     parked: list[str] = []
     monkeypatch.setattr(
-        "raven.agent.tools.mcp_oauth.pending_url",
+        "raven.mcp.oauth.pending_url",
         lambda server: parked[0] if parked else None,
     )
 
@@ -311,7 +311,7 @@ async def test_auth_does_not_answer_with_the_link_it_is_about_to_supersede(_isol
         json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
     )
     urls = ["https://idp.example/authorize?state=old"]
-    monkeypatch.setattr("raven.agent.tools.mcp_oauth.pending_url", lambda server: urls[-1] if urls else None)
+    monkeypatch.setattr("raven.mcp.oauth.pending_url", lambda server: urls[-1] if urls else None)
 
     class _Manager(_FakeManager):
         async def connect(self, name, cfg, *, executor_provider=None, interactive: bool = True):
@@ -325,7 +325,7 @@ async def test_auth_does_not_answer_with_the_link_it_is_about_to_supersede(_isol
 
     await rpc_plughub.plug_auth({"name": "svc"}, agent_loop_factory=_factory(loop))
 
-    from raven.agent.tools.mcp_oauth import pending_url
+    from raven.mcp.oauth import pending_url
 
     assert pending_url("svc").endswith("state=new"), "returned on the superseded link"
 
@@ -362,7 +362,7 @@ async def test_toggle_waits_for_the_disconnect_it_asked_for(_isolated) -> None:
     )
 
     class _Loop(_FakeLoop):
-        async def sync_mcp(self, servers) -> None:
+        async def apply_mcp_config(self, servers) -> None:
             await asyncio.sleep(0.15)  # the disconnect lands well after the kick
             self.mcp_manager.state = "disconnected"
 

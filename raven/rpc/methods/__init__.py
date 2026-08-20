@@ -153,7 +153,7 @@ def register_aligned_methods_except_system(
     """
     register_cli_methods(dispatcher, confirm_broker=confirm_broker)
     register_setup_methods(dispatcher)
-    register_reload_methods(dispatcher)
+    register_reload_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagent_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)

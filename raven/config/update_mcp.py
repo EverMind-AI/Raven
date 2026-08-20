@@ -45,7 +45,7 @@ _CANONICAL_KEY = {
 #: *future* keys is what persists a connection state true for a single instant.
 #: ``raven.mcp.list`` is tested against this set, so a live key added there
 #: without being listed here fails rather than quietly starting to leak.
-MCP_RUNTIME_KEYS = frozenset({"connected", "tools"})
+MCP_RUNTIME_KEYS = frozenset({"connected", "state", "tools"})
 _NEVER_PERSISTED = MCP_RUNTIME_KEYS | {"name", "error"}
 
 

@@ -2,16 +2,35 @@
 
 import asyncio
 from contextvars import ContextVar
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
+if TYPE_CHECKING:
+    from raven.mcp.naming import MCPToolRef
+
 # Where the agent loop parks a tool call's arguments when they do not parse as
 # JSON. Named here, next to the only code that must recognise it, so the two
 # ends cannot drift into reporting a parse failure as a missing field.
 RAW_ARGUMENTS_KEY = "_raw_arguments"
+
+
+def absent_tool_error(name: str, *, tail: str = "") -> str:
+    """What either surface says about a name that did not resolve.
+
+    Both readings, because neither surface can tell them apart: the model
+    invented the name, or an MCP server was unloaded mid-turn after this turn's
+    prompt promised its tools. "Not found" alone reads as "you got the name
+    wrong", which is wrong half the time.
+
+    One function because the two surfaces must not word it differently, and a
+    test holding two string literals together is the wrong place for that. The
+    ``tail`` is how the folded surface adds where its catalog is; the unfolded
+    one has none to point at -- the model is already holding every schema.
+    """
+    return f"Error: tool '{name}' is not available. It may have been unloaded, or the name may be wrong{tail}."
 
 
 def _received_tail(params: dict[str, Any]) -> str:
@@ -46,6 +65,15 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        # The one record of where a namespaced tool came from, keyed by the name
+        # it is registered under. Every question about an MCP tool -- which
+        # server owns it, what it is called there, which registered names a
+        # config entry refers to -- is answered from here and nowhere else. It
+        # has to be one place: the name is a one-way function of the pair
+        # (sanitised, capped, possibly hash-suffixed), so anything that tries to
+        # recover the parts from the string is guessing, and three consumers
+        # each guessed differently before this existed.
+        self._origins: dict[str, MCPToolRef] = {}
         # Turn-local, not an attribute: one gateway registry serves concurrent
         # turns from different channels, and a plain field would let whichever
         # turn set it last decide what the others are shown.
@@ -73,13 +101,38 @@ class ToolRegistry:
         channel = self._channel.get()
         return channel is None or channel in tool.channels
 
-    def register(self, tool: Tool) -> None:
-        """Register a tool."""
+    def register(self, tool: Tool, *, origin: "MCPToolRef | None" = None) -> None:
+        """Register a tool, recording where it came from if it has an origin.
+
+        ``origin`` is how a namespaced tool declares its parts. Passed at
+        registration rather than read back off the tool afterwards, so the
+        record cannot disagree with the registration that created it.
+        """
         self._tools[tool.name] = tool
+        if origin is not None:
+            self._origins[tool.name] = origin
 
     def unregister(self, name: str) -> None:
-        """Unregister a tool by name."""
+        """Unregister a tool by name -- the only way a tool leaves.
+
+        No record is kept of what was here. What that costs a turn already in
+        flight, and why the miss is worded the way it is, is in :meth:`execute`.
+        """
         self._tools.pop(name, None)
+        self._origins.pop(name, None)
+
+    def origin_of(self, name: str) -> "MCPToolRef | None":
+        """Where this registered tool came from, or None if it has no origin."""
+        return self._origins.get(name)
+
+    def names_from(self, server: str) -> list[str]:
+        """Every registered name contributed by one MCP server.
+
+        The manager teardown path reads this rather than keeping its own set of
+        names: a second copy is a second answer, and the blacklist can
+        unregister a name between the connect and the teardown.
+        """
+        return [name for name, ref in self._origins.items() if ref.server == server]
 
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
@@ -88,6 +141,30 @@ class ToolRegistry:
     def has(self, name: str) -> bool:
         """Check if a tool is registered."""
         return name in self._tools
+
+    def resolve_configured(self, configured: str) -> list[str]:
+        """Every registered name a config entry refers to (possibly empty).
+
+        Exact match wins outright. The registry is keyed by name, so a config
+        entry naming a tool that exists names *that* tool -- fanning out from
+        there would disable something the user did not write. That is not
+        hypothetical: two different servers can produce the same historical
+        spelling (``mcp_openseo_search_v2`` is the raw form of both
+        ``('openseo', 'search_v2')`` and ``('openseo_search', 'v2')``), so a
+        fan-out reached across servers into a tool named nothing like the entry.
+
+        The fallback exists for the opposite case -- an entry naming a spelling
+        no tool carries today, because sanitising or the length cap changed it.
+        Such a name cannot be parsed back into a pair, so each origin generates
+        its own spellings forward and the entry is tested against them. Several
+        origins can legitimately answer: ``a.b`` and ``a/b`` both clean to
+        ``a_b``, and an entry naming the collapsed spelling means both.
+        """
+        from raven.mcp.naming import spellings
+
+        if configured in self._tools:
+            return [configured]
+        return [name for name, ref in self._origins.items() if configured in spellings(ref.server, ref.tool)]
 
     def names(self) -> list[str]:
         """Every registered tool name.
@@ -141,11 +218,20 @@ class ToolRegistry:
         a validation failure means. Keyword-only so the five call sites stay
         self-describing and so a second field does not reorder anything.
         """
+        # Appended to an error the model may recover from by doing something
+        # else. Deliberately not on the branch below: a tool that is not there
+        # is not one of those, and "try a different approach" argues with an
+        # answer whose point is that there is nothing to try.
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            # No catalog listing on the end of it. Unfolded, every schema is
+            # already in this request and a list only repeats it; folded, a
+            # cataloged tool is reached through ``tool_call``, which appends the
+            # pointer this surface cannot. Measured at 1470 tokens for a
+            # 210-tool deploy, in the tool result, kept in history for the run.
+            return absent_tool_error(name)
 
         # Refused before dispatch, not after validation: a truncated call whose
         # required fields happen to have arrived still validates, and running it

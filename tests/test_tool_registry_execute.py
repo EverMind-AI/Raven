@@ -140,7 +140,29 @@ async def test_missing_tool_still_returns_a_plain_string():
     result = await reg.execute("nope", {})
 
     assert isinstance(result, str)
-    assert "not found" in result
+    assert "not available" in result
+
+
+@pytest.mark.asyncio
+async def test_a_miss_names_both_readings_and_lists_nothing():
+    """The registry cannot tell a hallucinated name from one unloaded mid-turn.
+
+    Both happen: a turn's prompt is assembled while an MCP server's tools
+    exist, and the server can go away before the model calls one. Saying only
+    "not found" accused the model of guessing, which is wrong half the time and
+    was the whole reason an earlier revision tracked tombstones to say
+    otherwise. Listing the catalog was worse -- 1470 tokens for a 210-tool
+    deploy, repeating schemas the request already carries, kept in history for
+    the rest of the run.
+    """
+    reg = _registry(_Plain())
+
+    result = await reg.execute("nope", {})
+
+    assert "may have been unloaded" in result
+    assert "the name may be wrong" in result
+    assert _Plain().name not in result
+    assert "try a different approach" not in result
 
 
 def test_tool_output_is_a_str_subclass():

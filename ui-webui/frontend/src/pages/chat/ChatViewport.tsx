@@ -469,7 +469,11 @@ export function ChatViewport({
 	const addMcps = useCallback(
 		async (clients: MCPClient[]) => {
 			const res = await addRavenMcps(clients.map(toRavenMcpServer));
-			if (res?.restart_required) toast.info(t('panel.mcp.restartRequired'));
+			// `applied` is the live half: the write always lands, and this says
+			// whether the running agent was reachable to be reconciled to it.
+			// `restart_required` used to carry this and is now always false --
+			// each server owns its transport, so nothing has to be restarted.
+			if (res && res.applied === false) toast.info(t('panel.mcp.savedNotApplied'));
 		},
 		[addRavenMcps, t],
 	);
@@ -478,7 +482,7 @@ export function ChatViewport({
 	const removeMcp = useCallback(
 		async (name: string) => {
 			const res = await removeRavenMcp(name);
-			if (res?.restart_required) toast.info(t('panel.mcp.restartRequiredRemove'));
+			if (res && res.applied === false) toast.info(t('panel.mcp.savedNotAppliedRemove'));
 		},
 		[removeRavenMcp, t],
 	);

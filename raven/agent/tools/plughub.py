@@ -21,7 +21,7 @@ Three boundaries this tool does not cross:
   rather than pasted through a tool call and into the transcript;
 * it opens no browser. A turn answers with the authorization link and lets the
   surface the user is actually looking at offer it -- see
-  :class:`raven.agent.tools.mcp_oauth._Flow` for why the host running a turn is
+  :class:`raven.mcp.oauth._Flow` for why the host running a turn is
   not necessarily the machine the person who asked is sitting at.
 """
 
@@ -89,7 +89,7 @@ class PluginTool(Tool):
 
     def __init__(self, loop: Any = None) -> None:
         # The agent loop itself: it owns the connection manager, the sandbox
-        # executor an stdio server needs, and ``sync_mcp``. Held rather than
+        # executor an stdio server needs, and ``apply_mcp_config``. Held rather than
         # resolved per call because there is exactly one for the life of a loop,
         # and the tool is registered by that loop's own constructor.
         self._loop = loop
@@ -296,7 +296,7 @@ class PluginTool(Tool):
         return self._connect_report(name, result)
 
     def _connect_report(self, name: str, result: dict) -> str:
-        from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT, pending_url
+        from raven.mcp.oauth import OAUTH_FLOW_TIMEOUT, pending_url
 
         snap = result.get("mcp") or {}
         state = snap.get("state") or "unknown"
@@ -350,7 +350,7 @@ class PluginTool(Tool):
         )
 
     async def _authorize(self, name: str) -> str:
-        from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT, pending_url
+        from raven.mcp.oauth import OAUTH_FLOW_TIMEOUT, pending_url
         from raven.plughub.connect import PlugConnectError, authorize
 
         name = (name or "").strip()

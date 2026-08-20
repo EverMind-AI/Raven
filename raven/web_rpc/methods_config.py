@@ -22,6 +22,13 @@ if TYPE_CHECKING:
 
 _pending_tasks: set[asyncio.Task] = set()
 
+# How long ``raven.mcp.set`` waits on the reconcile it started before answering
+# anyway. Long enough that an ordinary attach or detach has settled by the time
+# the panel reloads, short enough that a handshake parked at the browser step --
+# exempt from the 90s progress bound for up to 17 minutes -- does not hold the
+# HTTP request open. The reconcile itself is never cancelled by this.
+_MCP_APPLY_WAIT = 5.0
+
 
 def _reexec_process() -> None:  # pragma: no cover - replaces the running process image
     """Re-run the gateway's own argv in place, reloading config (and thus the IM
@@ -899,50 +906,114 @@ def register_config_methods(
     dispatcher.register("raven.everos.models", _everos_models)
 
     # MCP servers. The config is the source of truth for what the chat agent can
-    # reach; the live AgentLoop only adds whether the connection came up and
-    # which tools it registered. MCP tools are registered once, lazily, on the
-    # first turn that needs them, and there is no teardown that unregisters
-    # them, so a config change takes effect on the next gateway restart -- the
-    # same contract as skills above, reported the same way.
+    # reach; the live AgentLoop adds whether each connection is actually up and
+    # which tools it registered. Both come from the connection manager, which is
+    # the only thing that knows -- a server can be attached, detached or
+    # reconnected while raven runs, so neither the registry's key shapes nor a
+    # process-wide "MCP came up once" flag answers this per server.
     from raven.config.update_mcp import get_mcp_servers, set_mcp_servers
 
-    def _mcp_live(name: str, server_names: list[str]) -> dict:
-        """Connection state + tool names for one server, read off the registry.
+    def _mcp_manager():
+        """The live connection manager, or None if no loop has built one.
 
-        A tool goes to the *longest* server name that prefixes it: registered
-        names are ``mcp_<server>_<tool>`` and the separator is legal inside a
-        server name, so with both ``foo`` and ``foo_bar`` configured a plain
-        ``startswith`` would let ``foo`` claim ``foo_bar``'s tools.
+        Read off ``_mcp_manager`` rather than the ``mcp_manager`` property on
+        purpose: the property *creates* one, and a read-only status call must
+        not bring a subsystem into being as a side effect.
         """
-        if agent is None:
-            return {"connected": False, "tools": []}
-        tools = []
-        for n in getattr(agent.tools, "tool_names", None) or []:
-            owner = max(
-                (s for s in server_names if n.startswith(f"mcp_{s}_")),
-                key=len,
-                default=None,
-            )
-            if owner == name:
-                tools.append(n[len(f"mcp_{name}_") :])
+        return getattr(agent, "_mcp_manager", None) if agent is not None else None
+
+    def _mcp_live(name: str, snaps: dict[str, dict], tools_by_server: dict[str, dict[str, str]]) -> dict:
+        """Connection state + tool names for one server, per the origin index.
+
+        Takes the two maps rather than reading them, so listing N servers walks
+        the index once instead of N times.
+
+        The bare tool name is read from the index, not recovered from the
+        registered one. Stripping an ``mcp_<server>_`` prefix looks equivalent
+        and is not: sanitising rewrites the server segment, the cap truncates,
+        and a collision appends a hash, so a server whose name carries an
+        illegal character had every one of its tools shown under the full
+        registered name instead.
+        """
+        snap = snaps.get(name)
+        # ``state`` and nothing more. The connection's error string is
+        # deliberately not forwarded: the entry already carries an ``error``
+        # meaning "this config entry does not validate, saving over it is
+        # refused", and a failed handshake landing in that field would tell the
+        # user to fix a config that is fine.
         return {
-            "connected": bool(getattr(agent, "_mcp_connected", False)) and bool(tools),
-            "tools": sorted(tools),
+            "connected": bool(snap and snap["connected"]),
+            "state": (snap or {}).get("state", "disconnected"),
+            "tools": sorted(tools_by_server.get(name, {}).values()),
         }
 
     async def _mcp_list(params: dict) -> dict:
-        servers = get_mcp_servers()
-        names = [s["name"] for s in servers]
+        manager = _mcp_manager()
+        snaps = {s["name"]: s for s in manager.status()} if manager is not None else {}
+        configured = get_mcp_servers()
+        tools_by_server = manager.tools_by_server() if manager is not None else {}
+        servers = [{**s, **_mcp_live(s["name"], snaps, tools_by_server)} for s in configured]
         return {
-            "servers": [{**s, **_mcp_live(s["name"], names)} for s in servers],
-            # False before the first turn connects them, which is why a server
-            # can be configured, valid, and still show no tools.
-            "connected": bool(getattr(agent, "_mcp_connected", False)),
+            "servers": servers,
+            # Whether anything is connected right now, not whether the one-shot
+            # startup connect happened to have run.
+            "connected": any(s["connected"] for s in snaps.values()),
         }
 
     async def _mcp_set(params: dict) -> dict:
+        """Write the server set, then hand it to the live connections.
+
+        No restart: the connection manager attaches, detaches and reconnects
+        per server, and touches only the ones whose config actually changed.
+        ``applied`` says whether the live loop was reachable to be handed the
+        new set -- a gateway with no agent loop yet has nothing to reconcile,
+        and the next loop reads the config we just wrote.
+
+        The reconcile is not awaited to completion, and that is the whole point
+        of the shape below: it can legitimately take a quarter of an hour. A
+        handshake parked at the browser-authorization step is exempt from the
+        90s progress bound for as long as it stays parked, up to
+        ``OAUTH_FLOW_TIMEOUT + _AUTH_PARK_GRACE`` -- 17 minutes. This call
+        answers an HTTP PUT from a settings panel, so awaiting that means the
+        browser hangs on someone else's consent page. ``plughub.kick_sync``
+        made the same call for the same reason.
+
+        The bounded wait that remains is a courtesy, not the contract: an
+        ordinary reconcile settles well inside it, so the panel's own reload
+        right after this returns sees the real state instead of ``connecting``.
+        A slow one keeps running and the panel shows ``connecting`` until it is
+        reopened -- which is honest, and better than a hung request.
+        """
         set_mcp_servers(params.get("servers") or [])
-        return {"ok": True, "restart_required": True}
+        applied = False
+        if agent is not None and hasattr(agent, "apply_mcp_config"):
+            from loguru import logger
+
+            from raven.config.loader import load_config
+
+            def _report(t: asyncio.Task) -> None:
+                # The task outlives this handler, so nothing else would ever
+                # retrieve its exception.
+                if not t.cancelled() and t.exception() is not None:
+                    logger.warning("MCP config saved but the reconcile failed: {}", t.exception())
+
+            try:
+                servers = load_config().tools.mcp_servers
+            except Exception as e:  # noqa: BLE001 -- a config we cannot read must not lose the write
+                logger.warning("MCP config saved but not applied to the live loop: {}", e)
+            else:
+                task = asyncio.create_task(agent.apply_mcp_config(servers))
+                _pending_tasks.add(task)
+                task.add_done_callback(_pending_tasks.discard)
+                task.add_done_callback(_report)
+                applied = True
+                # shield() so the timeout gives up waiting rather than
+                # cancelling a reconcile that is mid-handshake.
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=_MCP_APPLY_WAIT)
+                except Exception:  # noqa: BLE001 -- a timeout is the expected path; _report owns a failure
+                    pass
+        return {"ok": True, "applied": applied, "restart_required": False}
 
     dispatcher.register("raven.mcp.list", _mcp_list)
     dispatcher.register("raven.mcp.set", _mcp_set)

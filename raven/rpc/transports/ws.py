@@ -335,7 +335,7 @@ async def handle_oauth_callback(request: web.Request) -> web.Response:
     redirect, so it chooses what lands in the query string, and this origin is
     the one the session cookie is attached to.
     """
-    from raven.agent.tools.mcp_oauth import CALLBACK_CSP, resolve_callback
+    from raven.mcp.oauth import CALLBACK_CSP, resolve_callback
 
     matched, html = resolve_callback(dict(request.query))
     return web.Response(

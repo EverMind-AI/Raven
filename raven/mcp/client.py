@@ -1,7 +1,9 @@
 """MCP client: connects to MCP servers and wraps their tools as native Raven tools."""
 
 import asyncio
+from collections.abc import Container
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -10,6 +12,7 @@ from loguru import logger
 from raven.agent.tools import media
 from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.registry import ToolRegistry
+from raven.mcp.naming import MCPToolRef, tool_name
 from raven.sandbox import SandboxInitError
 
 if TYPE_CHECKING:
@@ -19,10 +22,18 @@ if TYPE_CHECKING:
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an Raven Tool."""
 
-    def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
+    def __init__(
+        self,
+        session,
+        server_name: str,
+        tool_def,
+        tool_timeout: int = 30,
+        taken: Container[str] = frozenset(),
+    ):
         self._session = session
+        self._server_name = server_name
         self._original_name = tool_def.name
-        self._name = f"mcp_{server_name}_{tool_def.name}"
+        self._name = tool_name(server_name, tool_def.name, taken=taken)
         self._description = tool_def.description or tool_def.name
         self._parameters = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._tool_timeout = tool_timeout
@@ -30,6 +41,17 @@ class MCPToolWrapper(Tool):
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def ref(self) -> MCPToolRef:
+        """This tool's origin record, for the registry to file at registration.
+
+        Deliberately not a lookup table anyone queries: the wrapper holds the
+        pair because it needs it to place the call, and the one queryable copy
+        lives in the registry. A public accessor that others could read back is
+        how the second source grew last time.
+        """
+        return MCPToolRef(name=self._name, server=self._server_name, tool=self._original_name)
 
     @property
     def description(self) -> str:
@@ -75,6 +97,28 @@ class MCPToolWrapper(Tool):
         return text or "(no output)"
 
 
+@dataclass(frozen=True)
+class Connected:
+    """What one successful handshake leaves behind for the manager to commit.
+
+    The session and the capabilities are returned rather than stored here
+    because only the manager can decide whether this attempt still owns the
+    record: two attempts on one server hand back two sessions, and the loser's
+    transport is about to be closed. Committing them together with the tool
+    names, under the same epoch check, is what keeps a caller from ever being
+    handed a session whose stack is gone.
+    """
+
+    names: list[str]
+    """Registered tool names, in the order they were registered."""
+    session: Any
+    """The live ``mcp.ClientSession``."""
+    capabilities: Any
+    """``ServerCapabilities`` from the handshake -- which of tools / resources /
+    prompts this server actually offers. Read for gating; a server that offers
+    only tools must not make the resource meta-tools appear."""
+
+
 def resolve_transport(cfg) -> str | None:
     """Resolve a server config to its transport type; ``None`` when the
     config names neither a command nor a url."""
@@ -98,8 +142,8 @@ async def connect_mcp_server(
     stack: AsyncExitStack,
     executor: "SandboxExecutor | None" = None,
     http_auth: httpx.Auth | None = None,
-) -> list[str]:
-    """Connect one MCP server, register its tools, return their names.
+) -> Connected:
+    """Connect one MCP server, register its tools, and hand back what it offers.
 
     Failures propagate to the caller: :class:`MCPConfigError` for unusable
     configs, :class:`SandboxInitError` for the stdio-in-sandbox guard, and
@@ -169,16 +213,23 @@ async def connect_mcp_server(
         raise MCPConfigError(f"unknown transport type '{transport_type}'")
 
     session = await stack.enter_async_context(ClientSession(read, write))
-    await session.initialize()
+    # The handshake result is the only place a server states which primitives it
+    # offers, and it is stated once -- there is no way to ask again later, so
+    # dropping it here (as this line used to) meant nothing downstream could
+    # tell a tools-only server from one that also serves resources.
+    handshake = await session.initialize()
 
     tools = await session.list_tools()
     registered: list[str] = []
+    # The live registry, so a name registered a moment ago inside this same
+    # loop counts as taken: two tools of one server can collide with each other
+    # -- ``a.b`` and ``a/b`` both clean to ``a_b``.
     for tool_def in tools.tools:
-        wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
-        registry.register(wrapper)
+        wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout, taken=registry)
+        registry.register(wrapper, origin=wrapper.ref)
         registered.append(wrapper.name)
         logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
-    return registered
+    return Connected(names=registered, session=session, capabilities=handshake.capabilities)
 
 
 async def connect_mcp_servers(
@@ -191,7 +242,7 @@ async def connect_mcp_servers(
 
     One-shot connect-all over a shared stack, and no longer the live path: the
     agent loop connects through
-    :class:`~raven.agent.tools.mcp_manager.MCPConnectionManager`, which owns one
+    :class:`~raven.mcp.manager.MCPConnectionManager`, which owns one
     stack per server so servers can be attached and detached while raven runs.
 
     This helper stays for callers that want one shot over one stack -- scripts
@@ -200,8 +251,8 @@ async def connect_mcp_servers(
     """
     for name, cfg in mcp_servers.items():
         try:
-            registered = await connect_mcp_server(name, cfg, registry, stack, executor=executor)
-            logger.info("MCP server '{}': connected, {} tools registered", name, len(registered))
+            result = await connect_mcp_server(name, cfg, registry, stack, executor=executor)
+            logger.info("MCP server '{}': connected, {} tools registered", name, len(result.names))
         except SandboxInitError:
             # Propagates so the caller surfaces it as a startup error rather
             # than running with a silently broken MCP server.

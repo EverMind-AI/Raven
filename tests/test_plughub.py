@@ -21,7 +21,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(ledger_mod, "_plugins_dir", lambda: tmp_path / "plugins")
     (tmp_path / "plugins").mkdir()
     creds: list[str] = []
-    import raven.agent.tools.mcp_oauth as oauth
+    import raven.mcp.oauth as oauth
 
     monkeypatch.setattr(oauth, "delete_credentials", lambda server: creds.append(server))
     yield {"cfg_path": cfg_path, "deleted_creds": creds}

@@ -1708,17 +1708,22 @@
     },
     {
       "name": "reload.mcp",
-      "summary": "No-op in v0.1 (hermes polls every 5s).",
-      "description": "MUST NOT throw. hermes UI useConfigSync.ts:202 polls every 5s; throwing would spam logs. v0.1 implementation returns {ok: true} unconditionally. See design.md §3a.2.",
-      "params": [],
+      "summary": "Reconcile the live MCP server set with the config on disk.",
+      "description": "MUST NOT throw. Today's only caller is the TUI's /reload-mcp, typed by a person; the method is also the seam a config-file watch would use, and such a caller fires on a timer, so a failure is reported as status='noop' with a message rather than as an error. Reloading moves the tool list, which is the first thing in the cached prompt prefix, so a caller that does not send confirm gets status='confirm_required' and nothing is reconnected. There is no 'and stop asking' flag: persisting that needs a settings section this config does not have.",
+      "params": [
+        { "name": "session_id", "required": false, "schema": { "type": "string" } },
+        { "name": "confirm", "required": false, "schema": { "type": "boolean" } }
+      ],
       "result": {
         "name": "ReloadMcpResult",
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["ok"],
+          "required": ["ok", "status", "message", "reloaded", "tools_changed"],
           "properties": {
             "ok": { "type": "boolean" },
+            "status": { "type": "string", "enum": ["reloaded", "noop", "confirm_required"] },
+            "message": { "type": "string" },
             "reloaded": { "type": "integer" },
             "tools_changed": { "type": "boolean" }
           }

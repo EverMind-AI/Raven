@@ -132,41 +132,33 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
     tools: list[dict] = []
     mcp: list[dict] = []
     if loop is not None:
-        # Ownership comes from the tool name, which is the only place this
-        # branch records it: ``connect_mcp_servers`` registers each tool as
-        # ``mcp_<server>_<tool>``. A server-by-server connection manager lands
-        # later in the stack; writing against it here reported every server as
-        # disconnected with no tools, including one the agent was calling.
-        #
-        # Matched against the configured names rather than split on underscores:
-        # both halves of that name may contain one, so splitting cannot tell
-        # where the server ends -- `mcp_github_enterprise_do_thing` reads as a
-        # server called `github`, which is the same wrong answer in a new shape.
-        # The config keys are the authority on the boundary. Longest first, so a
-        # configured `my_server` wins over a configured `my`.
+        # Ownership comes from the registry's origin index, which is where a
+        # namespaced tool records the server it came from. It used to be guessed
+        # from the name: match the longest configured server name that prefixes
+        # it. That reads as careful and is not -- a server name is sanitised
+        # into the tool name, so ``context7.io`` produces ``mcp_context7_io_*``
+        # and no configured key prefixes it, and the server showed as connected
+        # with zero tools while the agent was calling them. The cap and the
+        # collision suffix rewrite the tail for the same reason: the name is a
+        # one-way function of the pair, so nothing can read it backwards.
         servers: dict[str, Any] = {}
         try:
             servers = dict(load_config().tools.mcp_servers or {})
         except Exception:
             logger.exception("ext.list: could not read the configured mcp servers")
-        configured = sorted(servers, key=len, reverse=True)
         tool_owner: dict[str, str] = {}
         owned: dict[str, int] = {}
         for name in loop.tools.tool_names:
-            text = str(name)
-            if not text.startswith("mcp_"):
-                continue
-            rest = text[4:]
-            owner = next((s for s in configured if rest == s or rest.startswith(s + "_")), None)
-            if owner:
-                tool_owner[text] = owner
-                owned[owner] = owned.get(owner, 0) + 1
+            ref = loop.tools.origin_of(name)
+            if ref is not None:
+                tool_owner[name] = ref.server
+                owned[ref.server] = owned.get(ref.server, 0) + 1
         # MCP connects lazily (first turn / install kick), so between a restart
         # and the first use a declared server has registered nothing yet. It is
         # listed with what is actually known -- its tools, if any -- rather than
         # omitted, so an installed plugin never vanishes from the caller's view.
         try:
-            from raven.agent.tools.mcp import resolve_transport
+            from raven.mcp.client import resolve_transport
 
             for name, sc in servers.items():
                 count = owned.get(name, 0)

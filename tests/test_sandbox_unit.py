@@ -1049,8 +1049,8 @@ class TestConnectMcpSandboxGuard:
         """Sandboxed executor without process-spawning raises SandboxInitError for stdio."""
         from contextlib import AsyncExitStack
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
         cfg = MagicMock()
@@ -1066,8 +1066,8 @@ class TestConnectMcpSandboxGuard:
 
         import mcp.client.stdio
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         reached = []
 
@@ -1092,8 +1092,8 @@ class TestConnectMcpSandboxGuard:
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         class SpawningExecutor(MockExecutor):
             @property
@@ -1122,8 +1122,8 @@ class TestConnectMcpSandboxGuard:
         """
         from contextlib import AsyncExitStack
 
-        from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         executor = MockExecutor()  # is_sandboxed=True, supports_process_spawning=False
 

@@ -131,7 +131,6 @@ if TYPE_CHECKING:
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
-    from raven.agent.tools.mcp_manager import MCPConnectionManager
     from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,
@@ -141,6 +140,8 @@ if TYPE_CHECKING:
     )
     from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig, PlaybookConfig
     from raven.context_engine import ContextEngine
+    from raven.mcp.manager import MCPConnectionManager
+    from raven.mcp.report import ApplyReport
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.routing.router import ModelRouter
@@ -534,6 +535,9 @@ class AgentLoop:
         # registration and after MCP connect so it can blacklist either group.
         # Used by eval harnesses (e.g. BCP) that need a strict tool subset.
         self._disabled_tools = set(disabled_tools or [])
+        # Entries already reported as naming a tool this switch does not own, so
+        # the notice lands once rather than on every MCP connect.
+        self._disabled_tools_reserved_warned: set[str] = set()
         self._tool_search_config = tool_search_config
         self.tools = ToolRegistry()
 
@@ -770,12 +774,40 @@ class AgentLoop:
         (see :meth:`_connect_mcp`) so the blacklist can cover either group.
         Silent on misses — eval configs commonly carry an over-broad list
         that's a no-op for tools that weren't registered in this build.
+
+        Resolved rather than looked up directly: an entry may name an MCP tool
+        by the raw spelling it carried before its name was sanitised, and an off
+        switch that stops matching is an off switch that stops switching off.
+
+        The MCP meta-tools are exempt, and the exemption is enforced here rather
+        than trusted to callers. Their presence is not a preference:
+        :meth:`_sync_mcp_meta_tools` registers them while some connected server
+        serves resources or prompts and withdraws them when none does, so it
+        owns those five names for the life of the loop. An entry naming one
+        would not switch it off -- the next connect re-gates and puts it back --
+        it would only make every connect unregister and re-register the set,
+        which moves the tool array and costs each live conversation its cached
+        prompt prefix. Reported rather than silently dropped, once per entry.
         """
         if not self._disabled_tools:
             return
-        for name in list(self._disabled_tools):
-            if self.tools.has(name):
-                self.tools.unregister(name)
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
+        for entry in list(self._disabled_tools):
+            for registered in self.tools.resolve_configured(entry):
+                if registered in reserved:
+                    if entry not in self._disabled_tools_reserved_warned:
+                        self._disabled_tools_reserved_warned.add(entry)
+                        logger.warning(
+                            "tools.disabled_tools names '{}', which raven registers and withdraws on its "
+                            "own as MCP servers serving resources or prompts come and go. The entry has "
+                            "no effect; remove it to keep the config honest.",
+                            entry,
+                        )
+                    continue
+                self.tools.unregister(registered)
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Point the loop and everything it built at a new provider/model.
@@ -1932,18 +1964,75 @@ class AgentLoop:
         is assembled after ``__init__`` in some entry points.
         """
         if self._mcp_manager is None:
-            from raven.agent.tools.mcp_manager import MCPConnectionManager
+            from raven.mcp.manager import MCPConnectionManager
 
             self._mcp_manager = MCPConnectionManager(
                 self.tools,
                 # MCP servers can register a name that is also blacklisted (e.g.
                 # ``mcp_<server>_search``), and the manager records what survived,
                 # so the blacklist has to be re-applied on every connect.
-                post_connect=self._apply_disabled_tools,
+                post_connect=self._after_mcp_connect,
                 on_state_change=lambda snap: self._emit_mcp_event("mcp.status", snap),
                 on_oauth_event=lambda event, payload: self._emit_mcp_event(event, payload),
             )
         return self._mcp_manager
+
+    def _after_mcp_connect(self) -> None:
+        """Re-apply the blacklist, then re-gate the MCP meta-tools.
+
+        Runs on every connect, not only the first: an MCP server can register a
+        name that is also in ``disabled_tools``, and a server that just arrived
+        may be the first one to serve resources or prompts.
+        """
+        self._apply_disabled_tools()
+        self._sync_mcp_meta_tools()
+
+    def _sync_mcp_meta_tools(self) -> None:
+        """Register the resource / prompt meta-tools iff some server serves them.
+
+        Five schemas that no deploy without MCP should pay for, and that a deploy
+        whose servers offer only tools should not pay for either -- most servers
+        offer only tools, and advertising ``read_mcp_resource`` to them spends
+        context on calls that can only fail.
+
+        Gating moves the tool array when a server connects or disconnects, which
+        costs the prompt-cache prefix. That is not a new cost: the server's own
+        tools appear and disappear at exactly those moments, so the array was
+        already moving. What it buys is that the array does not carry these five
+        the rest of the time.
+
+        Called after every connect and after every config apply, because both can
+        change the answer -- and idempotent, so calling it when nothing moved
+        registers and unregisters nothing.
+
+        Idempotence is the reason these five names are not the operator's to
+        switch off. The predicate is ``all(...)`` over the set, so one name
+        missing reads as "the set is not installed" and puts the whole set back;
+        anything else that removes a single member turns every connect into an
+        unregister-and-re-register of all of them. ``_apply_disabled_tools``
+        therefore skips them by name, which makes this method their sole owner:
+        they exist exactly while a connected server serves the primitive.
+        """
+        manager = self._mcp_manager
+        if manager is None:
+            return
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES, prompt_tools
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES, resource_tools
+
+        for primitive, names, build in (
+            ("resources", RESOURCE_TOOL_NAMES, lambda: resource_tools(manager, workspace=self.workspace)),
+            ("prompts", PROMPT_TOOL_NAMES, lambda: prompt_tools(manager)),
+        ):
+            wanted = bool(manager.servers_offering(primitive))
+            present = all(self.tools.has(n) for n in names)
+            if wanted and not present:
+                for tool in build():
+                    self.tools.register(tool)
+                logger.info("MCP: {} meta-tools registered", primitive)
+            elif not wanted and any(self.tools.has(n) for n in names):
+                for n in names:
+                    self.tools.unregister(n)
+                logger.info("MCP: {} meta-tools withdrawn -- no server offers them", primitive)
 
     def _mcp_tool_notices(self) -> list[str]:
         """Host facts about MCP tools the definitions cannot carry.
@@ -1995,8 +2084,9 @@ class AgentLoop:
 
         async def _sync() -> None:
             try:
-                await self.sync_mcp(self._mcp_servers)
-                self._mcp_connected = True
+                # Sets ``_mcp_connected`` itself, so every path that brings MCP
+                # up agrees on the flag rather than only this one.
+                await self.apply_mcp_config(self._mcp_servers)
             finally:
                 self._mcp_connecting = False
 
@@ -2019,7 +2109,16 @@ class AgentLoop:
             # Nobody awaits the task now, so it has to report for itself.
             task.add_done_callback(_log_late_mcp_sync)
 
-    async def sync_mcp(self, cfg_servers: dict) -> dict:
+    def mcp_config_changed(self, cfg_servers: dict) -> bool:
+        """Whether :meth:`apply_mcp_config` would do anything, without doing it.
+
+        The gate in front of every caller that can fire on a timer -- the reload
+        RPC, a config-file watch. Answering it stays in memory, so an unchanged
+        config never reaches a transport.
+        """
+        return self.mcp_manager.config_changed(cfg_servers)
+
+    async def apply_mcp_config(self, cfg_servers: dict) -> "ApplyReport":
         """Reconcile live MCP connections with ``cfg_servers``.
 
         The entry point for everything that changes the server set while the loop
@@ -2027,12 +2126,24 @@ class AgentLoop:
         Each server owns its own transport, so one can be attached or detached
         without restarting raven, and a disabled server is disconnected here
         rather than left running with its tools registered.
+
+        Reconciling, not restarting: servers whose config did not change are not
+        touched, so this is safe to call while turns are running.
         """
         self._mcp_servers = cfg_servers
         # The blacklist is re-applied by the manager's post_connect hook, on every
         # connect rather than only the first -- an MCP server can register a name
         # that is also in disabled_tools.
-        return await self.mcp_manager.sync(cfg_servers, executor_provider=self._mcp_executor)
+        report = await self.mcp_manager.apply_config(cfg_servers, executor_provider=self._mcp_executor)
+        # After the apply, not only after a connect: a *detach* can take the last
+        # server that served resources with it, and no connect fires for that.
+        self._sync_mcp_meta_tools()
+        # Whatever brought MCP up, it is up. Left unset, the one-shot lazy
+        # connect would still run later and re-walk every server this apply
+        # already attached, and the surfaces that read this flag as "MCP is
+        # live" would report a working server as disconnected.
+        self._mcp_connected = True
+        return report
 
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.

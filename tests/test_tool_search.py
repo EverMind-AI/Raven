@@ -297,7 +297,7 @@ async def test_tool_call_forwards_to_registry() -> None:
 async def test_tool_call_rejects_meta_and_missing() -> None:
     ctrl = _controller(ToolRegistry())
     assert "cannot be invoked" in await ctrl.call("tool_search", {})
-    assert "not found" in await ctrl.call("nope", {})
+    assert "not available" in await ctrl.call("nope", {})
 
 
 @pytest.mark.asyncio
@@ -570,7 +570,12 @@ async def test_tool_call_refuses_a_tool_this_channel_cannot_use() -> None:
 
     out = await reg.execute(TOOL_CALL_NAME, {"name": "deliver_files", "arguments": {}})
 
-    assert "not found" in out
+    assert "not available" in out
+    # Worded exactly as an absent tool is: "it exists but not for you" is the
+    # way around the filter that keeping it out of the schema was meant to close.
+    assert out.replace("deliver_files", "ghost") == await reg.execute(
+        TOOL_CALL_NAME, {"name": "ghost", "arguments": {}}
+    )
 
 
 @pytest.mark.asyncio
@@ -592,3 +597,147 @@ async def test_a_withheld_tool_does_not_consume_a_result_slot() -> None:
 
     reg.set_channel("web")
     assert [h["name"] for h in ctrl.search("deliver files to the user", limit=1)] == ["deliver_files"]
+
+
+class TestAlwaysVisibleResolvesConfiguredNames:
+    """A configured name has to keep matching after its tool is renamed.
+
+    ``always_visible`` is what a deploy uses to hold a tool resident while the
+    rest of the catalog is folded behind ``tool_search``. It matched by exact
+    set membership, so a namespaced tool whose registered name differs from the
+    configured spelling -- sanitising and the length cap both do that -- dropped
+    out of the resident set and back into the catalog. No error: the model just
+    has to search for it first.
+    """
+
+    def _mcp(self, registry, server: str, tool: str):
+        from raven.mcp.naming import MCPToolRef, tool_name
+
+        name = tool_name(server, tool, taken=registry)
+        registry.register(
+            _FakeTool(name, f"{tool} on {server}"), origin=MCPToolRef(name=name, server=server, tool=tool)
+        )
+        return name
+
+    def test_a_configured_name_that_was_sanitised_still_resolves(self):
+        reg = ToolRegistry()
+        # The registered name loses the slash; the config entry still has it.
+        registered = self._mcp(reg, "gh", "actions/download-logs")
+        assert registered == "mcp_gh_actions_download-logs"
+
+        search = ToolSearchController(reg, always_visible={"mcp_gh_actions/download-logs"})
+        assert registered in search.visible_names()
+
+    def test_an_exactly_named_tool_is_visible(self):
+        reg = ToolRegistry()
+        registered = self._mcp(reg, "gh", "list_repos")
+        search = ToolSearchController(reg, always_visible={registered})
+        assert registered in search.visible_names()
+
+    def test_a_builtin_still_matches_by_its_own_name(self):
+        reg = ToolRegistry()
+        reg.register(_FakeTool("grep", "search files"))
+        search = ToolSearchController(reg, always_visible={"grep"})
+        assert "grep" in search.visible_names()
+
+    def test_a_name_matching_nothing_is_kept_as_written(self):
+        # Usually a tool this deploy does not have, which is ordinary. Dropping
+        # it would hide a typo rather than surface one.
+        search = ToolSearchController(ToolRegistry(), always_visible={"not_installed_here"})
+        assert "not_installed_here" in search.visible_names()
+
+    def test_the_meta_tools_are_always_in(self):
+        search = ToolSearchController(ToolRegistry(), always_visible=set())
+        assert META_TOOL_NAMES <= search.visible_names()
+
+    def test_a_tool_registered_after_construction_resolves(self):
+        # MCP servers attach while raven runs, so resolution cannot happen once
+        # at construction: the tool is not there yet.
+        reg = ToolRegistry()
+        search = ToolSearchController(reg, always_visible={"mcp_gh_actions/download-logs"})
+        assert "mcp_gh_actions_download-logs" not in search.visible_names()
+
+        registered = self._mcp(reg, "gh", "actions/download-logs")
+        assert registered in search.visible_names()
+
+
+class TestAnAbsentNameOnTheFoldedPath:
+    """``tool_call`` answers a name it cannot resolve by pointing at tool_search.
+
+    This surface has a catalog to search, so that is the useful advice --
+    unlike ``ToolRegistry.execute``, which also serves the unfolded surface
+    where there is nothing to search and therefore names both readings instead.
+    A tool whose MCP server was unloaded mid-turn lands here too and the search
+    finds nothing: one wasted hop, and the accepted price of not tracking what
+    used to exist.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_name_is_told_where_the_catalog_is(self):
+        reg = ToolRegistry()
+        ctrl = ToolSearchController(reg, always_visible=set())
+        out = await ctrl.call("mcp_ghost_thing", {})
+        assert "not available" in out
+        assert "tool_search" in out
+
+    @pytest.mark.asyncio
+    async def test_it_reads_the_same_way_as_the_direct_path(self):
+        # Both surfaces answer a name that did not resolve, and neither can tell
+        # a hallucinated one from a tool unloaded mid-turn. Saying it two
+        # different ways -- one of them "you got the name wrong" -- was the
+        # disagreement this pins shut. Only the catalog pointer differs, because
+        # only this surface has a catalog the model cannot already see.
+        reg = ToolRegistry()
+        ctrl = ToolSearchController(reg, always_visible=set())
+        folded = await ctrl.call("ghost", {})
+        direct = await reg.execute("ghost", {})
+        for phrase in ("is not available", "may have been unloaded", "the name may be wrong"):
+            assert phrase in folded, phrase
+            assert phrase in direct, phrase
+        assert "tool_search" not in direct
+
+    @pytest.mark.asyncio
+    async def test_an_unregistered_tool_is_answered_the_same_way(self):
+        from raven.mcp.naming import MCPToolRef
+
+        reg = ToolRegistry()
+        name = "mcp_openseo_search"
+        reg.register(_FakeTool(name, "search openseo"), origin=MCPToolRef(name=name, server="openseo", tool="search"))
+        reg.unregister(name)
+        ctrl = ToolSearchController(reg, always_visible=set())
+        out = await ctrl.call(name, {})
+        assert "not available" in out
+        assert "tool_search" in out
+        # Same answer as a name that never existed: the registry keeps no record
+        # of what it used to hold, so there is nothing to say differently.
+        assert out.replace(name, "GHOST") == await ctrl.call("GHOST", {})
+
+    @pytest.mark.asyncio
+    async def test_a_channel_withheld_tool_is_refused_as_absent(self):
+        # The channel filter must not become reachable by naming a tool
+        # directly: "it exists but not for you" is the way around the filter
+        # that keeping it out of the schema was meant to close.
+        class _Bound(_FakeTool):
+            channels = frozenset({"web"})
+
+        reg = ToolRegistry()
+        reg.register(_Bound("only_on_web", "web-only tool"))
+        reg.set_channel("telegram")
+        ctrl = ToolSearchController(reg, always_visible=set())
+
+        out = await ctrl.call("only_on_web", {})
+        assert "not available" in out
+        # And it must not read as "it exists, just not for you" -- pointing at
+        # the catalog is safe because ``search`` filters by channel too.
+        assert [h["name"] for h in ctrl.search("web-only tool")] == []
+
+    def test_the_search_index_never_offers_an_unregistered_tool(self):
+        from raven.mcp.naming import MCPToolRef
+
+        reg = ToolRegistry()
+        name = "mcp_openseo_search"
+        reg.register(_FakeTool(name, "search openseo"), origin=MCPToolRef(name=name, server="openseo", tool="search"))
+        reg.unregister(name)
+        ctrl = ToolSearchController(reg, always_visible=set())
+        ctrl.refresh()
+        assert [h["name"] for h in ctrl.search("openseo search")] == []

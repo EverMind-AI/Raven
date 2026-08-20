@@ -380,8 +380,17 @@ export interface ModelEndpointsResponse {
 // ── MCP ──────────────────────────────────────────────────────────────
 
 export interface ReloadMcpResponse {
-  status?: string
+  ok?: boolean
+  /** Which line to print. `confirm_required` means nothing was reconnected and
+   *  the caller has to re-send with `confirm`; `noop` means there was nothing
+   *  to do, or no live agent to do it to -- `message` says which. */
+  status?: 'confirm_required' | 'noop' | 'reloaded'
   message?: string
+  /** Server records touched. `tools_changed` is the one to act on: it says the
+   *  model-facing tool list moved, which costs this conversation its cached
+   *  prompt prefix. */
+  reloaded?: number
+  tools_changed?: boolean
 }
 
 export interface ReloadEnvResponse {

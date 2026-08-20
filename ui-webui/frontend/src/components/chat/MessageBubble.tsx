@@ -335,7 +335,11 @@ type OnUserConfirm = (
 	rules?: ToolCallBlock['suggested_rules'],
 ) => void;
 
-const MCP_TOOL_PREFIX = 'mcp__';
+// Single underscore: registered MCP tool names are `mcp_<server>_<tool>`. This
+// counter matched nothing at all while it read `mcp__` -- a spelling no raven
+// build has ever registered -- so every MCP call fell through to the generic
+// branch and the "N MCP tools" summary stayed at zero.
+const MCP_TOOL_PREFIX = 'mcp_';
 
 // Task-management tools are all surfaced under one "updated todos" summary.
 const TODO_TOOLS = new Set(['TaskGet', 'TaskUpdate', 'TaskList', 'TaskCreate']);

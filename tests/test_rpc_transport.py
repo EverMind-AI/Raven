@@ -183,7 +183,7 @@ async def test_the_oauth_callback_escapes_what_the_redirect_carried(gateway_clie
     """
     import asyncio
 
-    from raven.agent.tools import mcp_oauth
+    from raven.mcp import oauth as mcp_oauth
 
     _, client = gateway_client
     payload = "<script>alert(1)</script>"

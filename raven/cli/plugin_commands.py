@@ -65,8 +65,8 @@ def plugin_auth(
         raise typer.Exit(1)
 
     async def _run() -> dict:
-        from raven.agent.tools.mcp_manager import MCPConnectionManager
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.manager import MCPConnectionManager
 
         mgr = MCPConnectionManager(ToolRegistry())
         try:

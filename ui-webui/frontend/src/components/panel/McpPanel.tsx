@@ -28,9 +28,12 @@ interface McpPanelProps {
 	 */
 	loadError?: string | null;
 	/**
-	 * Whether the agent has connected its MCP servers this run. They connect
-	 * lazily on the first turn that needs them, so "configured but not yet
-	 * connected" is a normal state, not a failure.
+	 * Whether at least one MCP server is connected *right now* — not whether
+	 * the agent's startup connect has run. Used only to tell "nothing has been
+	 * reached yet" (servers connect lazily on the first turn that needs them,
+	 * which is normal and not a failure) from "MCP is up and this one is not".
+	 * Per-server truth is `RavenMcpServer.state`, which is finer and is what
+	 * the rows below read first.
 	 */
 	connected?: boolean;
 	/**
@@ -146,11 +149,13 @@ export function McpPanel({
 						<Item key={mcp.name} variant="outline">
 							<ItemContent>
 								<ItemTitle className="flex items-center gap-x-2">
-									{/* Gold once the server's tools are registered. Muted
-									    means configured but not connected yet, which is
-									    normal before the first turn that needs it -- not
-									    an error, so not destructive-red. Red is kept for
-									    an entry the config schema rejects. */}
+									{/* Gold once the server's tools are registered, muted
+									    for everything else -- not reached yet, connecting,
+									    awaiting authorization, or a failed handshake. Red
+									    stays reserved for an entry the config schema
+									    rejects, because that is the one a save is blocked
+									    on; a failed handshake is named in the line below
+									    instead, where it can say which failure it was. */}
 									<span
 										className={`size-2 shrink-0 rounded-full ${
 											mcp.error
@@ -172,14 +177,26 @@ export function McpPanel({
 									) : (
 										<KbdGroup>
 											<Kbd>{mcp.type === 'stdio' || mcp.command ? 'STDIO' : 'HTTP'}</Kbd>
+											{/* `state` before the aggregate, because the aggregate
+											    cannot tell "not reached yet" from "reached and
+											    failed": with every server in `error` nothing is
+											    connected, and reporting that as "connects on
+											    first use" tells the reader to wait for something
+											    that already happened. */}
 											<Kbd>
 												{mcp.connected
 													? t('panel.mcp.tools', {
 															count: mcp.tools?.length ?? 0,
 														})
-													: connected
-														? t('panel.mcp.notConnected')
-														: t('panel.mcp.pending')}
+													: mcp.state === 'error'
+														? t('panel.mcp.failed')
+														: mcp.state === 'auth_required'
+															? t('panel.mcp.needsAuth')
+															: mcp.state === 'connecting'
+																? t('panel.mcp.connecting')
+																: connected
+																	? t('panel.mcp.notConnected')
+																	: t('panel.mcp.pending')}
 											</Kbd>
 										</KbdGroup>
 									)}

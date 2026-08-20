@@ -117,23 +117,21 @@ export const opsCommands: SlashCommand[] = [
 
   {
     aliases: ['reload_mcp'],
-    help: 'reload MCP servers in the live session (warns about prompt cache invalidation)',
+    help: 'reload MCP servers in the live session (asks first; /reload-mcp now skips)',
     name: 'reload-mcp',
     supported: false,
     run: (arg, ctx) => {
-      // Parse arg: `now` / `always` skip the confirmation gate.
-      // `always` additionally persists approvals.mcp_reload_confirm=false.
+      // `now` skips the confirmation gate, for this call only. There is no
+      // "and stop asking": nothing persists such a preference, and the
+      // `always` this used to accept printed a promise the server never kept.
       const a = (arg || '').trim().toLowerCase()
 
-      const params: { session_id: string | null; confirm?: boolean; always?: boolean } = {
+      const params: { session_id: string | null; confirm?: boolean } = {
         session_id: ctx.sid
       }
 
       if (a === 'now' || a === 'approve' || a === 'once' || a === 'yes') {
         params.confirm = true
-      } else if (a === 'always') {
-        params.confirm = true
-        params.always = true
       }
 
       ctx.gateway
@@ -147,16 +145,16 @@ export const opsCommands: SlashCommand[] = [
             }
 
             if (r.status === 'reloaded') {
-              ctx.transcript.sys(
-                params.always
-                  ? 'MCP servers reloaded · future /reload-mcp will run without confirmation'
-                  : 'MCP servers reloaded'
-              )
+              ctx.transcript.sys(r.message || 'MCP servers reloaded')
 
               return
             }
 
-            ctx.transcript.sys('reload complete')
+            // `noop` carries the only account of why nothing happened -- the
+            // config would not parse, no agent is running, or it already
+            // matches. Falling through to a fixed line reported an unreadable
+            // config file as a completed reload.
+            ctx.transcript.sys(r.message || 'nothing to reload')
           })
         )
         .catch(ctx.guardedErr)

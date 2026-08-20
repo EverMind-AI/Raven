@@ -8,9 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from raven.agent.tools.base import Tool
-from raven.agent.tools.mcp_manager import MCPConnectionManager
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
+from raven.mcp.manager import MCPConnectionManager
+from raven.mcp.naming import MCPToolRef
 from raven.sandbox import SandboxInitError
 
 
@@ -45,22 +46,50 @@ def _fake_connect(tool_names: list[str]):
         registered = []
         for t in tool_names:
             full = f"mcp_{name}_{t}"
-            registry.register(FakeTool(full))
+            # Registered the way a real connect does -- with its origin. The
+            # registry's origin index is what the manager reads its own teardown
+            # list back out of, so a stub without one is invisible to it.
+            registry.register(FakeTool(full), origin=MCPToolRef(name=full, server=name, tool=t))
             registered.append(full)
-        return registered
+        return _connected(registered)
 
     return fake
 
 
-_PATCH = "raven.agent.tools.mcp_manager.connect_mcp_server"
+_PATCH = "raven.mcp.manager.connect_mcp_server"
 
 
-async def test_sync_connects_and_reports():
+class _Caps:
+    """Minimal stand-in for the SDK's ``ServerCapabilities``.
+
+    A field left None means "this server does not offer that primitive", which
+    is what ``servers_offering`` reads. Defaults to tools-only, matching the
+    majority of real servers.
+    """
+
+    def __init__(self, *, resources=None, prompts=None, tools=object()) -> None:
+        self.resources = resources
+        self.prompts = prompts
+        self.tools = tools
+
+
+def _connected(names, *, session=None, capabilities=None):
+    """The shape ``connect_mcp_server`` returns, for a patched stub to hand back."""
+    from raven.mcp.client import Connected
+
+    return Connected(
+        names=list(names),
+        session=session if session is not None else object(),
+        capabilities=capabilities if capabilities is not None else _Caps(),
+    )
+
+
+async def test_apply_config_connects_and_reports():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     with patch(_PATCH, new=_fake_connect(["a", "b"])):
-        result = await mgr.sync({"srv": _cfg()})
-    assert result == {"reloaded": 1, "tools_changed": True}
+        result = await mgr.apply_config({"srv": _cfg()})
+    assert result.as_dict() == {"reloaded": 1, "tools_changed": True}
     assert reg.has("mcp_srv_a") and reg.has("mcp_srv_b")
     (snap,) = mgr.status()
     assert snap["state"] == "connected"
@@ -68,56 +97,56 @@ async def test_sync_connects_and_reports():
     assert mgr.tool_map()["mcp_srv_a"] == "srv"
 
 
-async def test_sync_unchanged_config_is_noop():
+async def test_apply_config_unchanged_config_is_noop():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     cfg = _cfg()
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": cfg})
-        result = await mgr.sync({"srv": cfg.model_copy()})
-    assert result == {"reloaded": 0, "tools_changed": False}
+        await mgr.apply_config({"srv": cfg})
+        result = await mgr.apply_config({"srv": cfg.model_copy()})
+    assert result.as_dict() == {"reloaded": 0, "tools_changed": False}
 
 
-async def test_sync_removed_server_unregisters_tools():
+async def test_apply_config_removed_server_withdraws_tools():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": _cfg()})
-        result = await mgr.sync({})
-    assert result == {"reloaded": 1, "tools_changed": True}
+        await mgr.apply_config({"srv": _cfg()})
+        result = await mgr.apply_config({})
+    assert result.as_dict() == {"reloaded": 1, "tools_changed": True}
     assert not reg.has("mcp_srv_a")
     assert mgr.status() == []
 
 
-async def test_sync_disabled_server_keeps_record():
+async def test_apply_config_disabled_server_keeps_record():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": _cfg()})
-        await mgr.sync({"srv": _cfg(enabled=False)})
+        await mgr.apply_config({"srv": _cfg()})
+        await mgr.apply_config({"srv": _cfg(enabled=False)})
     assert not reg.has("mcp_srv_a")
     (snap,) = mgr.status()
     assert snap["state"] == "disconnected"
     assert snap["enabled"] is False
     # Re-enabling reconnects.
     with patch(_PATCH, new=_fake_connect(["a"])):
-        result = await mgr.sync({"srv": _cfg()})
-    assert result["tools_changed"] is True
+        result = await mgr.apply_config({"srv": _cfg()})
+    assert result.tools_changed is True
     assert reg.has("mcp_srv_a")
 
 
-async def test_sync_changed_config_reconnects():
+async def test_apply_config_changed_config_reconnects():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": _cfg()})
+        await mgr.apply_config({"srv": _cfg()})
     with patch(_PATCH, new=_fake_connect(["a", "b"])):
-        result = await mgr.sync({"srv": _cfg(url="https://other.test/mcp")})
-    assert result["reloaded"] == 1
+        result = await mgr.apply_config({"srv": _cfg(url="https://other.test/mcp")})
+    assert result.reloaded == 1
     assert reg.has("mcp_srv_b")
 
 
-async def test_connect_failure_lands_in_error_state_and_is_not_retried_by_sync():
+async def test_connect_failure_lands_in_error_state_and_is_not_retried_by_apply_config():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     calls = []
@@ -128,13 +157,13 @@ async def test_connect_failure_lands_in_error_state_and_is_not_retried_by_sync()
 
     cfg = _cfg()
     with patch(_PATCH, new=boom):
-        result = await mgr.sync({"srv": cfg})
+        result = await mgr.apply_config({"srv": cfg})
         (snap,) = mgr.status()
         assert snap["state"] == "error"
         assert "nope" in snap["error"]
-        assert result["tools_changed"] is False
+        assert result.tools_changed is False
         # The 5s poll with unchanged config must not retry a dead server.
-        await mgr.sync({"srv": cfg.model_copy()})
+        await mgr.apply_config({"srv": cfg.model_copy()})
     assert calls == ["srv"]
 
 
@@ -147,7 +176,7 @@ async def test_connect_retries_error_state():
 
     cfg = _cfg()
     with patch(_PATCH, new=boom):
-        await mgr.sync({"srv": cfg})
+        await mgr.apply_config({"srv": cfg})
     with patch(_PATCH, new=_fake_connect(["a"])):
         snap = await mgr.connect("srv", cfg)
     assert snap["state"] == "connected"
@@ -163,14 +192,14 @@ async def test_sandbox_init_error_propagates():
 
     with patch(_PATCH, new=guard):
         with pytest.raises(SandboxInitError):
-            await mgr.sync({"srv": _cfg(command="mcp-server", url="")})
+            await mgr.apply_config({"srv": _cfg(command="mcp-server", url="")})
 
 
 async def test_disconnect_drop_forgets_record():
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": _cfg()})
+        await mgr.apply_config({"srv": _cfg()})
     await mgr.disconnect("srv", drop=True)
     assert mgr.status() == []
     assert not reg.has("mcp_srv_a")
@@ -181,7 +210,7 @@ async def test_state_change_callback_fires():
     seen: list[tuple[str, str]] = []
     mgr = MCPConnectionManager(reg, on_state_change=lambda s: seen.append((s["name"], s["state"])))
     with patch(_PATCH, new=_fake_connect(["a"])):
-        await mgr.sync({"srv": _cfg()})
+        await mgr.apply_config({"srv": _cfg()})
     await mgr.aclose()
     assert ("srv", "connecting") in seen
     assert ("srv", "connected") in seen
@@ -195,7 +224,7 @@ async def test_post_connect_blacklist_shrinks_tool_names():
 
     mgr = MCPConnectionManager(reg, post_connect=blacklist)
     with patch(_PATCH, new=_fake_connect(["a", "b"])):
-        await mgr.sync({"srv": _cfg()})
+        await mgr.apply_config({"srv": _cfg()})
     (snap,) = mgr.status()
     assert snap["tool_count"] == 1
     assert mgr.tool_map() == {"mcp_srv_a": "srv"}
@@ -217,8 +246,8 @@ async def test_a_second_connect_does_not_start_a_second_handshake():
     async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
         starts.append(name)
         await release.wait()
-        registry.register(FakeTool(f"mcp_{name}_a"))
-        return [f"mcp_{name}_a"]
+        registry.register(FakeTool(f"mcp_{name}_a"), origin=MCPToolRef(name=f"mcp_{name}_a", server=name, tool="a"))
+        return _connected([f"mcp_{name}_a"])
 
     with patch(_PATCH, new=slow):
         first = _asyncio.create_task(mgr.connect("srv", _cfg()))
@@ -251,14 +280,14 @@ async def test_a_stale_attempt_does_not_strip_the_winners_tools():
         first = False
         if mine:
             await gate.wait()  # the losing attempt finishes last
-        registry.register(FakeTool(f"mcp_{name}_a"))
-        return [f"mcp_{name}_a"]
+        registry.register(FakeTool(f"mcp_{name}_a"), origin=MCPToolRef(name=f"mcp_{name}_a", server=name, tool="a"))
+        return _connected([f"mcp_{name}_a"])
 
     with patch(_PATCH, new=racing):
         loser = _asyncio.create_task(mgr.connect("srv", _cfg()))
         await _asyncio.sleep(0)
         # A config change tears down the in-flight attempt and starts a fresh one.
-        await mgr.sync({"srv": _cfg(url="https://changed.test/mcp")})
+        await mgr.apply_config({"srv": _cfg(url="https://changed.test/mcp")})
         gate.set()
         await loser
 
@@ -278,7 +307,7 @@ async def test_a_server_parked_at_the_browser_is_exempt_only_for_a_while():
     """
     import asyncio as _asyncio
 
-    import raven.agent.tools.mcp_manager as mod
+    import raven.mcp.manager as mod
 
     reg = ToolRegistry()
     mgr = MCPConnectionManager(reg)
@@ -290,7 +319,7 @@ async def test_a_server_parked_at_the_browser_is_exempt_only_for_a_while():
         patch(_PATCH, new=never),
         patch.object(mod, "_HANDSHAKE_TIMEOUT", 0.05),
         patch.object(mod, "_AUTH_PARK_MAX", 0.15),
-        patch("raven.agent.tools.mcp_oauth.auth_wait_servers", lambda: {"srv"}),
+        patch("raven.mcp.oauth.auth_wait_servers", lambda: {"srv"}),
     ):
         snap = await _asyncio.wait_for(mgr.connect("srv", _cfg()), timeout=5)
 
@@ -315,8 +344,8 @@ async def test_a_cancelled_connect_leaves_the_record_retryable():
     async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
         started.set()
         await _asyncio.sleep(30)
-        registry.register(FakeTool(f"mcp_{name}_a"))
-        return [f"mcp_{name}_a"]
+        registry.register(FakeTool(f"mcp_{name}_a"), origin=MCPToolRef(name=f"mcp_{name}_a", server=name, tool="a"))
+        return _connected([f"mcp_{name}_a"])
 
     with patch(_PATCH, new=slow):
         task = _asyncio.create_task(mgr.connect("srv", _cfg()))
@@ -333,8 +362,8 @@ async def test_a_cancelled_connect_leaves_the_record_retryable():
 
     # And a later sync does retry it, which the parked state prevented.
     with patch(_PATCH, new=_fake_connect(["a"])):
-        result = await mgr.sync({"srv": _cfg()})
-    assert result["reloaded"] == 1
+        result = await mgr.apply_config({"srv": _cfg()})
+    assert result.reloaded == 1
     assert reg.has("mcp_srv_a")
 
 
@@ -352,10 +381,10 @@ async def test_a_cancelled_connect_takes_back_what_it_registered():
     started = _asyncio.Event()
 
     async def register_then_hang(name, cfg, registry, stack, executor=None, http_auth=None):
-        registry.register(FakeTool(f"mcp_{name}_a"))
+        registry.register(FakeTool(f"mcp_{name}_a"), origin=MCPToolRef(name=f"mcp_{name}_a", server=name, tool="a"))
         started.set()
         await _asyncio.sleep(30)
-        return [f"mcp_{name}_a"]
+        return _connected([f"mcp_{name}_a"])
 
     with patch(_PATCH, new=register_then_hang):
         task = _asyncio.create_task(mgr.connect("srv", _cfg()))
@@ -384,8 +413,10 @@ async def test_cancelling_a_connect_stops_the_handshake_too():
     async def registers_shortly(name, cfg, registry, stack, executor=None, http_auth=None):
         started.set()
         await _asyncio.sleep(0.05)
-        registry.register(FakeTool(f"mcp_{name}_late"))
-        return [f"mcp_{name}_late"]
+        registry.register(
+            FakeTool(f"mcp_{name}_late"), origin=MCPToolRef(name=f"mcp_{name}_late", server=name, tool="late")
+        )
+        return _connected([f"mcp_{name}_late"])
 
     with patch(_PATCH, new=registers_shortly):
         task = _asyncio.create_task(mgr.connect("srv", _cfg()))
@@ -404,8 +435,8 @@ def test_the_auth_park_bound_outlasts_the_oauth_flow_it_waits_on() -> None:
     flow timeout to 900 left the exemption at 420 -- so the watchdog cancelled
     every authorization at seven minutes while the page counted down fifteen.
     """
-    from raven.agent.tools import mcp_manager
-    from raven.agent.tools.mcp_oauth import OAUTH_FLOW_TIMEOUT
+    from raven.mcp import manager as mcp_manager
+    from raven.mcp.oauth import OAUTH_FLOW_TIMEOUT
 
     assert mcp_manager._AUTH_PARK_MAX > OAUTH_FLOW_TIMEOUT
 
@@ -415,7 +446,7 @@ def test_the_auth_park_bound_outlasts_the_oauth_flow_it_waits_on() -> None:
 
 def _capture_oauth_notify(monkeypatch):
     """Stub provider_for so the test can fire oauth events like the SDK would."""
-    from raven.agent.tools import mcp_oauth
+    from raven.mcp import oauth as mcp_oauth
 
     captured: dict[str, Any] = {}
 
@@ -441,15 +472,17 @@ async def test_a_background_connect_that_parks_becomes_auth_required_not_a_wait(
     async def parks(name, cfg, registry, stack, executor=None, http_auth=None):
         captured["notify"]("oauth.pending", {"server": name, "url": "https://idp.example/a"})
         await released.wait()
-        registry.register(FakeTool(f"mcp_{name}_late"))
-        return [f"mcp_{name}_late"]
+        registry.register(
+            FakeTool(f"mcp_{name}_late"), origin=MCPToolRef(name=f"mcp_{name}_late", server=name, tool="late")
+        )
+        return _connected([f"mcp_{name}_late"])
 
     registry = ToolRegistry()
     mgr = MCPConnectionManager(registry)
     with patch(_PATCH, new=parks):
-        result = await asyncio.wait_for(mgr.sync({"svc": _cfg(auth="oauth")}), timeout=5)
+        result = await asyncio.wait_for(mgr.apply_config({"svc": _cfg(auth="oauth")}), timeout=5)
 
-        assert result == {"reloaded": 1, "tools_changed": False}
+        assert result.as_dict() == {"reloaded": 1, "tools_changed": False}
         snap = mgr.status()[0]
         assert snap["state"] == "auth_required"
         assert snap["error"] == "waiting for browser authorization"
@@ -475,13 +508,15 @@ async def test_a_disconnect_while_parked_still_wins_over_the_late_commit(monkeyp
     async def parks(name, cfg, registry, stack, executor=None, http_auth=None):
         captured["notify"]("oauth.pending", {"server": name, "url": "https://idp.example/a"})
         await released.wait()
-        registry.register(FakeTool(f"mcp_{name}_late"))
-        return [f"mcp_{name}_late"]
+        registry.register(
+            FakeTool(f"mcp_{name}_late"), origin=MCPToolRef(name=f"mcp_{name}_late", server=name, tool="late")
+        )
+        return _connected([f"mcp_{name}_late"])
 
     registry = ToolRegistry()
     mgr = MCPConnectionManager(registry)
     with patch(_PATCH, new=parks):
-        await asyncio.wait_for(mgr.sync({"svc": _cfg(auth="oauth")}), timeout=5)
+        await asyncio.wait_for(mgr.apply_config({"svc": _cfg(auth="oauth")}), timeout=5)
         await mgr.disconnect("svc", drop=True)
         released.set()
         await asyncio.sleep(0.05)
@@ -504,7 +539,7 @@ async def test_an_interactive_connect_keeps_its_state_while_the_user_authorizes(
         captured["notify"]("oauth.pending", {"server": name, "url": "https://idp.example/a"})
         states.append(mgr.status()[0]["state"])
         released.set()
-        return []
+        return _connected([])
 
     registry = ToolRegistry()
     mgr = MCPConnectionManager(registry)
@@ -516,7 +551,7 @@ async def test_an_interactive_connect_keeps_its_state_while_the_user_authorizes(
 
 
 @pytest.mark.asyncio
-async def test_sync_connects_servers_concurrently():
+async def test_apply_config_connects_servers_concurrently():
     """Two handshakes that each refuse to finish until the other has started:
     the serial sync deadlocks here, the concurrent one does not."""
     import asyncio
@@ -529,17 +564,17 @@ async def test_sync_connects_servers_concurrently():
         if len(started) == 2:
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=2)
-        return []
+        return _connected([])
 
     mgr = MCPConnectionManager(ToolRegistry())
     with patch(_PATCH, new=meet):
-        await asyncio.wait_for(mgr.sync({"a": _cfg(), "b": _cfg()}), timeout=5)
+        await asyncio.wait_for(mgr.apply_config({"a": _cfg(), "b": _cfg()}), timeout=5)
 
     assert {s["state"] for s in mgr.status()} == {"connected"}
 
 
 @pytest.mark.asyncio
-async def test_a_concurrent_sync_starts_the_executor_once():
+async def test_a_concurrent_apply_starts_the_executor_once():
     import asyncio
 
     calls: list[int] = []
@@ -551,7 +586,7 @@ async def test_a_concurrent_sync_starts_the_executor_once():
 
     mgr = MCPConnectionManager(ToolRegistry())
     with patch(_PATCH, new=_fake_connect(["t"])):
-        await mgr.sync({"a": _cfg(), "b": _cfg()}, executor_provider=provider)
+        await mgr.apply_config({"a": _cfg(), "b": _cfg()}, executor_provider=provider)
 
     assert calls == [1]
 
@@ -560,7 +595,7 @@ async def test_a_concurrent_sync_starts_the_executor_once():
 async def test_beginning_or_dropping_an_attempt_invalidates_its_pending_link(monkeypatch):
     """The epoch dooms a superseded attempt's commit; its authorization link
     must be invalidated at the same edges (new attempt, detach)."""
-    from raven.agent.tools import mcp_oauth
+    from raven.mcp import oauth as mcp_oauth
 
     cancelled: list[str] = []
     monkeypatch.setattr(mcp_oauth, "cancel_pending", lambda name: cancelled.append(name))
@@ -571,3 +606,51 @@ async def test_beginning_or_dropping_an_attempt_invalidates_its_pending_link(mon
         await mgr.disconnect("svc")
 
     assert cancelled == ["svc", "svc"]
+
+
+@pytest.mark.asyncio
+async def test_a_disable_racing_a_handshake_does_not_orphan_its_registrations():
+    """A record whose epoch is None wants no attempt -- not a newer one.
+
+    `_disconnect_locked` clears the epoch as its first act, so an attempt still
+    in flight (parked at browser authorization, or a cold stdio server) reaches
+    the commit, fails the epoch check, and asks `_take_back` to clean up. Reading
+    `epoch is None` as "somebody else owns these names" left them registered
+    while the attempt's own stack was closed underneath them, which is the exact
+    failure the abort path exists to prevent: the model is offered a tool whose
+    session is dead, and `config_changed` reads the orphan through `names_from`
+    and answers "still work to do" on every poll, forever.
+
+    Only `drop=False` reaches it. With `drop=True` the record is gone, so the
+    guard never fires.
+    """
+    import asyncio
+
+    registry = ToolRegistry()
+    mgr = MCPConnectionManager(registry)
+    gate = asyncio.Event()
+
+    async def parked(name, cfg, registry_, stack, executor=None, http_auth=None):
+        await gate.wait()
+        full = f"mcp_{name}_x"
+        registry_.register(FakeTool(full), origin=MCPToolRef(name=full, server=name, tool="x"))
+        return _connected([full])
+
+    with patch(_PATCH, new=parked):
+        applying = asyncio.create_task(mgr.apply_config({"srv": _cfg()}))
+        await asyncio.sleep(0)
+        while mgr._conns.get("srv") is None or mgr._conns["srv"].state != "connecting":
+            await asyncio.sleep(0)
+
+        # The user disables the server while the handshake is still parked.
+        await mgr._disconnect_locked("srv", drop=False)
+        assert mgr._conns["srv"].epoch is None
+
+        gate.set()
+        await applying
+
+    assert registry.tool_names == [], "the attempt's registrations must come back out"
+    assert registry.names_from("srv") == []
+    assert [(s["state"], s["tool_count"]) for s in mgr.status()] == [("disconnected", 0)]
+    # And the probe settles, instead of reporting work on every tick.
+    assert mgr.config_changed({"srv": _cfg(enabled=False)}) is False

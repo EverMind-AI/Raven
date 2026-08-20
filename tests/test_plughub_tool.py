@@ -26,7 +26,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(install_mod, "_config_path", lambda: cfg_path)
     monkeypatch.setattr(ledger_mod, "_plugins_dir", lambda: tmp_path / "plugins")
     (tmp_path / "plugins").mkdir()
-    import raven.agent.tools.mcp_oauth as oauth
+    import raven.mcp.oauth as oauth
 
     monkeypatch.setattr(oauth, "delete_credentials", lambda server: None)
     monkeypatch.setattr(oauth, "_PENDING", {})
@@ -102,7 +102,7 @@ class _FakeLoop:
     def __init__(self, name: str, state: str, tools: list[str] | None = None):
         self.mcp_manager = _FakeManager(name, state, tools)
 
-    async def sync_mcp(self, servers) -> None:
+    async def apply_mcp_config(self, servers) -> None:
         pass
 
     async def _mcp_executor(self):
@@ -113,7 +113,7 @@ def test_the_fakes_do_not_invent_a_contract() -> None:
     """Same guard as the RPC suite: a fake with a method the real thing lacks
     turns this whole file green while the tool raises AttributeError live."""
     from raven.agent.loop.main import AgentLoop
-    from raven.agent.tools.mcp_manager import MCPConnectionManager
+    from raven.mcp.manager import MCPConnectionManager
 
     for attr in [k for k in vars(_FakeLoop) if not k.startswith("__")]:
         assert hasattr(AgentLoop, attr), f"_FakeLoop.{attr} is not on AgentLoop"
@@ -183,7 +183,7 @@ async def test_connect_reports_the_tools_a_no_auth_plugin_registered(monkeypatch
 async def test_connect_returns_the_authorization_url_without_waiting(monkeypatch) -> None:
     """The whole point: an OAuth connect parks on a person, and the tool has to
     come back with the link instead of holding the turn for 15 minutes."""
-    import raven.agent.tools.mcp_oauth as oauth
+    import raven.mcp.oauth as oauth
 
     _patch_catalog(monkeypatch, _entry("oauth"))
     loop = _FakeLoop("svc", "auth_required")
@@ -210,7 +210,7 @@ async def test_connect_takes_nobodys_screen(monkeypatch) -> None:
     """
     import webbrowser
 
-    import raven.agent.tools.mcp_oauth as oauth
+    import raven.mcp.oauth as oauth
 
     _patch_catalog(monkeypatch, _entry("oauth"))
     loop = _FakeLoop("svc", "auth_required")
@@ -342,7 +342,7 @@ async def test_list_sees_a_browser_wait_the_state_alone_does_not_show(_isolated,
     _isolated["cfg_path"].write_text(
         json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
     )
-    monkeypatch.setattr("raven.agent.tools.mcp_oauth.auth_wait_servers", lambda: {"svc"})
+    monkeypatch.setattr("raven.mcp.oauth.auth_wait_servers", lambda: {"svc"})
 
     out = await PluginTool(loop=_FakeLoop("svc", "connecting")).execute(action="list")
 

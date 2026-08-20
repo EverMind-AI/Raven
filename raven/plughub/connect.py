@@ -149,7 +149,7 @@ def _state_of(manager: Any, name: str) -> tuple[dict | None, str | None]:
 
 def _park_baseline(name: str | None) -> str | None:
     """The authorization link this server is parked on right now, if any."""
-    from raven.agent.tools.mcp_oauth import pending_url
+    from raven.mcp.oauth import pending_url
 
     return pending_url(name) if name else None
 
@@ -187,7 +187,7 @@ async def _await_focus(
     the old attempt's URL before the new attempt had even taken the lock, and
     handed the user a link that was about to stop redeeming.
     """
-    from raven.agent.tools.mcp_oauth import pending_url
+    from raven.mcp.oauth import pending_url
 
     deadline = asyncio.get_running_loop().time() + window
     while True:
@@ -215,7 +215,7 @@ async def kick_sync(loop: Any, focus: str | None = None) -> dict | None:
     window would only make it feel stuck.
     """
     manager = getattr(loop, "mcp_manager", None)
-    if loop is None or not hasattr(loop, "sync_mcp") or manager is None:
+    if loop is None or not hasattr(loop, "apply_mcp_config") or manager is None:
         return None
     from raven.config.loader import load_config
 
@@ -233,7 +233,7 @@ async def kick_sync(loop: Any, focus: str | None = None) -> dict | None:
         # Same reason as authorize(): a config this build rejects must not
         # surface as an internal error from every install and toggle.
         raise PlugConnectError(f"config could not be read: {e}") from e
-    task = asyncio.create_task(loop.sync_mcp(servers))
+    task = asyncio.create_task(loop.apply_mcp_config(servers))
     task.add_done_callback(_log_sync_outcome)
 
     if focus is None:
@@ -263,7 +263,7 @@ async def install_and_connect(entry_id: Any, form: Any, loop: Any) -> dict:
     still pending is reported as ``pending`` (the caller keeps the entry out of
     "installed" and resolves it from later events).
     """
-    from raven.agent.tools.mcp_oauth import auth_wait_servers
+    from raven.mcp.oauth import auth_wait_servers
     from raven.plughub import catalog_detail, install_plugin, uninstall_plugin
     from raven.plughub.install import PlugInstallError
     from raven.plughub.trust import HubTrustError
@@ -419,8 +419,8 @@ def installed_overview(loop: Any) -> list[dict]:
     assumed to be watching), so a later reader sees a slow handshake where the
     truth is that someone has a consent page open.
     """
-    from raven.agent.tools.mcp_oauth import auth_wait_servers
     from raven.config.loader import load_config
+    from raven.mcp.oauth import auth_wait_servers
     from raven.plughub import read_ledger
 
     manager = getattr(loop, "mcp_manager", None) if loop is not None else None

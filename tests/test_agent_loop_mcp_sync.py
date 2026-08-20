@@ -1,7 +1,7 @@
 """The seam between a real ``AgentLoop`` and the MCP connection manager.
 
 These use a real loop instance, not a fake one. The whole ``plug.*`` surface
-calls ``loop.sync_mcp`` / ``loop.mcp_manager`` / ``loop._mcp_executor``, and a
+calls ``loop.apply_mcp_config`` / ``loop.mcp_manager`` / ``loop._mcp_executor``, and a
 test that stands those up itself proves nothing about whether the loop has them
 -- which is exactly how an earlier revision shipped an RPC surface where every
 one of those calls was an AttributeError.
@@ -19,9 +19,35 @@ import pytest
 from raven.agent.loop.main import AgentLoop
 from raven.agent.tools.base import Tool
 from raven.config.schema import MCPServerConfig
+from raven.mcp.naming import MCPToolRef
 from raven.providers.base import LLMProvider
 
-_PATCH = "raven.agent.tools.mcp_manager.connect_mcp_server"
+_PATCH = "raven.mcp.manager.connect_mcp_server"
+
+
+class _Caps:
+    """Minimal stand-in for the SDK's ``ServerCapabilities``.
+
+    A field left None means "this server does not offer that primitive", which
+    is what ``servers_offering`` reads. Defaults to tools-only, matching the
+    majority of real servers.
+    """
+
+    def __init__(self, *, resources=None, prompts=None, tools=object()) -> None:
+        self.resources = resources
+        self.prompts = prompts
+        self.tools = tools
+
+
+def _connected(names, *, session=None, capabilities=None):
+    """The shape ``connect_mcp_server`` returns, for a patched stub to hand back."""
+    from raven.mcp.client import Connected
+
+    return Connected(
+        names=list(names),
+        session=session if session is not None else object(),
+        capabilities=capabilities if capabilities is not None else _Caps(),
+    )
 
 
 class _StubProvider(LLMProvider):
@@ -60,9 +86,12 @@ def _fake_connect(tool_names: list[str]):
         out = []
         for t in tool_names:
             full = f"mcp_{name}_{t}"
-            registry.register(_FakeTool(full))
+            # Registered the way a real connect does -- with its origin. The
+            # registry's origin index is what the manager reads its own teardown
+            # list back out of, so a stub without one is invisible to it.
+            registry.register(_FakeTool(full), origin=MCPToolRef(name=full, server=name, tool=t))
             out.append(full)
-        return out
+        return _connected(out)
 
     return fake
 
@@ -88,36 +117,97 @@ def test_the_loop_exposes_exactly_what_the_plug_handlers_call(workspace) -> None
     """`plug.*` reaches for these three by name; nothing else asserts they exist."""
     loop = _loop(workspace)
 
-    assert callable(loop.sync_mcp)
+    assert callable(loop.apply_mcp_config)
     assert callable(loop._mcp_executor)
     manager = loop.mcp_manager
-    for method in ("status", "connect", "disconnect", "sync", "aclose", "tool_map"):
+    for method in ("status", "connect", "disconnect", "apply_config", "config_changed", "aclose", "tool_map"):
         assert callable(getattr(manager, method)), method
     # plug.auth passes the executor provider straight through to connect().
     assert loop.mcp_manager is manager, "the manager must be stable across calls"
 
 
-async def test_sync_mcp_attaches_a_server_while_the_loop_runs(workspace) -> None:
+async def test_apply_mcp_config_attaches_a_server_while_the_loop_runs(workspace) -> None:
     loop = _loop(workspace)
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        result = await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        result = await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
 
-    assert result["tools_changed"] is True
+    assert result.tools_changed is True
     assert loop.tools.has("mcp_svc_search")
     (snap,) = loop.mcp_manager.status()
     assert snap["state"] == "connected"
 
 
-async def test_sync_mcp_detaches_a_server_the_config_dropped(workspace) -> None:
+async def test_apply_mcp_config_detaches_a_server_the_config_dropped(workspace) -> None:
     loop = _loop(workspace)
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
-        await loop.sync_mcp({})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({})
 
     assert not loop.tools.has("mcp_svc_search")
     assert loop.mcp_manager.status() == []
+
+
+async def test_an_unloaded_tool_leaves_the_schema_and_answers_both_readings(workspace) -> None:
+    """What a turn in flight gets when its server is unloaded under it.
+
+    That turn's prompt was assembled while the tool existed -- the model was
+    told it exists -- so the answer must not read as "you got the name wrong".
+    An earlier revision kept a tombstone naming the server to say so; the same
+    thing is now said by naming both readings in the miss itself, which costs
+    twelve tokens and no state.
+    """
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({})
+
+    # Gone from the schema, so the next turn never offers it.
+    assert "mcp_svc_search" not in [d["function"]["name"] for d in loop.tools.get_definitions()]
+    out = await loop.tools.execute("mcp_svc_search", {})
+    assert "may have been unloaded" in out
+    # And no catalog dump: the other tools are not named back at the model.
+    assert "read_file" not in out
+
+
+async def test_the_server_coming_back_makes_its_tools_callable_again(workspace) -> None:
+    loop = _loop(workspace)
+    cfg = {"svc": MCPServerConfig(url="https://svc.test/mcp")}
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config(cfg)
+        await loop.apply_mcp_config({})
+        assert not loop.tools.has("mcp_svc_search")
+        await loop.apply_mcp_config(cfg)
+
+    assert loop.tools.has("mcp_svc_search")
+
+
+async def test_a_probe_against_unchanged_config_reports_no_work(workspace) -> None:
+    loop = _loop(workspace)
+    servers = {"svc": MCPServerConfig(url="https://svc.test/mcp")}
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config(servers)
+
+    assert loop.mcp_config_changed(servers) is False
+    assert loop.mcp_config_changed({}) is True
+
+
+async def test_apply_marks_mcp_as_up_so_the_lazy_connect_does_not_re_walk_it(workspace) -> None:
+    """``_connect_mcp`` short-circuits on ``_mcp_connected``.
+
+    Left unset by ``apply_mcp_config``, a server this apply already attached
+    would be walked a second time by the one-shot lazy connect on the next turn.
+    """
+    loop = _loop(workspace)
+
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+
+    assert loop._mcp_connected is True
 
 
 async def test_a_disabled_server_is_not_connected(workspace) -> None:
@@ -140,9 +230,9 @@ async def test_disabling_a_connected_server_disconnects_it(workspace) -> None:
     loop = _loop(workspace)
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
         assert loop.tools.has("mcp_svc_search")
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp", enabled=False)})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp", enabled=False)})
 
     assert not loop.tools.has("mcp_svc_search")
     (snap,) = loop.mcp_manager.status()
@@ -177,7 +267,7 @@ async def test_the_disabled_tools_blacklist_survives_a_connect(workspace) -> Non
     loop = _loop(workspace, disabled_tools=["mcp_svc_search"])
 
     with patch(_PATCH, new=_fake_connect(["search", "fetch"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
 
     assert not loop.tools.has("mcp_svc_search")
     assert loop.tools.has("mcp_svc_fetch")
@@ -191,7 +281,7 @@ async def test_close_mcp_detaches_everything(workspace) -> None:
     loop = _loop(workspace)
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
     await loop.close_mcp()
 
     assert not loop.tools.has("mcp_svc_search")
@@ -211,7 +301,7 @@ async def test_the_loop_hands_the_manager_its_executor_provider(workspace) -> No
     loop._mcp_executor = _recording
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
 
     assert asked == [True]
 
@@ -232,7 +322,7 @@ async def test_state_changes_reach_the_event_sink(workspace) -> None:
     loop.set_mcp_event_sink(_sink)
 
     with patch(_PATCH, new=_fake_connect(["search"])):
-        await loop.sync_mcp({"svc": MCPServerConfig(url="https://svc.test/mcp")})
+        await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
     import asyncio
 
     await asyncio.sleep(0)  # the bridge is fire-and-forget
@@ -279,8 +369,10 @@ async def test_a_turn_stops_waiting_for_a_server_that_is_waiting_on_a_person(wor
 
     async def parked(name, cfg, registry, stack, executor=None, http_auth=None):
         await released.wait()
-        registry.register(_FakeTool(f"mcp_{name}_late"))
-        return [f"mcp_{name}_late"]
+        registry.register(
+            _FakeTool(f"mcp_{name}_late"), origin=MCPToolRef(name=f"mcp_{name}_late", server=name, tool="late")
+        )
+        return _connected([f"mcp_{name}_late"])
 
     loop = _loop(workspace, {"parks": MCPServerConfig(url="https://parks.test/mcp")})
 
@@ -321,7 +413,7 @@ async def test_an_auth_required_server_surfaces_in_the_tool_notices(workspace) -
     """A server whose tools are absent because it awaits authorization must be
     named in the runtime context, or the model reads the gap as a missing
     capability and tells the user it cannot be done."""
-    from raven.agent.tools.mcp_oauth import OAuthWaitTimeoutError
+    from raven.mcp.oauth import OAuthWaitTimeoutError
 
     async def refused(name, cfg, registry, stack, executor=None, http_auth=None):
         raise OAuthWaitTimeoutError("nobody clicked")
