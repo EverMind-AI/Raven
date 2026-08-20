@@ -33,8 +33,7 @@ function wsReset() {
      conversation's background work to another. The open dag node goes for the
      same reason, and because `dag.node` is addressed by session: left set, the
      panel would ask the newly opened conversation for a run it never made. */
-  AGENTS = []; agentOpen = null; dagNode = null;
-  const dot = $('#wsAgentRun'); if (dot) dot.hidden = true;
+  RavenIslands.subagents.reset();
 }
 
 /* ── resumed sessions ──────────────────────────────────────────────────
@@ -236,11 +235,10 @@ const wsStale = (mine) => mine !== wsEpoch;
 const wsShowsTurn = () => wsOpen && wsTab !== 'agents';
 
 function drawWs() {
-  /* The island owns #wsBody; the agents and browser views still draw into it
-     from the legacy layers, dispatched by the island's draw. */
+  /* The island owns #wsBody; the agents and browser views draw into it
+     through their own islands, dispatched by the workspace island's draw. */
   wsEpoch += 1;
   [...$('#wsTabs').children].forEach((b) => b.setAttribute('aria-selected', String(b.dataset.w === wsTab)));
-  agentStopClock();
   RavenIslands.workspace.draw();
 }
 
