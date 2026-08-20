@@ -27,6 +27,7 @@ export type {
 	RavenCronAddRequest,
 	RavenChannel,
 	RavenChannelFieldSpec,
+	RavenRebindState,
 	RavenToolCredential,
 	RavenToolKeySource,
 	RavenSkillForge,

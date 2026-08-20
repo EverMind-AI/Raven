@@ -436,7 +436,22 @@ export const ravenConfigApi = {
 			qr_text?: string | null;
 			connected: boolean;
 			running: boolean;
+			/** Present for a QR channel: how the rebind flow is going, on the poll
+			 *  the dialog already makes. */
+			rebind?: RavenRebindState | null;
 		}>(`/raven/channels/${name}/qr`),
+
+	/** Pair a QR channel to a different account. The adapter keeps the account it
+	 *  has until a new scan is confirmed, and no gateway restart is needed — so
+	 *  cancelling, or walking away, costs the user nothing. */
+	rebindChannel: (name: string) =>
+		client.post<RavenRebindState & { started: boolean; reason: string }>(
+			`/raven/channels/${name}/rebind`,
+			{},
+		),
+
+	cancelChannelRebind: (name: string) =>
+		client.post<RavenRebindState>(`/raven/channels/${name}/rebind/cancel`, {}),
 
 	// EverOS long-term memory models (llm/embedding/rerank/multimodal). Changes
 	// take effect on the next gateway restart (restart_required is returned).
@@ -567,6 +582,22 @@ export interface RavenToolCredential {
 	defaultApiBase?: string;
 	model?: string;
 	defaultModel?: string;
+}
+
+/** How a QR channel's rebind is going. `phase` is what the dialog draws:
+ *  `waiting` (a code is up — an expiry reissues and stays here with a higher
+ *  `refreshes`), `scanned` (seen, awaiting confirmation on the phone),
+ *  `confirmed`, `failed`, `cancelled`, `idle`. */
+export interface RavenRebindState {
+	phase: 'idle' | 'waiting' | 'scanned' | 'confirmed' | 'failed' | 'cancelled';
+	/** Codes reissued so far, against `max_refreshes` before the flow gives up. */
+	refreshes: number;
+	max_refreshes: number;
+	/** Seconds since the current code was issued; null when none is up. Sent as an
+	 *  age rather than a deadline because the two clocks are not shared. */
+	code_age_s: number | null;
+	/** Why it failed, when it did: `expired`, `no_token`, `error`. */
+	detail: string;
 }
 
 export interface RavenChannelFieldSpec {

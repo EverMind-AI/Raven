@@ -288,6 +288,23 @@ def build_raven_config_router() -> APIRouter:
         client = await GatewayClient.shared()
         return await client.call("raven.gateway.restart", {})
 
+    @router.post("/channels/{name}/rebind")
+    async def rebind_channel(name: str) -> dict:
+        """Pair this channel to a different account without stopping it.
+
+        The adapter keeps the account it has until a new scan is confirmed, so
+        this is safe to call on a live channel: closing the dialog, or never
+        scanning, costs nothing. No gateway restart either -- the token is read
+        per request, so the running long poll picks the new one up.
+        """
+        client = await GatewayClient.shared()
+        return await client.call("raven.channels.rebind", {"name": name})
+
+    @router.post("/channels/{name}/rebind/cancel")
+    async def cancel_channel_rebind(name: str) -> dict:
+        client = await GatewayClient.shared()
+        return await client.call("raven.channels.rebind.cancel", {"name": name})
+
     @router.get("/channels/{name}/qr")
     async def channel_qr(name: str) -> dict:
         client = await GatewayClient.shared()

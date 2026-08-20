@@ -418,14 +418,49 @@ def register_config_methods(
         qr = getattr(ch, "pending_qr", None) if ch is not None else None
         running = ch is not None and bool(getattr(ch, "is_running", False))
         png = _render_qr_png(qr) if qr else None
+        # The rebind snapshot rides this poll rather than needing its own: the
+        # page is already asking once a second for the code, and phase + code age
+        # are what turn "a picture" into "scan it, it expires, we reissued".
+        rebind = ch.rebind_state() if ch is not None and hasattr(ch, "rebind_state") else None
         return {
             "qr": png,
             "qr_text": qr if qr and png is None else None,
             "connected": running and bool(getattr(ch, "connected", False)),
             "running": running,
+            "rebind": rebind,
         }
 
     dispatcher.register("raven.channels.qr", _channels_qr)
+
+    # Rebinding: pairing a QR-login channel to a different account without
+    # stopping it. The adapter keeps the account it has until a new scan is
+    # confirmed, so these two methods are safe to call on a live channel and a
+    # reader who walks away loses nothing.
+    def _qr_channel(name: str):
+        ch = channel_manager.get_channel(name) if channel_manager is not None else None
+        return ch if ch is not None and hasattr(ch, "begin_rebind") else None
+
+    async def _channels_rebind(params: dict) -> dict:
+        """Start pairing ``name`` to a different account.
+
+        Answers ``started: False`` with a reason rather than raising: "this
+        channel does not support it", "it is not running" and "one is already in
+        flight" are all states the page draws, not errors it reports.
+        """
+        ch = _qr_channel(params.get("name", ""))
+        if ch is None:
+            return {"started": False, "reason": "unsupported", "phase": "idle"}
+        return await ch.begin_rebind()
+
+    async def _channels_rebind_cancel(params: dict) -> dict:
+        """Stop waiting for a scan; the account paired now stays paired."""
+        ch = _qr_channel(params.get("name", ""))
+        if ch is None:
+            return {"phase": "idle", "detail": "unsupported"}
+        return ch.cancel_rebind()
+
+    dispatcher.register("raven.channels.rebind", _channels_rebind)
+    dispatcher.register("raven.channels.rebind.cancel", _channels_rebind_cancel)
 
     async def _channels_live(params: dict) -> dict:
         """Every channel's runtime state in one round trip, for a client drawing

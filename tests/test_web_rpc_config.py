@@ -1824,10 +1824,10 @@ async def test_channels_qr_renders_pending_login_code() -> None:
     _Ch.pending_qr = None
     _Ch.connected = True  # paired
     resp = await _dispatch(d, "raven.channels.qr", {"name": "weixin"})
-    assert resp["result"] == {"qr": None, "qr_text": None, "connected": True, "running": True}
+    assert resp["result"] == {"qr": None, "qr_text": None, "connected": True, "running": True, "rebind": None}
 
     resp = await _dispatch(d, "raven.channels.qr", {"name": "nope"})
-    assert resp["result"] == {"qr": None, "qr_text": None, "connected": False, "running": False}
+    assert resp["result"] == {"qr": None, "qr_text": None, "connected": False, "running": False, "rebind": None}
 
 
 async def test_channels_qr_is_not_connected_before_the_first_qr_arrives() -> None:
@@ -1905,7 +1905,9 @@ async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeyp
 
     # Nothing pending yet, and the task being up is not being paired.
     r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
-    assert r == {"qr": None, "qr_text": None, "connected": False, "running": True}
+    # `rebind` is None for an adapter that does not offer the flow -- whatsapp
+    # pairs by QR but has no rebind of its own yet.
+    assert r == {"qr": None, "qr_text": None, "connected": False, "running": True, "rebind": None}
 
     await ch._handle_bridge_message(_json.dumps({"type": "qr", "qr": "2@abc"}))
     r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
@@ -1914,7 +1916,7 @@ async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeyp
 
     await ch._handle_bridge_message(_json.dumps({"type": "status", "status": "connected"}))
     r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
-    assert r == {"qr": None, "qr_text": None, "connected": True, "running": True}
+    assert r == {"qr": None, "qr_text": None, "connected": True, "running": True, "rebind": None}
 
 
 async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
@@ -1936,7 +1938,16 @@ async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
     register_config_methods(d, channel_manager=_Mgr())
 
     r = (await _dispatch(d, "raven.channels.qr", {"name": "weixin"}))["result"]
-    assert r == {"qr": None, "qr_text": None, "connected": False, "running": True}
+    assert {k: v for k, v in r.items() if k != "rebind"} == {
+        "qr": None,
+        "qr_text": None,
+        "connected": False,
+        "running": True,
+    }
+    # A rebindable adapter reports the flow's state on the same poll, so the
+    # dialog needs one request per tick rather than two that can drift apart.
+    assert r["rebind"]["phase"] == "idle"
+    assert r["rebind"]["code_age_s"] is None
 
     # Park the login flow on "waiting to be scanned" and read the RPC mid-flight.
     ch._fetch_qr = AsyncMock(return_value=("qid", "https://scan/1"))
@@ -2356,3 +2367,76 @@ async def test_tools_methods_are_served_by_the_gateway_registration(tool_cfg: Pa
 
     rows = (await _dispatch(d, "raven.tools.list", {}))["result"]["tools"]
     assert rows[0]["registered"] is True, "the handler never reached the live loop"
+
+
+# ---------------------------------------------------------------------------
+# raven.channels.rebind{,.cancel} -- pairing a live QR channel to another account
+# ---------------------------------------------------------------------------
+
+
+class _RebindableChannel:
+    """A QR channel as far as the rebind methods read it."""
+
+    def __init__(self, *, started=True, reason="") -> None:
+        self.calls: list[str] = []
+        self._started = started
+        self._reason = reason
+        self.pending_qr = None
+        self.connected = True
+        self.is_running = True
+
+    def rebind_state(self) -> dict:
+        return {"phase": "waiting", "refreshes": 1, "max_refreshes": 3, "code_age_s": 4.0, "detail": ""}
+
+    async def begin_rebind(self) -> dict:
+        self.calls.append("begin")
+        return {"started": self._started, "reason": self._reason, **self.rebind_state()}
+
+    def cancel_rebind(self) -> dict:
+        self.calls.append("cancel")
+        return {**self.rebind_state(), "phase": "cancelled"}
+
+
+class _OnlyChannel:
+    def __init__(self, ch) -> None:
+        self._ch = ch
+
+    def get_channel(self, name: str):
+        return self._ch if name == "weixin" else None
+
+
+async def test_rebind_reaches_the_adapter_and_reports_its_phase() -> None:
+    ch = _RebindableChannel()
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_OnlyChannel(ch))
+
+    r = (await _dispatch(d, "raven.channels.rebind", {"name": "weixin"}))["result"]
+    assert r["started"] is True and r["phase"] == "waiting"
+    assert r["max_refreshes"] == 3, "the page cannot say 'expired twice of three' without it"
+    assert ch.calls == ["begin"]
+
+    r = (await _dispatch(d, "raven.channels.rebind.cancel", {"name": "weixin"}))["result"]
+    assert r["phase"] == "cancelled"
+    assert ch.calls == ["begin", "cancel"]
+
+
+async def test_rebind_on_a_channel_that_cannot_do_it_answers_a_state_not_an_error() -> None:
+    # telegram has no QR pairing; the page draws "unsupported" and must not have
+    # to distinguish a transport failure from a channel that never offered it.
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_OnlyChannel(_RebindableChannel()))
+    resp = await _dispatch(d, "raven.channels.rebind", {"name": "telegram"})
+    assert "error" not in resp, resp
+    assert resp["result"] == {"started": False, "reason": "unsupported", "phase": "idle"}
+
+
+async def test_the_qr_poll_carries_the_rebind_phase() -> None:
+    # One poll, two facts: the page already asks for the code once a second, and
+    # a second call for the phase would drift out of step with it.
+    ch = _RebindableChannel()
+    ch.pending_qr = "https://scan/1"
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_OnlyChannel(ch))
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "weixin"}))["result"]
+    assert r["rebind"]["phase"] == "waiting"
+    assert r["rebind"]["code_age_s"] == 4.0

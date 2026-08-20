@@ -758,6 +758,25 @@
 		"deleteFailed": "删除失败：{{error}}"
 	},
 	"ravenChannels": {
+		"rebindEntry": "换绑其他账号",
+		"rebindConfirm": "把 {{name}} 换绑到另一个账号？",
+		"rebindSafety": "现在的账号会一直保持登录，直到新账号扫码确认成功为止 —— 中途关掉或不扫，什么都不会丢，也不需要重启网关。",
+		"rebindStart": "开始换绑",
+		"rebindScan": "用要换上的账号扫码登录",
+		"rebindAging": "这个二维码快过期了，过期会自动换新码",
+		"rebindReissued": "二维码已过期，已自动换新码（第 {{n}} / {{max}} 次）",
+		"rebindScanned": "已扫码，请在手机上确认",
+		"rebindDone": "{{name}} 已换绑成功，立即生效，无需重启网关",
+		"rebindGaveUp": "二维码连续过期太多次，已停止。当前账号没有变动，可以重试。",
+		"rebindError": "换绑出错（{{detail}}），当前账号没有变动。",
+		"rebindRetry": "重新出码",
+		"rebindKeepCurrent": "取消，保留当前账号",
+		"rebindFailed": "换绑请求失败：{{error}}",
+		"rebindRefused": {
+			"not_running": "渠道没有在运行，先把它打开再换绑。",
+			"already_rebinding": "已经有一个换绑在进行中了。",
+			"unsupported": "这个渠道不支持扫码换绑。"
+		},
 		"kicker": "配置 · 消息渠道",
 		"title": "消息渠道",
 		"subtitle": "即时通讯渠道。修改会保存到配置，需重启网关后生效。",
