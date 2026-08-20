@@ -75,6 +75,9 @@ LOG_DIR="$REPO_ROOT/.webapp_logs"
 GATEWAY_PID_FILE="$LOG_DIR/gateway.pid"
 SERVICE_PID_FILE="$LOG_DIR/service.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
+SERVICE_LOG="$LOG_DIR/service.log"
+RESOLVED_SERVICE_PYTHON=""
+RESOLVED_SERVICE_PYTHON_SOURCE=""
 # Brand logos are two DIFFERENT images, not copies of each other:
 #   - sidebar (top-left, transparent bg) -> src, imported by AppSidebar
 #   - favicon (browser tab, white bg)     -> public/, referenced by index.html
@@ -167,30 +170,33 @@ free_port() {
 }
 
 # Decide whether <name> may start on <port>. Returns 0 when the port is free,
-# 1 when something we own already serves it (so the caller skips starting a
-# second one), and exits when a stranger holds it: attaching to that would point
-# the app at whatever answers there, which is silent and wrong -- the UI would
-# talk to it as if it were the service, and `stop` would later try to kill it.
+# 1 when something we own already serves it, and 2 when the port cannot be
+# claimed safely. Attaching to a stranger would point the UI at whatever answers
+# there, and `stop` would later try to kill it.
 claim_port() {
   local name="$1" port="$2" pattern="$3" pid pids
+  local mine=() foreign=()
   port_in_use "$port" || return 0
   pids="$(pids_on_port "$port")" || true
   if [[ -z "$pids" ]]; then
     echo "[$name] :$port is in use but the holder cannot be identified" \
-         "(no ss/lsof/fuser) -- leaving it as is" >&2
-    return 1
+         "(no ss/lsof/fuser) -- refusing to continue" >&2
+    return 2
   fi
   for pid in $pids; do
-    if holder_is_ours "$pid" "$pattern"; then
-      echo "[$name] :$port already served by pid $pid -- reusing it"
-      return 1
-    fi
+    if holder_is_ours "$pid" "$pattern"; then mine+=("$pid"); else foreign+=("$pid"); fi
   done
+  if (( ${#foreign[@]} == 0 )); then
+    echo "[$name] :$port already served by pid ${mine[*]} -- reusing it"
+    return 1
+  fi
   echo "[$name] FATAL: :$port is held by an unrelated process" >&2
-  for pid in $pids; do echo "          pid $pid: $(cmd_of_pid "$pid")" >&2; done
-  echo "          Not ours to stop. Kill it yourself (kill ${pids//$'\n'/ }) if it is a leftover," >&2
+  for pid in "${foreign[@]}"; do
+    echo "          pid $pid: $(cmd_of_pid "$pid")" >&2
+  done
+  echo "          Not ours to stop. Kill it yourself (kill ${foreign[*]}) if it is a leftover," >&2
   echo "          or run with $(echo "$name" | tr 'a-z' 'A-Z')_PORT=<port> to move this app." >&2
-  exit 1
+  return 2
 }
 
 # A zombie keeps answering `kill -0` until its parent reaps it, and `restart`
@@ -247,6 +253,13 @@ spawn_session() {
   else
     exec python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
   fi
+}
+
+spawn_session_in_dir() {
+  local directory="$1"
+  shift
+  cd "$directory"
+  spawn_session "$@"
 }
 
 ensure_redis() {
@@ -383,7 +396,7 @@ else:
     print("changed=0")
 print("token=" + (web.get("authToken") or web.get("auth_token") or ""))
 PY
-  )" || { echo "[gateway] FATAL: could not update $RAVEN_CONFIG" >&2; exit 1; }
+  )" || { echo "[gateway] FATAL: could not update $RAVEN_CONFIG" >&2; return 1; }
   while IFS= read -r line; do
     case "$line" in
       changed=1*) echo "[gateway] ${line#changed=1 detail=} (in $RAVEN_CONFIG, backup .bak)" ;;
@@ -393,14 +406,80 @@ PY
   done <<<"$out"
 }
 
+emit_service_error() {
+  printf '%s\n' "$1" >&2
+  printf '%s\n' "$1" >>"$SERVICE_LOG"
+}
+
+# Import the first service module instead of probing uvicorn alone: the in-tree
+# AgentScope copy has runtime dependencies that raven's own metadata cannot see.
+service_python_ready() {
+  local candidate="$1" candidate_source="$2" output
+  if [[ ! -x "$candidate" ]]; then
+    emit_service_error "[service] rejected python: $candidate ($candidate_source; not executable)"
+    return 1
+  fi
+  if output="$(
+    (cd "$REPO_ROOT/service" && "$candidate" -c 'import raven, raven_gateway_agent, uvicorn') 2>&1
+  )"; then
+    return 0
+  fi
+  emit_service_error "[service] rejected python: $candidate ($candidate_source)"
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output" >>"$SERVICE_LOG"
+  fi
+  return 1
+}
+
+resolve_service_python() {
+  local raven_bin candidate selected_line
+  : >"$SERVICE_LOG"
+  RESOLVED_SERVICE_PYTHON=""
+  RESOLVED_SERVICE_PYTHON_SOURCE=""
+
+  if [[ -n "${SERVICE_PYTHON:-}" ]]; then
+    if service_python_ready "$SERVICE_PYTHON" SERVICE_PYTHON; then
+      RESOLVED_SERVICE_PYTHON="$SERVICE_PYTHON"
+      RESOLVED_SERVICE_PYTHON_SOURCE="SERVICE_PYTHON"
+    else
+      echo "[service] WARNING: SERVICE_PYTHON failed the service import preflight; trying raven's tool environment" >&2
+    fi
+  fi
+
+  if [[ -z "$RESOLVED_SERVICE_PYTHON" ]]; then
+    raven_bin="$(command -v raven || true)"
+    if [[ -n "$raven_bin" ]]; then
+      candidate="$(dirname "$(readlink -f "$raven_bin")")/python"
+      if service_python_ready "$candidate" "raven tool env"; then
+        RESOLVED_SERVICE_PYTHON="$candidate"
+        RESOLVED_SERVICE_PYTHON_SOURCE="raven tool env"
+      fi
+    fi
+  fi
+
+  if [[ -z "$RESOLVED_SERVICE_PYTHON" ]]; then
+    emit_service_error "[service] FATAL: no Python interpreter can import the web service."
+    emit_service_error "          Install its dependencies into raven's tool environment:"
+    emit_service_error "            uv tool install --force --editable . \\"
+    emit_service_error "              --with-requirements ui-webui/service/requirements-dev.txt"
+    emit_service_error "          Or set SERVICE_PYTHON=/abs/path/to/python and retry."
+    echo "          Import details: $SERVICE_LOG" >&2
+    return 1
+  fi
+
+  selected_line="[service] python: $RESOLVED_SERVICE_PYTHON ($RESOLVED_SERVICE_PYTHON_SOURCE)"
+  echo "$selected_line"
+  printf '%s\n' "$selected_line" >>"$SERVICE_LOG"
+}
+
 start_gateway() {
   if ! command -v raven >/dev/null 2>&1; then
     echo "[gateway] FATAL: 'raven' is not on PATH, and the chat cannot run" >&2
     echo "          without the gateway. Install it with" >&2
     echo "          uv tool install --editable <repo> --force" >&2
-    exit 1
+    return 1
   fi
-  sync_gateway_web_config
+  sync_gateway_web_config || return 1
   # Never silently reuse a listener here: stop_gateway ran first, so anything
   # still on the port is a gateway that refused to die or a foreign process.
   # Reusing it is what let a day-old gateway keep serving after a restart.
@@ -411,57 +490,50 @@ start_gateway() {
     done
     echo "          refusing to start a second gateway. Free the port, or pass" >&2
     echo "          KEEP_GATEWAY=1 to reuse the running one as-is." >&2
-    exit 1
+    return 1
   fi
   echo "[gateway] starting raven gateway, web channel on :$GATEWAY_WS_PORT   (log: $LOG_DIR/gateway.log)"
-  spawn_session bash -c "exec raven gateway --config '$RAVEN_CONFIG'" \
+  spawn_session raven gateway --config "$RAVEN_CONFIG" \
     >"$LOG_DIR/gateway.log" 2>&1 &
   echo $! >"$GATEWAY_PID_FILE"
 }
 
 start_service() {
-  claim_port service "$SERVICE_PORT" "$SERVICE_PATTERN" || return 0
-  echo "[service] main agent = raven gateway web channel  ($RAVEN_GATEWAY_WS_URL)"
-  echo "[service] starting agent service on :$SERVICE_PORT   (log: $LOG_DIR/service.log)"
-  # The service runs on the same interpreter as the gateway: the uv tool env that
-  # `raven` is installed into, which carries the service's dependencies too (see
-  # service/requirements.txt). Located from the `raven` entrypoint rather than
-  # hardcoded, so it follows a move of UV_TOOL_DIR. Override with
-  # SERVICE_PYTHON=/abs/path/to/python.
-  local svc_py=""
-  if [[ -n "${SERVICE_PYTHON:-}" ]] && "${SERVICE_PYTHON}" -c "import uvicorn" >/dev/null 2>&1; then
-    svc_py="$SERVICE_PYTHON"; echo "[service] python: $svc_py (SERVICE_PYTHON)"
-  else
-    local raven_bin cand
-    raven_bin="$(command -v raven || true)"
-    if [[ -n "$raven_bin" ]]; then
-      cand="$(dirname "$(readlink -f "$raven_bin")")/python"
-      if [[ -x "$cand" ]] && "$cand" -c "import uvicorn" >/dev/null 2>&1; then
-        svc_py="$cand"; echo "[service] python: $svc_py (raven tool env)"
-      fi
-    fi
-    if [[ -z "$svc_py" ]]; then
-      echo "[service] FATAL: raven's interpreter lacks the service deps (agentscope+uvicorn)." >&2
-      echo "          Install them into it, from the repo root:" >&2
-      echo "            uv tool install --force --editable . \\" >&2
-      echo "              --with-requirements ui-webui/service/requirements-dev.txt" >&2
-      echo "          Or set SERVICE_PYTHON=/abs/path/to/python and retry." >&2
-      exit 1
-    fi
+  local claim_rc=0
+  claim_port service "$SERVICE_PORT" "$SERVICE_PATTERN" || claim_rc=$?
+  case "$claim_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return "$claim_rc" ;;
+  esac
+  if [[ -z "$RESOLVED_SERVICE_PYTHON" ]]; then
+    emit_service_error "[service] FATAL: service Python was not resolved before startup."
+    return 1
   fi
+  echo "[service] main agent = raven gateway web channel  ($RAVEN_GATEWAY_WS_URL)"
+  echo "[service] starting agent service on :$SERVICE_PORT   (log: $SERVICE_LOG)"
   # `agentscope` lives in service/ alongside main.py, so the interpreter finds it
   # via sys.path[0] (the script's own directory) -- which precedes site-packages,
   # so the in-repo copy wins over any agentscope installed in the environment.
-  local svc_env="RAVEN_GATEWAY_WS_URL='$RAVEN_GATEWAY_WS_URL' RAVEN_GATEWAY_WS_TOKEN='$RAVEN_GATEWAY_WS_TOKEN' SERVICE_PORT='$SERVICE_PORT' PYTHONUTF8=1"
-  spawn_session bash -c "cd '$REPO_ROOT/service' && exec env $svc_env '$svc_py' main.py" \
-    >"$LOG_DIR/service.log" 2>&1 &
+  RAVEN_GATEWAY_WS_URL="$RAVEN_GATEWAY_WS_URL" \
+  RAVEN_GATEWAY_WS_TOKEN="$RAVEN_GATEWAY_WS_TOKEN" \
+  SERVICE_PORT="$SERVICE_PORT" \
+  PYTHONUTF8=1 \
+    spawn_session_in_dir "$REPO_ROOT/service" "$RESOLVED_SERVICE_PYTHON" main.py \
+    >>"$SERVICE_LOG" 2>&1 &
   echo $! >"$SERVICE_PID_FILE"
 }
 
 
 start_frontend() {
-  command -v pnpm >/dev/null 2>&1 || { echo "[frontend] pnpm not found — skipping" >&2; return 0; }
-  claim_port frontend "$FRONTEND_PORT" "$FRONTEND_PATTERN" || return 0
+  command -v pnpm >/dev/null 2>&1 || { echo "[frontend] FATAL: pnpm not found" >&2; return 1; }
+  local claim_rc=0
+  claim_port frontend "$FRONTEND_PORT" "$FRONTEND_PATTERN" || claim_rc=$?
+  case "$claim_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return "$claim_rc" ;;
+  esac
   echo "[frontend] starting Vite on :$FRONTEND_PORT   (log: $LOG_DIR/frontend.log)"
   # VITE_SERVICE_PORT is baked into the bundle at dev-server start: the UI
   # derives the service URL from it instead of asking the user, so a changed
@@ -470,19 +542,29 @@ start_frontend() {
   # --strictPort stops its auto-increment from drifting to a port nothing here
   # watches when the requested one gets taken between claim_port and the bind.
   # No `--` before them: pnpm forwards it literally, and Vite then ignores both.
-  spawn_session bash -c "cd '$REPO_ROOT' && VITE_SERVICE_PORT='$SERVICE_PORT' exec pnpm --filter frontend dev --port '$FRONTEND_PORT' --strictPort" \
+  VITE_SERVICE_PORT="$SERVICE_PORT" \
+    spawn_session_in_dir "$REPO_ROOT" pnpm --filter frontend dev --port "$FRONTEND_PORT" --strictPort \
     >"$LOG_DIR/frontend.log" 2>&1 &
   echo $! >"$FRONTEND_PID_FILE"
 }
 
 wait_for_port() {
-  local p="$1" name="$2" tries="${3:-30}"
+  local p="$1" name="$2" tries="${3:-30}" pid_file pid
+  pid_file="$LOG_DIR/$name.pid"
   printf '[%s] waiting for :%s ' "$name" "$p"
   while (( tries-- > 0 )); do
+    if [[ -s "$pid_file" ]]; then
+      pid="$(cat "$pid_file")"
+      if ! pid_alive "$pid"; then
+        echo " -> FAILED (pid $pid exited; check $LOG_DIR/$name.log)" >&2
+        return 1
+      fi
+    fi
     if port_in_use "$p"; then echo "-> up"; return 0; fi
     printf '.'; sleep 1
   done
-  echo " -> not up yet (check $LOG_DIR/$name.log)"
+  echo " -> FAILED (check $LOG_DIR/$name.log)" >&2
+  return 1
 }
 
 # Stop a pid-file-tracked process group, escalating through <signals> and
@@ -566,9 +648,17 @@ status() {
   echo "frontend : $(port_in_use "$FRONTEND_PORT"  && echo "UP on :$FRONTEND_PORT" || echo 'down')"
 }
 
+abort_bringup() {
+  local component="$1"
+  echo "[startup] FATAL: $component failed to start; stopping the partial stack" >&2
+  stop_all
+  return 1
+}
+
 # Bring up all pieces and wait for the key ports; no log tailing so this is
 # safe to call from non-interactive flows (e.g. restart).
 bringup() {
+  resolve_service_python || return 1
   ensure_redis
   ensure_logo
   ensure_deps
@@ -576,15 +666,33 @@ bringup() {
     echo "[gateway] KEEP_GATEWAY=1 — reusing the gateway on :$GATEWAY_WS_PORT without restarting it"
     echo "[gateway] WARNING: it may be running stale code; edits under raven/ will NOT take effect" >&2
   else
-    start_gateway
+    if ! start_gateway; then
+      abort_bringup gateway
+      return 1
+    fi
     # The service dials the WS lazily, but coming up second keeps the first
     # chat turn from racing a gateway that is still loading its config.
-    wait_for_port "$GATEWAY_WS_PORT" gateway 60
+    if ! wait_for_port "$GATEWAY_WS_PORT" gateway 60; then
+      abort_bringup gateway
+      return 1
+    fi
   fi
-  start_service
-  start_frontend
-  wait_for_port "$SERVICE_PORT"  service 40
-  wait_for_port "$FRONTEND_PORT" frontend
+  if ! start_service; then
+    abort_bringup service
+    return 1
+  fi
+  if ! start_frontend; then
+    abort_bringup frontend
+    return 1
+  fi
+  if ! wait_for_port "$SERVICE_PORT" service 40; then
+    abort_bringup service
+    return 1
+  fi
+  if ! wait_for_port "$FRONTEND_PORT" frontend; then
+    abort_bringup frontend
+    return 1
+  fi
   cat <<EOF
 
 ──────────────────────────────────────────────────────────────
@@ -623,10 +731,16 @@ restart_all() {
 }
 
 # ---- entrypoint ----------------------------------------------------------
-case "${1:-start}" in
-  start)   start_all ;;
-  stop)    stop_all ;;
-  restart) restart_all ;;
-  status)  status ;;
-  *) echo "usage: $0 [start|stop|restart|status]" >&2; exit 1 ;;
-esac
+main() {
+  case "${1:-start}" in
+    start)   start_all ;;
+    stop)    stop_all ;;
+    restart) restart_all ;;
+    status)  status ;;
+    *) echo "usage: $0 [start|stop|restart|status]" >&2; return 1 ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

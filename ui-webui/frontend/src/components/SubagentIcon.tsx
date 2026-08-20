@@ -1,4 +1,9 @@
-import { ClaudeCode, Codex, HermesAgent, OpenAI, OpenClaw, OpenCode } from '@lobehub/icons';
+import ClaudeCode from '@lobehub/icons/es/ClaudeCode';
+import Codex from '@lobehub/icons/es/Codex';
+import HermesAgent from '@lobehub/icons/es/HermesAgent';
+import OpenAI from '@lobehub/icons/es/OpenAI';
+import OpenClaw from '@lobehub/icons/es/OpenClaw';
+import OpenCode from '@lobehub/icons/es/OpenCode';
 import type { ReactNode } from 'react';
 
 import { MiroMindMark } from '@/components/MiroMindMark';
