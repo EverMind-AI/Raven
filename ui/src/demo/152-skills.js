@@ -66,40 +66,30 @@ const skInstBtn = (() => {
   } };
 })();
 
+/* The skill tab's face on #capsBody: the island owns everything inside the
+   box, and the chrome above it is still the page's, set here on every draw.
+   demo/153-plugins.js wraps this name for the plugin tab, so a call that
+   arrives here is always a skill draw. */
+function drawCaps() {
+  const box = $('#capsBody'); box.innerHTML = '';
+  const title = T('gui.tab.skills');
+  const installed = RavenIslands.skills.view() === 'installed';
+  $('#capsTitle').textContent = installed ? T('gui.plug.installed_title') : title;
+  $('#capsPage').setAttribute('aria-label', title);
+  $('#cKind').hidden = true;
+  $('#advAdd').hidden = true;
+  $('#cq').placeholder = T('gui.hub.search_ph');
+  $('.cbar').style.display = installed ? 'none' : '';
+  RavenIslands.skills.attach(box);
+  RavenIslands.skills.redraw();
+  /* The first reveal fetches; a boot-time draw of the closed page must
+     not fire a hub search nobody asked for. */
+  if ($('#capsPage').dataset.open === 'true') RavenIslands.skills.ensureSearch();
+  skInstBtn.sync();
+  drawCapsBadge();
+}
+
 {
-  const prevDrawCaps = drawCaps;
-  drawCaps = function () {
-    if (extTab !== 'skill') {
-      // Undo this tab's chrome before handing back: the skill view hid the
-      // status pills and (on the installed screen) the whole search bar.
-      $('#cKind').hidden = false;
-      $('.cbar').style.display = '';
-      prevDrawCaps();
-      skInstBtn.sync();
-      return;
-    }
-
-    /* The island owns everything inside #capsBody; the chrome above the
-       box is still the page's, set here on every draw exactly as the
-       legacy renderer did. */
-    const box = $('#capsBody'); box.innerHTML = '';
-    const title = T('gui.tab.skills');
-    const installed = RavenIslands.skills.view() === 'installed';
-    $('#capsTitle').textContent = installed ? T('gui.plug.installed_title') : title;
-    $('#capsPage').setAttribute('aria-label', title);
-    $('#cKind').hidden = true;
-    $('#advAdd').hidden = true;
-    $('#cq').placeholder = T('gui.hub.search_ph');
-    $('.cbar').style.display = installed ? 'none' : '';
-    RavenIslands.skills.attach(box);
-    RavenIslands.skills.redraw();
-    /* The first reveal fetches; a boot-time draw of the closed page must
-       not fire a hub search nobody asked for. */
-    if ($('#capsPage').dataset.open === 'true') RavenIslands.skills.ensureSearch();
-    skInstBtn.sync();
-    drawCapsBadge();
-  };
-
   const prevInput = $('#cq').oninput;
   $('#cq').oninput = () => {
     if (extTab === 'skill') { RavenIslands.skills.setQuery($('#cq').value.trim()); return; }
