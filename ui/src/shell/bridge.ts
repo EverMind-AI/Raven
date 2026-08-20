@@ -37,6 +37,12 @@ export interface Shell {
   useInTask?(promptKey: string, name: string): void
   reachText?(reach: string): string
   closeDetail?(): void
+  /* Optional verbs: each exists once an island needs it and the shell half
+     (demo/155-bridge.js) publishes it. */
+  copyToClip?(text: string, done: string): void
+  showWorkspace?(tab: string): void
+  wsShows?(tab: string): boolean
+  lang?(): string
 }
 
 declare global {

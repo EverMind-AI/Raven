@@ -61,6 +61,7 @@ _DEMO_PARTS = [
     "090-composer.js",
     "100-workspace.js",
     "110-subagents.js",
+    "112-browser.js",
     "120-capabilities.js",
     "130-settings.js",
     "140-schedule.js",
