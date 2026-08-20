@@ -2,10 +2,9 @@
    The renderer is the transcript island (ui/src/features/transcript/): a
    turn is read as segments -- the ask, the steps (thought, narration,
    activity rows), the answer -- and painted into a lane host inside the
-   #stage container. What remains here is the island's shell face: the names
+   #stage container. What remains here is the island's shell face -- the names
    the replay, the composer, the schedules fixture and the live layer still
-   call, the delegation seams the live layer assigns into, and the fixture
-   half of DS.transcript. */
+   call -- and the fixture half of DS.transcript. */
 
 /* One step of a turn: the handle keeps the legacy widget surface
    (hasThink/hasSay/failed setters, tool().done(), seal()). */
@@ -54,14 +53,6 @@ const ACT_ICO = {
     + 'M21 18a2.2 2.2 0 1 1-4.4 0 2.2 2.2 0 0 1 4.4 0ZM7.3 11l9.4-4M7.3 13l9.4 4',
 };
 
-/* ── delegation seams ─────────────────────────────────────────────
-   The cards in the trail open real things only with a host behind them;
-   live.js assigns all three. The island reaches them through DS.transcript,
-   late-bound, so the demo canvas stays honest (null -> panel fallback). */
-let delegOpenNode = null;    /* (run_id, node_id) => open the node's transcript */
-let delegReadDag = null;     /* (run_id) => [{node, status}], read off disk */
-let delegOpenSpawn = null;   /* (agent, label) => the run's record in the panel */
-
 /* The fixture half of DS.transcript. The demo replay passes explicit ok
    flags and clean previews, so the reading hooks are identity; branch keeps
    the demo's canned fork. Live mode installs the rpc source over this. */
@@ -73,12 +64,12 @@ DS.transcript ??= {
       last: '从上一轮回复分叉', when: '刚刚', run: null };
     SESS.unshift(s); cur = s.id; drawList(); openSession(s); toast('已分叉出新会话');
   },
-  dagRows: (runId) => (delegReadDag ? delegReadDag(runId) : Promise.resolve([])),
-  openDagNode: (runId, nodeId) => { if (delegOpenNode) delegOpenNode(runId, nodeId); },
-  openSpawn: (agent, label) => {
-    if (delegOpenSpawn) delegOpenSpawn(agent, label);
-    else setWs(true, 'agents');
-  },
+  /* dagRows, openDagNode and openSpawn are deliberately absent. The cards in
+     the trail open real things only with a host behind them, and the island
+     already has the honest answer for each: no node states to read, nothing to
+     open a node into, and the agents panel for a spawn row. Installing
+     null-guarded stand-ins here only moved that decision to the wrong layer --
+     live/240-external-agents.js installs the three that can do the work. */
   /* Whether a detached lane host is one the shell means to bring back rather
      than one it threw away. Nothing is parked on this canvas -- one session,
      no socket -- so the honest answer here is no; live/060-parked.js installs

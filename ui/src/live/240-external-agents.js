@@ -430,8 +430,13 @@ function dagOpenNode(runId, n) {
      watching the first one leave. */
   dagSelect(dagFor());
 }
-/* The trail's dag card opens a node through the same reader. */
-delegOpenNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
+/* The trail's dag card opens a node through the same reader. Installed on the
+   transcript source rather than into a page binding the fixture layer declared:
+   the island asks its source for these three, and this is the layer that can
+   answer. Assigned as fields, the way live/060-parked.js and
+   live/190-session-actions.js add theirs -- the source object itself was built
+   back in live/040-history.js. */
+DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
 
 /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from
@@ -442,7 +447,7 @@ delegOpenNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
    this read is the only place the nodes can come from. `dag.get` already returns
    both per file; dropping them here is what left that card with a run id and an
    empty strip. */
-delegReadDag = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
+DS.transcript.dagRows = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
   .then((r) => ((r && r.run && r.run.files) || []).map((f) => ({
     node: f.node, status: f.status, subagent: f.subagent || null, instance: f.instance || null,
   })));
@@ -450,7 +455,7 @@ delegReadDag = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur 
 /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */
-delegOpenSpawn = (agent, label) => {
+DS.transcript.openSpawn = (agent, label) => {
   setWs(true, 'agents');
   const match = () => RavenIslands.subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))

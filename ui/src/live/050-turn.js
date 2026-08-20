@@ -119,7 +119,7 @@ function onEvent(ev) {
           const first = d && d.run_id === p.run_id ? d.order[d.order.length - 1] : null;
           if (first) { dagOpenNode(p.run_id, { id: first }); return; }
         }
-        if (!isDag && delegOpenSpawn) { delegOpenSpawn('', p.label); return; }
+        if (!isDag) { DS.transcript.openSpawn('', p.label); return; }
         setWs(true, 'agents');
       },
     });

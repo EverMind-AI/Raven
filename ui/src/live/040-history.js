@@ -2,8 +2,9 @@
 /* Reading a stored turn as segments lives with the renderer (the transcript
    island); what stays here is the live half of DS.transcript -- how a tool
    result is previewed and judged, which is wire knowledge -- and the shim the
-   session openers still call. The delegation verbs keep the fixture's
-   late-bound closures: live/240 assigns the demo seams they read. */
+   session openers still call. The spread keeps whatever the fixture layer put
+   on the seam; the three delegation verbs are added later, by live/240, once
+   the dag reader they close over exists. */
 DS.transcript = {
   ...DS.transcript,
   clean: (text) => cleanPreview(text),
