@@ -1,16 +1,21 @@
 """PlaybookExecutor — from a matched spec plus extracted params to a running
 graph.
 
-Both modes end at the same dispatch: a node list handed to the
-SubAgentDagTool's ``run_with_roles`` entry (scheduling, file passing,
-progress and the background announce are all the tool's existing
-behaviour). ``dag`` ships its nodes; ``prompt`` first spends one LLM call
-composing them from the spec's assembly guidance, and the composed graph
-passes the same validation — no escape hatch.
+``dag`` mode ends at the same dispatch a model-composed graph goes through: the
+filled node list handed to ``SubAgentDagTool.execute`` -- same validation, same
+scheduler, same billing, same re-injection.
 
-Configuration hangs on nodes, so backends are built per node (the same
-agent may run several steps with different skills); each node dispatches to
-its own backend under a synthetic name.
+``prompt`` mode has two answers depending on who is asking, and that is the point
+of the mode rather than a wart. In a conversation the caller *is* a model, so the
+filled guidance is returned to it and it composes the graph itself, with the whole
+conversation in hand and ordinary tool errors to correct against. On the CLI there
+is no model in the room, so ``_compose`` spends one call to turn the guidance into
+a graph. Deleting that path would have quietly removed the CLI's ability to run a
+prompt-mode playbook at all.
+
+This module builds no backends and resolves no agent names. Each node names an
+agent on the shared table and the graph tool looks it up, which is what removed
+the synthetic ``pb-<node>`` names every step used to run under.
 
 Stateless by design: a plan either runs, or comes back as questions the
 caller relays to the user. The user's next message re-enters matching from
@@ -23,7 +28,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 from pydantic import ValidationError
@@ -39,36 +44,27 @@ _PARAM_REF_RE = re.compile(r"\$\{params\.([A-Za-z0-9_]+)\}")
 _NODE_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\.(output|output_path)\s*\}\}")
 
 
-@dataclass(frozen=True)
-class RoleBuildSpec:
-    """What the backend factory needs for one node's backend. Duck-typed by
-    ``SubagentManager.build_role_backend`` (tools_allow / skills_allow).
-
-    Deliberately narrow: in v1 the capability base behind ``node.agent`` only
-    steers *generation* (which name the casting LLM picks and which skills it
-    binds); the built backends differ solely in ``skills_allow``. Carrying the
-    base name here would imply a per-role prompt or model that nothing
-    downstream applies -- when role charters reach the sub-agent prompt, the
-    field returns together with its consumer."""
-
-    name: str
-    tools_allow: list[str] | None
-    skills_allow: list[str] | None
-
-
-RoleBackendFactory = Callable[[RoleBuildSpec], Any]
+#: Node fields a playbook may leave blank for the caller to fill, and that a node
+#: cannot run without. Deliberately short: ``skills`` absent means "this agent's
+#: own menu", which is a finished answer, so counting it as a gap would put a
+#: question in front of every well-formed playbook.
+FILLABLE_REQUIRED = ("agent", "prompt_template")
 
 
 @dataclass(frozen=True)
 class ExecutionPlan:
-    """The executor's verdict on one matched spec + extracted params."""
+    """What loading one playbook produced."""
 
-    kind: Literal["dag", "questions"]
+    kind: Literal["dag", "guidance", "gaps", "questions"]
+    """``dag``: dispatched, ``reply`` is the receipt. ``guidance``: prompt-mode
+    composition instructions for the caller to build a graph from. ``gaps``: the
+    playbook is missing values only the caller can supply and *nothing was
+    dispatched*. ``questions``: it cannot proceed, and ``reply`` says why."""
+
     reply: str = ""
-    """dag: the dispatch receipt; questions: what to ask the user."""
 
     notes: list[str] = field(default_factory=list)
-    """Degradations worth surfacing (stripped instances, unsupported mcps)."""
+    """Degradations worth surfacing (unsupported mcps, unfillable requests)."""
 
 
 def _fill_params(spec: PlaybookSpec, params: dict[str, Any]) -> tuple[dict[str, str], list[tuple[str, str]]]:
@@ -76,7 +72,7 @@ def _fill_params(spec: PlaybookSpec, params: dict[str, Any]) -> tuple[dict[str, 
 
     Returns the missing params as ``(name, description)``: the description is the
     follow-up wording per the field definition, and the name is what the retry
-    hint needs -- see :func:`_missing_params_reply`.
+    hint needs -- see :func:`_gap_reply`.
     """
     values: dict[str, str] = {}
     missing: list[tuple[str, str]] = []
@@ -92,22 +88,131 @@ def _fill_params(spec: PlaybookSpec, params: dict[str, Any]) -> tuple[dict[str, 
     return values, missing
 
 
-def _missing_params_reply(spec: PlaybookSpec, missing: list[tuple[str, str]]) -> str:
-    """Ask for the missing params, and show a phrasing that can come back.
+def _gap_reply(spec: PlaybookSpec, missing: list[tuple[str, str]], blanks: list[tuple[str, str]]) -> str:
+    """What is still needed, addressed to the caller that can supply it.
 
-    Matching is stateless: the answer re-enters at L1, where a bare reply like
-    "OpenAI" carries no trigger word, wins no nomination, and the run is lost
-    with the user believing they answered. So the ask carries an example built
-    from this playbook's own vocabulary -- repeating a trigger is what makes the
-    next message reach the gate at all.
+    The reader here is the model, and it used to be the user: the old wording
+    ended "include a trigger word in your reply, e.g. ..." because the answer had
+    to re-enter through a stateless keyword funnel to be seen at all. There is no
+    funnel now -- the caller holds the conversation and calls again -- so the reply
+    names the exact arguments instead of coaching someone into re-triggering a
+    match.
+
+    Both kinds of gap in one message, and named precisely (``params`` by key,
+    blanks by ``node.field``), because a caller that has to guess which argument a
+    complaint refers to will guess wrong and spend another round.
     """
-    asks = "\n".join(f"- {desc}" for _name, desc in missing)
-    trigger = spec.triggers.keywords[0]
-    slots = " ".join(f"{name}=<your answer>" for name, _desc in missing)
-    return (
-        f"Running '{spec.name}' still needs a few details:\n{asks}\n"
-        f"Include a trigger word in your reply, e.g.: {trigger} {slots}"
+    lines = [f"'{spec.name}' was not run -- it still needs:"]
+    for name, desc in missing:
+        lines.append(f"- params.{name}: {desc}")
+    for node_id, field_name in blanks:
+        lines.append(f"- fills[{node_id!r}][{_wire_name(field_name)!r}]: this playbook leaves it for you to write")
+    lines.append(
+        "Call load_playbook again with those filled in. Values the playbook already specifies are "
+        "not yours to change and will be refused."
     )
+    return "\n".join(lines)
+
+
+def _wire_name(field_name: str) -> str:
+    """A node field as a playbook author spells it (camelCase).
+
+    The caller is told to write ``fills[...]["promptTemplate"]`` rather than the
+    python attribute name, because camelCase is what it will have read in the
+    file and in the tool's own field list.
+    """
+    head, *rest = field_name.split("_")
+    return head + "".join(part.title() for part in rest)
+
+
+def _guidance_reply(spec: PlaybookSpec, values: dict[str, str]) -> str:
+    """prompt mode's answer to a caller that can compose: the filled guidance.
+
+    Returned rather than composed here. The caller has the conversation, so the
+    graph it builds can answer *this* request; a private composition call sees only
+    the guidance text and a cached roster, and its output then has to be reconciled
+    with a conversation it never read. Flexibility is the whole reason an author
+    picks prompt mode -- turning it into a worse ``dag`` mode by pinning the graph
+    at load time would remove the only thing it offers.
+    """
+    filled = _fill_param_refs(spec.prompts or "", values)
+    return (
+        f"'{spec.name}' is a guidance playbook: it describes how to build the graph rather than "
+        "shipping one. Compose it yourself and submit it with run_subagent_dag.\n\n"
+        f"{filled}"
+    )
+
+
+def _apply_fills(
+    nodes: list[NodeSpec],
+    fills: dict[str, dict[str, Any]],
+) -> tuple[list[NodeSpec], list[str]]:
+    """Apply the caller's fills, refusing any that target a field already written.
+
+    **This check is what makes "the playbook's own values are not negotiable"
+    true**, rather than a claim about a shape. Without it ``fills`` is a
+    general-purpose field editor: the caller could rewrite any node's prompt,
+    repoint it at another agent, or drop its skills, and the file in git would stop
+    describing what ran. With it, the only thing expressible is filling a blank --
+    which is exactly what the author asked for by leaving one.
+
+    Keys are the author's plain node ids. The run prefix is added afterwards, and
+    the caller has never seen it, so accepting a prefixed id would only ever be
+    accepting a coincidence.
+    """
+    by_id = {n.id: n for n in nodes}
+    errors: list[str] = []
+    updates: dict[str, dict[str, Any]] = {}
+    for node_id, patch in (fills or {}).items():
+        node = by_id.get(node_id)
+        if node is None:
+            errors.append(f"fills names node {node_id!r}, which this playbook does not have (nodes: {sorted(by_id)}).")
+            continue
+        if not isinstance(patch, dict):
+            errors.append(f"fills[{node_id!r}] must be an object of field -> value.")
+            continue
+        for raw_field, value in patch.items():
+            attr = _FILL_ALIASES.get(raw_field, raw_field)
+            if attr not in _FILLABLE:
+                errors.append(
+                    f"fills[{node_id!r}] names {raw_field!r}, which is not fillable "
+                    f"(fillable: {sorted(_wire_name(f) for f in _FILLABLE)})."
+                )
+                continue
+            if not _is_blank(getattr(node, attr, None)):
+                errors.append(
+                    f"node {node_id!r} already specifies {_wire_name(attr)!r}, so it cannot be changed -- "
+                    f"a playbook's own values are fixed; only what it left blank can be filled."
+                )
+                continue
+            updates.setdefault(node_id, {})[attr] = value
+    if errors:
+        return nodes, errors
+    return [n.model_copy(update=updates[n.id]) if n.id in updates else n for n in nodes], []
+
+
+def _is_blank(value: Any) -> bool:
+    """Whether a node field was left for someone else to write.
+
+    ``None`` and an empty string are blank. An empty *list* is not: ``skills: []``
+    is a written instruction meaning "no skills at all", and treating it as an
+    invitation would let a caller quietly widen what a step may reach.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+#: Fields ``fills`` may write. The two required ones plus the three optional
+#: per-node knobs, so a caller can add narrowing the author left open -- the
+#: blank-only rule is what keeps that from becoming an edit.
+_FILLABLE = (*FILLABLE_REQUIRED, "skills", "mcps", "instance")
+
+#: The wire spellings a caller might use, mapped to attribute names. Both are
+#: accepted for the same reason the node model accepts both.
+_FILL_ALIASES = {"promptTemplate": "prompt_template", "dependsOn": "depends_on"}
 
 
 def _render_value(value: Any) -> str:
@@ -135,6 +240,15 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
     leaves the executor, so the file format stays plain. A random tag rather
     than a run counter: a counter would restart with the process while the
     session's id registry outlives it.
+
+    ``instance`` is namespaced with the same tag, so an author writing
+    ``instance: researcher`` on three steps gets one session shared by those
+    three steps *of this run* rather than one shared by every run of the
+    playbook ever. Sharing across runs is a thing a handle can do, but it is not
+    what this declaration means: two runs of the same playbook are two separate
+    pieces of work, and pouring both into one session mixes their contexts. Two
+    concurrent runs would additionally queue against each other on that handle
+    (see ``hold_handle``) for no reason.
     """
     tag = uuid.uuid4().hex[:6]
     # The composite must satisfy the runner's id charset even if the
@@ -154,6 +268,7 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
                 "id": mapping[n.id],
                 "depends_on": [mapping.get(d, d) for d in n.depends_on],
                 "prompt_template": rewrite_refs(n.prompt_template),
+                "instance": f"{prefix}-{tag}-{n.instance}" if n.instance else None,
             }
         )
         for n in nodes
@@ -166,13 +281,12 @@ class PlaybookExecutor:
     def __init__(
         self,
         *,
-        backend_factory: RoleBackendFactory,
         dag_tool: Any = None,
         provider: "LLMProvider | None" = None,
         compose_model: str | None = None,
         background: bool = True,
+        compose_prompt_mode: bool = False,
     ) -> None:
-        self._make_backend = backend_factory
         self._dag_tool = dag_tool
         self._provider = provider
         self._compose_model = compose_model
@@ -180,6 +294,14 @@ class PlaybookExecutor:
         #: dispatch receipt. The CLI's explicit run; in-conversation entries
         #: stay backgrounded so the turn is not held open by a long graph.
         self._background = background
+        #: Whether *this* executor composes a prompt-mode graph itself. True on
+        #: the CLI, which has no model in the room and would otherwise have no way
+        #: to run a prompt-mode playbook. False in a conversation, where the
+        #: caller is a model: it gets the guidance and composes with the whole
+        #: conversation in hand, and a bad graph comes back as an ordinary tool
+        #: error it can fix, rather than through a private two-round repair loop
+        #: working from a cached roster and no history.
+        self._compose_prompt_mode = compose_prompt_mode
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
         """Address this turn's dispatch (progress + announce) like the loop
@@ -188,22 +310,39 @@ class PlaybookExecutor:
         if self._dag_tool is not None and hasattr(self._dag_tool, "set_context") and channel and chat_id:
             self._dag_tool.set_context(channel, chat_id, session_key)
 
-    async def execute(self, spec: PlaybookSpec, params: dict[str, Any]) -> ExecutionPlan:
+    async def execute(
+        self,
+        spec: PlaybookSpec,
+        params: dict[str, Any],
+        *,
+        fills: dict[str, dict[str, Any]] | None = None,
+        confirmed: bool = False,
+    ) -> ExecutionPlan:
+        """Fill the spec and act on it. The mode decides which of those happens.
+
+        ``fills`` supplies the node fields the author deliberately left blank,
+        keyed by the *author's* plain node id -- the ids in the file, not the
+        run-prefixed ones the runner sees, which the caller has never been shown.
+
+        ``confirmed`` says the caller already put this run to the user, so the
+        graph-level gate should not ask a second time. Nothing in the conversation
+        path sets it now that no funnel asks ahead of the turn; it stays because
+        an entry point that *does* ask must be able to say so.
+        """
         values, missing = _fill_params(spec, params)
-        if missing:
-            return ExecutionPlan(kind="questions", reply=_missing_params_reply(spec, missing))
         if self._dag_tool is None:
             return ExecutionPlan(
                 kind="questions",
                 reply="No graph executor is wired up in this environment; describe the task directly and I will handle it ad hoc.",
             )
 
-        if spec.mode == "dag":
-            nodes = [
-                n.model_copy(update={"prompt_template": _fill_param_refs(n.prompt_template, values)})
-                for n in spec.nodes or []
-            ]
-        else:
+        if spec.mode == "prompt":
+            # Nothing to fill node-wise: there are no nodes yet. A missing param
+            # still stops it, because the guidance is written against those values.
+            if missing:
+                return ExecutionPlan(kind="gaps", reply=_gap_reply(spec, missing, []))
+            if not self._compose_prompt_mode:
+                return ExecutionPlan(kind="guidance", reply=_guidance_reply(spec, values))
             nodes, compose_errors = await self._compose(spec, values)
             if nodes is None:
                 return ExecutionPlan(
@@ -212,7 +351,21 @@ class PlaybookExecutor:
                     + "; ".join(compose_errors[:3])
                     + "); describe the task directly and I will handle it ad hoc.",
                 )
-        return await self._dispatch(spec, nodes)
+            return await self._dispatch(spec, nodes, confirmed=confirmed)
+
+        nodes, fill_errors = _apply_fills(spec.nodes or [], fills or {})
+        if fill_errors:
+            # A refused fill is the caller's mistake, not a gap: telling it "still
+            # missing X" would invite the same wrong call again.
+            return ExecutionPlan(kind="questions", reply="Error: " + " ".join(fill_errors))
+        nodes = [n.model_copy(update={"prompt_template": _fill_param_refs(n.prompt_template, values)}) for n in nodes]
+        blanks = [(n.id, f) for n in nodes for f in FILLABLE_REQUIRED if not str(getattr(n, f, "") or "").strip()]
+        if missing or blanks:
+            # Reported before anything is dispatched, and reported *together*: a
+            # caller told about the params, asked again, and then told about the
+            # blank fields would spend two round trips learning one thing.
+            return ExecutionPlan(kind="gaps", reply=_gap_reply(spec, missing, blanks))
+        return await self._dispatch(spec, nodes, confirmed=confirmed)
 
     async def _compose(self, spec: PlaybookSpec, values: dict[str, str]) -> tuple[list[NodeSpec] | None, list[str]]:
         """prompt mode: one LLM call assembles the graph; same validation,
@@ -251,45 +404,45 @@ class PlaybookExecutor:
         """Agent name -> description, for the composition prompt."""
         self._roster_cache = roster
 
-    async def _dispatch(self, spec: PlaybookSpec, nodes: list[NodeSpec]) -> ExecutionPlan:
+    async def _dispatch(self, spec: PlaybookSpec, nodes: list[NodeSpec], *, confirmed: bool = False) -> ExecutionPlan:
+        """Hand the filled nodes to the DAG tool's own entry.
+
+        Nothing here resolves an agent name or builds a backend any more. Each
+        node carries the agent it wants, the graph tool looks it up on the shared
+        table, and a playbook step is dispatched by exactly the code path a
+        model-composed node is. What that removed: a per-node backend built here, a
+        hardcoded ``stateful=False`` that contradicted the mechanism, and the
+        synthetic ``pb-<node>`` agent name every step ran under -- which is why a
+        playbook's steps were unattributable in a trace and why an ``instance``
+        could not work.
+        """
         notes: list[str] = []
-        backends: dict[str, Any] = {}
-        capabilities: dict[str, Any] = {}
-        from raven.agent.subagent_dag import AgentCapabilities
+        tool_nodes: list[dict[str, Any]] = [
+            {
+                "id": run_node.id,
+                "agent": run_node.agent,
+                "prompt_template": run_node.prompt_template,
+                "depends_on": list(run_node.depends_on),
+                # Passed through only when the author wrote them, because absent
+                # and empty mean different things: no ``skills`` key is "this
+                # agent's own menu", ``skills: []`` is "no skills at all". Sending
+                # ``[]`` for both is how a playbook asking for no skills used to
+                # get all of them.
+                **({"skills": run_node.skills} if run_node.skills is not None else {}),
+                **({"mcps": run_node.mcps} if run_node.mcps is not None else {}),
+                **({"instance": run_node.instance} if run_node.instance else {}),
+            }
+            for run_node in _namespace_run(spec.name, nodes)
+        ]
 
-        tool_nodes: list[dict[str, Any]] = []
-        # Notes and logs speak the author's plain ids; the runner gets the
-        # namespaced ones.
-        for node, run_node in zip(nodes, _namespace_run(spec.name, nodes)):
-            # mcps degrades with a note rather than failing the graph: unlike a
-            # confirm gate or a shared session (both refused in validate.py), a
-            # missing tool costs capability, not correctness -- the node still
-            # does its own step, just with less reach.
-            if node.mcps:
-                notes.append(
-                    f"node {node.id} declares mcps ({', '.join(node.mcps)}) that sub-agents "
-                    "cannot mount in this release; those capabilities are degraded"
-                )
-            key = f"pb-{run_node.id}"
-            backends[key] = self._make_backend(
-                RoleBuildSpec(
-                    name=key,
-                    tools_allow=None,
-                    skills_allow=node.skills or None,
-                )
-            )
-            capabilities[key] = AgentCapabilities(stateful=False, reads_local_files=True)
-            tool_nodes.append(
-                {
-                    "id": run_node.id,
-                    "subagent": key,
-                    "prompt_template": run_node.prompt_template,
-                    "depends_on": list(run_node.depends_on),
-                }
-            )
-
-        receipt = await self._dag_tool.run_with_roles(
-            tool_nodes, roles=backends, role_capabilities=capabilities, background=self._background
+        receipt = await self._dag_tool.execute(
+            tool_nodes,
+            background=self._background,
+            # The gate. With the passive funnel gone, nothing asks ahead of this,
+            # so a playbook's ``confirm: true`` lands here or nowhere -- which is
+            # why the graph-level parameter had to exist before the funnel could
+            # be removed. ``confirmed`` is for an entry point that already asked.
+            confirm=bool(spec.confirm and not confirmed),
         )
         text = str(getattr(receipt, "model_text", receipt))
         if text.startswith("Error"):

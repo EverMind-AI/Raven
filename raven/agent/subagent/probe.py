@@ -289,6 +289,11 @@ async def probe_one(cfg: Any, *, source: Source, path: str | None = None) -> Pro
     """
     try:
         kind = getattr(cfg, "kind", None)
+        if kind == "builtin":
+            # Nothing to reach: it is raven's own loop, in this process. There is no
+            # command to resolve on PATH and no endpoint to call, so a probe could
+            # only ever report "unknown" after spending its per-entry budget.
+            return ProbeResult(getattr(cfg, "name", "") or "", source, "builtin", "ready", "in-process", "", 0)
         if kind == "openai":
             return await _probe_openai(cfg, source=source)
         if path is None:
@@ -345,6 +350,23 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return int((time.monotonic() - started) * 1000)
 
     kind = getattr(cfg, "kind", None)
+    if kind == "builtin":
+        # Nothing to verify. A built-in agent is this process: there is no command
+        # to launch, no endpoint to authenticate against, and no transcript parser
+        # to exercise -- the three things a test exists to catch. Refused rather
+        # than run, because falling through to the cli branch reported a failure
+        # whose detail read "unknown third-party subagent kind" and whose `kind`
+        # said "cli", and the caller then *recorded* that verdict, so the row
+        # showed a failed test forever.
+        return TestResult(
+            getattr(cfg, "name", ""),
+            source,
+            "builtin",
+            False,
+            "a built-in agent runs in this process; there is nothing to test",
+            None,
+            elapsed(),
+        )
     if kind == "acp":
         return await _test_acp(cfg, source=source, elapsed=elapsed)
     probe = await probe_one(cfg, source=source)

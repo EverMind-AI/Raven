@@ -30,7 +30,6 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.loop.streaming import stream_llm_call
 from raven.agent.subagent import SubagentManager
-from raven.agent.subagent.backends import enabled_third_party
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
@@ -390,7 +389,7 @@ class AgentLoop:
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 8,
         max_subagent_spawns_per_hour: int = 30,
-        third_party_subagents: list | None = None,
+        agents: list | None = None,
         media_config: Any = None,
         deep_research_config: Any = None,
         disabled_tools: list[str] | None = None,
@@ -581,9 +580,6 @@ class AgentLoop:
             model=self.model,
             context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
-            # Late-bound: the playbook runtime is built after the context
-            # engine, and the library can change between turns.
-            playbook_listing=lambda: self._playbooks.listing() if self._playbooks is not None else [],
             get_tool_notices=self._mcp_tool_notices,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -630,13 +626,14 @@ class AgentLoop:
             owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
-            third_party_subagents=third_party_subagents,
+            agents=agents,
             session_dir=self.sessions.session_dir,
         )
         self._direct_handoff = DirectChatHandoff()
-        # Kept for _register_default_tools to build the optional DAG tool (req4)
-        # and for hot-applying web config changes (P4).
-        self._third_party_subagents = third_party_subagents or []
+        # Kept for hot-applying web config changes (P4) and for the operations
+        # surfaces that report what config declared, as distinct from what the
+        # agent table resolved (the table also holds the package built-in rows).
+        self._agent_configs = agents or []
         self._dag_progress_sink = None
         # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
         # the web UI's skill panel (host wires it to the web channel's emitter,
@@ -962,37 +959,36 @@ class AgentLoop:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
-        # Sub-agent DAG orchestration (req4): a decoupled, optional tool,
-        # registered only when there is an enabled third-party sub-agent to
-        # dispatch to -- a config whose only entry is disabled must not register
-        # a tool with an empty roster.
-        if enabled_third_party(self._third_party_subagents):
-            from raven.agent.subagent_dag.tool import SubAgentDagTool
+        # Sub-agent DAG orchestration (req4). Registered unconditionally now that
+        # the agent table always holds the package's built-in rows: the tool used
+        # to be gated on an enabled third-party entry existing, because without one
+        # its roster was empty and a node had nothing to name. A graph over
+        # research-raven and code-raven is a graph, so that gate would now be
+        # withholding the tool from every default install.
+        from raven.agent.subagent_dag.tool import SubAgentDagTool
 
-            self.tools.register(
-                SubAgentDagTool(
-                    workspace=self.subagents.workspace,
-                    third_party_subagents=self._third_party_subagents,
-                    guide_skill_id=self._dag_guide_skill_id(),
-                    session_dir=self.sessions.session_dir,
-                    is_paused=lambda: self.subagents.paused,
-                    state_for=self.subagents.instance_state,
-                    gate=self.subagents.dispatch_gate,
-                    announce=self.subagents.announce_dag_result,
-                    adopt=self.subagents.adopt_background_run,
-                    charge=self.subagents.charge_dag_run,
-                )
+        self.tools.register(
+            SubAgentDagTool(
+                workspace=self.subagents.workspace,
+                registry=self.subagents.registry,
+                guide_skill_id=self._dag_guide_skill_id(),
+                session_dir=self.sessions.session_dir,
+                is_paused=lambda: self.subagents.paused,
+                state_for=self.subagents.instance_state,
+                gate=self.subagents.dispatch_gate,
+                announce=self.subagents.announce_dag_result,
+                adopt=self.subagents.adopt_background_run,
+                charge=self.subagents.charge_dag_run,
+                ask=self._confirm_graph,
             )
-        # The agent's own entry into the playbook library. Registered only when
-        # the library actually holds something matchable: the passive funnel
-        # already decided before this turn, so this tool exists for the cases it
-        # structurally cannot catch -- a request that means a playbook without
-        # using any of its trigger words, and a parameter supplied only after a
-        # previous run asked for it -- and an empty roster has neither.
+        )
+        # The only entry into the playbook library. Registered whenever the
+        # library has something to offer -- it is how a playbook gets used at all
+        # now, not a back door for the cases a matcher missed.
         if self._playbooks is not None and not self._playbooks.empty:
-            from raven.agent.tools.run_playbook import RunPlaybookTool
+            from raven.agent.tools.load_playbook import LoadPlaybookTool
 
-            self.tools.register(RunPlaybookTool(self._playbooks))
+            self.tools.register(LoadPlaybookTool(self._playbooks))
         # Creation registers whenever the feature is on -- an empty library is
         # exactly when capturing the first workflow matters.
         if self._playbooks is not None:
@@ -1112,49 +1108,80 @@ class AgentLoop:
         user_layer = Path(cfg.dir) if cfg.dir else (self.subagents.workspace / "playbooks")
         dag_tool = SubAgentDagTool(
             workspace=self.subagents.workspace,
-            third_party_subagents=self._third_party_subagents,
+            registry=self.subagents.registry,
             guide_skill_id=None,
             session_dir=self.sessions.session_dir,
             is_paused=lambda: self.subagents.paused,
+            # A playbook step may now name an `instance`, so it needs the same
+            # message-list derivation a spawn and a registered DAG node get.
+            # Missing here before because a playbook step could not carry a handle
+            # at all -- the executor dropped the field on the way to dispatch.
+            state_for=self.subagents.instance_state,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
+            ask=self._confirm_graph,
         )
-        from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
+        from raven.playbook import PlaybookGenerator, RouterSizes, live_inventory
 
         executor = PlaybookExecutor(
-            backend_factory=self.subagents.build_role_backend,
             dag_tool=dag_tool,
             provider=self.provider,
             compose_model=cfg.model,
         )
-        roster = agent_roster(load_role_pool())
+        # The agent table, not a private pool: what the generator casts nodes
+        # against has to be what the graph can then dispatch to.
+        roster = self.subagents.registry.descriptions()
         executor.set_roster(roster)
         store = PlaybookStore(user_layer)
         # Kept for the create_playbook tool: creation shares the library and
         # generator with the funnel, so both entries write the same place.
         self._playbook_store = store
-        self._playbook_generator = PlaybookGenerator(self.provider, None, roster, StaticInventory(), model=cfg.model)
-
-        async def ask_via_broker(prompt: str, choices: "list[str] | None", conversation_id: str):
-            # Resolved per call, not captured: the tool exists after
-            # _register_default_tools and the transport injects its broker
-            # later still. None (no tool / no broker) tells the runtime the
-            # environment cannot ask, which it treats as consent-not-required.
-            tool = self.tools.get("ask_user")
-            if isinstance(tool, AskUserTool):
-                return await tool.ask_direct(prompt, choices, conversation_id)
-            return None
+        self._playbook_generator = PlaybookGenerator(
+            self.provider,
+            None,
+            roster,
+            # A real inventory: with the empty one this used to pass,
+            # ``check_assets`` judged every skill and mcp server a draft named to be
+            # unknown, so a good draft came back annotated as missing everything.
+            live_inventory(self._mcp_servers, self.tools.names()),
+            model=cfg.model,
+        )
 
         return PlaybookRuntime(
-            provider=self.provider,
             store=store,
             executor=executor,
-            model=cfg.model,
             disabled=cfg.disabled,
-            ask=ask_via_broker,
+            router=RouterSizes(top_k=cfg.router.top_k, over_fetch_factor=cfg.router.over_fetch_factor),
         )
+
+    async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
+        """The graph-level ``confirm`` gate's route to a human.
+
+        A method rather than a closure inside the playbook wiring, because both
+        DAG tool instances need it and that wiring only runs when
+        ``playbooks.enabled``. Built as a closure there first, it left the
+        *registered* ``run_subagent_dag`` -- the one the model calls -- with no
+        asker at all: a model-composed graph asking for approval got a log line,
+        and was then told a human had approved something no human saw.
+
+        Resolved per call rather than captured: this is handed to a tool built in
+        ``_register_default_tools``, and the transport injects the ask broker
+        later still.
+
+        No broker (a channel with no question path, a test) returns True and the
+        graph runs. Not every surface can put a question to a human, and letting
+        the absence of one disable the feature outright is the worse failure;
+        ``SubAgentDagTool._confirmed`` logs it when it happens.
+        """
+        tool = self.tools.get("ask_user")
+        if not isinstance(tool, AskUserTool):
+            return True
+        answer = await tool.ask_direct(question, ["Run it", "Not now"], conversation_id)
+        if answer is None:
+            return True
+        return answer.strip().lower() in {"run it", "run", "yes", "y", "ok", "go", "sure"}
 
     def _dag_guide_skill_id(self) -> str | None:
         """The orchestration guide's id for the DAG tool description, or None.
@@ -2095,10 +2122,9 @@ class AgentLoop:
                     tool.set_context(channel, chat_id)
         # Not in the name list above: the playbook executor's DAG tool is a
         # private unregistered instance, reachable only through the runtime.
-        # Recorded here -- the one place every origin passes -- because
-        # consider() only runs for user turns, while a CRON/SENTINEL turn can
-        # still call run_playbook and its announce must go to the turn's own
-        # address, not the last human conversation's.
+        # Recorded here -- the one place every origin passes -- because a
+        # CRON/SENTINEL turn can call load_playbook too, and its announce must go
+        # to that turn's own address rather than the last human conversation's.
         if self._playbooks is not None:
             self._playbooks.set_context(
                 channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
@@ -2189,34 +2215,24 @@ class AgentLoop:
             [{"id": qid, "source": source, "name": name, "kind": tool_name}],
         )
 
-    def apply_third_party_subagents(self, configs: list) -> None:
-        """Hot-apply new third-party sub-agent config to the live runtime (P4):
-        the manager's spawn registry and the DAG tool's node executors, with no
-        restart. Registers the DAG tool on the first non-empty apply (and re-binds
-        the progress sink)."""
-        self._third_party_subagents = list(configs)
-        self.subagents.set_third_party_subagents(configs)
-        tool = self.tools.get("run_subagent_dag")
-        if tool is not None and hasattr(tool, "set_third_party_subagents"):
-            tool.set_third_party_subagents(configs)
-        elif tool is None and enabled_third_party(configs):
-            from raven.agent.subagent_dag.tool import SubAgentDagTool
+    def apply_agents(self, configs: list) -> None:
+        """Hot-apply new agent config to the live runtime (P4), with no restart.
 
-            new_tool = SubAgentDagTool(
-                workspace=self.subagents.workspace,
-                third_party_subagents=configs,
-                guide_skill_id=self._dag_guide_skill_id(),
-                session_dir=self.sessions.session_dir,
-                is_paused=lambda: self.subagents.paused,
-                state_for=self.subagents.instance_state,
-                gate=self.subagents.dispatch_gate,
-                announce=self.subagents.announce_dag_result,
-                adopt=self.subagents.adopt_background_run,
-                charge=self.subagents.charge_dag_run,
-            )
-            if self._dag_progress_sink is not None:
-                new_tool.set_progress_sink(self._dag_progress_sink)
-            self.tools.register(new_tool)
+        One call, one table: ``spawn`` and the DAG tool read the same
+        ``AgentRegistry``, so applying to the manager is applying to both. This
+        used to refresh two independently-built maps through two setters that each
+        skipped a bad entry on its own, which made "the manager has hermes, the DAG
+        tool does not" a reachable state.
+
+        No registration branch either -- the DAG tool is registered at startup
+        whatever config holds, because the built-in rows are always on the table.
+        """
+        self._agent_configs = list(configs)
+        self.subagents.apply_agents(configs)
+
+    # The pre-``agents`` spelling, still called by the RPC config handlers and the
+    # web config surface. Kept as a name only: both apply the whole list.
+    apply_third_party_subagents = apply_agents
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -2588,14 +2604,6 @@ class AgentLoop:
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
-                        # An injected message is a new user message by every
-                        # other definition in the loop, but it never reaches
-                        # consider(), whose reset would otherwise clear the
-                        # conversation's declined playbooks -- so an explicit
-                        # re-request inside the fall-through turn stays
-                        # refused. Reset here, at the merge point.
-                        if self._playbooks is not None:
-                            self._playbooks.reset_declines(session_key)
 
             tool_defs = self.tools.get_definitions()
 
@@ -3346,24 +3354,16 @@ class AgentLoop:
         if (ask_tool := self.tools.get("ask_user")) and isinstance(ask_tool, AskUserTool):
             ask_tool.set_context(key)
 
-        # ── Playbook interception: one vocabulary scan per user message; a
-        # nomination costs one gate call. An actionable match replaces this
-        # whole turn -- either a dispatch receipt (the graph runs in the
-        # background and announces its own result) or the questions that
-        # stopped it; anything else passes through untouched.
-        if self._playbooks is not None and origin in (None, Origin.USER):
-            plan = await self._playbooks.consider(content, channel=channel, chat_id=chat_id, session_key=key)
-            if plan is not None:
-                # Recorded like the personalization branch above: this return
-                # skips _save_turn, and the follow-up flow depends on history
-                # holding both sides -- a param answered on the next turn only
-                # works if the model can see the question being asked, and
-                # "did that run?" only works if the receipt is on record.
-                _ts = datetime.now().isoformat()
-                session.record({"role": "user", "content": content, "timestamp": _ts})
-                session.record({"role": "assistant", "content": plan.reply, "timestamp": _ts})
-                self.sessions.save(session)
-                return (plan.reply, [])
+        # No playbook interception. A playbook is one of the things the model can
+        # reach for this turn (`load_playbook`), not something that decides ahead
+        # of it: the funnel that used to sit here judged one message with no
+        # history and, on a hit, replaced the whole turn -- so the party with the
+        # least context made the most expensive call. All that remains per turn is
+        # telling the tool what the turn is about, so its listing can be ranked.
+        if self._playbooks is not None:
+            self._playbooks.set_context(channel=channel, chat_id=chat_id, session_key=key)
+            if (pb_tool := self.tools.get("load_playbook")) is not None and hasattr(pb_tool, "set_turn_message"):
+                pb_tool.set_turn_message(content)
 
         context_messages = self._context_messages_for_session(session)
         # SkillForge: Selector picks top-K. See note in the system-message

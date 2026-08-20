@@ -177,12 +177,12 @@ async def test_dag_records_go_to_history_while_nodes_run_in_the_bound_workdir(tm
     monkeypatch.setattr(dag_tool_mod, "run_dag", _fake_run_dag)
     tool = SubAgentDagTool(
         workspace=home,
-        third_party_subagents=[ThirdPartyCliSubagentConfig(name="stub", command="cat")],
+        agents=[ThirdPartyCliSubagentConfig(name="stub", command="cat")],
     )
     tool.set_context("web", "chat-1")
 
     with bind(session):
-        await tool.execute(nodes=[{"id": "a", "subagent": "stub", "prompt_template": "hi"}])
+        await tool.execute(nodes=[{"id": "a", "agent": "stub", "prompt_template": "hi"}])
 
     await asyncio.wait_for(reached.wait(), timeout=5)
 
@@ -196,7 +196,7 @@ def _write_run_dir(root: Path, run_id: str) -> None:
     rdir = root / run_id
     rdir.mkdir(parents=True)
     (rdir / "graph.json").write_text(
-        json.dumps({"nodes": [{"id": "a", "subagent": "stub", "prompt_template": "hi"}]}),
+        json.dumps({"nodes": [{"id": "a", "agent": "stub", "prompt_template": "hi"}]}),
         encoding="utf-8",
     )
 
@@ -214,7 +214,7 @@ async def test_dag_run_is_read_back_from_the_session_that_wrote_it(tmp_path: Pat
     run_id = "20260805T101112Z-abcdef01"
     _write_run_dir(dag_root(_sdir(home, "web:chat-1")), run_id)
 
-    tool = SubAgentDagTool(workspace=home, third_party_subagents=[])
+    tool = SubAgentDagTool(workspace=home, agents=[])
 
     run = await tool.read_run(run_id, "web:chat-1")
     assert run["dir"] == str(dag_root(_sdir(home, "web:chat-1")) / run_id)
@@ -240,7 +240,7 @@ async def test_dag_node_is_read_back_from_the_session_that_wrote_it(tmp_path: Pa
     _write_run_dir(root, run_id)
     (root / run_id / "a.prompt.md").write_text("rendered prompt", encoding="utf-8")
 
-    tool = SubAgentDagTool(workspace=home, third_party_subagents=[])
+    tool = SubAgentDagTool(workspace=home, agents=[])
 
     node = await tool.read_node(run_id, "a", session_key="web:chat-1")
     assert node["prompt"] == "rendered prompt"

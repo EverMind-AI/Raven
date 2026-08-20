@@ -57,7 +57,11 @@ backup = Path(payload["backup"])
 # on disk, and restoring from it would silently strip whatever it dropped.
 raw = read_raw_or_raise(path) if path.exists() else {}
 stored = raw.get("subagents") or {}
-before = stored.get("thirdParty") or stored.get("third_party") or []
+# All three spellings: the key was renamed to `agents`, and reading only the
+# older two makes this backup an empty list on a config that has already been
+# migrated -- so the rollback path it exists to provide would wipe every
+# configured agent instead of restoring them.
+before = stored.get("agents") or stored.get("thirdParty") or stored.get("third_party") or []
 # Before the write, not after: a backup that lands only on success is not a
 # rollback path. Mode 600 because an openai entry among the others holds its
 # own api key.

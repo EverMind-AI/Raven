@@ -3,7 +3,7 @@
 Runs once per playbook at compile time (never per user message): one LLM
 call expands the description, the user's original wording and any author
 seeds into candidate keywords/phrases, then two automatic guards cut what
-would poison the L1 funnel:
+would poison retrieval:
 
 - **rule filter** -- too-short entries and bare function words;
 - **generic-word filter** -- the load-bearing one. A candidate is matched

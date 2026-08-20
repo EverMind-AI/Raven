@@ -51,7 +51,7 @@ class _FakeAgent:
     def __init__(self) -> None:
         self.applied: list | None = None
 
-    def apply_third_party_subagents(self, configs: list) -> None:
+    def apply_agents(self, configs: list) -> None:
         self.applied = list(configs)
 
 
@@ -198,7 +198,7 @@ async def test_set_rejects_local_file_access_under_its_snake_case_spelling(cfg_p
 
 
 async def test_removing_an_agent_still_works_with_a_legacy_entry_stored(cfg_path: Path) -> None:
-    # The guard lives at the RPC boundary, not in set_third_party_subagents:
+    # The guard lives at the RPC boundary, not in set_agents:
     # add/remove re-write entries they read back raw, so a legacy `true` in an
     # unrelated entry would otherwise make every later add or remove fail.
     cfg_path.write_text(
@@ -220,8 +220,8 @@ async def test_removing_an_agent_still_works_with_a_legacy_entry_stored(cfg_path
         ),
         encoding="utf-8",
     )
-    update_subagents.remove_third_party_subagent("doomed", config_path=cfg_path)
-    remaining = update_subagents.get_third_party_subagents(config_path=cfg_path)
+    update_subagents.remove_agent("doomed", config_path=cfg_path)
+    remaining = update_subagents.get_agents(config_path=cfg_path)
     assert [a["name"] for a in remaining] == ["legacy"]
     assert remaining[0]["readsLocalFiles"] is False  # healed by the write
 

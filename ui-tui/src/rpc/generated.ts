@@ -764,15 +764,19 @@ export interface SubagentCall {
 export interface SubagentRow {
   name: string;
   preset?: string;
-  kind: 'cli' | 'openai' | 'acp';
+  kind: 'builtin' | 'cli' | 'openai' | 'acp';
   description: string;
   enabled: boolean;
   configured: boolean;
   /**
+   * A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. `enabled` is the only action it takes.
+   */
+  builtin?: boolean;
+  /**
    * The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead.
    */
   upgrade_to?: string;
-  group: 'installed' | 'uninstalled';
+  group: 'builtin' | 'installed' | 'uninstalled';
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;

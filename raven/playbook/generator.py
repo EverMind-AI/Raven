@@ -36,7 +36,7 @@ from raven.playbook.prompt import (
     emit_tool,
 )
 from raven.playbook.triggers import TriggerGuardError, guard_triggers
-from raven.playbook.types import BUILTIN_AGENTS, PlaybookSpec, slugify
+from raven.playbook.types import PlaybookSpec, slugify
 from raven.playbook.validate import check_assets, validate_structure
 
 if TYPE_CHECKING:
@@ -57,7 +57,14 @@ class CapabilityInventory(Protocol):
 
 @dataclass
 class StaticInventory:
-    """Inventory from plain lists — tests and early wiring."""
+    """Inventory from plain lists — tests, and callers that hold the lists already.
+
+    Constructed with no arguments it reports *nothing* available, which is what
+    every production call site used to do: ``check_assets`` then judged every
+    skill and every mcp server the generator proposed to be unknown, so a
+    perfectly good draft came back annotated as missing every capability it
+    named. Use :func:`inventory_from_config` for a real one.
+    """
 
     mcp: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
@@ -67,6 +74,21 @@ class StaticInventory:
 
     def known_tools(self) -> list[str]:
         return self.tools
+
+
+def live_inventory(mcp_servers: Any = None, tools: Any = None) -> StaticInventory:
+    """What this installation can actually offer, for ``check_assets`` to judge against.
+
+    ``mcp_servers`` is the configured server map (its keys are the names a node
+    would write); ``tools`` is anything iterable of tool names -- a
+    ``ToolRegistry.names()`` list, or nothing where no registry is built.
+
+    Both are read from the caller rather than looked up here, because the two
+    callers have different things in hand: the agent loop holds a live registry,
+    the CLI holds only config. What matters is that neither passes an empty
+    inventory by accident, which is what ``StaticInventory()`` did at both sites.
+    """
+    return StaticInventory(mcp=sorted(mcp_servers or {}), tools=sorted(tools or []))
 
 
 class PlaybookGenerationError(RuntimeError):
@@ -91,9 +113,9 @@ class GeneratedPlaybook:
 class PlaybookGenerator:
     """Generate and revise playbook drafts. Stateless between calls.
 
-    ``agent_roster`` maps agent name -> capability description — the v1
-    roster is the four builtin bases; when the unified agent registry grows
-    configurable builtin rows, the roster is read from there instead.
+    ``agent_roster`` maps agent name -> capability description, read from the
+    agent table (``AgentRegistry.descriptions``). It is what the casting LLM picks
+    node agents from, so a name it produces is a name the graph can dispatch to.
     """
 
     def __init__(
@@ -141,7 +163,7 @@ class PlaybookGenerator:
         """One revision round over an existing spec; the name stays fixed."""
         candidates = await self._retrieve_candidates(spec.description + "\n" + user_feedback)
         known_skills = [name for name, _ in candidates]
-        known_skills += [s for node in spec.nodes or [] for s in node.skills]
+        known_skills += [s for node in spec.nodes or [] for s in node.skills or []]
         return await self._loop(
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -223,7 +245,11 @@ class PlaybookGenerator:
             errors = [f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}" for e in exc.errors()]
             return None, errors[:20], [], (questions, assumptions)
 
-        errors = validate_structure(spec, known_agents=self._roster.keys() or BUILTIN_AGENTS)
+        # The roster is the agent table; empty means no table was reachable, and the
+        # agent names then go unchecked rather than being checked against a
+        # stand-in list that would both reject configured agents and pass deleted
+        # ones.
+        errors = validate_structure(spec, known_agents=self._roster.keys() or None)
         asset_errors, missing = check_assets(
             spec,
             known_skills=known_skills,

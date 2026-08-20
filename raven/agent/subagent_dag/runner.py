@@ -21,7 +21,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
 from raven.agent.subagent_dag._render import render_prompt
@@ -99,7 +99,7 @@ class DagRunResult:
 async def run_dag(
     spec: SubAgentDagSpec,
     *,
-    subagents: dict[str, Any],
+    resolve: "Callable[[DagNodeSpec], Any]",
     backend: Any,
     workdir: str,
     run_root: str,
@@ -116,7 +116,9 @@ async def run_dag(
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
-    ``subagents`` maps a node's ``subagent`` name to a SubagentBackend. ``backend``
+    ``resolve`` maps one node to the backend that runs it, so the narrowing a
+    node asks for (its ``skills``) is applied per node rather than per agent name;
+    it returns ``None`` for a name the agent table does not hold. ``backend``
     is the duck-typed file backend (read_file/write_file/join_path/abspath/
     file_exists). ``sandbox`` is an optional executor handed to each node backend
     (third-party CLI/OpenAI backends ignore it; a raven-loop node backend uses it).
@@ -188,9 +190,16 @@ async def run_dag(
         session_nodes = await read_session_nodes(backend, run_root)
         validate_and_order(spec, roots, session_nodes)
         by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
+        # Resolved once per node, here, rather than per dispatch: a narrowed backend
+        # is built for the node that asked for it, and the unknown-name check below
+        # is then the same lookup the dispatch will use rather than a second one
+        # that could disagree with it.
+        node_backends: dict[str, Any] = {}
         for node in spec.nodes:
-            if subagents.get(node.subagent) is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+            resolved = resolve(node)
+            if resolved is None:
+                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.agent}'")
+            node_backends[node.id] = resolved
 
         store = DagRunStore(backend, run_root, run_id or make_run_id())
         await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
@@ -230,7 +239,7 @@ async def run_dag(
                 "nodes": [
                     {
                         "id": node.id,
-                        "subagent": node.subagent,
+                        "subagent": node.agent,
                         "depends_on": node.depends_on,
                         "instance": node.instance,
                     }
@@ -256,7 +265,7 @@ async def run_dag(
                     "dag_node_updated",
                     {"run_id": store.run_id, "node": nid, "status": st},
                 )
-                await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
+                await _write_node_status(session_key, store.run_id, nid, by_id[nid].agent, st)
             ready = [
                 nid
                 for nid, st in status.items()
@@ -276,7 +285,7 @@ async def run_dag(
                     _run_group(
                         sorted(nids),
                         by_id=by_id,
-                        subagents=subagents,
+                        node_backends=node_backends,
                         store=store,
                         backend=backend,
                         workdir=workdir,
@@ -436,7 +445,7 @@ async def _run_group(
     nids: list[str],
     *,
     by_id: dict[str, DagNodeSpec],
-    subagents: dict[str, Any],
+    node_backends: dict[str, Any],
     store: DagRunStore,
     backend: Any,
     workdir: str,
@@ -459,7 +468,7 @@ async def _run_group(
     for nid in nids:
         await _run_node(
             by_id[nid],
-            subagents[by_id[nid].subagent],
+            node_backends[nid],
             store=store,
             backend=backend,
             workdir=workdir,
@@ -534,7 +543,7 @@ async def _run_node(
             "dag_node_updated",
             {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
+        await _write_node_status(session_key, store.run_id, node.id, node.agent, "running")
         try:
             prompt = await render_prompt(
                 node,
@@ -554,12 +563,9 @@ async def _run_node(
             # that conversation; without this it started from empty and wrote
             # nothing back, so the handle bought nothing.
             node_state = (
-                state_for(session_key or "", node.subagent, node.instance)
+                state_for(session_key or "", node.agent, node.instance)
                 if (state_for is not None and node.instance)
                 else None
-            )
-            state_kwargs = (
-                {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
             )
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same
@@ -568,19 +574,36 @@ async def _run_node(
             # the live index for the same reason a spawn is: nothing of a node
             # reaches disk until it ends, so without this a panel watching a
             # node in flight has only its prompt to show.
-            with activity.collecting(live_key=node_live_key(store.run_id, node.id)) as did:
-                try:
-                    result = await agent_backend.run(
-                        prompt,
-                        task_id=node.id,
-                        workspace=Path(workdir),
-                        executor=sandbox,
-                        session_key=session_key,
-                        instance=node.instance,
-                        **state_kwargs,
-                    )
-                finally:
-                    node_activity[node.id] = did.as_meta()
+            # The handle lock spans load-run-save, because the state is a whole-file
+            # read-modify-write: two runs on one handle that interleave here lose
+            # whichever wrote first, silently, and a later one can also read the
+            # other's turns and answer as if they were its own. Same lock the direct
+            # chat and the cli backend take, keyed by the handle rather than held on
+            # a backend, so a spawn and a node on that handle queue against each
+            # other. Re-entrant, so the cli backend's own acquire below passes
+            # through.
+            #
+            # Taken inside the semaphore, not around it: a node waiting for the lock
+            # then occupies a concurrency slot while it waits, which is a scheduling
+            # cost, whereas taking it first would hold the handle while queueing for
+            # a slot -- blocking every other run's nodes on that handle for longer.
+            async with hold_handle(session_key or "", node.agent, node.instance or node.id):
+                state_kwargs = (
+                    {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
+                )
+                with activity.collecting(live_key=node_live_key(store.run_id, node.id)) as did:
+                    try:
+                        result = await agent_backend.run(
+                            prompt,
+                            task_id=node.id,
+                            workspace=Path(workdir),
+                            executor=sandbox,
+                            session_key=session_key,
+                            instance=node.instance,
+                            **state_kwargs,
+                        )
+                    finally:
+                        node_activity[node.id] = did.as_meta()
             await store.write_text(output_path, result or "")
             status[node.id] = "completed"
             output_paths[node.id] = output_path
@@ -602,7 +625,7 @@ async def _run_node(
                 "ended_at": ended_at_ms,
             },
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
+        await _write_node_status(session_key, store.run_id, node.id, node.agent, status[node.id])
 
 
 async def _finalize(
@@ -642,7 +665,7 @@ async def _finalize(
         files.append(
             {
                 "node": nid,
-                "subagent": node.subagent,
+                "subagent": node.agent,
                 "depends_on": node.depends_on,
                 "instance": node.instance,
                 "instance_auto": nid in auto_instances,
@@ -656,7 +679,7 @@ async def _finalize(
         )
         manifest[nid] = {
             "status": status[nid],
-            "subagent": node.subagent,
+            "subagent": node.agent,
             "depends_on": node.depends_on,
             "instance": node.instance,
             "instance_auto": nid in auto_instances,
@@ -678,7 +701,7 @@ async def _finalize(
         # timeout window regardless of node count.
         await asyncio.gather(
             *(
-                _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
+                _write_node_status(session_key, store.run_id, node.id, node.agent, status[node.id])
                 for node in spec.nodes
             )
         )

@@ -287,7 +287,7 @@ def test_a_stored_openai_entry_with_local_file_access_still_loads() -> None:
             }
         }
     )
-    assert config.subagents.third_party[0].reads_local_files is False
+    assert config.subagents.agents[0].reads_local_files is False
 
 
 def test_openai_config_accepts_false_and_omitted() -> None:
@@ -492,3 +492,25 @@ async def test_test_result_wire_shape_is_camel_case(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(probe_mod, "_login_path", lambda: str(tmp_path))
     wire = (await run_test(_cli("nope {prompt}"), source="config")).to_wire()
     assert set(wire) == {"name", "source", "kind", "ok", "detail", "reply", "elapsedMs"}
+
+
+async def test_testing_a_builtin_agent_is_refused_rather_than_attempted() -> None:
+    """There is nothing a test could check about an in-process agent.
+
+    No command to launch, no endpoint to authenticate against, no transcript
+    parser to exercise -- the three things a test exists to catch. Falling through
+    to the cli branch did run, though: the probe now reports a built-in row
+    "ready", so it reached ``build_third_party_backend``, which raises on the kind,
+    and the bare-except turned that into a verdict claiming ``kind == "cli"`` with
+    the detail "unknown third-party subagent kind". The caller then *records*
+    verdicts, so that row would have shown a failed test permanently.
+    """
+    from raven.agent.subagent.probe import run_test
+    from raven.config.schema import BuiltinAgentConfig
+
+    result = await run_test(BuiltinAgentConfig(name="research-raven"), source="config")
+
+    assert result.kind == "builtin"
+    assert result.ok is False
+    assert "nothing to test" in result.detail
+    assert "unknown third-party" not in result.detail

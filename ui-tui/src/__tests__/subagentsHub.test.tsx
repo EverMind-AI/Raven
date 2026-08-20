@@ -282,6 +282,37 @@ describe('flattenSubagentRows', () => {
     expect(presetsCount).toBe(1)
   })
 
+  it('files a built-in row under installed, not under not-installed', () => {
+    // It is `configured: false` (not writing a row is how "use the package's
+    // default" is spelled) and it is never probed, so both predicates would
+    // otherwise misfile it -- into "NOT INSTALLED", for a loop running in this
+    // very process.
+    const builtin: SubagentRow = {
+      builtin: true,
+      configured: false,
+      description: 'deep retrieval and fact-checking',
+      enabled: true,
+      group: 'builtin',
+      has_api_key: false,
+      kind: 'builtin',
+      last_test_at_ms: undefined,
+      last_test_detail: undefined,
+      last_test_ok: undefined,
+      name: 'research-raven',
+      preset: undefined,
+      probe_detail: 'in-process',
+      probe_status: 'ready',
+      test_running: false
+    }
+
+    const { flat, installedCount, presetsCount, uninstalledCount } = flattenSubagentRows([builtin, ...ROWS])
+
+    expect(installedCount).toBe(2)
+    expect(uninstalledCount).toBe(1)
+    expect(presetsCount).toBe(1)
+    expect(flat[0]?.name).toBe('research-raven')
+  })
+
   it('maps flat index to the row that section-and-position implies', () => {
     const { flat } = flattenSubagentRows(ROWS)
 

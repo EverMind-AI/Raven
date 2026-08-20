@@ -207,8 +207,8 @@ def _normalized(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     from raven.config.schema import SubagentsConfig
 
-    validated = SubagentsConfig(third_party=entries)
-    return [cfg.model_dump(by_alias=True) for cfg in validated.third_party]
+    validated = SubagentsConfig(agents=entries)
+    return [cfg.model_dump(by_alias=True) for cfg in validated.agents]
 
 
 def third_party_subagent_presets() -> list[dict[str, Any]]:

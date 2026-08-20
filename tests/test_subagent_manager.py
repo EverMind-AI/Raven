@@ -22,6 +22,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent.subagent import manager as manager_mod
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
 from raven.providers.base import LLMResponse, ToolCallRequest
@@ -353,7 +354,7 @@ async def test_default_subagent_instance_is_live_while_in_flight(monkeypatch):
     assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
     await _settle(entered.is_set)
 
-    assert mgr.live_handles("sessLive") == {(manager_mod.RAVEN_LOOP_AGENT, "handle-x")}
+    assert mgr.live_handles("sessLive") == {(GENERIC_AGENT, "handle-x")}
 
     release.set()
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
@@ -377,7 +378,7 @@ async def test_cancel_by_instance_stops_a_live_default_subagent(monkeypatch):
     assert "started" in await mgr.spawn(task="long", session_key="sessLive", instance="handle-x")
     await _settle(entered.is_set)
 
-    cancelled = await mgr.cancel_by_instance("sessLive", manager_mod.RAVEN_LOOP_AGENT, "handle-x")
+    cancelled = await mgr.cancel_by_instance("sessLive", GENERIC_AGENT, "handle-x")
     assert cancelled is True
     await _settle(lambda: mgr.get_running_count() == 0)
 
@@ -538,7 +539,10 @@ async def test_default_subagent_gets_a_registry_row(tmp_path, monkeypatch):
     registry = InstanceRegistry(tmp_path / "reg.json")
     monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
 
-    await manager_mod._write_spawn_status("s1", None, "notes", "running")
+    # The generic built-in row's name, spelled out. It used to be substituted
+    # inside this helper for a ``None`` agent -- one of eight such branches -- and
+    # the substitution now happens once, where a spawn enters the manager.
+    await manager_mod._write_spawn_status("s1", GENERIC_AGENT, "notes", "running")
 
     rows = registry.list_instances("s1")
     assert [(r["sessionKey"], r["agent"], r["handle"]) for r in rows] == [RAVEN_ROW]

@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from raven.agent.subagent.backends import AgentMeta
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.providers.base import LLMResponse
@@ -55,7 +54,7 @@ def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
             await on_delta(task)
         return f"re: {task}"
 
-    monkeypatch.setattr(manager._raven_backend, "run", fake_run)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", fake_run)
     return manager
 
 
@@ -457,7 +456,7 @@ async def test_chat_and_spawn_on_one_handle_do_not_interleave(tmp_path, monkeypa
     manager = _direct_chat_manager(tmp_path, monkeypatch)
     inside: list[str] = []
 
-    original = manager._raven_backend.run
+    original = manager.registry.backend("raven").run
 
     async def tracked(task, **kwargs):
         inside.append(f"in:{task}")
@@ -465,7 +464,7 @@ async def test_chat_and_spawn_on_one_handle_do_not_interleave(tmp_path, monkeypa
         inside.append(f"out:{task}")
         return await original(task, **kwargs)
 
-    monkeypatch.setattr(manager._raven_backend, "run", tracked)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", tracked)
 
     await asyncio.gather(
         manager.chat(session_key="s1", agent="raven", handle="h", text="a"),
@@ -757,7 +756,7 @@ async def test_chat_with_a_backend_that_takes_the_handle_lock_completes(tmp_path
         async with hold_handle(session_key or "default", "raven", instance or task_id):
             return f"re: {task}"
 
-    monkeypatch.setattr(manager._raven_backend, "run", locking_run)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", locking_run)
 
     reply, meta = await asyncio.wait_for(
         manager.chat(session_key="s1", agent="raven", handle="notes", text="who are you"),
@@ -785,7 +784,7 @@ async def test_a_running_direct_chat_is_reported_live(tmp_path, monkeypatch):
         await release.wait()
         return "done"
 
-    monkeypatch.setattr(manager._raven_backend, "run", slow_run)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", slow_run)
 
     turn = asyncio.create_task(manager.chat(session_key="s1", agent="raven", handle="notes", text="hi"))
     await asyncio.wait_for(entered.wait(), timeout=2)
@@ -811,7 +810,7 @@ async def test_cancel_by_instance_stops_a_direct_chat(tmp_path, monkeypatch):
         await asyncio.Event().wait()
         return "never"
 
-    monkeypatch.setattr(manager._raven_backend, "run", hanging_run)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", hanging_run)
 
     turn = asyncio.create_task(manager.chat(session_key="s1", agent="raven", handle="notes", text="hi"))
     await asyncio.wait_for(entered.wait(), timeout=2)
@@ -944,8 +943,8 @@ async def test_chat_withholds_the_delta_hook_from_a_backend_that_cannot_stream(t
         offered.append(kwargs.get("on_delta"))
         return "buffered"
 
-    monkeypatch.setattr(manager._raven_backend, "run", fake_run)
-    monkeypatch.setattr(manager._raven_backend, "streams", False)
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", fake_run)
+    monkeypatch.setattr(manager.registry.backend("raven"), "streams", False)
 
     reply, _meta = await manager.chat(session_key="s1", agent="raven", handle="notes", text="hi", on_delta=_collect([]))
 
@@ -1126,7 +1125,7 @@ async def test_a_spawn_carries_the_instances_message_list(tmp_path, monkeypatch)
             return "ok"
 
     manager = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, session_dir=lambda k: tmp_path)
-    manager._raven_backend = _Backend()
+    manager.registry.set_builtin_builder(lambda _row, _build, _b=_Backend(): _b)
     # The result re-injection submits a turn; this test is about the message
     # list the dispatch carried, not about what the main agent hears afterwards.
     manager._submit = lambda *a, **k: None
@@ -1178,7 +1177,7 @@ async def test_a_spawn_that_named_no_instance_persists_nothing(tmp_path, monkeyp
             return "ok"
 
     manager = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, session_dir=lambda k: tmp_path)
-    manager._raven_backend = _Backend()
+    manager.registry.set_builtin_builder(lambda _row, _build, _b=_Backend(): _b)
     manager._submit = lambda *a, **k: None
 
     await manager._run_subagent_inner(
@@ -1215,8 +1214,11 @@ async def test_a_stateless_agent_cannot_be_direct_chatted(tmp_path, monkeypatch)
     from raven.agent.subagent.manager import SubagentManager
 
     manager = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, session_dir=lambda k: tmp_path)
-    manager._backends = {"mirothinker": object()}
-    manager._third_party_meta = [AgentMeta("mirothinker", "", False, True, False)]
+    from raven.config.schema import ThirdPartyOpenAISubagentConfig
+
+    manager.apply_agents(
+        [ThirdPartyOpenAISubagentConfig(name="mirothinker", base_url="http://x", model="m", stateful=False)]
+    )
 
     with pytest.raises(RuntimeError) as excinfo:
         await manager.chat(session_key="s1", agent="mirothinker", handle="h", text="hi")
@@ -1241,13 +1243,16 @@ def test_replay_follows_the_declaration_not_the_kind(tmp_path):
 
     manager = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, session_dir=lambda k: tmp_path)
 
-    class _Openai:
-        kind = "openai"
+    from raven.config.schema import ThirdPartyOpenAISubagentConfig
 
-    manager._backends = {"stateful_ep": _Openai(), "stateless_ep": _Openai()}
-    manager._third_party_meta = [
-        AgentMeta("stateful_ep", "", True, True, False),
-        AgentMeta("stateless_ep", "", False, True, False),
-    ]
+    manager.apply_agents(
+        [
+            ThirdPartyOpenAISubagentConfig(name="stateful_ep", base_url="http://x", model="m", stateful=True),
+            ThirdPartyOpenAISubagentConfig(name="stateless_ep", base_url="http://x", model="m", stateful=False),
+        ]
+    )
     assert manager._is_replayed("stateful_ep") is True
     assert manager._is_replayed("stateless_ep") is False
+    # A built-in row is replayed whatever it declares: an in-process loop has no
+    # session store of its own, so the message list raven keeps is its memory.
+    assert manager._is_replayed("raven") is True

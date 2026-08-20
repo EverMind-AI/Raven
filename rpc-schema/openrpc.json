@@ -6140,18 +6140,22 @@
           "preset": { "type": "string" },
           "kind": {
             "type": "string",
-            "enum": ["cli", "openai", "acp"]
+            "enum": ["builtin", "cli", "openai", "acp"]
           },
           "description": { "type": "string" },
           "enabled": { "type": "boolean" },
           "configured": { "type": "boolean" },
+          "builtin": {
+            "type": "boolean",
+            "description": "A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. `enabled` is the only action it takes."
+          },
           "upgrade_to": {
             "type": "string",
             "description": "The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead."
           },
           "group": {
             "type": "string",
-            "enum": ["installed", "uninstalled"]
+            "enum": ["builtin", "installed", "uninstalled"]
           },
           "probe_status": {
             "type": "string",

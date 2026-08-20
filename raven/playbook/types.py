@@ -27,6 +27,8 @@ from typing import Any, ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
+from raven.agent.subagent_dag._graph import DagNodeSpec
+
 SPEC_VERSION = 1
 
 NAME_RE = r"^[a-z0-9][a-z0-9-]*$"
@@ -38,10 +40,26 @@ _NAME_RE = NAME_RE
 _NODE_ID_RE = r"^[A-Za-z0-9_-]+$"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
-BUILTIN_AGENTS = ("research-raven", "code-raven", "data-raven", "content-raven")
-"""v1 agent roster: the four capability bases, resolved by the executor
-itself. When the unified agent registry grows configurable builtin rows,
-resolution moves there and this tuple becomes the seed data."""
+NodeSpec = DagNodeSpec
+"""One step of the graph -- the DAG's own node model, not a second definition.
+
+A playbook's ``nodes[]`` used to be declared here, and the two drifted: neither
+was a superset (this one had ``skills`` / ``mcps`` / ``confirm``, the DAG's had
+``inputs``), the agent field was spelled ``agent`` here and ``subagent`` there,
+and a field a playbook could write but no graph could carry was silently dropped
+at dispatch. The subset discipline the two are supposed to have -- a playbook's
+fields are a subset of a graph's -- is now structural rather than a rule someone
+has to remember.
+
+The camelCase wire spelling is unchanged: ``DagNodeSpec`` carries the camel alias
+generator, so ``promptTemplate`` in a playbook file and ``prompt_template`` in the
+model-facing schema both validate.
+
+Node-level ``confirm`` is gone with the merge, and deliberately: the field's only
+effect was to be rejected by validation, because honouring it needs a runner that
+can pause mid-graph. The gate is graph-level (``PlaybookSpec.confirm``, dispatched
+as ``SubAgentDagSpec.confirm``), where "approve this" means the whole graph.
+"""
 
 
 def slugify(name: str) -> str:
@@ -82,26 +100,6 @@ class ParamSpec(CamelBase):
         if self.type != "enum" and self.enum:
             raise ValueError(f"'enum' given but type is {self.type!r}")
         return self
-
-
-class NodeSpec(CamelBase):
-    """One step of the graph. Configuration hangs on the node, not on a
-    role: the same agent may run several steps with different skills."""
-
-    id: str = Field(pattern=_NODE_ID_RE)
-    agent: str
-    """A registered agent name; v1 resolves against :data:`BUILTIN_AGENTS`."""
-
-    prompt_template: str
-    depends_on: list[str] = Field(default_factory=list)
-    """Execution order and the reference whitelist for ``{{ x.* }}``."""
-
-    skills: list[str] = Field(default_factory=list)
-    mcps: list[str] = Field(default_factory=list)
-    instance: str | None = None
-    confirm: bool = False
-    """Node-level gate for irreversible actions; the top-level confirm
-    cannot stop the middle of a run."""
 
 
 class PlaybookSpec(CamelBase):

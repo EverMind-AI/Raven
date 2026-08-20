@@ -9,6 +9,8 @@ here. CJK strings appear as unicode escapes to keep the source ASCII; they pin
 that non-ASCII prose survives the trip unmangled.
 """
 
+from pathlib import Path
+
 import pytest
 from loguru import logger
 
@@ -234,3 +236,82 @@ def test_save_refuses_a_name_that_is_not_a_directory_name(tmp_path, name):
     with pytest.raises(ValueError):
         store.save(spec)
     assert list(tmp_path.rglob("playbook.md")) == []
+
+
+def test_a_playbook_saved_by_the_previous_release_still_loads(tmp_path: Path) -> None:
+    """The failure this guards was silent, which is what made it bad.
+
+    `block_dump` is `exclude_none`, not `exclude_defaults`, so every playbook the
+    previous release wrote carries `confirm: false` on each node -- a key the
+    unified node model forbids. `PlaybookRuntime` catches a load error as a
+    warning, so the user's saved procedure just stopped existing.
+
+    The `skills: []` limb is the quieter half: it used to fold to "all skills" and
+    now means "none", so such a file would have loaded and then run every step with
+    an empty menu.
+    """
+    (tmp_path / "legacy-book").mkdir()
+    (tmp_path / "legacy-book" / "playbook.md").write_text(
+        "---\n"
+        "name: legacy-book\n"
+        "description: written by the previous release\n"
+        "---\n\n"
+        "Body.\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\n"
+        "mode: dag\n"
+        "confirm: true\n"
+        "triggers:\n"
+        "  keywords: [legacy run]\n"
+        "params: {}\n"
+        "nodes:\n"
+        "- id: n1\n"
+        "  agent: code-raven\n"
+        "  promptTemplate: p\n"
+        "  dependsOn: []\n"
+        "  skills: []\n"
+        "  mcps: []\n"
+        "  confirm: false\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
+
+    spec = store.load("legacy-book")
+
+    assert spec.nodes[0].skills is None, "an old empty list meant 'all', so it must read as unset"
+    assert spec.nodes[0].mcps is None
+    assert spec.confirm is True  # the graph-level gate is untouched
+
+
+def test_an_empty_skills_list_written_today_is_left_alone(tmp_path: Path) -> None:
+    """The migration is scoped by the marker that dates the file.
+
+    A node-level `confirm` only ever came from the old writer, so its presence is
+    what licenses rewriting the empty lists. Without that scoping, `skills: []` on
+    a current playbook -- a deliberate "no skills at all" -- would be silently
+    widened to the agent's whole menu.
+    """
+    (tmp_path / "current-book").mkdir()
+    (tmp_path / "current-book" / "playbook.md").write_text(
+        "---\n"
+        "name: current-book\n"
+        "description: written on this release\n"
+        "---\n\n"
+        "Body.\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\n"
+        "mode: dag\n"
+        "triggers:\n"
+        "  keywords: [current run]\n"
+        "nodes:\n"
+        "- id: n1\n"
+        "  agent: code-raven\n"
+        "  promptTemplate: p\n"
+        "  skills: []\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
+
+    assert store.load("current-book").nodes[0].skills == []

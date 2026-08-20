@@ -132,7 +132,19 @@ def playbook_validate(
             errors.append(str(exc))
 
     if spec is not None:
-        errors.extend(validate_structure(spec))
+        # Validated against this machine's agent table. A playbook is a
+        # distribution unit, so a name missing from the table is a real finding
+        # here, reported as "not registered" rather than as a malformed file.
+        #
+        # The table is never empty -- the package's built-in rows are seeds, not
+        # config -- so there is no "could not load a table" case to handle on this
+        # path. ``validate_structure`` still accepts ``None`` for a caller that
+        # genuinely has no table; this is not one.
+        from raven.agent.subagent.registry import AgentRegistry
+
+        registry = AgentRegistry()
+        registry.apply(config.subagents.agents)
+        errors.extend(validate_structure(spec, known_agents=registry.all_names()))
     if errors:
         text = path.read_text(encoding="utf-8")
         for error in errors:
@@ -185,15 +197,21 @@ def playbook_create(
         err_console.print(f"[red]Playbook {escape(repr(name))} already exists ({store.origin_of(name)}).[/red]")
         raise typer.Exit(code=1)
 
+    from raven.agent.subagent.registry import AgentRegistry
     from raven.cli._helpers import make_provider
     from raven.config.update import set_playbook_disabled
-    from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
+    from raven.playbook import PlaybookGenerator, live_inventory
 
+    registry = AgentRegistry()
+    registry.apply(config.subagents.agents)
     generator = PlaybookGenerator(
         make_provider(config),
         None,
-        agent_roster(load_role_pool()),
-        StaticInventory(),
+        registry.descriptions(),
+        # No tool registry is built on this path, so only the mcp half is known;
+        # an unknown *tool* was never checked here anyway (``check_assets`` reads
+        # skills and mcps).
+        live_inventory(config.tools.mcp_servers),
         model=config.playbooks.model,
     )
     generated = asyncio.run(generator.generate("\n\n".join(pieces)))
@@ -234,12 +252,25 @@ def playbook_disable(name: str = typer.Argument(..., help="Playbook name, as lis
 def playbook_run(
     name: str = typer.Argument(..., help="Playbook name, as listed"),
     params: list[str] = typer.Argument(None, metavar="[K=V ...]", help="Parameter values"),
+    fill: list[str] = typer.Option(
+        None,
+        "--fill",
+        metavar="NODE.FIELD=VALUE",
+        help="Fill a node field the playbook left blank, e.g. --fill draft.promptTemplate='...'",
+    ),
 ):
     """Run one playbook to completion, in this process, and print the result.
 
-    The explicit entry: it works on disabled playbooks too (disabling only
-    mutes the passive matcher). Runs synchronously — for long graphs prefer
-    asking the agent, which dispatches in the background.
+    The explicit entry: it works on disabled playbooks too, because disabling only
+    takes a playbook out of what the model is offered and this is the user's own
+    hand. Runs synchronously -- for long graphs prefer asking the agent, which
+    dispatches in the background.
+
+    ``--fill`` is how this path supplies what a playbook left for a model to
+    write. Without it, such a playbook simply cannot run here: there is no model
+    in the room to compose the missing prompt, and running a graph with a blank
+    step would dispatch a sub-agent with nothing to do. The gap is reported with
+    the exact flags to pass instead.
     """
     values: dict[str, str] = {}
     for pair in params or []:
@@ -249,6 +280,15 @@ def playbook_run(
             raise typer.Exit(code=1)
         values[key] = value
 
+    fills: dict[str, dict[str, str]] = {}
+    for pair in fill or []:
+        target, eq, value = pair.partition("=")
+        node_id, dot, field_name = target.partition(".")
+        if not (eq and dot and node_id and field_name):
+            err_console.print(f"[red]--fill takes NODE.FIELD=VALUE, got {escape(repr(pair))}.[/red]")
+            raise typer.Exit(code=1)
+        fills.setdefault(node_id, {})[field_name] = value
+
     config = _load_config()
     store = _store(config)
     _require_known(store, name)
@@ -256,7 +296,7 @@ def playbook_run(
     from raven.agent.subagent.manager import SubagentManager
     from raven.agent.subagent_dag.tool import SubAgentDagTool
     from raven.cli._helpers import make_provider
-    from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_roster, load_role_pool
+    from raven.playbook import PlaybookExecutor, PlaybookRuntime
 
     provider = make_provider(config)
     manager = SubagentManager(
@@ -264,27 +304,42 @@ def playbook_run(
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
         exec_config=config.tools.exec,
+        agents=config.subagents.agents,
     )
-    dag_tool = SubAgentDagTool(workspace=config.workspace_path, guide_skill_id=None)
+    # The manager's table, so a node here resolves to the same agent it would in
+    # a conversation -- built-in rows included, which is what lets the CLI run a
+    # playbook at all now that no synthetic per-node backend is built for it.
+    dag_tool = SubAgentDagTool(
+        workspace=config.workspace_path,
+        registry=manager.registry,
+        guide_skill_id=None,
+        state_for=manager.instance_state,
+    )
     executor = PlaybookExecutor(
-        backend_factory=manager.build_role_backend,
         dag_tool=dag_tool,
         provider=provider,
         compose_model=config.playbooks.model,
         background=False,
+        # This path composes a prompt-mode graph itself. In a conversation the
+        # caller is a model and gets the guidance to compose from; here there is
+        # nobody to hand it to, so without this the CLI would lose the ability to
+        # run a prompt-mode playbook at all.
+        compose_prompt_mode=True,
     )
-    executor.set_roster(agent_roster(load_role_pool()))
+    executor.set_roster(manager.registry.descriptions())
     runtime = PlaybookRuntime(
-        provider=provider,
         store=store,
         executor=executor,
-        model=config.playbooks.model,
         disabled=config.playbooks.disabled,
     )
-    plan = asyncio.run(runtime.run_named(name, values))
+    plan = asyncio.run(runtime.load(name, values, fills, allow_disabled=True))
     if plan is None:
         err_console.print(f"[red]Playbook {escape(repr(name))} did not load; see the log for the parse error.[/red]")
         raise typer.Exit(code=1)
+    if plan.kind == "gaps":
+        # Named as an unrunnable-here condition rather than a generic failure: the
+        # playbook is fine, this entry point just has nobody to fill it in.
+        err_console.print("[yellow]This playbook expects values to be supplied at run time.[/yellow]", soft_wrap=True)
     # Payload, not styling: a graph result legitimately contains brackets.
     console.print(plan.reply, markup=False, soft_wrap=True)
     if plan.kind != "dag":

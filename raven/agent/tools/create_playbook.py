@@ -5,8 +5,9 @@ create``): when the user asks to save a workflow they just described or ran,
 the agent hands the description to the same generator the CLI uses, and the
 product lands in the same place under the same rules — the user layer of the
 library, on the disabled list until the user reviews and enables it. Disabled
-means out of the passive matcher only; it can still be run explicitly, so the
-user can try it before switching it on.
+means it is not offered to the model -- so it cannot be picked up by accident --
+while ``raven playbook run`` still resolves it, which is how the user tries it
+before switching it on.
 
 The tool takes a description, never a spec: generation, validation and repair
 stay inside :class:`PlaybookGenerator`, so a model cannot write an arbitrary
@@ -46,13 +47,14 @@ class CreatePlaybookTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Save a recurring multi-step procedure as a playbook the user can trigger later "
-            "by just asking. Use it when the user wants to keep a workflow -- 'save this as a "
-            "playbook', 'make this repeatable'. Describe the whole procedure from the "
-            "conversation: the steps and their order, which results feed which steps, the "
-            "parameters that change per run, and the phrases that should trigger it. The "
-            "playbook is stored disabled for the user's review; tell them where it landed and "
-            "that it activates on 'enable <name>'."
+            "Save a recurring multi-step procedure as a playbook, so the same work can be "
+            "run the same way later. Use it when the user wants to keep a workflow -- 'save "
+            "this as a playbook', 'make this repeatable'. Describe the whole procedure from "
+            "the conversation: the steps and their order, which results feed which steps, the "
+            "parameters that change per run, and the words someone would use when they want "
+            "this done (those make it easier to find later, they do not run it). The playbook "
+            "is stored disabled for the user's review; tell them where it landed and that it "
+            "becomes available on 'enable <name>'."
         )
 
     @property
@@ -111,7 +113,8 @@ class CreatePlaybookTool(Tool):
         notes = "".join(f"\n- {n}" for n in generated.notes)
         review = f"\nOpen questions for the user's review:{notes}" if notes else ""
         return (
-            f"Created playbook {name!r} at {path}. It starts disabled: it will not trigger "
-            f"automatically until the user reviews the file and enables it (say the word, or "
-            f"`raven playbook enable {name}`). It can already be run explicitly by name.{review}"
+            f"Created playbook {name!r} at {path}. It starts disabled: nobody is offered it "
+            f"until the user reviews the file and enables it (say the word, or "
+            f"`raven playbook enable {name}`). It can already be run by hand with "
+            f"`raven playbook run {name}`.{review}"
         )

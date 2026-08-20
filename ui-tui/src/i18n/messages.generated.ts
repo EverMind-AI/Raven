@@ -1444,7 +1444,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.connf.smtp_username': 'Sending account (SMTP)',
     'gui.connf.token': 'Bot token',
     'gui.connf.user_id': 'User ID',
-    'gui.set.prm.file_only': 'Changed only in the config file, then restart raven:'
+    'gui.set.prm.file_only': 'Changed only in the config file, then restart raven:',
+    'gui.agent.builtin': 'Built in',
+    'gui.agent.builtin_h':
+      "Raven's own agents. Always available, nothing to install; switch one off to keep it off the roster.",
+    'gui.agent.inprocess': 'in-process',
+    'gui.agent.kind_builtin': 'built in'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -2599,6 +2604,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.connf.smtp_username': '发件账号',
     'gui.connf.token': '机器人令牌（Token）',
     'gui.connf.user_id': '账号 User ID',
-    'gui.set.prm.file_only': '只能在配置文件里修改，改完重启 raven 生效：'
+    'gui.set.prm.file_only': '只能在配置文件里修改，改完重启 raven 生效：',
+    'gui.agent.builtin': '内置',
+    'gui.agent.builtin_h': 'Raven 自己的智能体。始终可用、无需安装；关掉某一个即可让它不出现在名单里。',
+    'gui.agent.inprocess': '进程内',
+    'gui.agent.kind_builtin': '内置'
   }
 } as Record<Locale, Record<string, string>>

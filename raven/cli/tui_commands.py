@@ -534,9 +534,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             memory_config=ec_config.memory,
             backend=backend,
             plugin_tools=plugin_tools,
-            # Gates run_subagent_dag: AgentLoop registers it only when the roster
-            # is non-empty, since its nodes dispatch to these agents.
-            third_party_subagents=config.subagents.third_party,
+            agents=config.subagents.agents,
             playbook_config=config.playbooks,
             # TUI is always a multi-turn interactive session.
             interactive=True,

@@ -397,6 +397,18 @@ function closeDetail() { $('#detail').dataset.open = 'false'; dCur = null; xaShe
    can actually run it". Collapsing them is how a disabled agent reads as
    broken, or a missing binary reads as switched off. */
 const XA_FIXTURE = [
+  { name: 'research-raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
+    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+    description: 'Deep retrieval and fact-checking: multi-source search, source-credibility judgment.' },
+  { name: 'code-raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
+    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+    description: "Repository-level code work: locate where a change lands, implement with unit tests." },
+  { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
+    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+    last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
+    description: 'General-purpose sub-agent with no capability bias.' },
   { name: 'claude_code', preset: 'claude_code', kind: 'cli', configured: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: true, last_test_at_ms: Date.now() - 3600e3, last_test_detail: '',
@@ -447,7 +459,8 @@ DS.xa ??= {
 };
 
 function xaKind(row) {
-  return T(row.kind === 'openai' ? 'gui.agent.kind_openai'
+  return T(row.kind === 'builtin' ? 'gui.agent.kind_builtin'
+    : row.kind === 'openai' ? 'gui.agent.kind_openai'
     : row.kind === 'acp' ? 'gui.agent.kind_acp' : 'gui.agent.kind_cli');
 }
 
@@ -455,6 +468,15 @@ function xaKind(row) {
    the fact that it is switched off, because that is the one the user has to act
    on. */
 function xaState(row) {
+  /* A built-in agent is this process. There is nothing to install and nothing to
+     reach, so the only fact worth a line is whether it is switched on -- reading
+     it through the probe verdicts would report "not measured" about a loop that is
+     demonstrably running. */
+  if (row.builtin) {
+    return row.enabled
+      ? { cls: 'ok', text: T('gui.agent.inprocess') }
+      : { cls: 'off', text: T('gui.agent.disabled') };
+  }
   if (row.kind === 'openai' && !row.has_api_key) return { cls: 'bad', text: T('gui.agent.needs_key') };
   if (row.configured && !row.enabled && row.probe_status !== 'missing') {
     return { cls: 'off', text: T('gui.agent.disabled') };
@@ -543,7 +565,14 @@ function xaSheetDraw(row) {
   meta.appendChild(mk('div', 'l2', row.description || ''));
   head.appendChild(meta);
   const act = mk('div', 'dact');
-  if (!row.configured) {
+  if (row.builtin) {
+    /* No connect (already running), no test (nothing to spend), no disconnect
+       (not writing a row is what "use the default" means). The switch is the
+       only action, and it is the only way to take one off the roster. */
+    const tog = mk('button', 'mini ghost', T(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable'));
+    tog.onclick = () => xaRun('toggle', row, { enabled: !row.enabled });
+    act.appendChild(tog);
+  } else if (!row.configured) {
     /* Connecting an HTTP agent needs its key first, so the head action defers
        to the form's save; every other kind connects in one click. */
     if (row.kind !== 'openai') {
@@ -633,6 +662,33 @@ function xaSheetDraw(row) {
   }
 }
 
+/* One built-in row. Deliberately not the connected-agent card: two of that
+   card's three verbs mean nothing here (there is no command to test and no row
+   to disconnect), and drawing them disabled reads as something being wrong. */
+function xaBuiltinCard(row) {
+  const st = xaState(row);
+  const r = mk('div', 'pcard');
+  const nm = mk('div', 'nm');
+  nm.append(mk('span', 'led' + (st.cls === 'ok' ? '' : ' ' + st.cls)),
+    mk('span', null, row.name), mk('span', 'kd', xaKind(row)));
+  r.append(nm);
+  r.appendChild(mk('div', 'mo' + (st.cls === 'ok' || st.cls === 'off' ? '' : ' ' + st.cls), st.text));
+  r.appendChild(mk('div', 'one', row.description || ''));
+  const ctl = mk('div', 'ctl');
+  const tog = mk('button', 'mini ghost', T(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable'));
+  tog.onclick = (e) => { e.stopPropagation(); xaRun('toggle', row, { enabled: !row.enabled }); };
+  ctl.appendChild(tog);
+  const cfg = mk('button', 'mini ghost', T('gui.agent.configure'));
+  cfg.onclick = (e) => { e.stopPropagation(); xaSheetOpen(row); };
+  ctl.appendChild(cfg);
+  r.appendChild(ctl);
+  r.setAttribute('role', 'button');
+  r.tabIndex = 0;
+  r.onclick = () => xaSheetOpen(row);
+  r.onkeydown = (e) => { if (e.key === 'Enter') xaSheetOpen(row); };
+  return r;
+}
+
 function drawXa() {
   const box = $('#xaBody');
   if (!box) return;
@@ -642,8 +698,23 @@ function drawXa() {
   hero.append(mk('h3', null, T('gui.agent.hero')), mk('p', null, T('gui.agent.hero_sub')));
   box.appendChild(hero);
 
-  const on = XAGENTS.filter((a) => a.configured);
-  const off = XAGENTS.filter((a) => !a.configured);
+  const builtin = XAGENTS.filter((a) => a.builtin);
+  const on = XAGENTS.filter((a) => a.configured && !a.builtin);
+  const off = XAGENTS.filter((a) => !a.configured && !a.builtin);
+
+  /* Built-in first: they are the agents a fresh install already has, so a page
+     that led with "nothing connected yet" would be describing the roster wrongly. */
+  if (builtin.length) {
+    const s0 = mk('div', 'csec');
+    const hd0 = mk('div', 'hd');
+    hd0.append(mk('b', null, T('gui.agent.builtin')), mk('span', 'n', String(builtin.length)));
+    s0.appendChild(hd0);
+    s0.appendChild(mk('div', 'sec-hint', T('gui.agent.builtin_h')));
+    const set0 = mk('div', 'fset');
+    builtin.forEach((row) => set0.appendChild(xaBuiltinCard(row)));
+    s0.appendChild(set0);
+    box.appendChild(s0);
+  }
 
   const s1 = mk('div', 'csec');
   const hd = mk('div', 'hd');

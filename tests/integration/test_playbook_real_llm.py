@@ -54,14 +54,20 @@ _CASES = yaml.safe_load(
 
 
 def _make_generator():
-    from raven.playbook import PlaybookGenerator, StaticInventory, agent_roster, load_role_pool
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.playbook import PlaybookGenerator, StaticInventory
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(api_key=OPENROUTER_KEY, default_model=MODEL, provider_name="openrouter")
+    # The agent table's own rows: the roster the generator casts nodes against has
+    # to be the one the graph can then dispatch to. It used to be a private
+    # four-name pool with no connection to either.
+    registry = AgentRegistry()
+    registry.apply([])
     return PlaybookGenerator(
         provider,
         skill_router=None,  # candidates not needed for decision-level checks
-        agent_roster=agent_roster(load_role_pool()),
+        agent_roster=registry.descriptions(),
         inventory=StaticInventory(mcp=[], tools=[]),
         model=MODEL,
     )

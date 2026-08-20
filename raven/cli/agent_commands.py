@@ -287,9 +287,7 @@ def register(app: typer.Typer) -> None:
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             router=router,
-            # Gates run_subagent_dag: AgentLoop registers it only when the roster
-            # is non-empty, since its nodes dispatch to these agents.
-            third_party_subagents=config.subagents.third_party,
+            agents=config.subagents.agents,
             playbook_config=config.playbooks,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,

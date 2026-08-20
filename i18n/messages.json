@@ -4990,6 +4990,22 @@
     "gui.set.prm.file_only": {
       "en": "Changed only in the config file, then restart raven:",
       "zh": "只能在配置文件里修改，改完重启 raven 生效："
+    },
+    "gui.agent.builtin": {
+      "en": "Built in",
+      "zh": "内置"
+    },
+    "gui.agent.builtin_h": {
+      "en": "Raven's own agents. Always available, nothing to install; switch one off to keep it off the roster.",
+      "zh": "Raven 自己的智能体。始终可用、无需安装；关掉某一个即可让它不出现在名单里。"
+    },
+    "gui.agent.inprocess": {
+      "en": "in-process",
+      "zh": "进程内"
+    },
+    "gui.agent.kind_builtin": {
+      "en": "built in",
+      "zh": "内置"
     }
   }
 }

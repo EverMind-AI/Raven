@@ -342,7 +342,7 @@ def register(app: typer.Typer) -> None:
             plugin_tools=plugin_tools,
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
-            third_party_subagents=config.subagents.third_party,
+            agents=config.subagents.agents,
             playbook_config=config.playbooks,
         )
         agent.configure_personalization(config.agents.defaults.enable_personalization)

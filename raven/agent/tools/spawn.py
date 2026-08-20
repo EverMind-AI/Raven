@@ -62,8 +62,15 @@ class SpawnTool(Tool):
     def name(self) -> str:
         return "spawn"
 
-    def _third_party_agents(self) -> list["AgentMeta"]:
-        lister = getattr(self._manager, "list_third_party_agents", None)
+    def _agents(self) -> list["AgentMeta"]:
+        """The roster this spawn may dispatch to -- the whole agent table.
+
+        Built-in agents are on it now. While they were not, the model was offered
+        "omit `agent` for a Raven sub-agent" and had no way to learn that
+        research-raven and code-raven existed or differed, so the only agents it
+        could choose *between* were the external ones.
+        """
+        lister = getattr(self._manager, "list_agents", None)
         return lister() if callable(lister) else []
 
     @property
@@ -74,18 +81,17 @@ class SpawnTool(Tool):
             "The subagent will complete the task and report back when done. "
             "Multiple spawns run concurrently."
         )
-        agents = self._third_party_agents()
+        agents = self._agents()
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
 
             listing = format_agent_listing(agents)
             base += (
-                " By default the subagent is a Raven agent; to delegate to a specialized "
-                f"third-party agent instead, pass its name as `agent`. Available: {listing}."
+                " Pick the agent for the job with `agent` -- there is no default, so choose "
+                f"deliberately from: {listing}."
             )
             # The one moment a wrong choice is visible: the model is reading this
-            # tool while the work is really a graph. Gated on the same roster the
-            # DAG tool is registered from, so it never names an absent tool.
+            # tool while the work is really a graph.
             base += (
                 " If you are about to issue several spawns for one task, that is a DAG: use "
                 "`run_subagent_dag` instead, so the independent parts run concurrently and each "
@@ -105,26 +111,15 @@ class SpawnTool(Tool):
                 "description": "Optional short label for the task (for display)",
             },
         }
-        agents = self._third_party_agents()
-        names = [a.name for a in agents]
+        agents = self._agents()
+        names = sorted(a.name for a in agents)
         if names:
             props["agent"] = {
                 "type": "string",
                 "enum": names,
-                "description": (
-                    "Optional: delegate to this specialized third-party agent instead of a default Raven subagent."
-                ),
+                "description": "Which agent runs this task. Required: pick one from the list.",
             }
-        stateful_names = [a.name for a in agents if a.stateful]
-        # Declared whatever the roster holds, because the default sub-agent is
-        # resumable on its own (its transcript is persisted per handle) and is the
-        # only target a default install has. Gating this on a stateful third-party
-        # agent existing left that install unable to name a handle at all, while
-        # `execute` minted one anyway and the announcement told the model to pass it
-        # back -- pointing it at an argument it was never offered.
-        targets = "the default sub-agent (omit `agent`)"
-        if stateful_names:
-            targets += f", and `agent` in {stateful_names}"
+        stateful_names = sorted(a.name for a in agents if a.stateful)
         props["instance"] = {
             "type": "string",
             "description": (
@@ -132,14 +127,18 @@ class SpawnTool(Tool):
                 "conversation with a resumable sub-agent. Reuse the same handle to "
                 "continue that session. Omit it and one is assigned automatically and "
                 "reported when the call finishes, so any run can be continued later. "
-                f"Accepted for {targets} -- against any other `agent` a handle continues "
-                "nothing and the call is rejected."
+                f"Accepted for `agent` in {stateful_names} -- against any other one a handle "
+                "continues nothing and the call is rejected."
             ),
         }
+        # `agent` is required only once there is a roster to require it from. An
+        # empty one is a table whose every row failed to build; demanding a value
+        # the enum cannot offer would be an unsatisfiable schema, and the manager
+        # still resolves an omitted name to the generic built-in row.
         return {
             "type": "object",
             "properties": props,
-            "required": ["task"],
+            "required": ["task", "agent"] if names else ["task"],
         }
 
     def _is_stateful(self, agent: str | None) -> bool:
@@ -147,14 +146,13 @@ class SpawnTool(Tool):
 
         The single predicate behind both the refusal below and the minting in
         ``execute``, so the two can never disagree about what a handle is worth.
-        ``agent is None`` is the built-in in-process sub-agent, whose transcript
-        is persisted per handle (raven/agent/subagent/instance_state.py); an
-        unknown name is left to the manager to reject rather than pre-judged
-        here.
+        Read from the same roster the schema is built from. An unknown name -- and
+        an omitted one, which the manager resolves to the generic built-in row --
+        is left to the manager rather than pre-judged here.
         """
         if agent is None:
             return True
-        meta = next((a for a in self._third_party_agents() if a.name == agent), None)
+        meta = next((a for a in self._agents() if a.name == agent), None)
         return meta is None or meta.stateful
 
     def _reject_useless_instance(self, agent: str | None, instance: str | None) -> str | None:
@@ -169,7 +167,7 @@ class SpawnTool(Tool):
         """
         if not instance or self._is_stateful(agent):
             return None
-        names = sorted(a.name for a in self._third_party_agents() if a.stateful)
+        names = sorted(a.name for a in self._agents() if a.stateful)
         alt = f" Sub-agents that can: {names}." if names else ""
         return (
             f"Error: sub-agent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
