@@ -186,9 +186,12 @@ function redrawAll() {
   closeDetail();
   const p = $('#stage').querySelector('.pitch');
   if (p) { p.remove(); pitch(); }
-  /* The transcript writes its words into the DOM as it renders -- fold headers,
-     work phrases, answer footers -- so a flip has to rebuild it, not just
-     re-run the catalogue over the markup. Skipped while a turn is streaming:
+  /* The transcript island re-renders its catalogue words (verbs, fold
+     headers, footers) in place -- which is also what covers a turn still
+     streaming, where the reload below must not run. */
+  RavenIslands.transcript.redraw();
+  /* The words baked into stored segments (note labels, phrased previews) come
+     back right on a rebuild from disk. Skipped while a turn is streaming:
      re-opening the session mid-turn would cut the stream off. */
   if (!draft && cur && !busy) openSession(sess(cur));
 }

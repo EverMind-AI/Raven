@@ -19,12 +19,12 @@ function replay(run, instant) {
     }, e.d);
     else if (e.t === 'think') fire(() => {
       st.hasThink = true;
-      st.cot.textContent = e.x;
+      st.thinkAppend(e.x);
       st.reveal();
       st.thinkDone(e.s);
-      if (!instant) { st.set(true); later(1400, () => st.set(false)); }
+      if (!instant) { st.setThinkOpen(true); later(1400, () => st.setThinkOpen(false)); }
     }, e.d);
-    else if (e.t === 'say') fire(() => { st.hasSay = true; st.say.innerHTML = md(e.x); down(); }, e.d);
+    else if (e.t === 'say') fire(() => { st.setSay(e.x); }, e.d);
     else if (e.t === 't+') fire(() => {
       open_[e.id] = st.tool(e.n, e.a); raw.push(`tool.start     ${e.n}`);
       open_[e.id].meta = { n: e.n, a: e.a, st };
@@ -40,13 +40,13 @@ function replay(run, instant) {
     else if (e.t === 'answer') {
       const parts = e.x.match(/[\s\S]{1,26}/g) || [];
       fire(() => {
-        const body = answerBlock(e.x);
-        if (instant) { body.innerHTML = md(e.x); down(); return; }
+        if (instant) { RavenIslands.transcript.answer(e.x); return; }
+        const typed = RavenIslands.transcript.answerTyped(e.x);
         let n = 0;
         parts.forEach((_, k) => later(k * TYPE_MS, () => {
           n += parts[k].length;
-          body.innerHTML = md(e.x.slice(0, n)) + (k < parts.length - 1 ? '<span class="caret"></span>' : '');
-          down();
+          if (k < parts.length - 1) typed.progress(n);
+          else typed.done();
         }));
       }, e.d);
       if (!instant) t += parts.length * TYPE_MS;
@@ -65,4 +65,3 @@ function replay(run, instant) {
     }, 300);
   });
 }
-

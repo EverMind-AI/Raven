@@ -14,6 +14,7 @@ import { SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
 import * as subagents from './features/subagents/mount'
 import * as subagentsStore from './features/subagents/store'
+import * as transcript from './features/transcript/mount'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
 import { md } from './shell/prose'
@@ -130,5 +131,33 @@ window.RavenIslands = {
     reset: workspace.reset,
     showFile: workspace.showFile,
     openDir: workspace.openDir,
+  },
+}
+
+window.RavenIslands = {
+  ...(window.RavenIslands || {}),
+  /* The transcript island: the conversation area's renderer. The legacy
+     shims (demo/060, demo/070, demo/080) and the live turn machine
+     (live/040, live/050, live/230) drive these; the DOM they used to build
+     is drawn by the island into a lane host inside #stage or a stage box. */
+  transcript: {
+    ask: transcript.ask,
+    step: transcript.step,
+    answer: transcript.answer,
+    answerTyped: transcript.answerTyped,
+    note: transcript.note,
+    qa: transcript.qa,
+    status: transcript.status,
+    killStatus: transcript.killStatus,
+    collapse: transcript.collapse,
+    foldRuns: transcript.foldRuns,
+    finishTurn: transcript.finishTurn,
+    history: transcript.history,
+    delivered: transcript.delivered,
+    dagFeed: transcript.dagFeed,
+    stopStream: transcript.stopStream,
+    nudge: transcript.nudge,
+    redraw: transcript.redraw,
+    agentStage: transcript.agentStage,
   },
 }

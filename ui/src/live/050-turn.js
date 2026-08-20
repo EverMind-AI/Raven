@@ -1,4 +1,7 @@
 /* ---- live turn state machine ------------------------------------- */
+/* The DOM half of a turn is the transcript island's now; this machine keeps
+   what is genuinely live-side: which step is open, which calls are in
+   flight, the say buffer the session row's preview reads, and the clocks. */
 const live = { subId: null, st: null, steps: [], say: '', open: new Map(), sawEpisode: false };
 
 function resetTurnState() {
@@ -13,61 +16,32 @@ function ensureStep() {
   return live.st;
 }
 
-/* The prose is re-parsed from the whole buffer on every token, so rendering per
-   delta means thousands of full parses and DOM swaps for one answer -- visible
-   as scroll jank, and it destroys any text the reader has selected inside the
-   answer. One paint per frame is as often as anyone can read. */
-let sayJob = null;
-function paintSay() {
-  if (sayJob) return;
-  const run = () => {
-    sayJob = null;
-    if (live.st) live.st.say.innerHTML = md(live.say);
-    down();
-  };
-  /* A frame callback never fires while the window is hidden, and a turn that
-     streams into a backgrounded window still has to land its text -- so a
-     hidden window falls back to a timer. */
-  sayJob = document.hidden ? { t: setTimeout(run, 120), timer: true } : { t: requestAnimationFrame(run) };
-}
-function stopSayPaint() {
-  if (!sayJob) return;
-  if (sayJob.timer) clearTimeout(sayJob.t); else cancelAnimationFrame(sayJob.t);
-  sayJob = null;
-}
+/* Token deltas land in the island's per-step buffer and paint once per
+   frame there; these two names survive for the parked-turn machinery. */
+function paintSay() { RavenIslands.transcript.nudge(); }
+function stopSayPaint() { RavenIslands.transcript.stopStream(); }
 
 function flushSay() {
-  /* Promote the episode's streamed narration: intermediate episodes keep it
-     as step prose; handled at message.complete for the final answer. */
+  /* The step keeps its streamed narration; only the local buffer resets. */
   live.say = '';
 }
 
-/* How long the turn took: asked, to the last word of the answer. Not until the
-   runtime is idle -- the housekeeping that follows a turn (memory deposit) can
-   run for another ten seconds, and counting it would make this number disagree
-   with the one a reloaded transcript computes from the stamps on disk. Under a
-   second the duration floors at 1s, matching what the restored transcript
-   shows for the same turn. */
+/* How long the turn took: asked, to the last word of the answer. Not until
+   the runtime is idle -- post-turn housekeeping would make this disagree with
+   what a reloaded transcript computes from the stamps on disk. */
 const turnDur = () => {
   const ms = (live.answerAt || Date.now()) - live.startedAt;
   return live.startedAt ? dur(Math.max(ms, 1000)) : null;
 };
 
-/* The turn folds ONCE, at message.complete. Folding as soon as prose started
-   arriving was tried and reverted: mid-stream nothing can tell the answer from
-   another line of narration, so a turn that narrates between calls folded again
-   and again, guessing wrong each time. The end of the turn is the first moment
-   the answer is known. */
+/* The turn folds ONCE, at message.complete: mid-stream nothing can tell the
+   answer from another line of narration. */
 
 function onEvent(ev) {
   const p = ev.payload || {};
   if (ev.type === 'message.start') {
-    /* Read BEFORE busy is set, because `busy` is exactly the discriminator:
-       the window that sent this turn set it locally and has already drawn the
-       question, while a window that is only watching has not. Drawing it here
-       is what makes a turn in flight legible to a second window (or a shared
-       link) -- the user entry is not written to the transcript until the turn
-       ends, so this event is the only place the question exists yet. */
+    /* Read BEFORE busy is set: the window that sent this turn has already
+       drawn the question; a window that is only watching has not. */
     if (!busy && p.content) ask(p.content);
     busy = true; goState(); drawMeter();
     WS.turn += 1;
@@ -79,27 +53,20 @@ function onEvent(ev) {
   } else if (ev.type === 'notice') {
     killStatus();
     /* Seals the open step first: this ends the turn, so the streamed prose
-       above stays where it was said instead of being adopted by whatever
-       comes next. */
+       above stays where it was said. */
     if (live.st) { live.st.seal(); live.st = null; }
     flushSay();
-    noticeRow(p.kind || '', p.detail || '');
+    noteRow(T('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true });
   } else if (ev.type === 'thinking.delta') {
     killStatus();
-    const st = ensureStep();
-    st.hasThink = true;
-    st.cot.textContent += p.text || '';
-    st.reveal();
+    ensureStep().thinkAppend(p.text || '');
   } else if (ev.type === 'token.delta') {
     killStatus();
     const st = ensureStep();
-    /* Prose means the thought is over -- fold it, or a finished thought keeps
-       shimmering above the answer it already produced. */
-    st.thinkDone();
-    st.hasSay = true;
+    /* sayDelta folds a finished thought before the prose lands. */
+    st.sayDelta(p.text || '');
     live.say += p.text || '';
     live.answerAt = Date.now();
-    paintSay();
   } else if (ev.type === 'tool.start') {
     killStatus();
     const st = ensureStep();
@@ -118,60 +85,44 @@ function onEvent(ev) {
     const took = Date.now() - o.t0;
     o.h.done(ok, preview, took, null, p.truncated);
     /* p.diff is the real change on disk -- the only place a whole-file write's
-       previous content survives, so the panel prefers it over the guess it made
-       from the arguments at tool.start. */
+       previous content survives. */
     if (typeof wsOnToolDone === 'function') wsOnToolDone(o.name, o.args, ok, preview, took, p.diff);
   } else if (ev.type === 'message.complete') {
     finishTurn(p.usage || {});
   } else if (ev.type === 'error') {
     killStatus();
-    /* A cancelled turn is the one "error" a person asked for. The stop button
-       already finalised this stage; the event still matters when the cancel
-       came from ANOTHER client on the same session -- and either way it is the
-       server saying the engine is free, which is what the queue waits on. */
+    /* A cancelled turn is the one "error" a person asked for; the event still
+       matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
       if (busy) softStop();
       if (!cancelInFlight) setTimeout(drainQueue, 400);
       return;
     }
     busy = false;
-    /* A turn that died upstream (a provider timeout, a rate limit) is the one
-       error worth offering to re-run, and re-running means the message that
-       started it -- not a fresh guess at what the user wanted. */
     noteRow(p.message || 'error', p.detail || p.reason || '',
       lastAsk ? { retry: () => send(lastAsk) } : null);
     goState(); drawMeter(); drawList();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
   } else if (ev.type === 'subagent.delivered') {
-    /* The seam a delegated result re-enters the conversation at. The next
-       thing to stream is the main agent retelling that result, and without
-       this row it reads as raven speaking unprompted -- the reader deserves
-       the "because" one line above the effect. Placed at the tail of the flow
-       (before the live glyph), which is exactly where the injection happened
-       in time; clicking it opens the run the result came from. */
-    const row = mk('div', 'sdlv' + (p.status === 'error' ? ' err' : ''));
-    row.appendChild(ico('M5 5v5a4 4 0 0 0 4 4h9M14 10l4 4-4 4', 'ic'));
+    /* The seam a delegated result re-enters the conversation at: the row is
+       the "because" one line above the retelling that follows. Clicking it
+       opens the run the result came from. */
     const isDag = p.kind === 'dag';
-    const b = mk('button', 'nm', isDag ? T('gui.deleg.dag_title') : p.label);
-    b.onclick = () => {
-      if (isDag && p.run_id) {
-        const d = dagFor();
-        const first = d && d.run_id === p.run_id ? d.order[d.order.length - 1] : null;
-        if (first) { dagOpenNode(p.run_id, { id: first }); return; }
-      }
-      if (!isDag && delegOpenSpawn) { delegOpenSpawn('', p.label); return; }
-      setWs(true, 'agents');
-    };
-    row.appendChild(b);
-    row.appendChild(mk('span', 'tx',
-      T(p.status === 'error' ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered')));
-    const stage = $('#stage');
-    if (stage) {
-      const lr = stage.querySelector(':scope > .turnlive');
-      stage.insertBefore(row, lr || null);
-      down();
-    }
+    RavenIslands.transcript.delivered({
+      label: p.label || '',
+      isDag,
+      err: p.status === 'error',
+      open: () => {
+        if (isDag && p.run_id) {
+          const d = dagFor();
+          const first = d && d.run_id === p.run_id ? d.order[d.order.length - 1] : null;
+          if (first) { dagOpenNode(p.run_id, { id: first }); return; }
+        }
+        if (!isDag && delegOpenSpawn) { delegOpenSpawn('', p.label); return; }
+        setWs(true, 'agents');
+      },
+    });
   } else if (ev.type === 'cron.started') {
     // Mark (or seed) the job's row so the rail shows the run while it works;
     // the session file may not exist until the turn ends, hence the seed.
@@ -197,14 +148,9 @@ function onEvent(ev) {
     /* The trail's delegation card paints the same events as the sheet below:
        one feed call per branch, before the sheet's own bookkeeping. */
     dagFlowFeed(ev.type, p);
-    /* The graph arrives whole, before any node runs -- the server validates the
-       whole thing or refuses it -- so the map is drawable from the first event
-       and only the colours move after that.
-
-       Filed under the conversation it belongs to. onEvent only ever runs for the
-       open session (another session's frames are buffered by rpc.notify.event
-       and replayed by restoreTurn, with `cur` restored first), so the current
-       key is the owning key on both paths. */
+    /* The graph arrives whole, before any node runs. Filed under the
+       conversation it belongs to: onEvent only ever runs for the open
+       session, so the current key is the owning key on both paths. */
     DAGS.set(sheetSession(), {
       run_id: p.run_id,
       session: sheetSession(),
@@ -232,9 +178,7 @@ function onEvent(ev) {
     dagFlowFeed(ev.type, p);
     const d = dagFor();
     if (d && d.run_id === p.run_id) {
-      /* Each file's status is the run's own last word on that node: a node the
-         registry never got an update for (a run interrupted mid-flight) would
-         otherwise sit at `running` forever. */
+      /* Each file's status is the run's own last word on that node. */
       (p.files || []).forEach((f) => {
         const n = d.nodes.get(f.node);
         if (n) { n.status = f.status; n.ended_at = n.ended_at || Date.now(); }
@@ -260,37 +204,14 @@ drawMeter = function () {
 
 function finishTurn(usage) {
   killStatus();
-  /* A queued paint would write the streamed prose back into a step this is
-     about to empty. */
-  stopSayPaint();
-  if (live.st) live.st.seal();
-  /* Final answer gets the answer block (copy / retry actions); the streamed
-     step prose is replaced by it so the text does not appear twice. */
-  if (live.st && live.say.trim()) {
-    /* Read before the step can be removed: the answer belongs where the prose
-       was streaming, not at the bottom of whatever arrived since. */
-    const anchor = live.st.step.nextSibling;
-    live.st.say.innerHTML = '';
-    live.st.hasSay = false;
-    if (!live.st.hasThink && !live.st.calls.length) {
-      live.st.step.remove();
-      live.steps.pop();
-    }
-    /* The footer carries when the answer landed; how long it took is on the
-       turn's fold header. */
-    const body = answerBlock(live.say, stamp(Date.now()), anchor);
-    body.innerHTML = md(live.say);
-  }
-  foldSilentRuns(live.steps);
-  /* Whatever is still loose joins the turn's fold (creating it if the turn
-     folded nothing early). */
-  collapseTurn(turnDur());
+  /* The island promotes the streamed prose into the answer block where the
+     prose stood, merges the silent stretches and folds the turn. */
+  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
   busy = false;
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   const outTok = usage.output_tokens || usage.completion_tokens || 0;
   use = { calls: tl.length, in: inTok, out: outTok, cost: usage.cost || 0 };
-  /* The window fill is the turn's prompt, not the running total: every turn
-     re-sends the conversation, so input tokens ARE what is in the window. */
+  /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);
   raw.push('message.complete');
   const s = sess(cur);
@@ -349,4 +270,3 @@ async function refreshList() {
     drawList();
   } catch { /* keep the stale list */ }
 }
-
