@@ -1,9 +1,14 @@
-"""``run_playbook``: the agent-facing entry, and what keeps it from drifting
-from the passive funnel."""
+"""``load_playbook``: the one entry into the library, and what it refuses.
+
+There is no passive funnel left for this to stay in step with -- it *is* the
+path -- so what these cover instead is the contract that makes the entry safe to
+give a model: the listing it chooses from, the enum that bounds the choice, and
+``fills`` being able to complete a playbook but never to edit one.
+"""
 
 import pytest
 
-from raven.agent.tools.run_playbook import RunPlaybookTool
+from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.playbook import (
     NodeSpec,
     ParamSpec,
@@ -23,8 +28,8 @@ class FakeDagTool:
     def set_context(self, channel, chat_id, session_key=None):
         self.context = (channel, chat_id, session_key)
 
-    async def run_with_roles(self, nodes, *, roles, role_capabilities, background=True):
-        self.calls.append({"nodes": nodes, "roles": roles})
+    async def execute(self, nodes, background=True, confirm=False, **_):
+        self.calls.append({"nodes": nodes, "background": background, "confirm": confirm})
         return "started in the background, run_id=abc123"
 
 
@@ -46,10 +51,9 @@ def _runtime(tmp_path, specs, dag_tool=None):
     for spec in specs:
         store.save(spec)
     executor = PlaybookExecutor(
-        backend_factory=lambda role: object(),
         dag_tool=dag_tool or FakeDagTool(),
     )
-    return PlaybookRuntime(provider=None, store=store, executor=executor)
+    return PlaybookRuntime(store=store, executor=executor)
 
 
 @pytest.fixture
@@ -61,15 +65,15 @@ def test_description_lists_the_same_library_the_funnel_matches(runtime):
     """The tool advertises what it can actually run. Listing anything else would
     let the model name a playbook the funnel does not hold."""
     assert "weekly-feedback" in runtime.listing()[0]
-    assert "weekly-feedback" in RunPlaybookTool(runtime).description
-    assert "weekly user-feedback analysis" in RunPlaybookTool(runtime).description
+    assert "weekly-feedback" in LoadPlaybookTool(runtime).description
+    assert "weekly user-feedback analysis" in LoadPlaybookTool(runtime).description
 
 
 def test_name_is_constrained_to_installed_playbooks(runtime):
     """An enum rather than a free string: a misspelled name is otherwise only
     caught after the call, and a model cannot be handed a way to name a
     playbook that does not exist."""
-    schema = RunPlaybookTool(runtime).parameters
+    schema = LoadPlaybookTool(runtime).parameters
     assert schema["properties"]["name"]["enum"] == ["weekly-feedback"]
     assert schema["required"] == ["name"]
 
@@ -79,7 +83,7 @@ async def test_running_by_name_dispatches_the_same_graph(tmp_path):
     named run produces the dispatch a matched run would."""
     dag = FakeDagTool()
     rt = _runtime(tmp_path, [_spec()], dag_tool=dag)
-    out = await RunPlaybookTool(rt).execute("weekly-feedback", {"week_of": "2026-08-11"})
+    out = await LoadPlaybookTool(rt).execute("weekly-feedback", {"week_of": "2026-08-11"})
 
     assert "weekly-feedback" in out
     assert [n["id"].rsplit("-", 1)[-1] for n in dag.calls[0]["nodes"]] == ["pull"]
@@ -93,7 +97,7 @@ async def test_a_missing_param_comes_back_as_a_question(tmp_path):
     calls this instead. Without the param it must ask rather than dispatch."""
     dag = FakeDagTool()
     rt = _runtime(tmp_path, [_spec()], dag_tool=dag)
-    out = await RunPlaybookTool(rt).execute("weekly-feedback", {})
+    out = await LoadPlaybookTool(rt).execute("weekly-feedback", {})
 
     assert "which week should be analyzed?" in out
     assert dag.calls == []
@@ -101,7 +105,7 @@ async def test_a_missing_param_comes_back_as_a_question(tmp_path):
 
 async def test_an_unknown_name_names_the_alternatives(tmp_path):
     rt = _runtime(tmp_path, [_spec()])
-    out = await RunPlaybookTool(rt).execute("no-such-playbook", {})
+    out = await LoadPlaybookTool(rt).execute("no-such-playbook", {})
     assert "no-such-playbook" in out
     assert "weekly-feedback" in out
 

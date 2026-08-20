@@ -1325,17 +1325,85 @@ class ThirdPartyAcpSubagentConfig(Base):
         return self
 
 
+class BuiltinAgentConfig(Base):
+    """An in-process raven agent loop, callable as a named sub-agent.
+
+    The same backend the main loop dispatches an unnamed spawn to
+    (:class:`RavenLoopBackend`), differing only in which skills and tools it may
+    reach. It is on the same table as the external agents so that ``spawn`` and a
+    DAG node pick from one roster: a built-in agent that is only reachable by
+    omitting the ``agent`` argument is an agent the model cannot be told about.
+
+    A row here is an *override* of the package's own seed rows (see
+    ``raven.agent.subagent.builtin_agents``), matched by ``name`` -- writing one
+    is how a user retunes ``research-raven``'s skills, and writing a name the
+    package does not ship is how they add a fifth. There is no way to delete a
+    seed row, because not writing it is what "use the default" means; set
+    ``enabled: false`` to take one off the roster.
+
+    ``skills`` and ``tools`` are three-valued on purpose. ``null`` (the default)
+    means the full catalogue, an empty list means *no* menu at all, and a list
+    narrows to those entries -- the empty case has to be expressible because
+    "this agent gets no skills" is a real charter, and folding it into ``null``
+    would advertise the opposite of what was written.
+    """
+
+    name: str
+    kind: Literal["builtin"] = "builtin"
+    description: str = ""
+    enabled: bool = True
+    model: str | None = None
+    """Model override for this agent's loop; ``None`` inherits the main loop's."""
+    skills: list[str] | None = None
+    tools: list[str] | None = None
+    restrict_to_workspace: bool | None = None
+    """``None`` inherits the manager's own setting rather than forcing one, so a
+    row that says nothing about confinement cannot loosen it."""
+    timeout: int | None = None
+    max_output_chars: int = 30000
+
+
+AgentConfig = Annotated[
+    BuiltinAgentConfig | ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
+    Field(discriminator="kind"),
+]
+
+# The pre-``agents`` spelling of the union, kept as an alias because "third
+# party" is still the right name for the three external transports where a
+# caller genuinely means those (the probe, the acp snapshot store).
 ThirdPartySubagentConfig = Annotated[
     ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
     Field(discriminator="kind"),
 ]
 
 
-class PlaybookConfig(Base):
-    """Playbook matching and execution (the passive per-message funnel).
+class PlaybookRouterConfig(Base):
+    """How far the per-turn playbook listing is narrowed.
 
-    Off by default: matching adds one deterministic vocabulary scan per user
-    message plus one LLM gate call when the scan nominates candidates."""
+    Same two knobs as ``skillForge.router``, and for the same reason: the
+    expensive part of advertising a playbook is its description plus parameter
+    table, and a library of a hundred cannot spend that on every turn. Only the
+    *description* half is narrowed -- the ``name`` enum stays the whole library,
+    so a retrieval miss never makes a playbook unreachable.
+    """
+
+    top_k: int = Field(default=5, ge=1)
+    """How many playbooks get a full description in the tool this turn."""
+
+    over_fetch_factor: int = Field(default=2, ge=1)
+    """Rank this many times ``top_k`` before cutting back, mirroring the skill
+    router. One local source means there is nothing to fuse, so this only widens
+    the window the ranking is computed over."""
+
+
+class PlaybookConfig(Base):
+    """The stored playbook library, and how it is offered to the model.
+
+    ``enabled`` gates the library being loaded at all. There is no per-message
+    matching cost any more: the model decides whether to use a playbook, from the
+    same tool table it decides everything else from, so nothing runs ahead of the
+    turn and no gate call is spent on a message that mentions a trigger word.
+    """
 
     enabled: bool = False
     dir: str | None = None
@@ -1344,23 +1412,73 @@ class PlaybookConfig(Base):
     is not configurable — a user playbook of the same name shadows it."""
 
     model: str | None = None
-    """Model for the match gate; defaults to the loop's own model."""
+    """Model for composing a ``prompt``-mode graph on the CLI path, which has no
+    model of its own; defaults to the loop's own model. The in-conversation path
+    does not use it -- the main model composes from the guidance directly."""
 
     disabled: list[str] = Field(default_factory=list)
-    """Deny list of playbook names not matchable on this machine. Local
-    state lives here rather than in playbook.md (the distribution unit):
-    enable/disable edit this list, for builtin and user playbooks alike."""
+    """Deny list of playbook names not offered on this machine. Local state lives
+    here rather than in playbook.md (the distribution unit): enable/disable edit
+    this list, for builtin and user playbooks alike.
+
+    Disabled means *not listed*: the model cannot see it, so it cannot call it --
+    which is the whole of what disabling can mean now that there is no passive
+    matcher left to mute. An explicit ``raven playbook run`` still resolves one,
+    because that is the user's own hand."""
+
+    router: PlaybookRouterConfig = Field(default_factory=PlaybookRouterConfig)
 
 
 class SubagentsConfig(Base):
-    """Native subagent config, including third-party agents (req5).
+    """The one table of agents raven can dispatch to.
 
-    ``third_party`` lists heterogeneous external agents the main agent can
-    dispatch to via ``spawn(agent=<name>)``; each spawns concurrently in the
-    background like any raven subagent.
+    ``agents`` holds every kind in one list -- ``builtin`` rows (an in-process
+    raven loop) beside the three external transports -- because ``spawn`` and a
+    DAG node have to pick from the same roster. Split across two lists, an agent
+    reachable from one entry point and not the other is a state neither the model
+    nor the user can see, which is what this list being single fixes.
+
+    Read under its old key ``thirdParty`` as well, so a config written before the
+    rename keeps loading; the write path emits ``agents``.
     """
 
-    third_party: list[ThirdPartySubagentConfig] = Field(default_factory=list)
+    agents: list[AgentConfig] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
+    )
+
+    @model_validator(mode="after")
+    def _dedupe_names(self) -> "SubagentsConfig":
+        """Drop later rows that repeat a name, keeping the first, with a warning.
+
+        A hand-edited config with two rows of one name used to load fine and let
+        the second silently win whichever dict was built last, so which agent
+        answered depended on construction order.
+
+        Warn-and-drop rather than reject, on the same reasoning as
+        ``_warn_on_declared_cli_fields``: raising here surfaces as a
+        ``ValidationError`` on the whole top-level ``Config``, so raven would stop
+        starting and the UI that could fix the duplicate would sit behind the
+        config that no longer loads. Keeping the *first* row makes the outcome
+        deterministic, which is the property that was actually missing. The hard
+        reject lives at the write path (``update_subagents.set_agents``), where the
+        caller owns the value and can act on the error.
+        """
+        seen: set[str] = set()
+        kept: list[Any] = []
+        for cfg in self.agents:
+            if cfg.name in seen:
+                logger.warning(
+                    "sub-agent {!r} is declared more than once; ignoring the later row(s) -- "
+                    "remove the duplicate from subagents.agents",
+                    cfg.name,
+                )
+                continue
+            seen.add(cfg.name)
+            kept.append(cfg)
+        if len(kept) != len(self.agents):
+            self.agents = kept
+        return self
 
 
 class CliConfig(Base):

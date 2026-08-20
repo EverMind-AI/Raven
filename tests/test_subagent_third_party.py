@@ -409,12 +409,26 @@ class _FakeProvider:
         return "fake-model"
 
 
+def _stub_agents(mgr: SubagentManager, backends: dict[str, Any]) -> None:
+    """Put stand-in backends on the manager's table, under real rows.
+
+    A row has to exist for the name to resolve: the manager refuses to dispatch to
+    a name the table does not hold rather than substituting the in-process loop, so
+    a bare ``registry._backends[name] = stub`` is unreachable. Registering a cli row
+    per name and then swapping the backend it built keeps the stub on the same code
+    path a configured agent takes. Applied in one call because ``apply_agents``
+    rebuilds the whole table, which would discard stubs swapped in earlier.
+    """
+    mgr.apply_agents([ThirdPartyCliSubagentConfig(name=name, command="cat {prompt}") for name in backends])
+    mgr.registry._backends.update(backends)
+
+
 def _mgr(tmp_path: Path, third_party=None, **kwargs) -> SubagentManager:
     return SubagentManager(
         provider=_FakeProvider(),
         workspace=tmp_path,
         model="fake-model",
-        third_party_subagents=third_party or [],
+        agents=third_party or [],
         **kwargs,
     )
 
@@ -426,11 +440,18 @@ def test_manager_resolves_backends(tmp_path: Path) -> None:
 
     assert isinstance(mgr._resolve_backend("claude_code"), CliAgentBackend)
     assert isinstance(mgr._resolve_backend("mirothinker"), OpenAIApiBackend)
-    # Unknown / None -> the default raven-loop backend.
-    assert mgr._resolve_backend(None) is mgr._raven_backend
-    assert mgr._resolve_backend("nope") is mgr._raven_backend
-    names = [a.name for a in mgr.list_third_party_agents()]
-    assert names == ["claude_code", "mirothinker"]
+    # A built-in row resolves to an in-process loop, and it is reached by name
+    # like every other agent.
+    assert mgr._resolve_backend("research-raven") is not None
+    # An unknown name raises rather than falling back. Substituting the in-process
+    # loop answered *as* the agent the caller asked for, with none of its history
+    # and no sign to anyone that a substitution happened.
+    with pytest.raises(RuntimeError, match="not on the agent table"):
+        mgr._resolve_backend("nope")
+    names = [a.name for a in mgr.list_agents()]
+    # The built-in rows lead (package seeds first), then config order.
+    assert names[-2:] == ["claude_code", "mirothinker"]
+    assert "research-raven" in names
 
 
 def test_manager_lists_stateful_flag(tmp_path: Path) -> None:
@@ -441,7 +462,8 @@ def test_manager_lists_stateful_flag(tmp_path: Path) -> None:
         resume_command="claude -p {prompt} --resume {agent_id}",
     )
     mgr = _mgr(tmp_path, [stateless, stateful])
-    assert mgr.list_third_party_agents() == [
+    external = [m for m in mgr.list_agents() if m.name in {"codex", "claude_code"}]
+    assert external == [
         AgentMeta("codex", "", False, True),
         AgentMeta("claude_code", "", True, True),
     ]
@@ -453,7 +475,10 @@ def test_manager_skips_bad_third_party_entry(tmp_path: Path) -> None:
         kind = "nope"
 
     mgr = _mgr(tmp_path, [_Bad()])
-    assert mgr.list_third_party_agents() == []  # bad entry skipped, manager still builds
+    # The bad entry is skipped and the manager still builds -- with the package's
+    # own rows, which do not come from config and so cannot be sunk by it.
+    assert "bad" not in [a.name for a in mgr.list_agents()]
+    assert "raven" in [a.name for a in mgr.list_agents()]
 
 
 class TestSharedRosterHelpers:
@@ -529,7 +554,8 @@ def test_manager_roster_omits_a_disabled_agent(tmp_path: Path) -> None:
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
     mgr = _mgr(tmp_path, [on, off])
-    assert [m.name for m in mgr.list_third_party_agents()] == ["on"]
+    names = [m.name for m in mgr.list_agents()]
+    assert "on" in names and "off" not in names
 
 
 def test_spawn_tool_listing_omits_a_disabled_agent(tmp_path: Path) -> None:
@@ -538,7 +564,7 @@ def test_spawn_tool_listing_omits_a_disabled_agent(tmp_path: Path) -> None:
     on = ThirdPartyCliSubagentConfig(name="on", description="stays", command="echo {prompt}")
     off = ThirdPartyCliSubagentConfig(name="off", description="goes", command="echo {prompt}", enabled=False)
     mgr = _mgr(tmp_path, [on, off])
-    listing = format_agent_listing(mgr.list_third_party_agents())
+    listing = format_agent_listing(mgr.list_agents())
     assert "on" in listing
     assert "off" not in listing
 
@@ -548,20 +574,21 @@ def test_dag_tool_roster_omits_a_disabled_agent(tmp_path: Path) -> None:
 
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
-    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[on, off])
-    assert [m.name for m in tool._subagent_meta] == ["on"]
-    assert set(tool._subagents) == {"on"}
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[on, off])
+    names = tool.registry.names()
+    assert "on" in names and "off" not in names
 
 
-def test_dag_tool_with_everything_disabled_has_an_empty_roster(tmp_path: Path) -> None:
-    # Reachable by switch now, not only by deleting entries, so it must degrade to
-    # "no agents" rather than raise.
+def test_dag_tool_with_every_configured_agent_disabled_keeps_the_built_in_rows(tmp_path: Path) -> None:
+    # Switching off every configured agent used to leave the roster empty. It
+    # cannot now: the built-in rows are package seeds rather than config, so the
+    # graph tool always has something to dispatch to.
     from raven.agent.subagent_dag.tool import SubAgentDagTool
 
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
-    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[off])
-    assert tool._subagent_meta == []
-    assert tool._subagents == {}
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[off])
+    assert "off" not in tool.registry.names()
+    assert "research-raven" in tool.registry.names()
 
 
 # --- AgentLoop's run_subagent_dag registration gate -----------------------
@@ -584,17 +611,17 @@ def _make_agent_loop(tmp_path: Path, third_party: list | None = None):
         model="stub",
         max_iterations=2,
         restrict_to_workspace=True,
-        third_party_subagents=third_party,
+        agents=third_party,
     )
 
 
-def test_dag_tool_not_registered_when_the_only_agent_is_disabled(tmp_path: Path) -> None:
-    # A raw config list is non-empty here, but every entry is disabled: the
-    # roster the tool would advertise is empty, so it must not register at all
-    # -- matching the empty-config case rather than diverging from it.
+def test_dag_tool_is_registered_even_with_every_configured_agent_disabled(tmp_path: Path) -> None:
+    # The old gate withheld the tool when the roster would be empty. The roster is
+    # never empty now -- the built-in rows are always on the table -- so the gate
+    # would only be withholding graph orchestration from every default install.
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
     loop = _make_agent_loop(tmp_path, [off])
-    assert loop.tools.get("run_subagent_dag") is None
+    assert loop.tools.get("run_subagent_dag") is not None
 
 
 def test_dag_tool_registered_when_at_least_one_agent_is_enabled(tmp_path: Path) -> None:
@@ -604,21 +631,23 @@ def test_dag_tool_registered_when_at_least_one_agent_is_enabled(tmp_path: Path) 
     assert loop.tools.get("run_subagent_dag") is not None
 
 
-def test_apply_third_party_subagents_does_not_register_dag_tool_for_disabled_only(
-    tmp_path: Path,
-) -> None:
-    # Hot-apply hits the same gate as construction: going from no config to a
-    # disabled-only config must not register the tool either.
-    loop = _make_agent_loop(tmp_path, [])
-    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
-    loop.apply_third_party_subagents([off])
-    assert loop.tools.get("run_subagent_dag") is None
-
-
-def test_apply_third_party_subagents_registers_dag_tool_once_enabled(tmp_path: Path) -> None:
+def test_a_hot_apply_refreshes_one_table_that_both_consumers_read(tmp_path: Path) -> None:
+    # The point of the shared registry: applying once cannot leave the spawn
+    # manager and the graph tool disagreeing, which two independently-refreshed
+    # maps could.
     loop = _make_agent_loop(tmp_path, [])
     on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
-    loop.apply_third_party_subagents([on])
+    loop.apply_agents([on])
+    tool = loop.tools.get("run_subagent_dag")
+    assert "on" in [m.name for m in loop.subagents.list_agents()]
+    assert "on" in tool.registry.names()
+    assert tool.registry is loop.subagents.registry
+
+
+def test_apply_agents_keeps_the_dag_tool_registered(tmp_path: Path) -> None:
+    loop = _make_agent_loop(tmp_path, [])
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    loop.apply_agents([on])
     assert loop.tools.get("run_subagent_dag") is not None
 
 
@@ -635,7 +664,7 @@ def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(tmp_path: Pa
         loop = _make_agent_loop(tmp_path, [on])
     else:
         loop = _make_agent_loop(tmp_path, [])
-        loop.apply_third_party_subagents([on])
+        loop.apply_agents([on])
 
     tool = loop.tools.get("run_subagent_dag")
     mgr = loop.subagents
@@ -659,13 +688,27 @@ def test_spawn_tool_exposes_agent_param_when_configured(tmp_path: Path) -> None:
     tool = SpawnTool(manager=_mgr(tmp_path, [cli]))
     params = tool.parameters
     assert "agent" in params["properties"]
-    assert params["properties"]["agent"]["enum"] == ["claude_code"]
+    # The enum is the whole table: the built-in agents are choices too, which is
+    # the point of them being on it.
+    assert "claude_code" in params["properties"]["agent"]["enum"]
+    assert "research-raven" in params["properties"]["agent"]["enum"]
+    # And required, so every spawn names its agent rather than falling into a
+    # default the model was never told about.
+    assert "agent" in params["required"]
     assert "claude_code" in tool.description
 
 
-def test_spawn_tool_no_agent_param_when_none(tmp_path: Path) -> None:
+def test_spawn_tool_offers_the_builtin_rows_with_no_config_at_all(tmp_path: Path) -> None:
+    """There is no such thing as an empty roster now.
+
+    The parameter used to be omitted when no third-party agent was configured,
+    which left the model unable to name -- or even see -- the built-in agents it
+    was in fact dispatching to by omission.
+    """
     tool = SpawnTool(manager=_mgr(tmp_path, []))
-    assert "agent" not in tool.parameters["properties"]
+    params = tool.parameters
+    assert "research-raven" in params["properties"]["agent"]["enum"]
+    assert "agent" in params["required"]
 
 
 def test_spawn_tool_points_at_the_dag_when_a_roster_exists(tmp_path: Path) -> None:
@@ -675,11 +718,12 @@ def test_spawn_tool_points_at_the_dag_when_a_roster_exists(tmp_path: Path) -> No
     assert "run_subagent_dag" in SpawnTool(manager=_mgr(tmp_path, [cli])).description
 
 
-def test_spawn_tool_omits_the_dag_pointer_without_a_roster(tmp_path: Path) -> None:
-    """``run_subagent_dag`` is registered off the same enabled roster this
-    listing is built from, so an empty roster means the pointer would name a
-    tool the model cannot call."""
-    assert "run_subagent_dag" not in SpawnTool(manager=_mgr(tmp_path, [])).description
+def test_spawn_tool_points_at_the_dag_even_with_no_configured_agent(tmp_path: Path) -> None:
+    """The pointer used to be withheld when the roster was empty, because the DAG
+    tool was registered off that same roster and would not exist. Both are now
+    unconditional -- the built-in rows are always on the table -- so the advice is
+    always about a tool the model can actually call."""
+    assert "run_subagent_dag" in SpawnTool(manager=_mgr(tmp_path, [])).description
 
 
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
@@ -709,8 +753,10 @@ def test_spawn_tool_always_exposes_the_instance_param(tmp_path: Path) -> None:
         props = SpawnTool(manager=_mgr(tmp_path, roster)).parameters["properties"]
         assert "instance" in props
         assert props["instance"]["type"] == "string"
-        assert "the default sub-agent" in props["instance"]["description"]
-        # Nothing stateful on the roster, so no third-party name is offered a handle.
+        # The built-in rows are stateful (raven replays their message list), so a
+        # handle is always offered for at least those.
+        assert "research-raven" in props["instance"]["description"]
+        # `codex` has no resumeCommand, so it is not among the names offered one.
         assert "codex" not in props["instance"]["description"]
 
     stateful = ThirdPartyCliSubagentConfig(
@@ -722,7 +768,7 @@ def test_spawn_tool_always_exposes_the_instance_param(tmp_path: Path) -> None:
     assert "instance" in props
     assert props["instance"]["type"] == "string"
     # With a mixed roster the param names who else may receive it, beside the default.
-    assert "['claude_code']" in props["instance"]["description"]
+    assert "claude_code" in props["instance"]["description"]
 
 
 class TestSpawnInstanceGate:
@@ -755,7 +801,7 @@ class TestSpawnInstanceGate:
 
         assert out.startswith("Error:")
         assert "stateless" in out
-        assert "['claude_code']" in out  # who can, not just who cannot
+        assert "claude_code" in out  # who can, not just who cannot
         assert spawned == []
 
     async def test_handle_without_an_agent_is_forwarded(self, tmp_path: Path) -> None:
@@ -812,7 +858,7 @@ async def test_manager_forwards_instance_to_backend(tmp_path: Path) -> None:
             return "ok"
 
     mgr = _mgr(tmp_path, [])
-    mgr._backends["rec"] = _Recorder()
+    _stub_agents(mgr, {"rec": _Recorder()})
     mgr.set_submit(lambda req: None)
     await mgr.spawn("t", session_key="web:s1", agent="rec", instance="refactor-auth")
     for task in list(mgr._running_tasks.values()):
@@ -1846,10 +1892,10 @@ def test_presets_are_valid_and_complete() -> None:
     assert {p["preset"] for p in presets.values()} == set(presets)
     # Every preset validates against the schema (discriminated union), so "Add
     # from preset" can never produce a config the write path would reject ...
-    cfg = SubagentsConfig(third_party=list(presets.values()))
-    assert len(cfg.third_party) == len(presets)
+    cfg = SubagentsConfig(agents=list(presets.values()))
+    assert len(cfg.agents) == len(presets)
     # ... and each one builds into a concrete backend.
-    for entry in cfg.third_party:
+    for entry in cfg.agents:
         assert build_third_party_backend(entry) is not None
 
     # One preset per agent, each already carrying that agent's transport: there is
@@ -1897,7 +1943,7 @@ def test_presets_declare_their_own_provenance() -> None:
 def test_provenance_survives_a_rename() -> None:
     entry = dict(third_party_subagent_preset("claude_code"))
     entry["name"] = "frontend_reviewer"
-    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    cfg = SubagentsConfig(agents=[entry]).agents[0]
     assert cfg.name == "frontend_reviewer"
     assert cfg.preset == "claude_code"
     # Round-trips under the wire alias, which is what the gateway persists.
@@ -1905,22 +1951,20 @@ def test_provenance_survives_a_rename() -> None:
 
 
 def test_hand_written_entry_has_no_provenance() -> None:
-    cfg = SubagentsConfig(third_party=[{"name": "mine", "kind": "cli", "command": "echo hi"}])
-    assert cfg.third_party[0].preset is None
+    cfg = SubagentsConfig(agents=[{"name": "mine", "kind": "cli", "command": "echo hi"}])
+    assert cfg.agents[0].preset is None
 
 
 def test_provenance_backfilled_when_name_matches_a_preset_cli() -> None:
     # A preset entry written by an earlier build has no `preset` field yet, so
     # backfilling by name is what lets it be edited and saved again.
-    cfg = SubagentsConfig(
-        third_party=[{"name": "claude_code", "kind": "cli", "command": "claude -p {prompt}"}]
-    ).third_party[0]
+    cfg = SubagentsConfig(agents=[{"name": "claude_code", "kind": "cli", "command": "claude -p {prompt}"}]).agents[0]
     assert cfg.preset == "claude_code"
 
 
 def test_provenance_backfilled_when_name_matches_a_preset_openai() -> None:
     cfg = SubagentsConfig(
-        third_party=[
+        agents=[
             {
                 "name": "mirothinker",
                 "kind": "openai",
@@ -1928,14 +1972,14 @@ def test_provenance_backfilled_when_name_matches_a_preset_openai() -> None:
                 "model": "mirothinker-1-7-deepresearch",
             }
         ]
-    ).third_party[0]
+    ).agents[0]
     assert cfg.preset == "mirothinker"
 
 
 def test_provenance_not_guessed_for_a_renamed_hand_written_entry() -> None:
     # `Coder` is evidently a renamed preset on this machine, but its origin is
     # genuinely unknowable from `command` alone and must not be guessed.
-    cfg = SubagentsConfig(third_party=[{"name": "Coder", "kind": "cli", "command": "echo hi"}]).third_party[0]
+    cfg = SubagentsConfig(agents=[{"name": "Coder", "kind": "cli", "command": "echo hi"}]).agents[0]
     assert cfg.preset is None
 
 
@@ -1946,7 +1990,7 @@ def test_explicit_provenance_is_left_untouched() -> None:
         "command": "echo hi",
         "preset": "claude_code",
     }
-    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    cfg = SubagentsConfig(agents=[entry]).agents[0]
     assert cfg.preset == "claude_code"
 
 
@@ -1955,7 +1999,7 @@ def test_unknown_preset_value_is_rejected() -> None:
 
     entry = {"name": "mine", "kind": "cli", "command": "echo hi", "preset": "not-a-real-preset"}
     with pytest.raises(ValidationError, match="not-a-real-preset"):
-        SubagentsConfig(third_party=[entry])
+        SubagentsConfig(agents=[entry])
 
 
 # --- manager: instance registry + one-instance cancellation --------------
@@ -1984,7 +2028,7 @@ async def test_manager_records_and_cancels_one_instance(tmp_path: Path) -> None:
             return "never"
 
     mgr = _mgr(tmp_path, [])
-    mgr._backends["hang"] = _Hang()
+    _stub_agents(mgr, {"hang": _Hang()})
     mgr.set_submit(lambda req: None)
     await mgr.spawn("t", session_key="web:s1", agent="hang", instance="h1")
     await asyncio.wait_for(started.wait(), timeout=5)
@@ -2023,9 +2067,7 @@ async def test_manager_cancel_releases_the_concurrency_slot(tmp_path: Path) -> N
             return "never"
 
     mgr = _mgr(tmp_path, [], max_concurrent=slots)
-    for i, ev in enumerate(hang_started):
-        mgr._backends[f"hang{i}"] = _Hang(ev)
-    mgr._backends["canary"] = _Canary()
+    _stub_agents(mgr, {f"hang{i}": _Hang(ev) for i, ev in enumerate(hang_started)} | {"canary": _Canary()})
     mgr.set_submit(lambda req: None)
 
     for i in range(slots):
@@ -2043,11 +2085,15 @@ async def test_manager_cancel_releases_the_concurrency_slot(tmp_path: Path) -> N
 
 
 async def test_manager_two_spawns_on_one_handle_both_cancelled_and_gate_freed(tmp_path: Path) -> None:
-    """Two spawns can race onto the same (agent, instance) key before the
-    first completes; `_instance_tasks` must hold both task ids rather than
-    letting the second overwrite the first, and cancel_by_instance must reach
-    both -- proven observably by filling the gate with the pair and confirming
-    a third, gate-blocked spawn then starts once the instance is cancelled."""
+    """Two spawns can race onto the same (agent, instance) key before the first
+    completes; `_instance_tasks` must hold both task ids rather than letting the
+    second overwrite the first, and cancel_by_instance must reach both -- proven
+    observably by filling the gate with the pair and confirming a third,
+    gate-blocked spawn then starts once the instance is cancelled.
+
+    The second one *queues* rather than running alongside the first: they address
+    one handle, and one handle is one conversation. It still holds a gate slot
+    while it waits, which is why the canary below stays blocked."""
     hang_started = [asyncio.Event(), asyncio.Event()]
     canary_started = asyncio.Event()
 
@@ -2068,13 +2114,14 @@ async def test_manager_two_spawns_on_one_handle_both_cancelled_and_gate_freed(tm
             return "never"
 
     mgr = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, model="fake-model", max_concurrent=2)
-    mgr._backends["hang"] = _Hang()
-    mgr._backends["canary"] = _Canary()
+    _stub_agents(mgr, {"hang": _Hang(), "canary": _Canary()})
     mgr.set_submit(lambda req: None)
 
     await mgr.spawn("t1", session_key="web:s1", agent="hang", instance="reviewer")
     await mgr.spawn("t2", session_key="web:s1", agent="hang", instance="reviewer")
-    await asyncio.wait_for(asyncio.gather(*(e.wait() for e in hang_started)), timeout=5)
+    await asyncio.wait_for(hang_started[0].wait(), timeout=5)
+    await asyncio.sleep(0.05)
+    assert not hang_started[1].is_set(), "the second spawn on one handle must queue, not interleave"
 
     assert len(mgr._instance_tasks[("web:s1", "hang", "reviewer")]) == 2
     tasks = list(mgr._running_tasks.values())
@@ -2120,9 +2167,7 @@ async def test_manager_spawn_writes_pending_row_before_the_gate(tmp_path: Path) 
             return "never"
 
     mgr = SubagentManager(provider=_FakeProvider(), workspace=tmp_path, model="fake-model", max_concurrent=1)
-    mgr._backends["hang"] = _Hang()
-    mgr._backends["queued"] = _Queued()
-    mgr._backends["canary"] = _Canary()
+    _stub_agents(mgr, {"hang": _Hang(), "queued": _Queued(), "canary": _Canary()})
     mgr.set_submit(lambda req: None)
 
     await mgr.spawn("t1", session_key="web:s1", agent="hang", instance="h1")
@@ -2166,7 +2211,7 @@ async def test_manager_cancel_all_cancels_every_running_spawn(tmp_path: Path) ->
             return "never"
 
     mgr = _mgr(tmp_path, [])
-    mgr._backends["hang"] = _Hang()
+    _stub_agents(mgr, {"hang": _Hang()})
     mgr.set_submit(lambda req: None)
 
     await mgr.spawn("t1", session_key="web:s1", agent="hang", instance="a")
@@ -2335,7 +2380,7 @@ def test_openai_kind_is_stateful_when_declared():
     from raven.config.schema import SubagentsConfig
 
     cfg = SubagentsConfig(
-        third_party=[
+        agents=[
             {
                 "kind": "openai",
                 "name": "custom-http",
@@ -2344,7 +2389,7 @@ def test_openai_kind_is_stateful_when_declared():
                 "stateful": True,
             }
         ]
-    ).third_party[0]
+    ).agents[0]
 
     assert third_party_agent_meta(cfg).stateful is True
 
@@ -2359,7 +2404,7 @@ def test_openai_kind_is_stateful_by_default():
     from raven.config.schema import SubagentsConfig
 
     cfg = SubagentsConfig(
-        third_party=[
+        agents=[
             {
                 "kind": "openai",
                 "name": "custom-http",
@@ -2367,7 +2412,7 @@ def test_openai_kind_is_stateful_by_default():
                 "model": "m",
             }
         ]
-    ).third_party[0]
+    ).agents[0]
 
     assert third_party_agent_meta(cfg).stateful is True
 
@@ -2378,7 +2423,7 @@ def test_openai_kind_honours_a_declared_false():
     from raven.config.schema import SubagentsConfig
 
     cfg = SubagentsConfig(
-        third_party=[
+        agents=[
             {
                 "kind": "openai",
                 "name": "custom-http",
@@ -2387,7 +2432,7 @@ def test_openai_kind_honours_a_declared_false():
                 "stateful": False,
             }
         ]
-    ).third_party[0]
+    ).agents[0]
 
     assert cfg.stateful is False
     assert third_party_agent_meta(cfg).stateful is False
@@ -2403,7 +2448,7 @@ def test_a_stored_null_stateful_still_loads():
     from raven.config.schema import SubagentsConfig
 
     cfg = SubagentsConfig(
-        third_party=[
+        agents=[
             {
                 "kind": "openai",
                 "name": "written-by-the-old-form",
@@ -2412,7 +2457,7 @@ def test_a_stored_null_stateful_still_loads():
                 "stateful": None,
             }
         ]
-    ).third_party[0]
+    ).agents[0]
 
     assert cfg.stateful is True
     assert third_party_agent_meta(cfg).stateful is True
@@ -2431,7 +2476,7 @@ def test_the_mirothinker_preset_is_pinned_stateless():
     entry = next(e for e in third_party_subagent_presets() if e.get("preset") == "mirothinker")
     assert entry["stateful"] is False
 
-    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    cfg = SubagentsConfig(agents=[entry]).agents[0]
     meta = third_party_agent_meta(cfg)
     assert meta.stateful is False
     assert "stateless" in format_agent_listing([meta])
@@ -2442,7 +2487,7 @@ def test_cli_kind_still_derives_stateful_from_resume_command():
     from raven.config.schema import SubagentsConfig
 
     entries = SubagentsConfig(
-        third_party=[
+        agents=[
             {"kind": "cli", "name": "plain", "command": "true --prompt {prompt}"},
             {
                 "kind": "cli",
@@ -2452,7 +2497,7 @@ def test_cli_kind_still_derives_stateful_from_resume_command():
                 "idSource": "provisioned",
             },
         ]
-    ).third_party
+    ).agents
 
     assert third_party_agent_meta(entries[0]).stateful is False
     assert third_party_agent_meta(entries[1]).stateful is True
@@ -3028,3 +3073,68 @@ def test_spawn_instance_description_states_that_omission_assigns_one(tmp_path: P
     desc = SpawnTool(manager=_mgr(tmp_path, [cli])).parameters["properties"]["instance"]["description"]
     assert "assigned automatically" in desc
     assert "start a fresh one" not in desc
+
+
+async def test_two_spawns_on_one_handle_do_not_lose_each_others_turns(tmp_path: Path) -> None:
+    """The reason the second one queues: the instance state is a whole-file
+    read-modify-write.
+
+    Interleaved, the second dispatch reads the message list before the first
+    appends to it and then writes its own version over the top -- the first
+    agent's turn is gone, nothing raises, and the next resume reads a
+    conversation that never happened. Reachable without any playbook: an openai
+    agent declaring itself stateful is replayed the same way, and so is every
+    built-in agent now that a graph can name one.
+    """
+    order: list[str] = []
+
+    class _Appends:
+        async def run(self, task, *, task_id, history=None, on_messages=None, **_):
+            order.append(f"start:{task}")
+            messages = list(history or [])
+            await asyncio.sleep(0.05)  # the window an interleave would land in
+            messages.append({"role": "assistant", "content": task})
+            if on_messages is not None:
+                on_messages(messages)
+            order.append(f"end:{task}")
+            return task
+
+    from raven.config.schema import ThirdPartyOpenAISubagentConfig
+
+    mgr = SubagentManager(
+        provider=_FakeProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        session_dir=lambda _k: tmp_path,
+    )
+    mgr.apply_agents([ThirdPartyOpenAISubagentConfig(name="replayed", base_url="http://x", model="m", stateful=True)])
+    mgr.registry._backends["replayed"] = _Appends()
+    mgr.set_submit(lambda req: None)
+
+    await mgr.spawn("first", session_key="web:s1", agent="replayed", instance="h")
+    await mgr.spawn("second", session_key="web:s1", agent="replayed", instance="h")
+    await asyncio.gather(*list(mgr._running_tasks.values()), return_exceptions=True)
+
+    # Serialized end to end, not overlapped.
+    assert order == ["start:first", "end:first", "start:second", "end:second"]
+    state = mgr.instance_state("web:s1", "replayed", "h")
+    assert state is not None
+    assert [m["content"] for m in state.load()] == ["first", "second"]
+
+
+def test_the_registered_dag_tool_can_reach_a_human_for_the_confirm_gate(tmp_path: Path) -> None:
+    """The gate is only a gate if the tool the *model* calls has an asker.
+
+    It did not: the asker was built as a closure inside the playbook wiring, which
+    only runs when `playbooks.enabled`, and only the executor's private tool
+    instance got it. So a model-composed graph with `confirm: true` -- the schema
+    invites it for "publishing, sending, spending" -- dispatched every node and
+    reported that a human had approved something no human saw.
+    """
+    loop = _make_agent_loop(tmp_path, [])
+    tool = loop.tools.get("run_subagent_dag")
+
+    assert tool is not None
+    assert tool._ask is not None, "the model-facing DAG tool has no route to a human"
+    # The same asker the playbook path uses, so one answer means one thing.
+    assert tool._ask == loop._confirm_graph

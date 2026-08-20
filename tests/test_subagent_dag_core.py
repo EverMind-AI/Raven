@@ -35,8 +35,8 @@ def test_topo_order_and_parse() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "hello"},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "agent": "x", "prompt_template": "hello"},
+                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -49,17 +49,34 @@ def test_subagent_name_takes_any_name_the_config_layer_accepts(name: str) -> Non
     # "General Audit" happily, so a DAG node naming the same agent must not be
     # refused for the name alone. Only the node `id` stays charset-restricted,
     # because it becomes `<id>.prompt.md`.
-    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
-    assert spec.nodes[0].subagent == name
+    spec = parse_dag_spec({"nodes": [{"id": "a", "agent": name, "prompt_template": "hi"}]})
+    assert spec.nodes[0].agent == name
 
 
-@pytest.mark.parametrize("name", ["", " ", " coder", "coder ", "\tcoder", "two\nlines"])
-def test_subagent_name_rejects_blank_and_edge_whitespace(name: str) -> None:
+@pytest.mark.parametrize("name", [" ", " coder", "coder ", "\tcoder", "two\nlines"])
+def test_subagent_name_rejects_edge_whitespace(name: str) -> None:
     # Edge whitespace is invisible, so " coder" would fail the roster lookup
     # against a name that looks identical to the configured one -- refused here
     # where the error can name the field instead.
     with pytest.raises(DagValidationError):
-        parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
+        parse_dag_spec({"nodes": [{"id": "a", "agent": name, "prompt_template": "hi"}]})
+
+
+@pytest.mark.parametrize("field", ["agent", "prompt_template"])
+def test_a_blank_required_field_parses_but_never_runs(field: str) -> None:
+    """Blank has to survive parsing and be refused before dispatch.
+
+    A playbook may leave a node's agent or prompt for the model to fill, and
+    ``load_playbook`` can only report that gap if the file loads -- so the parse
+    accepts it. ``validate_and_order`` is the point past which nobody can fill it
+    any more, which is where it gets refused.
+    """
+    node = {"id": "a", "agent": "x", "prompt_template": "hi", field: ""}
+    spec = parse_dag_spec({"nodes": [node]})
+    assert getattr(spec.nodes[0], field) == ""
+
+    with pytest.raises(DagValidationError, match="cannot run without"):
+        validate_and_order(spec)
 
 
 @pytest.mark.parametrize("node_id", ["has space", "a/b", "..", "a.out", ""])
@@ -67,15 +84,15 @@ def test_node_id_keeps_its_closed_charset(node_id: str) -> None:
     # The id is a path component; widening the sub-agent charset must not have
     # widened this one with it.
     with pytest.raises(DagValidationError):
-        parse_dag_spec({"nodes": [{"id": node_id, "subagent": "x", "prompt_template": "hi"}]})
+        parse_dag_spec({"nodes": [{"id": node_id, "agent": "x", "prompt_template": "hi"}]})
 
 
 def test_cycle_rejected() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
+                {"id": "a", "agent": "x", "prompt_template": "{{ b.output }}", "depends_on": ["b"]},
+                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}", "depends_on": ["a"]},
             ]
         }
     )
@@ -87,8 +104,8 @@ def test_default_deny_undeclared_reference() -> None:
     spec = parse_dag_spec(
         {
             "nodes": [
-                {"id": "a", "subagent": "x", "prompt_template": "hi"},
-                {"id": "b", "subagent": "x", "prompt_template": "{{ a.output }}"},  # no depends_on
+                {"id": "a", "agent": "x", "prompt_template": "hi"},
+                {"id": "b", "agent": "x", "prompt_template": "{{ a.output }}"},  # no depends_on
             ]
         }
     )
@@ -108,8 +125,8 @@ def _spec(*nodes: dict) -> object:
 
 def test_reused_instance_on_a_stateless_agent_is_rejected() -> None:
     spec = _spec(
-        {"id": "draft", "subagent": "x", "prompt_template": "write", "instance": "author"},
-        {"id": "revise", "subagent": "x", "prompt_template": "revise", "instance": "author"},
+        {"id": "draft", "agent": "x", "prompt_template": "write", "instance": "author"},
+        {"id": "revise", "agent": "x", "prompt_template": "revise", "instance": "author"},
     )
     with pytest.raises(DagValidationError) as exc:
         validate_capabilities(spec, _STATELESS_BOXED)
@@ -123,14 +140,14 @@ def test_reused_instance_on_a_stateless_agent_is_rejected() -> None:
 def test_a_single_instance_handle_is_not_reuse() -> None:
     """One node carrying a handle reuses nothing, so it is at worst redundant —
     rejecting it would fail graphs that are merely verbose."""
-    spec = _spec({"id": "solo", "subagent": "x", "prompt_template": "go", "instance": "author"})
+    spec = _spec({"id": "solo", "agent": "x", "prompt_template": "go", "instance": "author"})
     validate_capabilities(spec, _STATELESS_BOXED)
 
 
 def test_reused_instance_on_a_stateful_agent_is_allowed() -> None:
     spec = _spec(
-        {"id": "draft", "subagent": "x", "prompt_template": "write", "instance": "author"},
-        {"id": "revise", "subagent": "x", "prompt_template": "revise", "instance": "author"},
+        {"id": "draft", "agent": "x", "prompt_template": "write", "instance": "author"},
+        {"id": "revise", "agent": "x", "prompt_template": "revise", "instance": "author"},
     )
     validate_capabilities(spec, _FULL)
 
@@ -139,8 +156,8 @@ def test_a_handle_shared_by_two_different_agents_is_not_a_capability_error() -> 
     """The runner groups by handle to serialize, whichever agent runs the node;
     two agents sharing one never shared a session to begin with."""
     spec = _spec(
-        {"id": "a", "subagent": "x", "prompt_template": "go", "instance": "shared"},
-        {"id": "b", "subagent": "y", "prompt_template": "go", "instance": "shared"},
+        {"id": "a", "agent": "x", "prompt_template": "go", "instance": "shared"},
+        {"id": "b", "agent": "y", "prompt_template": "go", "instance": "shared"},
     )
     validate_capabilities(spec, {**_STATELESS_BOXED, "y": AgentCapabilities(stateful=False)})
 
@@ -160,10 +177,10 @@ def test_path_placeholders_are_rejected_for_an_agent_that_cannot_read_files(
     suggested: str,
 ) -> None:
     spec = _spec(
-        {"id": "a", "subagent": "x", "prompt_template": "upstream"},
+        {"id": "a", "agent": "x", "prompt_template": "upstream"},
         {
             "id": "b",
-            "subagent": "x",
+            "agent": "x",
             "prompt_template": template,
             "inputs": inputs,
             "depends_on": depends_on,
@@ -180,10 +197,10 @@ def test_path_placeholders_are_rejected_for_an_agent_that_cannot_read_files(
 
 def test_content_placeholders_are_fine_for_an_agent_that_cannot_read_files() -> None:
     spec = _spec(
-        {"id": "a", "subagent": "x", "prompt_template": "upstream"},
+        {"id": "a", "agent": "x", "prompt_template": "upstream"},
         {
             "id": "b",
-            "subagent": "x",
+            "agent": "x",
             "prompt_template": "{{ a.output }} {{ inputs.k }} {{ ref:notes.md }}",
             "inputs": {"k": "literal"},
             "depends_on": ["a"],
@@ -194,8 +211,8 @@ def test_content_placeholders_are_fine_for_an_agent_that_cannot_read_files() -> 
 
 def test_paths_are_fine_for_an_agent_that_can_read_files() -> None:
     spec = _spec(
-        {"id": "a", "subagent": "x", "prompt_template": "upstream"},
-        {"id": "b", "subagent": "x", "prompt_template": "{{ a.output_path }}", "depends_on": ["a"]},
+        {"id": "a", "agent": "x", "prompt_template": "upstream"},
+        {"id": "b", "agent": "x", "prompt_template": "{{ a.output_path }}", "depends_on": ["a"]},
     )
     validate_capabilities(spec, _FULL)
 
@@ -204,8 +221,8 @@ def test_an_agent_absent_from_the_map_is_not_gated() -> None:
     """An unknown ``subagent`` is the runner's error to raise; guessing at
     capabilities we were never told would reject a graph for the wrong reason."""
     spec = _spec(
-        {"id": "a", "subagent": "unmapped", "prompt_template": "go", "instance": "h"},
-        {"id": "b", "subagent": "unmapped", "prompt_template": "go", "instance": "h"},
+        {"id": "a", "agent": "unmapped", "prompt_template": "go", "instance": "h"},
+        {"id": "b", "agent": "unmapped", "prompt_template": "go", "instance": "h"},
     )
     validate_capabilities(spec, {})
 
@@ -254,7 +271,7 @@ async def test_render_output_and_inputs() -> None:
             "nodes": [
                 {
                     "id": "b",
-                    "subagent": "x",
+                    "agent": "x",
                     "prompt_template": "up={{ a.output }} path={{ a.output_path }} lit={{ inputs.k }}",
                     "depends_on": ["a"],
                     "inputs": {"k": "LITERAL"},
@@ -296,8 +313,8 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
     rdir = f"/hist/mas_dag/{run_id}"
     graph = {
         "nodes": [
-            {"id": "a", "subagent": "x", "prompt_template": "do {{ inputs.k }}", "depends_on": [], "instance": None},
-            {"id": "b", "subagent": "y", "prompt_template": "use {{ a.output }}", "depends_on": ["a"], "instance": "h"},
+            {"id": "a", "agent": "x", "prompt_template": "do {{ inputs.k }}", "depends_on": [], "instance": None},
+            {"id": "b", "agent": "y", "prompt_template": "use {{ a.output }}", "depends_on": ["a"], "instance": "h"},
         ]
     }
     be.files[f"{rdir}/graph.json"] = json.dumps(graph).encode()
@@ -307,7 +324,7 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
         manifest = {
             "a": {
                 "status": "completed",
-                "subagent": "x",
+                "agent": "x",
                 "depends_on": [],
                 "instance": None,
                 "started_at": 1000,
@@ -318,7 +335,7 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
             },
             "b": {
                 "status": "failed",
-                "subagent": "y",
+                "agent": "y",
                 "depends_on": ["a"],
                 "instance": "h",
                 "started_at": 3000,
@@ -463,7 +480,7 @@ def test_split_reference_names_the_root() -> None:
 
 
 def _one_node(template: str, **extra: object) -> object:
-    return parse_dag_spec({"nodes": [{"id": "n", "subagent": "x", "prompt_template": template, **extra}]}).nodes[0]
+    return parse_dag_spec({"nodes": [{"id": "n", "agent": "x", "prompt_template": template, **extra}]}).nodes[0]
 
 
 async def test_render_reaches_an_earlier_run_through_the_runs_prefix() -> None:
@@ -494,3 +511,129 @@ async def test_a_path_placeholder_naming_a_missing_file_is_refused(template: str
     node = _one_node(template, **extra)
     with pytest.raises(DagValidationError, match="does not exist"):
         await render_prompt(node, backend=_FakeBackend(), cwd="/w", output_paths={})
+
+
+# --- who may set a shared session's skills -------------------------------
+
+
+def test_a_later_node_on_a_shared_instance_cannot_set_skills() -> None:
+    """A resumed session keeps the skill menu it was opened with.
+
+    So a list on the second node is read by nobody. The older rule demanded every
+    member declare the *same* skills, which let the file repeat it where it had no
+    effect -- reading as if each step configured its own tools. Refused instead, so
+    the file cannot say something untrue.
+    """
+    spec = _spec(
+        {"id": "open", "agent": "x", "prompt_template": "go", "instance": "s", "skills": ["a"]},
+        {
+            "id": "later",
+            "agent": "x",
+            "prompt_template": "go",
+            "instance": "s",
+            "depends_on": ["open"],
+            "skills": ["b"],
+        },
+    )
+    with pytest.raises(DagValidationError) as exc:
+        validate_capabilities(spec, _FULL)
+
+    message = str(exc.value)
+    assert "['later']" in message  # the offender, not the node that may set them
+    assert "keeps the skill menu it was opened with" in message
+    assert "open" in message  # and where to move them
+
+
+def test_the_node_that_opens_the_session_may_set_skills() -> None:
+    spec = _spec(
+        {"id": "open", "agent": "x", "prompt_template": "go", "instance": "s", "skills": ["a"]},
+        {"id": "later", "agent": "x", "prompt_template": "go", "instance": "s", "depends_on": ["open"]},
+    )
+    assert validate_capabilities(spec, _FULL) == []
+
+
+def test_an_undecided_order_is_refused_only_when_it_would_matter() -> None:
+    """Which member opens the session is undecided without a chain.
+
+    The runner serializes a shared-instance group but does not pin the order among
+    nodes with no mutual dependency, so *whose* skills take effect is unanswerable.
+    The check fires only when someone actually declared some -- a group that
+    declares nothing is unaffected, which is what keeps this from being a new
+    restriction on every graph that shares a handle.
+    """
+    declaring = _spec(
+        {"id": "a", "agent": "x", "prompt_template": "go", "instance": "s", "skills": ["k"]},
+        {"id": "b", "agent": "x", "prompt_template": "go", "instance": "s"},
+    )
+    with pytest.raises(DagValidationError, match="do not form a dependency chain"):
+        validate_capabilities(declaring, _FULL)
+
+    silent = _spec(
+        {"id": "a", "agent": "x", "prompt_template": "go", "instance": "s"},
+        {"id": "b", "agent": "x", "prompt_template": "go", "instance": "s"},
+    )
+    assert validate_capabilities(silent, _FULL) == []
+
+
+# --- capability gaps are reported, not refused ---------------------------
+
+
+def test_skills_for_an_agent_that_cannot_take_them_is_a_notice() -> None:
+    """A capability gap downgrades; a safety breach refuses.
+
+    A playbook written on a better-equipped machine should still run here with the
+    parts that work -- but the caller has to be told, or a wrong result is
+    unattributable.
+    """
+    spec = _spec({"id": "a", "agent": "x", "prompt_template": "go", "skills": ["research"]})
+    caps = {"x": AgentCapabilities(injectable_skills=False)}
+
+    notices = validate_capabilities(spec, caps)
+
+    assert len(notices) == 1
+    assert "cannot take injected skills" in notices[0]
+    assert "'a'" in notices[0]
+
+
+def test_declaring_mcps_always_downgrades_while_the_wiring_is_absent() -> None:
+    """Honest about the implementation, not about the declaration.
+
+    A built-in agent's row says it *could* take mcp servers, so reading the notice
+    off `injectable_mcps` would report success for something nothing implements.
+    One explicit flag drives it, and flipping that flag is what stops the notice.
+    """
+    spec = _spec({"id": "a", "agent": "x", "prompt_template": "go", "mcps": ["github"]})
+
+    notices = validate_capabilities(spec, {"x": AgentCapabilities(injectable_mcps=True)})
+
+    assert len(notices) == 1
+    assert "not implemented" in notices[0]
+
+
+def test_a_graph_that_asks_for_nothing_extra_gets_no_notices() -> None:
+    spec = _spec({"id": "a", "agent": "x", "prompt_template": "go"})
+    assert validate_capabilities(spec, _FULL) == []
+
+
+def test_a_shared_session_ordered_through_a_non_member_is_accepted() -> None:
+    """The shape the shipped orchestration guide teaches, and it was refused.
+
+    `draft(author) -> review -> revise(author)`: the two members share no direct
+    edge, so head detection over direct dependencies alone called them unordered
+    and rejected the graph -- asserting something false, since the topological sort
+    runs `draft` first. Adding `skills` to `draft` is exactly what the guide's own
+    field table invites, and that was the trigger.
+    """
+    spec = _spec(
+        {"id": "draft", "agent": "x", "prompt_template": "write", "instance": "author", "skills": ["w"]},
+        {"id": "review", "agent": "x", "prompt_template": "critique {{ draft.output }}", "depends_on": ["draft"]},
+        {
+            "id": "revise",
+            "agent": "x",
+            "prompt_template": "revise {{ review.output }}",
+            "depends_on": ["review"],
+            "instance": "author",
+        },
+    )
+
+    assert validate_capabilities(spec, _FULL) == []

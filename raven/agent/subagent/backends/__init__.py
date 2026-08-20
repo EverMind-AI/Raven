@@ -53,13 +53,19 @@ class AgentMeta(NamedTuple):
     is what a caller planning around a long-running agent needs to know."""
 
 
-def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
-    """The advertised capabilities of one third-party subagent config.
+def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
+    """The advertised capabilities of one agent config, any kind.
 
     "Stateful" means reusing an instance handle continues that agent's
     conversation instead of starting a fresh one, and it is always read from the
     mechanism that would have to deliver it -- never from a wish:
 
+    - ``builtin``: always true. The mechanism is raven's own replay of the stored
+      message list (``instance_state.py``), which it owns end to end for an
+      in-process loop, so there is no endpoint-specific exception to make. Its
+      other two capabilities are likewise structural: the loop runs here, so it
+      reads this filesystem, and it reports usage and tool calls as it works
+      (``raven_loop.py``), which is what ``live_progress`` advertises.
     - ``cli``: from ``resume_command``. The schema already forces the optional
       ``stateful`` field to agree with it.
     - ``acp``: from the agent's own ``sessionCapabilities.resume``, recorded in a
@@ -89,6 +95,14 @@ def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     would let them disagree.
     """
     kind = getattr(cfg, "kind", None)
+    if kind == "builtin":
+        return AgentMeta(
+            getattr(cfg, "name", "") or "",
+            getattr(cfg, "description", "") or "",
+            True,
+            True,
+            True,
+        )
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
@@ -177,10 +191,10 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
     return "; ".join(parts)
 
 
-def enabled_third_party(configs: Sequence[Any]) -> list[Any]:
-    """The subset of third-party configs the model may dispatch to.
+def enabled_agents(configs: Sequence[Any]) -> list[Any]:
+    """The subset of agent configs the model may dispatch to.
 
-    Lives here beside ``third_party_agent_meta`` and ``format_agent_listing``
+    Lives here beside ``agent_meta`` and ``format_agent_listing``
     because this module owns how a config is presented to the model, and it is
     applied inside the two consumers rather than at their call sites: five paths
     hand a config list to those setters (three CLI entry points, the AgentLoop's
@@ -195,6 +209,13 @@ def enabled_third_party(configs: Sequence[Any]) -> list[Any]:
     caller cannot silently lose agents.
     """
     return [cfg for cfg in configs or [] if getattr(cfg, "enabled", True)]
+
+
+# Pre-rename spellings. Kept because both are pure functions with call sites
+# across the test suite, and a rename that also changes behaviour is a rename
+# whose failures are hard to attribute.
+third_party_agent_meta = agent_meta
+enabled_third_party = enabled_agents
 
 
 def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | None = None) -> SubagentBackend:
@@ -264,6 +285,8 @@ __all__ = [
     "SubagentActionAbortedError",
     "SubagentBackend",
     "acp_snapshot_for",
+    "agent_meta",
+    "enabled_agents",
     "enabled_third_party",
     "format_agent_listing",
     "third_party_agent_meta",

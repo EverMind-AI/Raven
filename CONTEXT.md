@@ -62,6 +62,28 @@ re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bou
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
+**Agent table** (`subagents.agents[]` in config → `agent/subagent/registry.py`):
+The one list of agents raven can dispatch to, materialized once per process as an
+`AgentRegistry` that `spawn`, `run_subagent_dag` and the playbook generator all read.
+A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that kind's
+connection fields; `AgentCaps` and `Injectable` are *derived* from it, and are what a
+consumer branches on so that nothing has to switch on the transport. `builtin` rows are
+package seeds (`agent/subagent/builtin_agents.py`): they exist whether or not config
+mentions them, a config row of the same name is a field-level override, and `enabled:
+false` is the only way to take one off the roster. Read under the older key `thirdParty`
+too; the write path emits `agents`.
+_Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
+point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
+entry point and not the other is no longer a state that exists.
+
+**Roster** (`format_agent_listing`):
+The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
+descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
+account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
+the `agent` parameter constrains the same set. All three capabilities render positive *or*
+negative, because "no tag" and "the roster does not say" are indistinguishable otherwise.
+_Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
+
 **Subagent working directory** (`workspace=` on every backend's `run`):
 Where a sub-agent's commands and file tools act: the *session's* working directory, the same
 one the dispatching turn's own tools get. Every dispatch supplies it — `spawn` captures
@@ -427,9 +449,8 @@ _Avoid_: calling a description-mode entry an "injected skill" — its body never
 **Skill Requirements**:
 A skill's optional `requires` block, declaring what its procedure needs before
 it is worth showing. `bins` / `env` are process-static and resolved in
-`SkillRegistry.check_available`; `tools` is live runtime state (the DAG tool
-registers only when third-party sub-agents are configured, and hot-applies) and
-is enforced per turn by `ActiveSkillsSegmentBuilder` against the definitions
+`SkillRegistry.check_available`; `tools` is live runtime state (a tool can be
+registered or hot-applied at runtime) and is enforced per turn by `ActiveSkillsSegmentBuilder` against the definitions
 actually being sent. Every sub-key is optional and every malformed shape
 degrades to "nothing declared" — see `requires_list`.
 _Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
@@ -557,28 +578,36 @@ where both creation entries — `raven playbook create` and the `create_playbook
 tool — land their product, disabled for review; a user directory reusing a
 builtin's name shadows it, with a load warning. A generator's open questions and
 assumptions go into the body (its `## Open questions` section) for a human to
-read; whether a playbook is matchable on this machine is config (the
-`playbooks.disabled` deny list — absent means on, disabling only mutes the
-passive funnel and explicit runs still work), because the file is the
-distribution unit and local state must not travel with it.
+read; whether a playbook is offered on this machine is config (the
+`playbooks.disabled` deny list — absent means on; disabling takes it out of what
+the model is shown, and `raven playbook run` still resolves it), because the file
+is the distribution unit and local state must not travel with it.
 
-The two modes differ only in where the graph comes from: `dag` ships it as
-`nodes`; `prompt` ships assembly guidance as `prompts` and a model composes the
-graph at run time. Both then pass the same validation and reach the same
-dispatch — a node list handed to `SubAgentDagTool.run_with_roles` with a backend
-built per node, running in the background and announcing its own result. A field
-the release cannot honour is refused rather than noted: `nodes[].confirm` and an
-`instance` handle on a stateless agent fail validation, because a gate reported
-after the step ran is worse than no gate.
+The two modes differ in where the graph comes from, and therefore in who acts on
+a load: `dag` ships it as `nodes`, which the engine fills and dispatches through
+`SubAgentDagTool.execute` — the same entry a model-composed graph takes, so one
+validation, one scheduler, one billing path. `prompt` ships assembly guidance as
+`prompts` and the *caller* composes: in a conversation the model gets the filled
+guidance and submits its own `run_subagent_dag` call, while the CLI, having no
+model in the room, composes with one call of its own. `mode` is the author's
+statement of how completely they specified the procedure, and is deliberately not
+in the tool signature.
 
-Discovery is a two-stage funnel: `triggers.keywords` (guarded against stop
-words, short entries and generic words, then substring-matched per message at
-zero cost) nominates candidates, and one LLM gate judges intent, extracts
-`params` and adjudicates between overlapping candidates. Any gate failure
-resolves to no match, so the conversation falls through untouched. The
-`run_playbook` tool is the agent's own entry for what that funnel structurally
-cannot catch — a request that never says a trigger word, and an answer supplied
-after a run asked for it.
+**Discovery is the model's, not a matcher's.** A playbook is reached through
+`load_playbook`, one of the tools a turn can use, alongside `spawn` and
+`run_subagent_dag` — there is no pre-turn interception and no LLM gate.
+`triggers.keywords` decides which playbooks get *described* in that tool when the
+library is larger than `playbooks.router.topK`; the `name` enum stays the whole
+library, so a retrieval miss leaves a playbook undescribed rather than
+unreachable. What the caller may supply is bounded to `params` and `fills`, and a
+`fills` entry aimed at a field the playbook already wrote is refused — so a
+playbook can be completed but never edited, and the file in git stays an accurate
+account of what ran.
+_Avoid_: calling `triggers.keywords` a trigger — a keyword makes a playbook
+visible, never run. And avoid describing `confirm` as a playbook-level gate: it is
+`SubAgentDagSpec.confirm`, a graph-level parameter the playbook's value is
+injected into, which is what let the passive funnel be deleted without the gate
+going with it.
 _Avoid_: calling it a Skill or a SKILL.md — a playbook has its own root, its own
 file name and its own loader, and is not indexed by `skill_local`. Also avoid
 conflating it with a sub-agent DAG run (`run_subagent_dag` executes one graph a

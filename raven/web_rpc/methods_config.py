@@ -107,7 +107,7 @@ def register_config_methods(
       ahead of the policy default on the *next* turn. ``set`` refuses while
       the session has a subagent in flight.
     """
-    from raven.agent.subagent.backends import third_party_agent_meta
+    from raven.agent.subagent.backends import agent_meta
     from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
     from raven.agent.subagent.presets import third_party_subagent_presets
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
@@ -116,20 +116,21 @@ def register_config_methods(
     from raven.agent.workdir import validate_override
     from raven.config.schema import SubagentsConfig
     from raven.config.update_subagents import (
-        get_third_party_subagents,
+        get_agents,
+        reject_builtin_transport_changes,
         reject_unsupported_acp_fields,
         reject_unsupported_openai_fields,
-        set_third_party_subagents,
+        set_agents,
     )
     from raven.rpc.errors import RpcError
 
     async def _list(params: dict) -> dict:
-        agents = get_third_party_subagents()
+        agents = get_agents()
         # `statefulNames` is a sibling of `agents`, not a field inside each entry:
         # `_set` below runs `reject_unsupported_acp_fields`, which would reject
         # this computed value the moment it showed up inside an acp agent's own
         # object on a later save.
-        stateful = [meta.name for cfg in _as_configs(agents) if (meta := third_party_agent_meta(cfg)).stateful]
+        stateful = [meta.name for cfg in _as_configs(agents) if (meta := agent_meta(cfg)).stateful]
         return {"agents": agents, "statefulNames": stateful}
 
     async def _set(params: dict) -> dict:
@@ -142,23 +143,28 @@ def register_config_methods(
         # Same split for the acp kind: warned about on load so a stored config
         # still starts raven, rejected here where the caller owns the value.
         reject_unsupported_acp_fields(agents)
+        # A built-in row may be retuned but not re-transported: claiming its name
+        # for a cli entry would leave the in-process agent unreachable under a name
+        # stored playbooks already use. Refused here, where the caller holds the
+        # value, for the same reason the two checks above are.
+        reject_builtin_transport_changes(agents)
         # Validate + write atomically (raises on bad schema / duplicate names;
         # the dispatcher surfaces the error to the client, nothing is applied).
-        set_third_party_subagents(agents)
-        if agent is not None and hasattr(agent, "apply_third_party_subagents"):
-            agent.apply_third_party_subagents(SubagentsConfig(third_party=agents).third_party)
+        set_agents(agents)
+        if agent is not None and hasattr(agent, "apply_agents"):
+            agent.apply_agents(SubagentsConfig(agents=agents).agents)
         return {"ok": True, "count": len(agents)}
 
     async def _presets(params: dict) -> dict:
         return {"presets": third_party_subagent_presets()}
 
     def _as_configs(entries: list[dict]) -> list[Any]:
-        return list(SubagentsConfig(third_party=entries).third_party)
+        return list(SubagentsConfig(agents=entries).agents)
 
     async def _probe(params: dict) -> dict:
         # Read config from disk rather than from the live AgentLoop: a save lands
         # there, so the next probe reflects it with nothing to invalidate.
-        entries = [(cfg, "config") for cfg in _as_configs(get_third_party_subagents())]
+        entries = [(cfg, "config") for cfg in _as_configs(get_agents())]
         entries += [(cfg, "preset") for cfg in _as_configs(third_party_subagent_presets())]
         verdicts = TestStateStore().load(entries)
         return {"results": [r.to_wire() for r in await probe_all(entries, verdicts=verdicts)]}
@@ -171,7 +177,7 @@ def register_config_methods(
         # By name only, never a command from the params: a command here would be
         # executed immediately with nothing persisted, which is a wider surface
         # than the config plane that at least leaves a record of what can run.
-        pool = third_party_subagent_presets() if source == "preset" else get_third_party_subagents()
+        pool = third_party_subagent_presets() if source == "preset" else get_agents()
         match = next((e for e in pool if e.get("name") == name), None)
         if match is None:
             return {"result": TestResult(name, source, None, False, "no such subagent", None, 0).to_wire()}

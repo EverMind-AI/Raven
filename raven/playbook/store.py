@@ -148,7 +148,57 @@ class PlaybookStore:
         data["description"] = front.get("description")
         if data["name"] != name:
             raise ValueError(f"playbook {name!r}: frontmatter name {data['name']!r} != directory name")
-        return PlaybookSpec.model_validate(data)
+        return PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
+
+
+def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
+    """Bring a playbook written by an older release up to the current node shape.
+
+    Two changes landed together that a stored file cannot survive untouched, and
+    both are invisible failures rather than loud ones -- the runtime catches a
+    load error as a warning and drops the playbook out of the library, so a user's
+    saved procedure simply stops existing.
+
+    ``confirm`` on a node is gone (the gate is graph-level), and the node model
+    forbids unknown keys. Every playbook the previous release saved carries it:
+    ``block_dump`` is ``exclude_none``, not ``exclude_defaults``, so ``False`` was
+    written out in full.
+
+    ``skills: []`` / ``mcps: []`` used to mean "everything" -- the executor folded
+    an empty list to ``None`` -- and now mean "nothing at all". Left alone, such a
+    file would load and then run every step with an empty skill menu, which is the
+    quieter of the two failures and the worse one.
+
+    A node-level ``confirm`` key is the marker for "written by that release", and
+    it is a sound one-way signal: the old writer always emitted it, so its
+    presence dates the file, while a file without it is read on today's terms.
+    That is why the empty-list rewrite is scoped to nodes carrying it rather than
+    applied everywhere -- on a current file ``skills: []`` is a deliberate
+    instruction, and rewriting it would silently widen what that step may reach.
+    """
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        return data
+    migrated: list = []
+    touched = False
+    for node in nodes:
+        if not isinstance(node, dict) or "confirm" not in node:
+            migrated.append(node)
+            continue
+        touched = True
+        node = {k: v for k, v in node.items() if k != "confirm"}
+        for field in ("skills", "mcps"):
+            if node.get(field) == []:
+                node.pop(field)
+        migrated.append(node)
+    if not touched:
+        return data
+    logger.info(
+        "Playbook {!r} was written by an older release; dropping node-level 'confirm' and "
+        "reading empty skills/mcps lists as unset",
+        name,
+    )
+    return {**data, "nodes": migrated}
 
 
 def _render(spec: PlaybookSpec, notes: list[str]) -> str:

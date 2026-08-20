@@ -101,11 +101,20 @@ class SubagentRow(_Strict):
 
     name: str
     preset: str | None
-    kind: Literal["cli", "openai", "acp"]
+    kind: Literal["builtin", "cli", "openai", "acp"]
     description: str
     enabled: bool
     configured: bool
-    group: Literal["installed", "uninstalled"]
+    builtin: bool = Field(
+        default=False,
+        description=(
+            "A built-in agent: raven's own in-process loop, on the agent table whether or not "
+            "config mentions it. Distinct from `configured`, which stays false for one -- not "
+            "writing a row is how 'use the package's default' is spelled, so there is nothing "
+            "to delete and no transport to connect. `enabled` is the only action it takes."
+        ),
+    )
+    group: Literal["builtin", "installed", "uninstalled"]
     upgrade_to: str | None = Field(
         default=None,
         description=(

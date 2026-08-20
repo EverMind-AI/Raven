@@ -27,7 +27,7 @@ def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         json.dumps(
             {
                 "subagents": {
-                    "thirdParty": [
+                    "agents": [
                         {
                             "name": "Coder",
                             "preset": "claude_code",
@@ -103,7 +103,7 @@ async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list
     # them as ConfigValidationError, not the -32603 internal_error the dispatcher
     # would otherwise turn a bare ValidationError into.
     config_path.write_text(
-        json.dumps({"subagents": {"thirdParty": [{"name": "Broken", "kind": "cli"}]}}),
+        json.dumps({"subagents": {"agents": [{"name": "Broken", "kind": "cli"}]}}),
         encoding="utf-8",
     )
     with pytest.raises(ConfigValidationError) as excinfo:
@@ -120,8 +120,29 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     by_name = {row["name"]: row for row in result["rows"]}
 
     # Coder/Researcher already claim the claude_code/mirothinker presets, so
-    # those two are excluded from the unconfigured-preset rows.
-    assert set(by_name) == {"Coder", "Researcher", "codex", "openclaw", "opencode", "hermes"}
+    # those two are excluded from the unconfigured-preset rows. The built-in rows
+    # lead the list: they are on the agent table whether config mentions them or
+    # not, so an overlay that omitted them would be hiding half the roster the
+    # model dispatches to.
+    assert set(by_name) == {
+        "raven",
+        "research-raven",
+        "code-raven",
+        "data-raven",
+        "content-raven",
+        "Coder",
+        "Researcher",
+        "codex",
+        "openclaw",
+        "opencode",
+        "hermes",
+    }
+    # Their own group, not installed/uninstalled: there is nothing to install, and
+    # a row that could only ever read "uninstalled" would say the opposite.
+    assert by_name["research-raven"]["group"] == "builtin"
+    assert by_name["research-raven"]["builtin"] is True
+    assert by_name["research-raven"]["configured"] is False
+    assert by_name["research-raven"]["enabled"] is True
     assert all(row["probe_status"] == "unknown" for row in result["rows"])
     assert all(row["probe_detail"] == "" for row in result["rows"])
     # group must still resolve correctly without a probe: openai keyed by its
@@ -172,7 +193,7 @@ from raven.rpc.methods.subagents import (
 
 
 def _stored(path: Path) -> list[dict]:
-    return json.loads(path.read_text())["subagents"]["thirdParty"]
+    return json.loads(path.read_text())["subagents"]["agents"]
 
 
 async def test_add_writes_the_preset_template_under_a_chosen_name(config_path: Path) -> None:
@@ -326,7 +347,7 @@ async def test_update_clearing_the_description_with_no_preset_blanks_it(config_p
     # A hand-written entry (no `preset` provenance) has no default to fall back
     # to, so clearing it must actually clear it.
     raw = json.loads(config_path.read_text())
-    raw["subagents"]["thirdParty"].append(
+    raw["subagents"]["agents"].append(
         {"name": "Handwritten", "kind": "cli", "command": "cat", "description": "custom text", "enabled": True}
     )
     config_path.write_text(json.dumps(raw), encoding="utf-8")
@@ -343,7 +364,7 @@ async def test_update_whole_entry_validation_failure_does_not_leak_the_api_key(c
     # plaintext apiKey. Neither the raised error's message nor its `data` may
     # contain the key or the substring "input_value".
     raw = json.loads(config_path.read_text())
-    raw["subagents"]["thirdParty"].append({"name": "Y", "kind": "openai", "apiKey": "sk-CANARY-B"})
+    raw["subagents"]["agents"].append({"name": "Y", "kind": "openai", "apiKey": "sk-CANARY-B"})
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ConfigValidationError) as excinfo:
@@ -374,7 +395,7 @@ async def test_a_mutation_hot_applies_to_the_live_loop(config_path: Path) -> Non
     applied: list[list] = []
 
     class _Loop:
-        def apply_third_party_subagents(self, configs: list) -> None:
+        def apply_agents(self, configs: list) -> None:
             applied.append(configs)
 
     await subagents_toggle({"name": "Researcher", "enabled": True}, agent_loop_factory=lambda: _Loop())
@@ -394,7 +415,7 @@ async def test_a_write_re_reads_the_file_first(config_path: Path) -> None:
     # mutation; the mutation must not resurrect the stale list it was rendered
     # from. Simulate a concurrent add, then toggle an unrelated agent.
     raw = json.loads(config_path.read_text())
-    raw["subagents"]["thirdParty"].append({"name": "Sneaky", "kind": "cli", "command": "cat", "enabled": True})
+    raw["subagents"]["agents"].append({"name": "Sneaky", "kind": "cli", "command": "cat", "enabled": True})
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
     await subagents_toggle({"name": "Coder", "enabled": False})
@@ -432,7 +453,7 @@ async def test_test_on_a_healthy_agent_does_not_leak_another_entrys_api_key(conf
     # anyone must not turn a `t` on a completely unrelated, healthy row into a key
     # disclosure via pydantic's `input_value=...` diagnostic.
     raw = json.loads(config_path.read_text())
-    raw["subagents"]["thirdParty"].append({"name": "Bad", "kind": "openai", "apiKey": "sk-CANARY-C"})
+    raw["subagents"]["agents"].append({"name": "Bad", "kind": "openai", "apiKey": "sk-CANARY-C"})
     config_path.write_text(json.dumps(raw), encoding="utf-8")
 
     with pytest.raises(ConfigValidationError) as excinfo:
@@ -570,3 +591,41 @@ async def test_cancel_still_reaches_the_first_call_while_a_second_is_refused(con
     assert out["cancelled"] is True
 
     assert _RUNNING == {}
+
+
+async def test_toggling_a_builtin_row_creates_its_override(config_path: Path) -> None:
+    """``enabled`` is the only way to take a built-in agent off the roster.
+
+    The row exists on the table without existing in config, so the first toggle
+    has to write the override rather than report the name unknown -- and it must
+    write nothing but the switch, so the description and skills keep coming from
+    the package's own row.
+    """
+    result = await subagents_toggle({"name": "research-raven", "enabled": False})
+    assert result == {"enabled": False}
+
+    stored = [e for e in _stored(config_path) if e["name"] == "research-raven"]
+    assert len(stored) == 1
+    assert stored[0]["kind"] == "builtin"
+    assert stored[0]["enabled"] is False
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["research-raven"]["enabled"] is False
+    # And the switch is all it overrode: the description still comes from the
+    # package's row. A write dumps the whole model, so applying the stored row
+    # field-for-field would blank the only line the model reads about this agent.
+    assert "Deep retrieval" in rows["research-raven"]["description"]
+    # Still on the list -- switched off is not deleted, and it has to stay
+    # reachable to be switched back on.
+    assert rows["research-raven"]["group"] == "builtin"
+
+    await subagents_toggle({"name": "research-raven", "enabled": True})
+    assert (await subagents_list({"probe": False}))["rows"] != []
+
+
+async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: Path) -> None:
+    """The write primitive refuses it, so every RPC that writes inherits the guard."""
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError):
+        await subagents_update({"name": "Coder", "new_name": "research-raven"})

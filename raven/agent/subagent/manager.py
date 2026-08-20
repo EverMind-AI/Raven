@@ -19,13 +19,12 @@ from raven.agent.subagent.backends import (
     RavenLoopBackend,
     SubagentActionAbortedError,
     SubagentBackend,
-    build_third_party_backend,
-    enabled_third_party,
-    third_party_agent_meta,
 )
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.direct_chat import DirectChatError, DirectChatRecord, DirectTurnMeta
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_history import SpawnRecord
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
@@ -40,10 +39,6 @@ _SPAWN_WINDOW_SECONDS = 3600
 # a wedged CLI subagent already holds must never stall behind a slow or
 # corrupt registry write.
 _REGISTRY_WRITE_TIMEOUT_S = 2.0
-# The reserved instance-registry name for the built-in in-process sub-agent.
-# A default spawn has no third-party agent name, but it still needs an identity
-# for a direct chat to address it by.
-RAVEN_LOOP_AGENT = "raven"
 # ``spawn`` reports a refusal by returning its reason rather than raising, so a
 # caller that has to tell "dispatched" from "declined" has only the string. Both
 # refusals below open with this, and the spawn tool tests for it before publishing
@@ -51,19 +46,19 @@ RAVEN_LOOP_AGENT = "raven"
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
 
 
-async def _write_spawn_status(session_key: str | None, agent: str | None, handle: str, status: str) -> None:
+async def _write_spawn_status(session_key: str | None, agent: str, handle: str, status: str) -> None:
     """Best-effort registry write for one spawn's status, swallowing any failure."""
     if not session_key:
         return
     try:
         await asyncio.wait_for(
-            get_registry().upsert_spawn(session_key, agent or RAVEN_LOOP_AGENT, handle, status),
+            get_registry().upsert_spawn(session_key, agent, handle, status),
             timeout=_REGISTRY_WRITE_TIMEOUT_S,
         )
     except Exception:  # noqa: BLE001 - a status row must never fail or hang a spawn
         logger.opt(exception=True).warning(
             "Subagent instance registry write failed for {}/{!r} (status={})",
-            agent or RAVEN_LOOP_AGENT,
+            agent,
             handle,
             status,
         )
@@ -86,7 +81,7 @@ class SubagentManager:
         jina_api_key: str | None = None,
         max_concurrent: int = 8,
         max_spawns_per_hour: int = 30,
-        third_party_subagents: list | None = None,
+        agents: list | None = None,
         session_dir: "Callable[[str], Path] | None" = None,
     ):
         from raven.config.schema import ExecToolConfig
@@ -144,24 +139,50 @@ class SubagentManager:
         # per-process) so one busy session can't throttle others. Each deque is
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
-        # Pluggable per-spawn execution backend. Default is an in-process raven
-        # loop; third-party backends (CLI claude/codex, OpenAI-API mirothinker;
-        # req5) register in ``_backends`` keyed by agent name.
-        self._raven_backend = self.build_role_backend()
-        self._backends: dict[str, SubagentBackend] = {}
-        # (name, description, stateful) of configured third-party agents, for
-        # the spawn tool's description so the main agent knows what it can
-        # dispatch to.
-        self._third_party_meta: list[tuple[str, str, bool]] = []
-        self.set_third_party_subagents(third_party_subagents or [])
+        # The one agent table this process dispatches against, shared with the DAG
+        # tool rather than built twice (see ``AgentRegistry``). The in-process
+        # factory is bound after construction because it is a bound method of this
+        # object.
+        self.registry = AgentRegistry()
+        self.registry.set_builtin_builder(self.build_builtin_backend)
+        self.registry.apply(agents or [])
+
+    def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
+        """An in-process raven loop for one ``builtin`` row, narrowed for one dispatch.
+
+        The registry's factory. Everything a loop needs beyond the row -- provider,
+        model, agent home, exec config, the search credentials -- lives on this
+        manager, which is why the factory is injected into the registry rather than
+        written there.
+
+        ``build`` is the already-narrowed pair the registry computed (the row's
+        allow-lists intersected with this dispatch's), duck-typed on
+        ``tools_allow`` / ``skills_allow``. The row's own ``model`` and
+        ``restrict_to_workspace`` are per-agent overrides: unset, they inherit this
+        manager's, so a row that says nothing about confinement cannot loosen it.
+        """
+        confine = getattr(row.config, "restrict_to_workspace", None)
+        return RavenLoopBackend(
+            provider=self.provider,
+            model=getattr(row.config, "model", None) or self.model,
+            agent_home=self.workspace,
+            restrict_to_workspace=self.restrict_to_workspace if confine is None else confine,
+            exec_config=self.exec_config,
+            brave_api_key=self.brave_api_key,
+            jina_api_key=self.jina_api_key,
+            web_proxy=self.web_proxy,
+            tools_allow=getattr(build, "tools_allow", None),
+            skills_allow=getattr(build, "skills_allow", None),
+        )
 
     def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
-        """A raven-loop backend, optionally capability-narrowed for one role.
+        """A full-capability raven-loop backend, narrowed by ``build`` if given.
 
-        ``build`` is duck-typed (the playbook executor's RoleBuildSpec): only
-        ``tools_allow`` / ``skills_allow`` are read, so this module does not
-        import playbook types. With no argument it returns the default
-        full-capability backend the manager itself dispatches spawns to."""
+        Retained for callers that hold no row: the availability probe, and a
+        dispatch to the generic agent on an installation whose table failed to
+        build. Ordinary dispatch goes through the registry instead, so a node's
+        agent name is what decides which backend runs it.
+        """
         return RavenLoopBackend(
             provider=self.provider,
             model=self.model,
@@ -175,31 +196,33 @@ class SubagentManager:
             skills_allow=getattr(build, "skills_allow", None),
         )
 
-    def set_third_party_subagents(self, configs: list) -> None:
-        """(Re)build the third-party backend registry from config. Hot-appliable
-        at runtime (P4): replaces the current set so a web config change takes
-        effect without a restart."""
-        backends: dict[str, SubagentBackend] = {}
-        meta: list[AgentMeta] = []
-        for cfg in enabled_third_party(configs):
-            name = getattr(cfg, "name", None)
-            try:
-                backends[name] = build_third_party_backend(cfg)
-                meta.append(third_party_agent_meta(cfg))
-            except Exception as e:  # noqa: BLE001 — a bad entry must not sink the manager
-                logger.warning("Skipping third-party subagent {!r}: {}", name, e)
-        self._backends = backends
-        self._third_party_meta = meta
+    def apply_agents(self, configs: list) -> None:
+        """(Re)build the agent table from config. Hot-appliable at runtime (P4).
 
-    def _resolve_backend(self, agent: str | None) -> SubagentBackend:
-        """Pick the execution backend for a spawn; unknown/None -> raven loop."""
-        if agent and agent in self._backends:
-            return self._backends[agent]
-        return self._raven_backend
+        One call refreshes every consumer, because they all read the same
+        registry: before this, the manager's dict and the DAG tool's were
+        refreshed by two separate setters that each skipped a bad entry on its
+        own, so a partial failure left the two rosters disagreeing.
+        """
+        self.registry.apply(configs)
 
-    def list_third_party_agents(self) -> list[AgentMeta]:
-        """Advertised capabilities of the configured third-party agents (for the spawn tool)."""
-        return list(self._third_party_meta)
+    def _resolve_backend(self, agent: str) -> SubagentBackend:
+        """The execution backend for one agent name.
+
+        Raises rather than substituting: falling back to the in-process loop for
+        an unrecognized name answers *as* that agent, with none of its history and
+        no sign to the caller that a substitution happened.
+        """
+        backend = self.registry.backend(agent)
+        if backend is None:
+            raise RuntimeError(
+                f"sub-agent {agent!r} is not on the agent table (or its backend failed to build); nothing was run"
+            )
+        return backend
+
+    def list_agents(self) -> list[AgentMeta]:
+        """Advertised capabilities of every enabled agent (for the tool descriptions)."""
+        return self.registry.meta()
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
@@ -326,7 +349,16 @@ class SubagentManager:
         later inside the background task: the sub-agent outlives the calling
         turn, and the turn's working-directory binding is released once that
         turn returns.
+
+        ``agent`` is required of the model (the spawn tool's schema makes it so,
+        with the whole table as its enum), and a caller that omits it is
+        normalized to the generic built-in row here -- the one place that
+        substitution happens, instead of the eight ``agent or RAVEN_LOOP_AGENT``
+        branches this used to be spread across. The name is unchanged from what
+        those branches produced, so existing instance-registry rows and
+        direct-chat records still resolve.
         """
+        agent = agent or GENERIC_AGENT
         if self._paused:
             logger.info("Spawn refused: delegation is paused")
             return (
@@ -363,7 +395,7 @@ class SubagentManager:
             "handle": handle,
             "workspace": effective_workspace,
         }
-        instance_key = (quota_key, agent or RAVEN_LOOP_AGENT, handle)
+        instance_key = (quota_key, agent, handle)
 
         # A row before the task even exists: a spawn queued behind a full gate
         # (or a sandbox VM still booting) would otherwise have no registry row
@@ -425,7 +457,8 @@ class SubagentManager:
         the source of truth for one. A caller that streamed therefore has to not
         deliver the return value a second time.
         """
-        if agent != RAVEN_LOOP_AGENT and agent not in self._backends:
+        row = self.registry.get(agent)
+        if row is None or not row.enabled:
             raise RuntimeError(
                 f"Cannot chat with instance {handle!r} of agent {agent!r}: this sub-agent is "
                 "disabled or no longer configured, so the instance cannot be addressed. "
@@ -450,7 +483,7 @@ class SubagentManager:
         record = DirectChatRecord.open(session_dir, agent=agent, handle=handle, task_id=task_id, task=text)
         async with self._hold_instance_slot(session_key, agent, handle), hold_handle(session_key, agent, handle):
             await _write_spawn_status(session_key, agent, handle, "running")
-            backend = self._resolve_backend(None if agent == RAVEN_LOOP_AGENT else agent)
+            backend = self._resolve_backend(agent)
             kwargs: dict[str, Any] = {}
             if state is not None:
                 kwargs["history"] = state.load()
@@ -531,21 +564,21 @@ class SubagentManager:
     def declared_stateful(self, agent: str | None) -> bool:
         """Whether reusing this agent's handle continues its conversation.
 
-        Read from the roster the tool descriptions advertise, so what the model
+        Read from the one table the tool descriptions advertise, so what the model
         is told, what the spawn schema offers and what actually happens cannot
-        disagree. ``RAVEN_LOOP_AGENT`` has no config entry to consult and is
-        always stateful: raven owns its message list itself.
+        disagree. A name that is not on the table is reported stateless: nothing
+        can continue a conversation with an agent that cannot be dispatched to.
         """
-        if agent is None or agent == RAVEN_LOOP_AGENT:
-            return True
-        return any(meta.name == agent and meta.stateful for meta in self._third_party_meta)
+        row = self.registry.get(agent or GENERIC_AGENT)
+        return bool(row is not None and row.caps.stateful)
 
     def _is_replayed(self, agent: str) -> bool:
         """Whether raven owns this agent's conversation state.
 
-        True for an openai entry that *declares* itself stateful, whose backend
-        has no session of its own and depends on raven replaying the message
-        list; false for a cli agent, which resumes inside its own store.
+        True for a ``builtin`` row -- an in-process loop has no session store of
+        its own, so the message list raven keeps *is* its memory -- and for an
+        openai entry that *declares* itself stateful, whose backend depends on the
+        same replay. False for cli and acp, which resume inside their own stores.
 
         The declaration is consulted rather than the kind alone: an endpoint
         that ignores a system prompt continues nothing under replay, and the
@@ -553,10 +586,12 @@ class SubagentManager:
         re-posts the whole transcript every turn -- growing until it trips the
         endpoint's context limit -- to buy nothing.
         """
-        backend = self._backends.get(agent)
-        if backend is None or getattr(backend, "kind", None) != "openai":
+        row = self.registry.get(agent)
+        if row is None:
             return False
-        return self.declared_stateful(agent)
+        if row.kind == "builtin":
+            return True
+        return row.kind == "openai" and row.caps.stateful
 
     def instance_state(self, session_key: str, agent: str | None, handle: str) -> "InstanceState | None":
         """The message list raven keeps for one instance, or ``None``.
@@ -567,8 +602,8 @@ class SubagentManager:
         read as the sub-agent having forgotten, rather than as an argument that
         was refused.
         """
-        name = agent or RAVEN_LOOP_AGENT
-        if not (name == RAVEN_LOOP_AGENT or self._is_replayed(name)):
+        name = agent or GENERIC_AGENT
+        if not self._is_replayed(name):
             return None
         return InstanceState(instance_state_path(self._session_dir(session_key), name, handle))
 
@@ -641,7 +676,7 @@ class SubagentManager:
         model: str,
     ) -> None:
         session_key = origin.get("session_key")
-        agent = origin.get("agent")
+        agent = origin.get("agent") or GENERIC_AGENT
         handle = origin.get("handle") or task_id
         effective_workspace = origin.get("workspace") or self.workspace
         # Opened before dispatch so a call that never returns still leaves its
@@ -688,20 +723,30 @@ class SubagentManager:
                 # follows is the price of every such run being continuable -- accepted
                 # deliberately, with reclaiming it left as follow-up work.
                 state = self.instance_state(session_key or "", agent, handle) if origin.get("instance") else None
-                state_kwargs: dict[str, Any] = (
-                    {"history": state.load(), "on_messages": state.save} if state is not None else {}
-                )
-                final_result = await backend.run(
-                    task,
-                    task_id=task_id,
-                    workspace=effective_workspace,
-                    executor=executor,
-                    session_key=session_key,
-                    instance=origin.get("instance"),
-                    provider=provider,
-                    model=model,
-                    **state_kwargs,
-                )
+                # Held across load-run-save, not just around each half. The state
+                # is a whole-file read-modify-write, so two dispatches on one
+                # handle that interleave here lose whichever wrote first: the
+                # second one read the list before the first appended to it and
+                # then wrote its own version over the top. Nothing raises. A
+                # direct chat and the cli backend already take this same lock; a
+                # spawn resuming a replayed handle (openai, or any builtin agent
+                # now that a graph can name one) did not, which is what made the
+                # loss reachable without any playbook involved.
+                async with hold_handle(session_key or "", agent, handle):
+                    state_kwargs: dict[str, Any] = (
+                        {"history": state.load(), "on_messages": state.save} if state is not None else {}
+                    )
+                    final_result = await backend.run(
+                        task,
+                        task_id=task_id,
+                        workspace=effective_workspace,
+                        executor=executor,
+                        session_key=session_key,
+                        instance=origin.get("instance"),
+                        provider=provider,
+                        model=model,
+                        **state_kwargs,
+                    )
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 record.finish(status="completed", output=final_result, activity=did)
                 await self._announce_result(task_id, label, task, final_result, origin, "ok")

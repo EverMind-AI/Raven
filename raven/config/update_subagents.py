@@ -1,9 +1,17 @@
-"""Atomic write path for ``subagents.third_party`` config (req5 / P4).
+"""Atomic write path for ``subagents.agents`` config (req5 / P4).
 
-The only supported write path for third-party sub-agent config. Every entry
-point (CLI, future WebUI "configure Raven" page) must go through here. Entries
-are validated against the schema (discriminated ``kind: cli|openai``) before
-anything is written, and the write is atomic (temp file + os.replace).
+The only supported write path for agent config. Every entry point (CLI, the
+WebUI "configure Raven" page) must go through here. Entries are validated against
+the schema (discriminated on ``kind``) before anything is written, and the write
+is atomic (temp file + os.replace).
+
+Written under the ``agents`` key; a config still holding the old ``thirdParty``
+one is read and migrated on the next write, so the two never coexist.
+
+The built-in rows are *not* written here. They are package seeds
+(``raven.agent.subagent.builtin_agents``), and a caller may store an override row
+for one -- but not change its ``kind``, and not remove it, since "absent" is what
+"use the package's row" means. Both are refused below.
 
 Redaction of secrets (``api_key``) is a display concern left to the caller — this
 primitive round-trips raw values so a read→edit→write cycle never clobbers a key.
@@ -22,8 +30,10 @@ from pydantic.alias_generators import to_camel
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import SubagentsConfig
 
-# camelCase alias of SubagentsConfig.third_party (Base uses a camel alias generator).
-_ALIAS = "thirdParty"
+# The key written. ``SubagentsConfig`` reads the two older spellings as well, so
+# a stored config keeps loading; writing only this one is what retires them.
+_ALIAS = "agents"
+_LEGACY_ALIASES = ("thirdParty", "third_party")
 
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -41,7 +51,7 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
     (see ``_drop_declared_local_file_access``). Coercing silently on a *write* is
     a different matter: the caller is holding the value and can be told.
 
-    Deliberately not called from ``set_third_party_subagents``. That function is
+    Deliberately not called from ``set_agents``. That function is
     also how ``add_`` / ``remove_third_party_subagent`` re-write entries they
     read back raw from disk, so a legacy ``true`` sitting in an unrelated entry
     would make every later add or remove fail -- the same trap, one layer down.
@@ -75,7 +85,7 @@ def reject_unsupported_acp_fields(entries: list[dict]) -> None:
     a second source of truth, and nothing in the code would know which to believe
     when they disagreed.
 
-    Deliberately not called from ``set_third_party_subagents``, again matching the
+    Deliberately not called from ``set_agents``, again matching the
     openai rejector: that function is also how ``add_`` / ``remove_`` re-write
     entries they read back raw from disk, so one legacy field in an unrelated entry
     would make every later add or remove fail.
@@ -113,67 +123,131 @@ def _raw_config(path: Path) -> dict[str, Any]:
 
 def _raw_entries(path: Path) -> list[dict]:
     sub = _raw_config(path).get("subagents") or {}
-    return sub.get(_ALIAS) or sub.get("third_party") or []
+    for key in (_ALIAS, *_LEGACY_ALIASES):
+        if sub.get(key):
+            return sub[key]
+    return []
 
 
-def get_third_party_subagents(*, config_path: Path | None = None) -> list[dict]:
-    """Return the configured third-party sub-agents as validated dicts (by alias).
+def reject_builtin_transport_changes(entries: list[dict]) -> None:
+    """Raise when an incoming entry would rewrite a built-in row's transport.
+
+    A built-in agent is an in-process raven loop; its row exists whether or not
+    config mentions one, and an override may retune what it can reach (``skills``,
+    ``tools``, ``model``) or take it off the roster (``enabled: false``). What it
+    may not do is claim the name for another transport: that leaves the built-in
+    agent unreachable under a name every stored playbook and instance record
+    already points at.
+
+    A *removal* needs no check here -- writing no row for a seed is exactly how
+    "use the package's default" is spelled, so it is not a delete.
+    """
+    from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if name in BUILTIN_AGENT_NAMES and entry.get("kind") not in (None, "builtin"):
+            raise ValueError(
+                f"sub-agent {name!r} is a built-in agent, so it cannot be redeclared as kind "
+                f"{entry.get('kind')!r}: the built-in one would become unreachable under a name "
+                "playbooks and instance records already use. Choose another name for this entry"
+            )
+
+
+def get_agents(*, config_path: Path | None = None) -> list[dict]:
+    """Return the configured agents as validated dicts (by alias).
+
+    Config rows only -- the package's built-in seed rows are not in config and do
+    not appear here. A caller that wants the whole table reads
+    ``AgentRegistry.rows()``; this is the *editable* set, which is what a config
+    surface must show so that "delete" means something.
 
     Raises ``ValidationError`` if the on-disk section is malformed.
     """
     path = config_path or get_config_path()
-    validated = SubagentsConfig(third_party=_raw_entries(path))
-    return [cfg.model_dump(by_alias=True) for cfg in validated.third_party]
+    validated = SubagentsConfig(agents=_raw_entries(path))
+    return [cfg.model_dump(by_alias=True) for cfg in validated.agents]
 
 
-def set_third_party_subagents(entries: list[dict], *, config_path: Path | None = None) -> None:
-    """Replace the whole ``subagents.third_party`` list (validate-then-write).
+def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
+    """Replace the whole ``subagents.agents`` list (validate-then-write).
 
     Raises ``ValidationError`` if any entry violates the schema, or ``ValueError``
-    on duplicate names — nothing is written in either case.
+    on duplicate names or a built-in row redeclared under another transport --
+    nothing is written in any of those cases.
+
+    Duplicates are a hard error here while the load path only warns and keeps the
+    first: on load, refusing would take the whole ``Config`` down and raven would
+    stop starting behind the very config a user needs the UI to fix. Here the
+    caller is holding the value and can be told.
     """
-    validated = SubagentsConfig(third_party=entries)
-    names = [c.name for c in validated.third_party]
-    dupes = {n for n in names if names.count(n) > 1}
+    reject_builtin_transport_changes([e for e in entries if isinstance(e, dict)])
+    # Counted on the incoming entries, not on the validated model: the schema
+    # deduplicates on load (keeping the first, so a hand-edited config still
+    # starts), which means by then there is only one of each and this check would
+    # never fire. The whole point of it is that a caller writing two gets told.
+    names = [e.get("name") for e in entries if isinstance(e, dict)]
+    dupes = {n for n in names if n is not None and names.count(n) > 1}
     if dupes:
-        raise ValueError(f"duplicate third-party sub-agent name(s): {sorted(dupes)}")
+        raise ValueError(f"duplicate sub-agent name(s): {sorted(dupes)}")
+    validated = SubagentsConfig(agents=entries)
     dumped = validated.model_dump(by_alias=True)[_ALIAS]
 
     path = config_path or get_config_path()
     data = _raw_config(path)
     data.setdefault("subagents", {})
-    # Drop a possible snake_case key so we don't leave two competing entries.
-    data["subagents"].pop("third_party", None)
+    # Drop the older spellings so a config never carries two competing lists.
+    for legacy in _LEGACY_ALIASES:
+        data["subagents"].pop(legacy, None)
     data["subagents"][_ALIAS] = dumped
     _write_atomic(path, data)
-    logger.info("update_subagents: wrote {} third-party sub-agent(s)", len(dumped))
+    logger.info("update_subagents: wrote {} sub-agent(s)", len(dumped))
 
 
-def add_third_party_subagent(entry: dict, *, config_path: Path | None = None) -> None:
-    """Add or replace (by name) one third-party sub-agent."""
+def add_agent(entry: dict, *, config_path: Path | None = None) -> None:
+    """Add or replace (by name) one agent."""
     path = config_path or get_config_path()
     name = entry.get("name")
     kept = [e for e in _raw_entries(path) if not (isinstance(e, dict) and e.get("name") == name)]
     kept.append(entry)
-    set_third_party_subagents(kept, config_path=path)
+    set_agents(kept, config_path=path)
 
 
-def remove_third_party_subagent(name: str, *, config_path: Path | None = None) -> bool:
-    """Remove a third-party sub-agent by name. Returns True if one was removed."""
+def remove_agent(name: str, *, config_path: Path | None = None) -> bool:
+    """Remove an agent's config row by name. Returns True if one was removed.
+
+    Removing an *override* of a built-in row is allowed and means "go back to the
+    package's row" -- the agent itself stays on the table, which is why nothing
+    here guards the built-in names.
+    """
     path = config_path or get_config_path()
     current = _raw_entries(path)
     kept = [e for e in current if not (isinstance(e, dict) and e.get("name") == name)]
     if len(kept) == len(current):
         return False
-    set_third_party_subagents(kept, config_path=path)
+    set_agents(kept, config_path=path)
     return True
 
 
+# Pre-``agents`` spellings, kept as names only.
+get_third_party_subagents = get_agents
+set_third_party_subagents = set_agents
+add_third_party_subagent = add_agent
+remove_third_party_subagent = remove_agent
+
+
 __all__ = [
-    "get_third_party_subagents",
-    "set_third_party_subagents",
+    "add_agent",
     "add_third_party_subagent",
-    "remove_third_party_subagent",
+    "get_agents",
+    "get_third_party_subagents",
+    "reject_builtin_transport_changes",
     "reject_unsupported_acp_fields",
     "reject_unsupported_openai_fields",
+    "remove_agent",
+    "remove_third_party_subagent",
+    "set_agents",
+    "set_third_party_subagents",
 ]

@@ -17,6 +17,10 @@ function xaRowOf(r) {
     preset: r.preset,
     kind: r.kind || 'cli',
     configured: !!r.configured,
+    /* Raven's own agents. On the table whether or not config mentions them, so
+       they are `configured: false` yet not something to install -- the page needs
+       both facts to avoid offering a Connect button for a loop already running. */
+    builtin: !!r.builtin,
     enabled: !!r.enabled,
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,

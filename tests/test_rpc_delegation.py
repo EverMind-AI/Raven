@@ -166,11 +166,11 @@ async def test_pausing_also_stops_a_dag_run_not_just_a_single_spawn() -> None:
     tool = SubAgentDagTool(workspace=Path("."), is_paused=lambda: manager.paused)
 
     manager.set_paused(True)
-    refused = await tool.execute(nodes=[{"id": "a", "subagent": "x", "prompt": "hi"}])
+    refused = await tool.execute(nodes=[{"id": "a", "agent": "x", "prompt": "hi"}])
     assert "paused" in refused.lower()
 
     # And resuming lets a graph past the pause gate again: whatever it fails on
     # next, it is no longer the pause.
     manager.set_paused(False)
-    after = await tool.execute(nodes=[{"id": "a", "subagent": "x", "prompt": "hi"}])
+    after = await tool.execute(nodes=[{"id": "a", "agent": "x", "prompt": "hi"}])
     assert "delegation is paused" not in after

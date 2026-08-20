@@ -29,9 +29,9 @@ from raven.agent.subagent.test_state import TestStateStore
 from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (
-    get_third_party_subagents,
-    remove_third_party_subagent,
-    set_third_party_subagents,
+    get_agents,
+    remove_agent,
+    set_agents,
 )
 from raven.rpc.errors import ConfigValidationError, SubagentNotFoundError
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 
 def _as_configs(entries: list[dict]) -> list[Any]:
-    return list(SubagentsConfig(third_party=entries).third_party)
+    return list(SubagentsConfig(agents=entries).agents)
 
 
 def _upgrade_transport(cfg: Any, source: str) -> str | None:
@@ -71,7 +71,15 @@ def _group(cfg: Any, probe_status: str) -> str:
     An openai entry is keyed off its api key, not the probe: the probe reports
     "api key not set or rejected" for both a missing key and a rejected one, and
     those are different groups needing different user action.
+
+    A built-in row gets a group of its own rather than being sorted into
+    installed/uninstalled. There is nothing to install: it is raven's own loop,
+    always available, and it has no command to check -- so a row that could only
+    ever read "uninstalled" (never probed, so never "ready") would be telling the
+    user to go and install something that is already running.
     """
+    if getattr(cfg, "kind", None) == "builtin":
+        return "builtin"
     if getattr(cfg, "kind", None) == "openai":
         return "installed" if (getattr(cfg, "api_key", "") or "").strip() else "uninstalled"
     return "installed" if probe_status == "ready" else "uninstalled"
@@ -131,7 +139,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     round trip a mutation's follow-up list call has no reason to pay for.
     """
     try:
-        configured_raw = get_third_party_subagents(config_path=get_config_path())
+        configured_raw = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     configured = _as_configs(configured_raw)
@@ -139,12 +147,40 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     presets = [p for p in third_party_subagent_presets() if p.get("preset") not in claimed]
     preset_cfgs = _as_configs(presets)
 
-    entries: list[tuple[Any, str]] = [(c, "config") for c in configured]
+    # The built-in rows, merged the way the runtime merges them, so this list shows
+    # the same table the model dispatches against -- including a user's override of
+    # one. They are reported as ``source == "builtin"`` rather than "config",
+    # because "configured" drives the delete button and a seed row cannot be
+    # deleted: not writing one is what "use the default" means.
+    from raven.agent.subagent.builtin_agents import merge_builtin_seeds
+
+    builtin_cfgs = [c for c in merge_builtin_seeds(configured) if getattr(c, "kind", None) == "builtin"]
+    external = [c for c in configured if getattr(c, "kind", None) != "builtin"]
+
+    entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
+    entries += [(c, "config") for c in external]
     entries += [(c, "preset") for c in preset_cfgs]
 
     verdicts = TestStateStore().load(entries)
-    if probe:
-        results = await probe_all(entries, verdicts=verdicts)
+    # Built-in rows are excluded from the probe: there is no command to launch and
+    # no endpoint to reach, so probing one would spend its per-entry budget to
+    # learn nothing. They report ``unknown`` and are grouped by kind instead.
+    probeable = [(cfg, source) for cfg, source in entries if source != "builtin"]
+    if probe and probeable:
+        probed = dict(
+            zip(
+                [(cfg.name, source) for cfg, source in probeable],
+                await probe_all(probeable, verdicts=verdicts),
+                strict=True,
+            )
+        )
+        results = [
+            probed.get(
+                (cfg.name, source),
+                ProbeResult(cfg.name, source, cfg.kind, "unknown", "", "", 0, verdicts.get(f"{source}:{cfg.name}")),
+            )
+            for cfg, source in entries
+        ]
     else:
         results = [
             ProbeResult(cfg.name, source, cfg.kind, "unknown", "", "", 0, verdicts.get(f"{source}:{cfg.name}"))
@@ -161,8 +197,11 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "preset": getattr(cfg, "preset", None),
                 "kind": cfg.kind,
                 "description": getattr(cfg, "description", "") or "",
-                "enabled": bool(getattr(cfg, "enabled", True)) if source == "config" else False,
+                # A built-in row's switch is real (it is the only way to take one
+                # off the roster); a preset row has none until it is configured.
+                "enabled": bool(getattr(cfg, "enabled", True)) if source != "preset" else False,
                 "configured": source == "config",
+                "builtin": source == "builtin",
                 "group": _group(cfg, result.status),
                 "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
@@ -204,16 +243,16 @@ def _hot_apply(agent_loop_factory: "AgentLoopFactory | None") -> None:
     if agent_loop_factory is None:
         return
     loop = agent_loop_factory()
-    if loop is None or not hasattr(loop, "apply_third_party_subagents"):
+    if loop is None or not hasattr(loop, "apply_agents"):
         return
     try:
-        entries = get_third_party_subagents(config_path=get_config_path())
+        entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         # The config is shared with other clients (web UI, hand edits): a
         # concurrent write between our own write and this re-read can leave a
         # malformed entry here even though this call's own mutation succeeded.
         _raise_config_error(exc)
-    loop.apply_third_party_subagents(_as_configs(entries))
+    loop.apply_agents(_as_configs(entries))
 
 
 async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
@@ -245,8 +284,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     if entry.get("kind") == "openai" and not (entry.get("apiKey") or "").strip():
         entry["enabled"] = False
     try:
-        kept = list(get_third_party_subagents(config_path=get_config_path()))
-        set_third_party_subagents([*kept, entry], config_path=get_config_path())
+        kept = list(get_agents(config_path=get_config_path()))
+        set_agents([*kept, entry], config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
@@ -265,7 +304,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     """Change only name / description / api key on an existing entry."""
     name = params.get("name")
     try:
-        entries = get_third_party_subagents(config_path=get_config_path())
+        entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     target = next((e for e in entries if e.get("name") == name), None)
@@ -285,7 +324,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
     if (params.get("api_key") or "").strip():
         target["apiKey"] = params["api_key"]
     try:
-        set_third_party_subagents(entries, config_path=get_config_path())
+        set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
@@ -297,15 +336,25 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     name = params.get("name")
     enabled = bool(params.get("enabled"))
     try:
-        entries = get_third_party_subagents(config_path=get_config_path())
+        entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     target = next((e for e in entries if e.get("name") == name), None)
     if target is None:
-        raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+        # A built-in row exists on the table without existing in config, and
+        # ``enabled`` is the only way to take one off the roster -- so toggling one
+        # for the first time has to *create* its override row rather than report
+        # the name unknown. Only ``enabled`` is written: everything else keeps
+        # coming from the package's seed.
+        from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
+
+        if name not in BUILTIN_AGENT_NAMES:
+            raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
+        target = {"name": name, "kind": "builtin"}
+        entries.append(target)
     target["enabled"] = enabled
     try:
-        set_third_party_subagents(entries, config_path=get_config_path())
+        set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
@@ -315,7 +364,7 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
 async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Delete one entry. Reports `removed: false` for a name that was not there."""
     try:
-        removed = remove_third_party_subagent(params.get("name", ""), config_path=get_config_path())
+        removed = remove_agent(params.get("name", ""), config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     if removed:
@@ -340,11 +389,7 @@ def _find(name: str, source: str) -> Any:
     out of a request to test one unrelated, perfectly healthy row.
     """
     try:
-        pool = (
-            third_party_subagent_presets()
-            if source == "preset"
-            else get_third_party_subagents(config_path=get_config_path())
-        )
+        pool = third_party_subagent_presets() if source == "preset" else get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     entry = next((e for e in pool if e.get("name") == name), None)

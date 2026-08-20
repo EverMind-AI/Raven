@@ -150,8 +150,8 @@ nodes:
 
 | 字段 | 状态 | 为什么拒绝而不是降级 |
 |---|---|---|
-| `confirm`（节点级） | 校验失败 | 闸的意义是拦住不可逆动作。降级成"跑完再提示"的话，提示到达时动作已经发生——那不是弱化的安全，是负安全 |
-| `instance` | 校验失败（除非 agent 在注册表标记为 stateful） | 内置 agent 都是进程内执行、无 resume 机制，句柄承诺的连续性根本兑现不了；作者唯一的信号会是"下游节点不记得上游"这种难查的症状 |
+| `confirm`（节点级） | ~~校验失败~~ → **字段已删除** | 闸的意义是拦住不可逆动作，而"跑完再提示"是负安全。但一个唯一用途是被拒绝的字段不该存在：闸收到图级（`PlaybookSpec.confirm`，注入 dag 的图级 `confirm`），审的时候看到的就是整张图。见 [2026-08-19-unified-agent-registry-design.md](2026-08-19-unified-agent-registry-design.md) 的 D6/D13 |
+| `instance` | ~~校验失败~~ → **可用** | 这一行的理由（"内置 agent 无 resume 机制"）与代码不符：raven 自己重放 message list（`instance_state.py`），内置 agent 恒 stateful。统一注册表后规则 7 按表判定，句柄真的生效；本期的限制改成"同句柄的非链头节点不得再写 skills/mcps"（resume 沿用首次的 system prompt） |
 | `mcps` | 接受 + 降级提示 | 少一个工具是能力损失不是正确性问题，节点照样完成自己那步。为它整图失败不划算 |
 
 区别在于**安全闸失败即拒，能力缺口降级告知**。
@@ -214,9 +214,9 @@ per-playbook 并发上限（由 runner 全局配置管）。
 | 4 | 图无环，且所有节点从起点可达 |
 | 5 | `{{ x.output }}` 的 `x` 必须在本节点 `dependsOn` 内 |
 | 6 | `${params.x}` 的 `x` 必须在 `params` 里声明 |
-| 7 | `instance` 仅从注册表标 `stateful` 的 agent 可用 |
+| 7 | `instance` 仅从注册表标 `stateful` 的 agent 可用（拿不到表时**不查**，不拿假清单判） |
 | 8 | 同 `instance` 的节点之间必须存在依赖链——共享会话不能并发，会互相踩上下文 |
-| 9 | 同 `instance` 的节点 `skills` / `mcps` 必须一致——会话启动时工具集就定了，中途换不了 |
+| 9 | 同 `instance` 的**非链头**节点不得写 `skills` / `mcps`——会话启动时菜单就定了，写在后面的那份读它的人以为生效、实际不生效。旧口径"必须一致"允许重复写三遍，正是这个误读 |
 | 10 | `{{ dep.output_path }}` 仅当注册表标该 agent `readsLocalFiles` 时可用 |
 | 11 | `mode: prompt` 给出的图，执行前过 4-10 全部规则；不合法则重组，仍不合法则报错，不降级硬跑 |
 

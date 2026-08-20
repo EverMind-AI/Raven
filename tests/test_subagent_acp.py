@@ -58,7 +58,7 @@ async def _no_pooled_connections():
 
 
 def test_acp_entry_keeps_only_launch_fields() -> None:
-    cfg = SubagentsConfig(third_party=[{"name": "a", "kind": "acp", "command": "hermes acp"}]).third_party[0]
+    cfg = SubagentsConfig(agents=[{"name": "a", "kind": "acp", "command": "hermes acp"}]).agents[0]
     assert cfg.kind == "acp"
     assert cfg.command == "hermes acp"
     assert not hasattr(cfg, "resume_command")
@@ -81,7 +81,7 @@ def test_cli_declarations_on_an_acp_entry_are_dropped_not_fatal(caplog) -> None:
             "stateful": True,
         }
     ]
-    cfg = SubagentsConfig(third_party=entries).third_party[0]
+    cfg = SubagentsConfig(agents=entries).agents[0]
     assert cfg.name == "a"
     assert not hasattr(cfg, "resume_command")
 
@@ -119,16 +119,16 @@ def test_a_legacy_cli_entry_keeps_its_preset_and_is_offered_an_upgrade() -> None
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
     from raven.rpc.methods.subagents import _upgrade_transport
 
-    legacy = SubagentsConfig(
-        third_party=[{"name": "codex", "kind": "cli", "command": "codex exec --json {prompt}"}]
-    ).third_party[0]
+    legacy = SubagentsConfig(agents=[{"name": "codex", "kind": "cli", "command": "codex exec --json {prompt}"}]).agents[
+        0
+    ]
     assert legacy.preset == "codex"
     assert THIRD_PARTY_SUBAGENT_PRESETS["codex"]["kind"] == "acp"
     assert _upgrade_transport(legacy, "config") == "acp"
 
     # An entry already on the preset's transport is current, and a preset row is
     # by definition current.
-    current = SubagentsConfig(third_party=[dict(THIRD_PARTY_SUBAGENT_PRESETS["codex"])]).third_party[0]
+    current = SubagentsConfig(agents=[dict(THIRD_PARTY_SUBAGENT_PRESETS["codex"])]).agents[0]
     assert _upgrade_transport(current, "config") is None
     assert _upgrade_transport(legacy, "preset") is None
 

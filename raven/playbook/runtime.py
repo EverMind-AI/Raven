@@ -1,100 +1,77 @@
-"""PlaybookRuntime — the per-message funnel, packaged for the agent loop.
+"""PlaybookRuntime — the library, and the one entry the model loads a playbook by.
 
-One object bundles what the loop's interception branch needs: the library
-(loaded once at construction), the L1 index over its trigger vocabularies,
-the L2 gate, and the executor. ``consider`` is the only entry: it returns
-``None`` for the overwhelmingly common case (no nomination, gate said no,
-or anything failed), and the loop then runs the normal turn untouched.
+One object bundles the library (loaded once at construction), the retrieval index
+over its trigger vocabularies, and the executor. :meth:`load` is the only
+execution entry; :meth:`listing` and :meth:`names` are what the tool advertises.
 
-Library reloads are by rebuilding the runtime (restart or a future
-hot-reload hook); nothing here watches the directory.
+**This used to be a funnel.** It scanned every user message, spent an LLM gate
+call on any message that mentioned a trigger word, and on a hit took over the
+whole turn -- the main agent never ran. That is gone (see
+:mod:`raven.playbook.matcher` for why), and with it three mechanisms that only
+existed to patch it: the per-conversation memory of refusals, the "which of these
+two did you mean" user prompt, and the gate itself. What remains is a library the
+model chooses from.
+
+Library reloads are by rebuilding the runtime (restart or a future hot-reload
+hook); nothing here watches the directory.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
 from raven.playbook.executor import ExecutionPlan, PlaybookExecutor
-from raven.playbook.matcher import MatchCandidate, TriggerIndex, gate
+from raven.playbook.matcher import TriggerIndex
+from raven.playbook.router import RouterSizes, select_playbooks
 from raven.playbook.store import PlaybookStore
 from raven.playbook.triggers import find_collisions
 from raven.playbook.types import PlaybookSpec
 
-if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
-
-#: (prompt, choices, conversation_id) -> the user's answer. ``None`` means the
-#: round-trip is structurally unavailable in this environment; ``""`` means
-#: the user was asked and did not answer (timeout / cancel).
-AskFn = Callable[[str, "list[str] | None", str], Awaitable["str | None"]]
-
-_RUN_CHOICE = "Run it"
-_SKIP_CHOICE = "Not now"
-_NONE_OF_THESE = "None of these"
-
-# What counts as consent besides clicking the run choice: users type. CJK
-# entries are unicode escapes to keep the source ASCII (hao/shi/keyi/zhixing/
-# queren/pao -- ok/yes/can-do/execute/confirm/run).
-_AFFIRMATIVE = {
-    _RUN_CHOICE.lower(),
-    "run",
-    "yes",
-    "y",
-    "ok",
-    "go",
-    "sure",
-    "\u597d",
-    "\u662f",
-    "\u53ef\u4ee5",
-    "\u6267\u884c",
-    "\u786e\u8ba4",
-    "\u8dd1",
-}
+#: How many times one conversation may be told "still missing X" for the same
+#: playbook before it is told to stop. Without a bound, "cannot fill it -> ask
+#: again -> still cannot" is a loop the model can spend a whole turn in, and each
+#: pass costs a tool call for no progress. Two is enough for the case this exists
+#: for: the first reply names the gaps, the second confirms they are filled.
+MAX_GAP_ROUNDS = 2
 
 
 class PlaybookRuntime:
-    """Match-and-execute funnel over one loaded playbook library."""
+    """One loaded playbook library, plus the loader the model reaches it through."""
 
     def __init__(
         self,
         *,
-        provider: "LLMProvider",
         store: PlaybookStore,
         executor: PlaybookExecutor,
-        model: str | None = None,
         disabled: Iterable[str] = (),
-        ask: AskFn | None = None,
+        router: RouterSizes | None = None,
     ) -> None:
-        self._provider = provider
+        # No provider and no model here any more. Both existed for the gate --
+        # one LLM call per nominated message -- and nothing in this object calls a
+        # model now. The one place that still needs one is composing a
+        # prompt-mode graph on the CLI, which is the executor's own dependency.
         self._executor = executor
-        self._model = model
-        #: The whole-run confirm channel (spec-level ``confirm``): asked before
-        #: a passive dispatch, never on the explicit entries -- a run_playbook
-        #: tool call or a CLI run is itself the consent. ``None`` (no channel
-        #: wired, e.g. tests) keeps the pre-confirm behaviour of dispatching.
-        self._ask = ask
-        #: conversation -> names the user refused in that conversation's
-        #: current turn (a confirm answered "Not now", or contenders answered
-        #: "None of these"). run_named refuses these: the fall-through turn is
-        #: exactly where the tool is live, and its instructions read like this
-        #: situation -- without the memory, the model re-runs what the user
-        #: just declined. Cleared by the conversation's next user message
-        #: (its consider() call), so a change of mind works immediately.
-        self._declined: dict[str, set[str]] = {}
+        self._router = router or RouterSizes()
         #: This turn's reply address, for the dispatch's progress and announce.
-        #: ``consider`` receives it per call; a tool call arrives without it, so
-        #: the last one seen is kept for :meth:`run_named` to reuse.
+        #: Set per turn by the loop; a tool call arrives without one, so the last
+        #: one seen is what :meth:`load` reuses.
         self._context: dict[str, str | None] = {"channel": None, "chat_id": None, "session_key": None}
+        #: (conversation, playbook) -> how many times we have reported gaps.
+        #: Reset when that pair finally dispatches, so a second, genuinely new
+        #: run of the same playbook starts with a fresh budget.
+        self._gap_rounds: dict[tuple[str, str], int] = {}
         self._specs: dict[str, PlaybookSpec] = {}
-        #: Loaded but not matchable. The deny list is config
-        #: (``playbooks.disabled``), not file content: absent from the list
-        #: means matchable, so a hand-written directory participates the
-        #: moment it exists. A disabled playbook stays loaded because
-        #: disabling only mutes the passive funnel -- an explicit run (the
-        #: run_playbook tool, ``raven playbook run``) still resolves it.
+        #: Loaded but not offered. The deny list is config
+        #: (``playbooks.disabled``), not file content, so a hand-written directory
+        #: participates the moment it exists. A disabled playbook stays *loaded*
+        #: because ``raven playbook run`` still resolves it -- that is the user's
+        #: own hand, and nothing about disabling should stop them naming one
+        #: outright. What it does mean is that the model never sees it, which is
+        #: the whole of what disabling can enforce now that no passive matcher
+        #: remains to mute.
         self._disabled: set[str] = set()
         deny = set(disabled)
         for pid in store.list_ids():
@@ -103,190 +80,148 @@ class PlaybookRuntime:
             except Exception as exc:  # noqa: BLE001 - one bad file must not sink the library
                 logger.warning("Skipping unloadable playbook {!r}: {}", pid, exc)
                 continue
-            if not spec.triggers.keywords:
-                logger.info("Playbook {!r} has no trigger vocabulary; it will never match passively", pid)
-                continue
             self._specs[pid] = spec
             if pid in deny:
-                logger.info("Playbook {!r} is disabled in config; not matchable", pid)
+                logger.info("Playbook {!r} is disabled in config; not offered to the model", pid)
                 self._disabled.add(pid)
-        matchable = {pid: s.triggers for pid, s in self._specs.items() if pid not in self._disabled}
-        self._index = TriggerIndex(matchable)
-        collisions = find_collisions(matchable)
-        if collisions:
-            logger.warning("Playbook trigger collisions (adjudicated by the gate at runtime): {}", collisions)
+        offered = {pid: s.triggers for pid, s in self._specs.items() if pid not in self._disabled}
+        self._index = TriggerIndex(offered)
+        if collisions := find_collisions(offered):
+            # Shared vocabulary is no longer ambiguity to adjudicate -- nothing
+            # dispatches off a keyword. Both playbooks simply become visible
+            # together and the model picks, which is the outcome the gate's
+            # contender prompt was trying to reach.
+            logger.debug("Playbooks sharing trigger vocabulary (both will be offered together): {}", collisions)
         logger.info(
-            "Playbook runtime loaded {} matchable playbook(s), {} disabled",
-            len(matchable),
+            "Playbook runtime loaded {} playbook(s), {} disabled",
+            len(self._specs),
             len(self._disabled),
         )
 
     @property
     def empty(self) -> bool:
-        return not self._specs
+        """Whether there is anything to offer. Disabled entries do not count:
+        the tool exists to be called, and one that can only answer "that is
+        turned off" is a tool the model should not have been given."""
+        return not (set(self._specs) - self._disabled)
 
     def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
         """Record this turn's reply address and pass it to the executor."""
         self._context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
         self._executor.set_context(channel=channel, chat_id=chat_id, session_key=session_key)
 
-    def reset_declines(self, conversation_id: str | None) -> None:
-        """Forget the conversation's refusals: a new user message arrived.
+    def names(self) -> list[str]:
+        """Every offered playbook name, id order -- the tool's ``enum``.
 
-        ``consider`` does this for ordinary turns. A mid-turn injected
-        message never gets a ``consider`` call -- the loop merges it straight
-        into the running turn -- so the loop calls this at the merge point;
-        otherwise an explicit re-request inside the fall-through turn is
-        still refused.
+        The whole library, deliberately not the narrowed selection: a name costs a
+        handful of tokens, and constraining the enum to what retrieval surfaced
+        would turn a recall miss into "the model cannot reach it at all", even
+        when the user has just named the playbook out loud.
         """
-        if conversation_id:
-            self._declined.pop(conversation_id, None)
+        return sorted(set(self._specs) - self._disabled)
 
-    def listing(self) -> list[tuple[str, str]]:
-        """``(id, description)`` for every loaded playbook, id order.
+    def listing(self, message: str = "") -> list[tuple[str, str]]:
+        """``(name, detail)`` for the playbooks worth describing in full this turn.
 
-        What the agent-facing tool advertises. The same library the passive
-        funnel matches against, so the two entries cannot disagree about which
-        playbooks exist. Disabled entries appear with a marker: they are out
-        of the passive funnel but remain explicitly runnable, and the tool
-        needs their names to offer that.
+        The expensive half of advertising a library, so it is the half that gets
+        narrowed (:mod:`raven.playbook.router`). ``detail`` carries what the model
+        needs to call one correctly and cannot guess: the description, the
+        parameter table, and which node fields were left blank for it to fill.
+        Without the parameter table it can only guess key names, and a guessed key
+        is dropped silently and comes back as the same question.
         """
-        return [
-            (pid, self._specs[pid].description + (" [disabled]" if pid in self._disabled else ""))
-            for pid in sorted(self._specs)
-        ]
+        chosen = select_playbooks(
+            {pid: spec for pid, spec in self._specs.items() if pid not in self._disabled},
+            message,
+            # The index this object already built at load: it normalized the whole
+            # vocabulary once, which is the work the ranking would otherwise redo
+            # per keyword per playbook per turn.
+            index=self._index,
+            sizes=self._router,
+        )
+        return [(pid, self._detail(self._specs[pid])) for pid in chosen]
 
-    async def run_named(self, name: str, params: dict[str, Any]) -> ExecutionPlan | None:
-        """Run a playbook the caller already identified; ``None`` if unknown.
+    def _detail(self, spec: PlaybookSpec) -> str:
+        """One playbook as the tool description renders it."""
+        parts = [spec.description]
+        if spec.params:
+            rows = []
+            for name, p in spec.params.items():
+                bits = [p.type]
+                if p.required and p.default is None:
+                    bits.append("required")
+                elif p.default is not None:
+                    bits.append(f"default={p.default!r}")
+                if p.enum:
+                    bits.append(f"one of {p.enum}")
+                rows.append(f"{name} ({', '.join(bits)}): {p.description}")
+            parts.append("params: " + "; ".join(rows))
+        if gaps := _blank_fields(spec):
+            parts.append("left for you to fill: " + "; ".join(f"{nid}.{field}" for nid, field in gaps))
+        return " | ".join(parts)
 
-        The named entry for :class:`~raven.agent.tools.run_playbook.RunPlaybookTool`.
-        It skips L1 and the gate -- the caller has the conversation and has
-        already decided -- but joins the passive path at the executor, so
-        parameter filling, composition, validation and dispatch stay in one
-        place. Unlike ``consider``, an executor failure propagates: a tool call
-        has a caller who can be told, where a passive miss must degrade to a
-        normal turn.
+    async def load(
+        self,
+        name: str,
+        params: dict[str, Any] | None = None,
+        fills: dict[str, dict[str, Any]] | None = None,
+        *,
+        allow_disabled: bool = False,
+    ) -> ExecutionPlan | None:
+        """Load one playbook and act on it; ``None`` if the name is unknown.
+
+        The single entry, for the model's tool and for ``raven playbook run``
+        alike. What "act on it" means is the playbook's own business rather than
+        the caller's -- a ``dag`` playbook dispatches (after any gaps are filled
+        and its confirm gate passes), a ``prompt`` one comes back as composition
+        guidance for the caller to build a graph from. The caller does not choose,
+        and is not told to: ``mode`` is how the author wrote the file, not a
+        decision anyone downstream should be making.
+
+        ``allow_disabled`` is for the CLI, where the user named the playbook
+        themselves.
         """
         spec = self._specs.get(name)
-        if spec is None:
+        if spec is None or (name in self._disabled and not allow_disabled):
             return None
         cid = self._context.get("session_key") or ""
-        if cid and name in self._declined.get(cid, ()):
-            # Consent-by-call does not hold right after a refusal of the same
-            # playbook: on the fall-through turn the call is the model's
-            # decision, made against instructions that cannot distinguish a
-            # trigger miss from the user's "Not now".
-            return ExecutionPlan(
-                kind="questions",
-                reply=(
-                    f"Not dispatched: the user was just asked about running {name!r} and declined. "
-                    "Acknowledge their decision instead; run it only if they explicitly ask again."
-                ),
-            )
-        self._executor.set_context(**self._context)
-        return await self._executor.execute(spec, params)
+        key = (cid, name)
+        plan = await self._executor.execute(spec, params or {}, fills=fills or {})
+        if plan.kind == "gaps":
+            rounds = self._gap_rounds.get(key, 0) + 1
+            self._gap_rounds[key] = rounds
+            if rounds > MAX_GAP_ROUNDS:
+                self._gap_rounds.pop(key, None)
+                logger.info("Playbook {}: gap loop hit its limit after {} rounds", name, MAX_GAP_ROUNDS)
+                return ExecutionPlan(
+                    kind="questions",
+                    reply=(
+                        f"Still missing values for '{name}' after {MAX_GAP_ROUNDS} attempts, so it was not run. "
+                        "Ask the user for what is missing, or do the work another way -- do not call this again "
+                        "with the same arguments."
+                    ),
+                )
+            return plan
+        self._gap_rounds.pop(key, None)
+        return plan
 
-    async def consider(
-        self,
-        message: str,
-        *,
-        channel: str | None = None,
-        chat_id: str | None = None,
-        session_key: str | None = None,
-    ) -> ExecutionPlan | None:
-        """One message through the funnel; ``None`` means pass through."""
-        # Recorded before any early return, not on the match path: run_named
-        # (the tool entry) reuses the last address seen, and the turns where
-        # the agent reaches for the tool are exactly the turns the funnel did
-        # not claim -- recording only on a match would hand a tool-started
-        # run's announce a stale conversation, or the cold-start default.
-        self.set_context(channel=channel, chat_id=chat_id, session_key=session_key)
-        # A new user message resets the conversation's refusals: declining is
-        # an answer about this turn, not a standing ban, and the reset is what
-        # lets "actually, run it" on the next message just work.
-        self.reset_declines(session_key or (f"{channel}:{chat_id}" if channel and chat_id else ""))
-        if not self._specs:
-            return None
-        hits = self._index.match(message)
-        if not hits:
-            return None
-        candidates = [
-            MatchCandidate(
-                playbook_id=pid,
-                description=self._specs[pid].description,
-                params=self._specs[pid].params,
-            )
-            for pid in hits
-        ]
-        verdict = await gate(self._provider, message, candidates, model=self._model)
-        cid = session_key or (f"{channel}:{chat_id}" if channel and chat_id else "")
-        if not verdict.actionable or verdict.match is None:
-            return await self._offer_contenders(verdict, cid)
-        spec = self._specs[verdict.match]
-        logger.info("Playbook {} matched (reason: {})", spec.name, verdict.reason)
-        if spec.confirm and not await self._confirmed(spec, verdict.params, cid):
-            return None
-        try:
-            return await self._executor.execute(spec, verdict.params)
-        except Exception:  # noqa: BLE001 - an executor bug must degrade to a normal turn
-            logger.opt(exception=True).warning("Playbook execution failed; falling back to the normal turn")
-            return None
 
-    async def _confirmed(self, spec: PlaybookSpec, params: dict[str, Any], cid: str) -> bool:
-        """The spec-level confirm gate, over the host's ask channel.
+def _blank_fields(spec: PlaybookSpec) -> list[tuple[str, str]]:
+    """``(node_id, field)`` for every node field the author left for the model.
 
-        No channel wired (tests, environments without a question broker)
-        keeps the pre-confirm behaviour of dispatching -- the L2 gate is then
-        the only protection, as before. When the user is actually asked,
-        anything but consent (including a timeout's empty answer) skips the
-        run, and the message falls through to the normal turn.
-        """
-        if self._ask is None or not cid:
-            return True
-        shown = ", ".join(f"{k}={v}" for k, v in params.items()) or "none extracted"
-        answer = await self._ask(
-            f"Run the stored playbook '{spec.name}'? ({spec.description}) Params: {shown}.",
-            [_RUN_CHOICE, _SKIP_CHOICE],
-            cid,
-        )
-        if answer is None:
-            logger.info("Playbook {}: no ask channel at call time; proceeding without confirm", spec.name)
-            return True
-        if answer.strip().lower() in _AFFIRMATIVE:
-            return True
-        logger.info("Playbook {}: user declined the confirm ({!r}); falling through", spec.name, answer)
-        self._declined.setdefault(cid, set()).add(spec.name)
-        return False
+    Only the two a node cannot run without. An absent ``skills`` is *not* a gap:
+    it means "this agent's own menu", which is a complete answer -- treating it as
+    something to fill would put a question in front of every well-formed playbook
+    in the library.
+    """
+    from raven.playbook.executor import FILLABLE_REQUIRED
 
-    async def _offer_contenders(self, verdict: Any, cid: str) -> ExecutionPlan | None:
-        """A too-close-to-call gate becomes the user's choice, not a silent drop.
+    return [
+        (node.id, field)
+        for node in spec.nodes or []
+        for field in FILLABLE_REQUIRED
+        if not str(getattr(node, field, "") or "").strip()
+    ]
 
-        Only with an ask channel and at least two known, matchable contenders;
-        picking from the list is the consent, so the pick dispatches without a
-        second confirm. Params were extracted for no candidate in particular,
-        so the pick runs with none and the missing-params reply guides the
-        follow-up.
-        """
-        if self._ask is None or not cid:
-            return None
-        picks = [c for c in verdict.contenders if c in self._specs and c not in self._disabled]
-        if len(picks) < 2:
-            return None
-        answer = await self._ask(
-            "That request fits more than one stored playbook -- run one of these?",
-            [*picks, _NONE_OF_THESE],
-            cid,
-        )
-        if answer is None or answer.strip() not in picks:
-            if answer is not None:
-                # "None of these" (or a timeout) refuses the whole offer; the
-                # fall-through turn must not quietly run one of them anyway.
-                self._declined.setdefault(cid, set()).update(picks)
-            return None
-        spec = self._specs[answer.strip()]
-        logger.info("Playbook {} chosen by the user among contenders {}", spec.name, picks)
-        try:
-            return await self._executor.execute(spec, {})
-        except Exception:  # noqa: BLE001 - an executor bug must degrade to a normal turn
-            logger.opt(exception=True).warning("Playbook execution failed; falling back to the normal turn")
-            return None
+
+__all__ = ["MAX_GAP_ROUNDS", "PlaybookRuntime"]

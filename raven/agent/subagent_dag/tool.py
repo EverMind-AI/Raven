@@ -1,9 +1,10 @@
 """The native ``run_subagent_dag`` Raven tool (req4).
 
 Exposes the decoupled DAG subsystem to the main agent as an ordinary Raven
-``Tool`` (string in / string out). It builds its own name->SubagentBackend map
-from third-party subagent config (sharing the req5 adapter layer), runs the DAG
-over a local file backend, and returns a readable summary.
+``Tool`` (string in / string out). It resolves each node's agent through the
+shared agent table (:class:`raven.agent.subagent.registry.AgentRegistry`, normally
+the sub-agent manager's), runs the DAG over a local file backend, and returns a
+readable summary.
 
 A run is backgrounded by default, like ``spawn``: the call returns as soon as
 the graph is accepted and the result comes back later as an announced turn.
@@ -26,18 +27,11 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.subagent.backends import (
-    AgentMeta,
-    build_third_party_backend,
-    enabled_third_party,
-    format_agent_listing,
-    third_party_agent_meta,
-)
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent_dag import DagNodeSpec, SubAgentDagSpec, make_run_id, parse_dag_spec
@@ -51,6 +45,9 @@ from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
 from raven.agent.subagent_history import dag_root, session_history_root
 from raven.agent.tools.base import Tool, ToolResult
+
+if TYPE_CHECKING:
+    from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
 # host (gateway wires it to the web channel's emitter).
@@ -69,6 +66,27 @@ TaskAdopter = Callable[[str, "asyncio.Task", str | None], None]
 # shared sub-agent dispatch budget; the host supplies
 # ``SubagentManager.charge_dag_run``.
 QuotaCharger = Callable[[str | None], "str | None"]
+
+# (conversation_id, question) -> whether the user approved. The graph-level
+# ``confirm`` gate's only route to a human; hosts that have no way to ask leave it
+# unwired, and see ``_confirmed`` for what happens then.
+Ask = Callable[[str, str], Awaitable[bool]]
+
+
+def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | ToolResult":
+    """Prepend downgrade notices to whatever the run is reporting.
+
+    On the model-facing text only. A notice says a field the graph carried will
+    not take effect, which is something the caller has to know when it reads the
+    output; the display line is a one-liner for a transcript row and has no room
+    for it.
+    """
+    if not notices:
+        return result
+    head = "Note: " + "; ".join(notices) + "."
+    if isinstance(result, ToolResult):
+        return ToolResult(model_text=f"{head}\n\n{result.model_text}", display_text=result.display_text)
+    return f"{head}\n\n{result}"
 
 
 @dataclass(frozen=True)
@@ -103,6 +121,19 @@ class _RunDirs:
     subagents_root: str
 
 
+@dataclass(frozen=True)
+class _NodeBuild:
+    """One node's narrowing, in the shape the registry's factory reads.
+
+    Only ``skills`` reaches here: ``mcps`` has nothing to attach to yet (the
+    graph is told so by a downgrade notice), and ``tools`` is not a node field --
+    a node narrows what its agent may consult, not what it may do.
+    """
+
+    skills_allow: list[str] | None
+    tools_allow: list[str] | None = None
+
+
 # How long a terminal event may take when a run ends without a manifest. It is
 # also emitted from a cancelled task, where an unbounded await can hang a
 # gateway shutdown behind a sink that is already closing.
@@ -127,7 +158,7 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "one, and to re-do work under the same name give the node a new id."
             ),
         },
-        "subagent": {"type": "string", "description": "Name of a configured third-party agent to run this node."},
+        "agent": {"type": "string", "description": "Name of the agent that runs this node, from the roster."},
         "prompt_template": {
             "type": "string",
             "description": (
@@ -158,6 +189,24 @@ _NODE_SCHEMA: dict[str, Any] = {
                 "conversation. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
             ),
         },
+        "skills": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Optional: narrow this node's session to these skills. Only a built-in raven agent "
+                "can take them; elsewhere the field is reported ignored. An empty list means no "
+                "skills at all. On a node that continues another node's `instance`, leave it out -- "
+                "a resumed session keeps the menu it opened with."
+            ),
+        },
+        "mcps": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Optional: mcp servers for this node's session. Declaring them is accepted, but "
+                "attaching one is not implemented yet, so the list is reported ignored."
+            ),
+        },
         "instance": {
             "type": "string",
             "description": (
@@ -170,7 +219,7 @@ _NODE_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "required": ["id", "subagent", "prompt_template"],
+    "required": ["id", "agent", "prompt_template"],
     "additionalProperties": False,
 }
 
@@ -190,7 +239,8 @@ class SubAgentDagTool(Tool):
         self,
         *,
         workspace: Path,
-        third_party_subagents: list | None = None,
+        registry: "AgentRegistry | None" = None,
+        agents: list | None = None,
         progress_publisher: ProgressPublisher | None = None,
         max_concurrency: int = 5,
         guide_skill_id: str | None = GUIDE_SKILL_ID,
@@ -201,6 +251,7 @@ class SubAgentDagTool(Tool):
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
         charge: QuotaCharger | None = None,
+        ask: "Ask | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -230,42 +281,59 @@ class SubAgentDagTool(Tool):
         self._default_origin = _DagOrigin(channel="cli", chat_id="direct", conversation="cli:direct")
         self._origin: ContextVar[_DagOrigin | None] = ContextVar("dag_origin", default=None)
         self._tool_call_id: ContextVar[str | None] = ContextVar("dag_tool_call_id", default=None)
-        self._subagents: dict[str, Any] = {}
-        self._subagent_meta: list[AgentMeta] = []
-        self._capabilities: dict[str, AgentCapabilities] = {}
+        self._ask = ask
         self._cancels: dict[str, asyncio.Event] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
         # garbage-collected mid-graph.
         self._runs: dict[str, asyncio.Task] = {}
-        self.set_third_party_subagents(third_party_subagents or [])
+        # The one agent table, normally the sub-agent manager's. This tool used to
+        # build a second one from the same config, which meant a hot-apply refreshed
+        # two maps through two setters that each skipped a bad entry independently:
+        # "the manager has hermes, the DAG tool does not" was reachable. A caller
+        # with no manager (tests, an offline CLI path) may hand configs instead and
+        # get a private table -- which is not the same thing as a second copy of a
+        # shared one, since nothing else reads it.
+        from raven.agent.subagent.registry import AgentRegistry as _AgentRegistry
 
-    def set_third_party_subagents(self, configs: list) -> None:
-        """(Re)build the node executor map from config. Hot-appliable (P4).
+        if registry is not None:
+            self._registry = registry
+        else:
+            self._registry = _AgentRegistry()
+            self._registry.apply(agents or [])
 
-        The advertised roster and the capability map the pre-check enforces are
-        captured alongside the executors, from the same loop, so the description
-        can never advertise an agent whose backend failed to build -- nor gate a
-        graph on a capability claim the roster never printed.
+    @property
+    def registry(self) -> "AgentRegistry":
+        """The agent table this tool dispatches against."""
+        return self._registry
+
+    def set_agents(self, configs: list) -> None:
+        """(Re)apply config to this tool's own table. Hot-appliable (P4).
+
+        A no-op path for a tool sharing the manager's registry -- the manager's
+        ``apply_agents`` already refreshed it, and re-applying here would rebuild
+        every external backend a second time. Kept for callers that gave this tool
+        its own table.
         """
-        built: dict[str, Any] = {}
-        meta: list[AgentMeta] = []
-        capabilities: dict[str, AgentCapabilities] = {}
-        for cfg in enabled_third_party(configs):
-            name = getattr(cfg, "name", None)
-            try:
-                built[name] = build_third_party_backend(cfg)
-                entry = third_party_agent_meta(cfg)
-                meta.append(entry)
-                capabilities[entry.name] = AgentCapabilities(
-                    stateful=entry.stateful,
-                    reads_local_files=entry.reads_local_files,
-                )
-            except Exception as e:  # noqa: BLE001 - a bad entry must not sink the tool
-                logger.warning("Skipping third-party subagent {!r} for DAG nodes: {}", name, e)
-        self._subagents = built
-        self._subagent_meta = meta
-        self._capabilities = capabilities
+        self._registry.apply(configs)
+
+    def _capability_map(self) -> dict[str, AgentCapabilities]:
+        """The table's rows as the pre-check reads them.
+
+        Derived per call rather than cached beside the backends: the point of
+        holding the registry is that there is one place a capability can come
+        from, and a cache here would be a second one that a hot-apply could leave
+        stale.
+        """
+        return {
+            row.name: AgentCapabilities(
+                stateful=row.caps.stateful,
+                reads_local_files=row.caps.reads_local_files,
+                injectable_skills=row.injectable.skills,
+                injectable_mcps=row.injectable.mcps,
+            )
+            for row in self._registry.enabled()
+        }
 
     def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
         """Turn-local: record where this turn's progress and announces are addressed."""
@@ -486,7 +554,7 @@ class SubAgentDagTool(Tool):
         # node's `instance` field only makes sense once you know which agents
         # are stateful, and a downstream node's prompt_template has to be
         # written against the shape of what the upstream one returns.
-        names = format_agent_listing(self._subagent_meta) or "(none configured)"
+        names = self._registry.roster_text() or "(none configured)"
         guide = ""
         if self._guide_skill_id:
             guide = (
@@ -525,29 +593,49 @@ class SubAgentDagTool(Tool):
                         "until every node is done and returns the full summary as this call's result."
                     ),
                 },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "Default false. Set true to have the user approve the graph before any node "
+                        "runs -- for work with effects outside this machine (publishing, sending, "
+                        "spending). They see every step, so approving is approving all of them."
+                    ),
+                },
             },
             "required": ["nodes"],
         }
 
     def _node_schema(self) -> dict[str, Any]:
-        """Node schema with ``subagent`` constrained to the configured roster.
+        """Node schema with ``agent`` constrained to the agent table.
 
         A misspelled name is only caught in ``run_dag``, and it rejects the
         whole graph, so one typo costs the entire call; the enum moves that to
         the schema.
 
         Deep-copied rather than annotated in place: ``_NODE_SCHEMA`` is a module
-        constant shared by every instance, and the roster is hot-appliable. An
-        empty roster omits the enum rather than emitting ``enum: []`` -- that
-        matches nothing while ``subagent`` stays required, which some providers
+        constant shared by every instance, and the table is hot-appliable. An
+        empty table omits the enum rather than emitting ``enum: []`` -- that
+        matches nothing while ``agent`` stays required, which some providers
         reject as an unsatisfiable tool schema. Empty is reachable at runtime:
-        ``apply_third_party_subagents([])`` clears the roster of an
-        already-registered tool.
+        a table whose every row failed to build.
         """
         schema = deepcopy(_NODE_SCHEMA)
-        if names := sorted(self._subagents):
-            schema["properties"]["subagent"]["enum"] = names
+        if names := self._registry.names():
+            schema["properties"]["agent"]["enum"] = names
         return schema
+
+    def _resolve_node(self, node: DagNodeSpec) -> Any:
+        """The backend one node dispatches to, or ``None`` if its agent is unknown.
+
+        Handed to ``run_dag`` instead of a name->backend map, because narrowing is
+        per node and not per agent: two nodes may name one agent with different
+        skill lists, and a map keyed by name cannot hold both. It is also what
+        removed the synthetic ``pb-<node>`` names -- a playbook step used to reach
+        its own pre-built backend under an invented agent name, which is what made
+        every playbook node unattributable in a trace.
+        """
+        build = _NodeBuild(skills_allow=node.skills) if node.skills is not None else None
+        return self._registry.backend(node.agent, build=build)
 
     def _validation_error(self, exc: DagValidationError) -> str:
         """Render a rejected graph as the tool result, with the way back.
@@ -576,11 +664,10 @@ class SubAgentDagTool(Tool):
         """Give every stateful node that named no instance a fresh handle.
 
         ``capabilities`` must be the map the caller is actually dispatching
-        against (``self._capabilities`` merged with any ``extra_capabilities``,
-        as ``_execute`` builds it) -- a role known only through the merge, like
-        a playbook's ``pb-`` roles, is invisible to ``self._capabilities`` alone
-        and would otherwise fall back to ``AgentCapabilities()``'s permissive
-        default and get minted against its own declared ``stateful=False``.
+        against -- an agent absent from it falls back to
+        ``AgentCapabilities()``'s permissive default and is minted for, which is
+        the right way round: a test double or a row whose caps could not be read
+        should get a handle it may not need rather than be denied one it does.
 
         Returns the rewritten spec and the ids it minted for. The ids travel
         separately because the handle itself carries no mark: once it is in the
@@ -590,7 +677,7 @@ class SubAgentDagTool(Tool):
         minted: set[str] = set()
         nodes: list[DagNodeSpec] = []
         for node in spec.nodes:
-            caps = capabilities.get(node.subagent, AgentCapabilities())
+            caps = capabilities.get(node.agent, AgentCapabilities())
             if node.instance or not caps.stateful:
                 nodes.append(node)
                 continue
@@ -598,7 +685,7 @@ class SubAgentDagTool(Tool):
             nodes.append(node.model_copy(update={"instance": mint_handle(node.id)}))
         return spec.model_copy(update={"nodes": nodes}), frozenset(minted)
 
-    async def execute(self, nodes: list[dict], background: bool = True, **kwargs: Any) -> str:
+    async def execute(self, nodes: list[dict], background: bool = True, confirm: bool = False, **kwargs: Any) -> str:
         # Backstop, not the primary control: no in-process sub-agent backend
         # registers this tool today. It fires only if one ever does, so the
         # failure is a refusal rather than a silent recursive fan-out.
@@ -607,35 +694,14 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
-        return await self._execute(nodes, background)
-
-    async def run_with_roles(
-        self,
-        nodes: list[dict],
-        *,
-        roles: dict[str, Any],
-        role_capabilities: dict[str, AgentCapabilities],
-        background: bool = True,
-    ) -> str:
-        """Run a graph whose nodes dispatch to caller-built backends.
-
-        The playbook executor's entry: ``roles`` maps a role name to a backend
-        instance built for this run (whitelisted tools/skills), merged over the
-        configured roster for the roster check and the dispatch map alike. Not
-        LLM-facing — the tool schema and ``execute`` are unchanged, so a model
-        (or injected text) cannot smuggle backends in through a tool call.
-        """
-        return await self._execute(nodes, background, extra_subagents=roles, extra_capabilities=role_capabilities)
+        return await self._execute(nodes, background, confirm=confirm)
 
     async def _execute(
         self,
         nodes: list[dict],
         background: bool,
-        extra_subagents: dict[str, Any] | None = None,
-        extra_capabilities: dict[str, AgentCapabilities] | None = None,
+        confirm: bool = False,
     ) -> str:
-        subagents = {**self._subagents, **(extra_subagents or {})}
-        capabilities = {**self._capabilities, **(extra_capabilities or {})}
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
         # sub-agent dispatches.
@@ -644,25 +710,28 @@ class SubAgentDagTool(Tool):
                 "Error: delegation is paused. The user paused sub-agent spawning; "
                 "do the work in this turn instead, or ask them to resume."
             )
+        capabilities = self._capability_map()
         # Validation is a distinct phase, ahead of the run, in both modes: a
         # graph that fails any check costs zero sub-agent dispatches and is
         # rejected in the caller's own turn, so a rejection is always cheap
         # enough for the model to just fix and re-submit. Backgrounding must not
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
-            spec = parse_dag_spec({"nodes": nodes})
+            spec = parse_dag_spec({"nodes": nodes, "confirm": confirm})
             validate_and_order(spec, self._reference_roots(), await self._session_nodes())
-            # ``capabilities``, not ``self._capabilities``: a caller-supplied role
-            # (the playbook executor's entry) is only in the merged map, and the
-            # capability pre-check has to see it or every such node is unknown.
-            validate_capabilities(spec, capabilities)
-            # ``run_dag`` checks the roster too, but it does so inside the run --
+            notices = validate_capabilities(spec, capabilities)
+            # ``run_dag`` checks the table too, but it does so inside the run --
             # which a backgrounded call has already returned from. Checked here
             # as well so a misspelled name is still a refusal the model can fix
             # in the same turn, not an announcement a turn later.
             for node in spec.nodes:
-                if subagents.get(node.subagent) is None:
-                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+                if self._registry.get(node.agent) is None:
+                    raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.agent}'")
+                if not self._registry.get(node.agent).enabled:  # type: ignore[union-attr]
+                    raise DagValidationError(
+                        f"node '{node.id}' names agent '{node.agent}', which is turned off on this "
+                        f"machine -- enable it in the agents settings, or point the node at another agent"
+                    )
         except DagValidationError as exc:
             return self._validation_error(exc)
 
@@ -673,6 +742,14 @@ class SubAgentDagTool(Tool):
             run_root=str(dag_root(session_dir)),
             subagents_root=str(session_history_root(session_dir)),
         )
+        # Ahead of the charge: a graph the user turns down must not spend budget
+        # either. Behind validation, so a graph that could never run does not get
+        # a confirmation prompt.
+        if spec.confirm and not await self._confirmed(spec, origin):
+            return (
+                "The user did not approve this graph, so nothing was run. Do not re-submit it; "
+                "ask them what to change, or do the work another way."
+            )
         # Charged after validation so a rejected graph costs no budget, and
         # before either mode starts so the refusal is the caller's own result.
         if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
@@ -686,22 +763,55 @@ class SubAgentDagTool(Tool):
         self._cancels[run_id] = cancel
 
         if not background:
-            return await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
+            result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances)
+            return _with_notices(result, notices)
 
-        task = asyncio.create_task(
-            self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
-        )
+        task = asyncio.create_task(self._run_and_announce(spec, run_id, cancel, origin, dirs, call_id, auto_instances))
         self._runs[run_id] = task
         task.add_done_callback(lambda _t: self._runs.pop(run_id, None))
         if self._adopt is not None:
             self._adopt(run_id, task, origin.conversation)
-        return ToolResult(
-            model_text=(
-                f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
-                "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+        return _with_notices(
+            ToolResult(
+                model_text=(
+                    f"DAG run {run_id} started in the background ({len(spec.nodes)} nodes). "
+                    "I'll report the result when it finishes -- keep working, and do not submit this graph again."
+                ),
+                display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
             ),
-            display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
+            notices,
         )
+
+    async def _confirmed(self, spec: SubAgentDagSpec, origin: _DagOrigin) -> bool:
+        """Ask the user to approve this graph. True when they did.
+
+        The gate is graph-level and there is exactly one of it, which puts a
+        requirement on what the question shows: approving a graph means approving
+        every step in it, so the steps that reach outside this machine have to be
+        visible in the question. Hence the per-node lines rather than a bare
+        "run 6 nodes?".
+
+        With no ask channel wired the graph runs. Not every surface has a way to
+        put a question to a human (a cron trigger, an IM channel with no
+        interactive reply), and letting the absence of one disable the feature
+        outright would be a worse failure than proceeding -- the same trade-off a
+        playbook's own top-level confirm already makes. It is recorded at info
+        level so the decision is visible in a log rather than only in this comment.
+        """
+        if self._ask is None:
+            logger.info(
+                "DAG run asked for confirmation but no ask channel is wired; dispatching {} node(s) unconfirmed",
+                len(spec.nodes),
+            )
+            return True
+        lines = [f"- {node.id}: {node.agent}" for node in spec.nodes]
+        question = "Run this {} step graph?\n{}".format(len(spec.nodes), "\n".join(lines))
+        try:
+            answer = await self._ask(origin.conversation, question)
+        except Exception as exc:  # noqa: BLE001 - an unreachable asker is a "no", not a crash
+            logger.warning("DAG confirmation could not be delivered: {}", exc)
+            return False
+        return bool(answer)
 
     async def _run_and_announce(
         self,
@@ -712,10 +822,9 @@ class SubAgentDagTool(Tool):
         dirs: _RunDirs,
         call_id: str | None,
         auto_instances: frozenset[str],
-        subagents: dict[str, Any] | None = None,
     ) -> None:
         """Run a backgrounded graph, then send its summary back as a turn."""
-        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances, subagents=subagents)
+        result = await self._run(spec, run_id, cancel, origin, dirs, call_id, auto_instances)
         if cancel.is_set():
             # A stop the user asked for. ``run_dag`` still returns normally,
             # with a running node recorded ``cancelled`` and a pending one
@@ -773,14 +882,13 @@ class SubAgentDagTool(Tool):
         dirs: _RunDirs,
         call_id: str | None,
         auto_instances: frozenset[str],
-        subagents: dict[str, Any] | None = None,
     ) -> str | ToolResult:
         """Execute one validated graph and render its outcome."""
         emit = self._emitter(origin.conversation, call_id)
         try:
             result = await run_dag(
                 spec,
-                subagents=subagents if subagents is not None else self._subagents,
+                resolve=self._resolve_node,
                 backend=self._backend,
                 workdir=dirs.workdir,
                 run_root=dirs.run_root,

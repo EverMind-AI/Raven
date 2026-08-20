@@ -63,7 +63,7 @@ async def _spawn(workspace: Path, task: str = "count the files", *, label: str |
             return f"answer to {task}"
 
     mgr = _manager(workspace)
-    mgr._raven_backend = backend or _Answers()
+    mgr.registry.set_builtin_builder(lambda _row, _build, _b=backend or _Answers(): _b)
     await mgr.spawn(task, label=label, session_key=SESSION)
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
     return mgr
@@ -148,7 +148,7 @@ class TestStatus:
                 return "done"
 
         mgr = _manager(workspace)
-        mgr._raven_backend = _Hangs()
+        mgr.registry.set_builtin_builder(lambda _row, _build, _b=_Hangs(): _b)
         await mgr.spawn("a long one", label="long", session_key=SESSION)
         for _ in range(100):
             if (await subagent_list({"session_id": SESSION}))["items"]:
@@ -306,7 +306,7 @@ async def test_a_run_in_flight_serves_the_transcript_being_collected(workspace: 
             return "done"
 
     mgr = _manager(workspace)
-    mgr._raven_backend = _SlowBackend()
+    mgr.registry.set_builtin_builder(lambda _row, _build, _b=_SlowBackend(): _b)
     await mgr.spawn("count the files", label="counting", session_key=SESSION)
     await asyncio.wait_for(started.wait(), timeout=5)
     try:
@@ -472,8 +472,8 @@ def _write_run(workspace: Path, run_id: str, *, manifest: dict | None = None) ->
         json.dumps(
             {
                 "nodes": [
-                    {"id": "survey", "subagent": "Researcher", "depends_on": []},
-                    {"id": "write", "subagent": "Writer", "depends_on": ["survey"]},
+                    {"id": "survey", "agent": "Researcher", "depends_on": []},
+                    {"id": "write", "agent": "Writer", "depends_on": ["survey"]},
                 ]
             }
         ),

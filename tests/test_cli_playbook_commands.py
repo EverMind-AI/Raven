@@ -178,7 +178,7 @@ def test_enable_unknown_name_fails(library):
 
 
 class _FakeRuntime:
-    """Captures construction and answers run_named without any machinery."""
+    """Captures construction and answers ``load`` without any machinery."""
 
     last = None
 
@@ -186,8 +186,8 @@ class _FakeRuntime:
         self.kwargs = kwargs
         type(self).last = self
 
-    async def run_named(self, name: str, params: dict) -> ExecutionPlan | None:
-        self.ran = (name, params)
+    async def load(self, name, params, fills=None, *, allow_disabled=False) -> ExecutionPlan | None:
+        self.ran = (name, params, fills, allow_disabled)
         return ExecutionPlan(kind="dag", reply="graph finished: all nodes ok")
 
 
@@ -204,9 +204,39 @@ def test_run_executes_by_name_with_kv_params(library, monkeypatch):
     r = runner.invoke(app, ["playbook", "run", "mine", "target=acme"])
     assert r.exit_code == 0, r.stdout
     assert "graph finished" in r.stdout
-    assert _FakeRuntime.last.ran == ("mine", {"target": "acme"})
+    # `allow_disabled`: this entry is the user's own hand, and disabling only
+    # takes a playbook out of what the model is offered.
+    assert _FakeRuntime.last.ran == ("mine", {"target": "acme"}, {}, True)
     # The explicit entry runs synchronously: the executor is built foreground.
     assert _FakeRuntime.last.kwargs["executor"]._background is False
+    # And it composes a prompt-mode graph itself -- there is no model in the room
+    # to hand the guidance to, so without this the CLI could not run one at all.
+    assert _FakeRuntime.last.kwargs["executor"]._compose_prompt_mode is True
+
+
+def test_run_takes_fills_for_a_field_the_playbook_left_blank(library, monkeypatch):
+    """The CLI's answer to a playbook that expects values at run time.
+
+    Without ``--fill`` such a playbook simply cannot run here: nobody is present
+    to write the missing prompt, and dispatching a blank step would hand a
+    sub-agent nothing to do.
+    """
+    _write_md(library["user"], "mine", "the user one")
+    monkeypatch.setattr("raven.cli._helpers.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+
+    r = runner.invoke(
+        app,
+        ["playbook", "run", "mine", "--fill", "draft.promptTemplate=write it up"],
+    )
+    assert r.exit_code == 0, r.stdout
+    assert _FakeRuntime.last.ran[2] == {"draft": {"promptTemplate": "write it up"}}
+
+
+def test_run_rejects_a_malformed_fill(library):
+    _write_md(library["user"], "mine", "the user one")
+    r = runner.invoke(app, ["playbook", "run", "mine", "--fill", "no-dot-here=x"])
+    assert r.exit_code == 1
 
 
 def test_run_rejects_malformed_params(library):

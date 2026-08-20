@@ -1,19 +1,22 @@
-"""Unit tests for the playbook match funnel: trigger guards, L1 index, L2 gate."""
+"""Trigger vocabulary: offline expansion, its guards, the index, and retrieval.
 
-import json
-
-import pytest
+The LLM gate this file used to cover is gone. It judged one message with no
+conversation history and, on a hit, dispatched a whole graph before the model
+ran -- see :mod:`raven.playbook.matcher` for why that moved. Keywords now decide
+which playbooks get *described* to the model when the library is too big to list
+whole, which is what the router tests at the bottom cover.
+"""
 
 from raven.playbook import (
-    MatchCandidate,
+    RouterSizes,
     TriggerIndex,
     Triggers,
     expand_triggers,
     find_collisions,
-    gate,
     normalize,
+    select_playbooks,
 )
-from raven.playbook.types import ParamSpec
+from raven.playbook.types import PlaybookSpec
 
 
 class _ToolCall:
@@ -152,68 +155,107 @@ def test_normalize_folds_case_width_and_whitespace():
     assert normalize(FULL_WIDTH_LINE) == FOLDED_LINE
 
 
-# ---------------------------------------------------------------- L2 gate
-
-CANDIDATES = [
-    MatchCandidate(
-        playbook_id="seo",
-        description="produce one SEO-optimized article for a given topic",
-        params={
-            "topic": ParamSpec(required=True, description="what is the article about?"),
-            "word_count": ParamSpec(type="integer", default=1500, description="target word count"),
-        },
-    ),
-    MatchCandidate(playbook_id="feedback", description="weekly user-feedback analysis"),
-]
+# --- retrieval: which playbooks this turn describes in full ----------------
 
 
-async def test_gate_returns_actionable_verdict_with_params():
-    provider = ScriptedProvider(
-        [
-            json.dumps(
-                {
-                    "match": "seo",
-                    "confidence": "high",
-                    "reason": "the user clearly wants an SEO article",
-                    "params": {"topic": "vector databases"},
-                    "missing": [],
-                }
-            )
-        ]
+def _spec(name: str, *, keywords: list[str], description: str = "does a thing") -> PlaybookSpec:
+    return PlaybookSpec(
+        name=name,
+        description=description,
+        mode="dag",
+        triggers=Triggers(keywords=keywords),
+        nodes=[{"id": "a", "agent": "raven", "promptTemplate": "go"}],
     )
-    verdict = await gate(provider, "write me an SEO article on vector databases", CANDIDATES)
-    assert verdict.actionable
-    assert verdict.params == {"topic": "vector databases"}
-    # candidate params were rendered into the prompt
-    assert "word_count" in provider.calls[0][0]["content"]
 
 
-async def test_gate_low_confidence_is_not_actionable():
-    provider = ScriptedProvider([{"match": "seo", "confidence": "low", "reason": "merely mentioned"}])
-    verdict = await gate(provider, "is seo even worth doing", CANDIDATES)
-    assert verdict.match == "seo"
-    assert not verdict.actionable
+def test_a_small_library_is_returned_whole():
+    """Narrowing five playbooks would spend a scan to drop nothing -- and the
+    listing is what the model reads to choose, so dropping any of it is a cost."""
+    specs = {n: _spec(n, keywords=[n]) for n in ("a", "b", "c")}
+    assert select_playbooks(specs, "anything") == ["a", "b", "c"]
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        None,  # no tool call
-        "not json {",  # unparseable
-        {"match": "unknown-id", "confidence": "high", "reason": "x"},  # unknown id
-        {"match": 3, "confidence": "high"},  # invalid shape
-        RuntimeError("provider down"),  # transport failure
-    ],
-)
-async def test_gate_failures_resolve_to_pass_through(payload):
-    provider = ScriptedProvider([payload])
-    verdict = await gate(provider, "write me an SEO article", CANDIDATES)
-    assert verdict.match is None
-    assert not verdict.actionable
+def test_a_large_library_is_ranked_by_trigger_hits():
+    specs = {f"p{i}": _spec(f"p{i}", keywords=[f"word{i}"]) for i in range(10)}
+    chosen = select_playbooks(specs, "please handle word7 for me", sizes=RouterSizes(top_k=3))
+
+    assert len(chosen) == 3
+    assert chosen[0] == "p7"  # the keyword hit outranks everything unmatched
 
 
-async def test_gate_with_no_candidates_never_calls_the_model():
-    provider = ScriptedProvider([])
-    verdict = await gate(provider, "just chatting", [])
-    assert not verdict.actionable
-    assert provider.calls == []
+def test_the_description_is_a_weaker_signal_than_a_keyword():
+    """A playbook whose vocabulary is thin should still be reachable by what it
+    says it does -- but a keyword hit is the author's own statement of when their
+    playbook applies, so it wins."""
+    specs = {f"filler{i}": _spec(f"filler{i}", keywords=[f"nomatch{i}"]) for i in range(8)}
+    specs["by-words"] = _spec("by-words", keywords=["zzz"], description="reconcile invoices monthly")
+    specs["by-keyword"] = _spec("by-keyword", keywords=["invoices"])
+
+    chosen = select_playbooks(specs, "reconcile the invoices", sizes=RouterSizes(top_k=2))
+    assert chosen[0] == "by-keyword"
+    assert "by-words" in chosen
+
+
+def test_a_message_matching_nothing_still_gets_a_deterministic_selection():
+    """Rendering nothing until a keyword hits is how a playbook whose vocabulary
+    misses becomes invisible. And the order must not change between two turns
+    asking the same thing, or the model is handed a reshuffled list for no reason."""
+    specs = {f"p{i}": _spec(f"p{i}", keywords=[f"word{i}"]) for i in range(10)}
+    first = select_playbooks(specs, "something unrelated entirely", sizes=RouterSizes(top_k=4))
+    second = select_playbooks(specs, "something unrelated entirely", sizes=RouterSizes(top_k=4))
+
+    assert len(first) == 4
+    assert first == second
+
+
+def test_the_index_counts_hits_rather_than_only_nominating():
+    """The count is the ranking signal, and a funnel had no use for it.
+
+    ``match`` answers "nominated or not", which is all a trigger needed. Ranking
+    needs to know that a message hitting three of a playbook's words fits better
+    than one hitting a single generic word.
+    """
+    idx = TriggerIndex(
+        {
+            "specific": Triggers(keywords=["weekly feedback", "user feedback", "feedback report"]),
+            "generic": Triggers(keywords=["report"]),
+        }
+    )
+
+    counts = idx.hit_counts("put together the weekly feedback report")
+
+    # Two of the three: "user feedback" is not in that sentence.
+    assert counts["specific"] == 2
+    assert counts["generic"] == 1
+    assert idx.hit_counts("nothing relevant here") == {}
+
+
+def test_the_ranking_normalizes_the_vocabulary_once_not_per_turn():
+    """The index exists to normalize at load; the ranking must not redo it.
+
+    A hundred playbooks with twenty keywords each is two thousand normalize()
+    calls a turn to reach an answer the index already holds.
+    """
+    calls = 0
+    real = normalize
+
+    def counting(text: str) -> str:
+        nonlocal calls
+        calls += 1
+        return real(text)
+
+    specs = {f"p{i}": _spec(f"p{i}", keywords=[f"word{i}a", f"word{i}b"]) for i in range(8)}
+    index = TriggerIndex({pid: s.triggers for pid, s in specs.items()})
+
+    import raven.playbook.router as router_mod
+
+    original = router_mod.normalize
+    router_mod.normalize = counting
+    try:
+        select_playbooks(specs, "please handle word3a", index=index, sizes=RouterSizes(top_k=2))
+    finally:
+        router_mod.normalize = original
+
+    # One for the message; the rest only for descriptions of playbooks whose
+    # keywords missed. Never one per keyword.
+    assert calls <= 1 + len(specs)

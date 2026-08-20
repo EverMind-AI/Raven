@@ -1,5 +1,11 @@
 # 外部 agent 注册表：一张表、两种接入方式、独立落盘
 
+> **已被扩展（2026-08-19）**：本稿的 R1/R2（第三方 agent 的登记与 spawn 派发）已收进
+> [2026-08-19-unified-agent-registry-design.md](2026-08-19-unified-agent-registry-design.md)：
+> 配置键从 `subagents.thirdParty` 改为 `subagents.agents`，表上多了 `builtin` 一档（raven
+> 自己的进程内 agent 也上表、也能被 `spawn` 与 dag 节点指名），物化收成一份
+> `AgentRegistry`。本稿描述的三方接入方式（cli / acp / openai 的字段与 backend）不变。
+
 日期：2026-08-11
 状态：已实现（P1+P2+P3），未评审
 背景稿：`2026-08-11-acp-local-agent-mesh-design.md`（为什么选 ACP、以及全部实测依据在那里，本稿不重复）

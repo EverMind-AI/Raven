@@ -39,6 +39,12 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * was configured, because nothing can make it run from this overlay and
  * offering it under presets only invites a failed add.
  *
+ * A `builtin` row is raven's own in-process agent. It is `configured: false`
+ * (not writing a row is how "use the package's default" is spelled) and it is
+ * never probed, so both of the predicates below would misfile it -- the first
+ * into "not installed", which is the opposite of true for a loop running in this
+ * very process. It is placed under `installed` on its kind alone.
+ *
  * An `openai` row never lands there, no matter what `group` says. The backend
  * derives its group from whether an api key is set (see `_group`), so "not
  * installed" for that kind means "no key yet" -- and the key is typed into the
@@ -53,12 +59,13 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * split the rest on `configured`. No row can fall out of every section.
  */
 export function flattenSubagentRows(rows: SubagentRow[]): FlattenedSubagentRows {
-  // An openai row always has an endpoint to reach, so only a cli row can be
-  // missing the thing it runs.
-  const hasSomethingToRun = (r: SubagentRow) => r.kind === 'openai' || r.group === 'installed'
-  const installed = rows.filter(r => r.configured && hasSomethingToRun(r))
+  // A built-in agent is this process; an openai row always has an endpoint to
+  // reach. So only a cli row can be missing the thing it runs.
+  const isBuiltin = (r: SubagentRow) => r.kind === 'builtin'
+  const hasSomethingToRun = (r: SubagentRow) => isBuiltin(r) || r.kind === 'openai' || r.group === 'installed'
+  const installed = rows.filter(r => (r.configured || isBuiltin(r)) && hasSomethingToRun(r))
   const uninstalled = rows.filter(r => !hasSomethingToRun(r))
-  const presets = rows.filter(r => !r.configured && hasSomethingToRun(r))
+  const presets = rows.filter(r => !r.configured && !isBuiltin(r) && hasSomethingToRun(r))
 
   return {
     flat: [...installed, ...uninstalled, ...presets],
@@ -223,7 +230,9 @@ function SubagentRowLine({
   t: Theme
 }) {
   const glyph = STATUS_GLYPH[row.probe_status] ?? '?'
-  const toggleLabel = row.configured ? (row.enabled ? '[on ]' : '[off]') : '[new]'
+  // `[new]` means "not added yet", which a built-in row never is: it is on the
+  // table already, so its switch state is the whole truth about it.
+  const toggleLabel = row.configured || row.kind === 'builtin' ? (row.enabled ? '[on ]' : '[off]') : '[new]'
 
   // The gap between the two columns is a margin, never a `<Text> </Text>`
   // child. A text node is flex-shrinkable: once name + detail exceed the
@@ -823,6 +832,18 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     }
 
     if (!selected) {
+      return
+    }
+
+    // A built-in agent takes exactly one action. There is no connection to edit,
+    // no command to test, and deleting is not a thing that exists for it -- so the
+    // three keys below are dropped rather than opening a form with nothing in it
+    // or spending a turn to "verify" this process.
+    if (selected.kind === 'builtin') {
+      if (ch === ' ') {
+        toggle(selected)
+      }
+
       return
     }
 

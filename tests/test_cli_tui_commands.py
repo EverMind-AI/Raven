@@ -228,8 +228,8 @@ def test_tui_agent_loop_receives_a_router_slot(patched_tui_loop_deps) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tui_agent_loop_receives_third_party_subagents(patched_tui_loop_deps) -> None:
-    """``_build_agent_loop`` must forward ``third_party_subagents=``.
+def test_tui_agent_loop_receives_the_agent_config(patched_tui_loop_deps) -> None:
+    """``_build_agent_loop`` must forward ``agents=``.
 
     ``AgentLoop.__init__`` registers ``run_subagent_dag`` only when that list is
     non-empty (``agent/loop/main.py`` -- the tool's nodes dispatch to those
@@ -243,8 +243,8 @@ def test_tui_agent_loop_receives_third_party_subagents(patched_tui_loop_deps) ->
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "third_party_subagents" in kwargs, "AgentLoop must receive third_party_subagents kwarg"
-    assert kwargs["third_party_subagents"] is patched_tui_loop_deps["config"].subagents.third_party
+    assert "agents" in kwargs, "AgentLoop must receive the agents kwarg"
+    assert kwargs["agents"] is patched_tui_loop_deps["config"].subagents.agents
 
 
 # ---------------------------------------------------------------------------
