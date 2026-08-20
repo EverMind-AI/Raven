@@ -340,13 +340,9 @@ function agentFoldTime(box, ctx) {
   if (from && to && to > from) foldTime(fold, dur(to - from));
 }
 
-function drawWsFile(box) {
-  box.appendChild(mk('div', 'wsnote', T('gui.ws.dir_empty')));
-}
-
-/* Opening things for real needs the host: overridden in live.js, and honest
-   about being a demo here rather than pretending. */
-function wsOpenPath(p) { toast(`demo：正式版会用系统默认程序打开 ${p}`); }
+/* Opening a url for real needs the host: overridden in live.js, and honest
+   about being a demo here rather than pretending. Opening a path is no longer
+   here at all -- that one is DS.workspace.openPath, which the island asks. */
 function wsOpenUrl(u) { toast(`demo：正式版会用系统浏览器打开 ${u}`); }
 
 /* ── tool-event hooks ──────────────────────────────────────────────────

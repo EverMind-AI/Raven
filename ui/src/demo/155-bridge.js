@@ -17,4 +17,9 @@ window.RavenShell = {
   showWorkspace: (tab) => { if (!wsOpen) setWs(true); wsPick(tab); },
   wsShows: (tab) => wsOpen && wsTab === tab,
   lang: () => LANG,
+  hostPlatform: () => HOST_PLATFORM,
+  wsView: () => ({ tab: wsTab, open: wsOpen, picked: wsPicked }),
+  wsState: () => WS,
+  wsPick: (tab) => wsPick(tab),
+  drawWsAgents: (box) => drawWsAgents(box),
 };
