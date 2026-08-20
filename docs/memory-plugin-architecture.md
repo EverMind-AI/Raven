@@ -293,7 +293,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.1`]**
+### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.3`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -321,7 +321,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    (`~/.everos/.index/` sqlite + lancedb) changed.
 1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add 'everos[multimodal]==1.2.1' && uv sync
+   uv add 'everos[multimodal]==1.2.3' && uv sync
    ```
    Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
    path-traversal regression fixed in `1.2.1`.
@@ -348,9 +348,53 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    notes for any bump whose migration behaves this way. An upgrade whose
    only record is a pull-request description is known to whoever read
    that description.
-5. **Finalize**: bump the manifest `version`; commit `pyproject.toml` +
-   `uv.lock` + adapter changes. Rollback = `git revert` (plus data
-   restore if the schema changed — see step 4).
+5. **Finalize**: bump the manifest `version`. Two tests assert it as a
+   literal and must be updated with it —
+   `test_everos_plugin_discovery.py::test_bundled_shadows_lower_priority_source`
+   and `test_plugin_command.py::TestActiveBackend::test_lists_everos_memory`.
+   Then commit
+   `pyproject.toml` + `uv.lock` + adapter changes. Rollback =
+   `git revert` (plus data restore if the schema changed — see step 4).
+
+### 7.3 Record: `1.2.1` -> `1.2.3`
+
+Four packages moved: `everos`, `everalgo-agent-memory` `0.3.1` ->
+`0.4.0`, `everalgo-user-memory` `0.3.2` -> `0.4.0`, and `lancedb`
+`0.33.0` -> `0.34.0`.
+
+**No data migration.** No LanceDB table schema changed: `user_profile`
+and `knowledge_topic` are byte-identical between the two releases, and
+the five files that differ at all (`episode`, `atomic_fact`,
+`agent_case`, `agent_skill`, `foresight`) differ only in docstrings. So
+the startup schema check that `1.2.2` extended to column *types* does
+not fire on an index this upgrade produced. `0.33` and `0.34` were
+verified compatible in both directions — each writes Lance file format
+`v2.1`, and a table written by either opens, searches (over the other's
+IVF and FTS indexes), upserts and prunes under the other — so reverting
+the pin can still read the index. Step 4's backup is cheap insurance,
+not a precondition.
+
+**The Linux floor moved to glibc 2.28.** `lancedb 0.34.0` ships no
+`manylinux_2_17` wheel and no sdist, so CentOS/RHEL 7, Ubuntu 18.04 and
+Amazon Linux 2 can no longer install. `install.sh` hands the exported
+lockfile to the user's `uv` as constraints, which makes this an
+install-time hard failure rather than a slow source build.
+
+**Two behaviour changes.** `extract_foresight` now ships disabled, and
+because the default moved in code rather than in `default_ome.toml` an
+existing `~/.everos/ome.toml` does not opt out of the change; re-enable
+it per install. Agent-skill extraction works for the first time —
+before `1.2.3` a cascade race meant it produced zero `SKILL.md` files —
+so `EverosSkillSource` starts contributing real skills to the prompt
+instead of nothing.
+
+**Two known gaps, not addressed here.** On exhausting a supervised
+loop's restart budget the server now `SIGTERM`s itself, expecting a
+process supervisor; raven spawns it once per session and
+`_SPAWNABLE_STATES` deliberately excludes `FAILED`, so memory stays off
+until the session restarts. And `everos cascade rebuild`, now the
+supported index recovery, refuses to run while a server holds the OME
+lock — while raven exposes no way to stop the server it started.
 
 ---
 
