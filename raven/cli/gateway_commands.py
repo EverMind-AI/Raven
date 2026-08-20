@@ -497,8 +497,8 @@ def register(app: typer.Typer) -> None:
                 # so the live turn's real inbound Source is still in gw_sources
                 # (keyed by conversation id) — reuse it so a topic / thread address
                 # is exact, rather than reconstructing it from the conversation id.
+                from raven.rpc.question_broker import QuestionBroker
                 from raven.spine import Text as _Text
-                from raven.tui_rpc.question_broker import QuestionBroker
 
                 async def _question_to_channel(frame: dict) -> None:
                     params = frame.get("params", {})

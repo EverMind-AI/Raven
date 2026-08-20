@@ -2,7 +2,7 @@
   "openrpc": "1.2.6",
   "info": {
     "title": "Raven TUI RPC",
-    "description": "JSON-RPC 2.0 contract between the Raven Python parent process (RpcServer) and the Node TUI child process (RpcClient). Single source of truth for both sides. Pydantic v2 models in raven/tui_rpc/models.py and codegen-derived TypeScript types in ui-tui/src/rpc/generated.ts must stay in sync with this file. Drift is caught in CI by tests/test_rpc_schema_match.py and `npm run lint:rpc`.",
+    "description": "JSON-RPC 2.0 contract between the Raven Python parent process (RpcServer) and the Node TUI child process (RpcClient). Single source of truth for both sides. Pydantic v2 models in raven/rpc/models.py and codegen-derived TypeScript types in ui-tui/src/rpc/generated.ts must stay in sync with this file. Drift is caught in CI by tests/test_rpc_schema_match.py and `npm run lint:rpc`.",
     "version": "0.1.0",
     "license": {
       "name": "MIT",

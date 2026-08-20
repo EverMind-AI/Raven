@@ -427,7 +427,7 @@ def _build_tui_agent_loop():
     from pydantic import ValidationError
 
     from raven.providers.auth import MissingCredentialsError
-    from raven.tui_rpc.errors import InternalError
+    from raven.rpc.errors import InternalError
 
     try:
         from raven.agent.loop import AgentLoop
@@ -574,23 +574,23 @@ async def _run_rpc_server_until_done(
     Returns True if handshake succeeded (system.hello was received within the
     deadline); False if it timed out.
     """
-    # Lazy import: keeps tui_commands importable without pulling tui_rpc on
+    # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
-    from raven.tui_rpc.approval_broker import ApprovalBroker
-    from raven.tui_rpc.confirm_broker import ConfirmBroker
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import register_aligned_methods_except_system
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.approval_broker import ApprovalBroker
+    from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import register_aligned_methods_except_system
+    from raven.rpc.methods.system import (
         system_hello as _orig_hello,
     )
-    from raven.tui_rpc.methods.system import (
+    from raven.rpc.methods.system import (
         system_ping,
         system_version,
     )
-    from raven.tui_rpc.question_broker import QuestionBroker
-    from raven.tui_rpc.server import RpcServer
-    from raven.tui_rpc.spine import build_tui
-    from raven.tui_rpc.subscriptions import SubscriptionEmitter
+    from raven.rpc.question_broker import QuestionBroker
+    from raven.rpc.server import RpcServer
+    from raven.rpc.spine import build_tui
+    from raven.rpc.subscriptions import SubscriptionEmitter
 
     handshake_done = asyncio.Event()
 
@@ -626,7 +626,7 @@ async def _run_rpc_server_until_done(
     # An init crash is latched into ``build_error`` and re-raised by the
     # factory closure on first ``turn.send``; ``_spawn_agent_loop_task`` emits
     # the typed -32603 error event to the UI through the subscription emitter.
-    from raven.tui_rpc.errors import RpcError
+    from raven.rpc.errors import RpcError
 
     agent_loop = None
     build_error: RpcError | None = None
@@ -654,7 +654,7 @@ async def _run_rpc_server_until_done(
     # Wire the spine turn path: build_tui assembles the Scheduler + delivery hub
     # + streaming sink the turn.* handlers submit onto. Only when an agent loop
     # exists — otherwise turn.send surfaces the build error / -32008 itself.
-    from raven.tui_rpc.methods import turn as turn_module
+    from raven.rpc.methods import turn as turn_module
 
     turn_scheduler = None
     turn_ids: dict[str, str] = {}
@@ -696,7 +696,7 @@ async def _run_rpc_server_until_done(
     # registers everything else (cli.dispatch + setup.status + reload.mcp +
     # config.* + session.* + terminal.* + stubs + slash routing + turn.*).
     # Keeping production aligned with the umbrella means any future
-    # register_*_methods helper added in raven/tui_rpc/methods/__init__.py
+    # register_*_methods helper added in raven/rpc/methods/__init__.py
     # is picked up automatically — no more registration drift where new
     # handlers worked in the demo runner but returned -32601 in `raven tui`.
     dispatcher.register("system.hello", hello_then_signal)

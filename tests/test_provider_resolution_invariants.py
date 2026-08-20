@@ -743,7 +743,7 @@ def test_no_surface_writes_the_default_model_without_naming_its_provider():
     Scanned rather than asserted per call site, because the next writer is the
     one nobody thought of -- and **both spellings count**. An earlier version
     looked only for ``set_default_model`` and was therefore blind to
-    ``tui_rpc/methods/config.py``, which writes the same field through
+    ``rpc/methods/config.py``, which writes the same field through
     ``_set_nested`` and happens to be correct.
     """
     import ast
