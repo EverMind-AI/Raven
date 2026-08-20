@@ -25,7 +25,15 @@ attempt with zero ceremony.
 from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
-from raven.trajectory.store import is_pinned, iter_spans, pin, pins, span_log_paths, unpin
+from raven.trajectory.store import (
+    is_pinned,
+    iter_spans,
+    pin,
+    pins,
+    resolve_attempt_id,
+    span_log_paths,
+    unpin,
+)
 from raven.trajectory.verdict import (
     VERDICT_STATUSES,
     Verdict,
@@ -46,6 +54,7 @@ __all__ = [
     "pins",
     "read_verdicts",
     "record_verdict",
+    "resolve_attempt_id",
     "span_log_paths",
     "unpin",
 ]

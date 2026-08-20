@@ -126,6 +126,25 @@ class TestIterSpans:
         assert [s["traceId"] for s in tstore.iter_spans(tmp_path)] == ["trace-1"]
 
 
+class TestResolveAttemptId:
+    def test_trace_id_resolves_to_canonical_attempt(self, tmp_path):
+        _write_log(
+            tmp_path / "logs" / "audit-spans.log",
+            [_span("trace-1", attempt_id="att-x"), _span("trace-2", attempt_id="att-x")],
+        )
+        assert tstore.resolve_attempt_id("trace-1", tmp_path) == "att-x"
+        assert tstore.resolve_attempt_id("att-x", tmp_path) == "att-x"
+
+    def test_identity_when_spans_lack_attempt_attr(self, tmp_path):
+        span = {"traceId": "trace-1", "spanId": "s1", "name": "session.turn", "attributes": {}}
+        _write_log(tmp_path / "logs" / "audit-spans.log", [span])
+        assert tstore.resolve_attempt_id("trace-1", tmp_path) == "trace-1"
+
+    def test_none_when_no_span_matches(self, tmp_path):
+        _write_log(tmp_path / "logs" / "audit-spans.log", [_span("trace-1")])
+        assert tstore.resolve_attempt_id("missing", tmp_path) is None
+
+
 def test_end_to_end_with_real_tracer(tmp_path, monkeypatch):
     """Spans written by the live tracer are addressable through iter_spans."""
     from raven.tracing import spans as _spans

@@ -34,7 +34,7 @@ from typing import Any
 from raven import __version__
 from raven.config.paths import get_workspace_path
 from raven.tracing import config as tracing_config
-from raven.trajectory.store import iter_spans, pin
+from raven.trajectory.store import iter_spans, pin, resolve_attempt_id
 from raven.trajectory.verdict import read_verdicts
 
 BUNDLE_FORMAT_VERSION = 1
@@ -110,20 +110,12 @@ def collect_bundle(
     if not id_:
         raise ValueError("id is required")
     resolved_state = state_dir or tracing_config.state_dir()
-    spans = list(iter_spans(resolved_state, attempt_id=id_))
-    if not spans:
-        raise LookupError(f"no spans found for id {id_!r}")
-
     # A turn's trace id may address a multi-turn attempt; the canonical
     # attempt id owns the whole trajectory, so collect and name by it.
-    attempt_id = id_
-    for span in spans:
-        span_attempt = (span.get("attributes") or {}).get("attempt.id")
-        if span_attempt:
-            attempt_id = span_attempt
-            break
-    if attempt_id != id_:
-        spans = list(iter_spans(resolved_state, attempt_id=attempt_id))
+    attempt_id = resolve_attempt_id(id_, resolved_state)
+    if attempt_id is None:
+        raise LookupError(f"no spans found for id {id_!r}")
+    spans = list(iter_spans(resolved_state, attempt_id=attempt_id))
 
     out_root = (out_dir or resolved_state / "bundles").resolve()
     out_root.mkdir(parents=True, exist_ok=True)

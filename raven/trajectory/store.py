@@ -79,6 +79,25 @@ def is_pinned(span: dict[str, Any], state_dir: Path | None = None, *, _pins: dic
     return span.get("traceId") in registry or attrs.get("attempt.id") in registry
 
 
+def resolve_attempt_id(id_: str, state_dir: Path | None = None) -> str | None:
+    """Canonical attempt id for ``id_`` (an attempt id or a turn's trace id).
+
+    A turn's trace id addresses the whole multi-turn attempt it belongs to, so
+    every consumer that keys state by id (verdicts, pins, bundles) must write
+    under the canonical ``attempt.id`` — otherwise the same trajectory ends up
+    labeled under one name and packed under another. Returns ``id_`` itself
+    when matching spans carry no ``attempt.id`` (pre-attempt records), and
+    ``None`` when no span matches at all.
+    """
+    found = False
+    for span in iter_spans(state_dir, attempt_id=id_):
+        found = True
+        attempt_id = (span.get("attributes") or {}).get("attempt.id")
+        if attempt_id:
+            return attempt_id
+    return id_ if found else None
+
+
 def span_log_paths(state_dir: Path | None = None) -> list[Path]:
     """All span log files in write order: archived (oldest first), then active."""
     base = state_dir or tracing_config.state_dir()

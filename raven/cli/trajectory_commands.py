@@ -1,7 +1,9 @@
 """``raven trajectory`` subapp — package, label, and protect trajectories.
 
 Trajectories are addressed by attempt id (equal to the trace id for a
-single-turn attempt; see :mod:`raven.trajectory`). The subcommands are thin
+single-turn attempt; see :mod:`raven.trajectory`). Every id-taking command
+resolves a turn's trace id to its canonical attempt id first, so verdicts,
+pins, and bundles always land under the same name. The subcommands are thin
 wrappers over the trajectory layer:
 
 - ``save``    — pack one attempt into a self-contained bundle directory
@@ -34,14 +36,36 @@ trajectory_app = typer.Typer(
 )
 
 
+def _resolve_or_exit(id_: str) -> str:
+    """Map ``id_`` to its canonical attempt id, exiting when no span matches.
+
+    Keeps verdict/pin/unpin on the same address ``save`` uses — a label or
+    pin written under a turn's trace id would never be found again by the
+    attempt-keyed readers.
+    """
+    resolved = tstore.resolve_attempt_id(id_)
+    if resolved is None:
+        console.print(f"[red]no spans found for id {id_!r}[/red]")
+        raise typer.Exit(code=1)
+    if resolved != id_:
+        console.print(f"[dim]{id_} is one turn of attempt {resolved}[/dim]")
+    return resolved
+
+
 @trajectory_app.command("save")
 def trajectory_save(
     id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
     out: Path | None = typer.Option(None, "--out", "-o", help="Output directory (default: <trace-state>/bundles)"),
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Workspace holding the session records (default: the configured workspace)",
+    ),
 ) -> None:
     """Pack a trajectory into a self-contained bundle directory (and pin it)."""
     try:
-        bundle_dir = collect_bundle(id_, out_dir=out)
+        bundle_dir = collect_bundle(id_, out_dir=out, workspace=workspace)
     except (LookupError, ValueError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
@@ -73,8 +97,9 @@ def trajectory_verdict(
     """Record a task-outcome label for an attempt (source: user)."""
     if status not in VERDICT_STATUSES:
         raise typer.BadParameter(f"status must be one of {', '.join(VERDICT_STATUSES)}; got {status!r}")
-    record_verdict(id_, status, source="user", why=why, notes=notes)
-    console.print(f"[green]✓[/green] Recorded verdict [cyan]{status}[/cyan] for {id_}")
+    attempt_id = _resolve_or_exit(id_)
+    record_verdict(attempt_id, status, source="user", why=why, notes=notes)
+    console.print(f"[green]✓[/green] Recorded verdict [cyan]{status}[/cyan] for {attempt_id}")
 
 
 @trajectory_app.command("pin")
@@ -83,8 +108,9 @@ def trajectory_pin(
     reason: str = typer.Option("", "--reason", "-r", help="Why this trajectory is kept"),
 ) -> None:
     """Protect a trajectory from any future purge."""
-    tstore.pin(id_, reason=reason)
-    console.print(f"[green]✓[/green] Pinned {id_}")
+    attempt_id = _resolve_or_exit(id_)
+    tstore.pin(attempt_id, reason=reason)
+    console.print(f"[green]✓[/green] Pinned {attempt_id}")
 
 
 @trajectory_app.command("unpin")
@@ -92,8 +118,12 @@ def trajectory_unpin(
     id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
 ) -> None:
     """Remove a trajectory's purge protection."""
-    if tstore.unpin(id_):
-        console.print(f"[green]✓[/green] Unpinned {id_}")
+    # Best-effort resolution (a stale pin may outlive its spans), and drop the
+    # literal id too so pins written before canonical resolution still clear.
+    resolved = tstore.resolve_attempt_id(id_) or id_
+    removed = [x for x in dict.fromkeys((resolved, id_)) if tstore.unpin(x)]
+    if removed:
+        console.print(f"[green]✓[/green] Unpinned {' and '.join(removed)}")
     else:
         console.print(f"{id_} was not pinned.")
 
