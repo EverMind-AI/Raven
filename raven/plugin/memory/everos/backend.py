@@ -137,9 +137,10 @@ class ServiceState(Enum):
 
     Two axes are folded into one enum because callers only ever act on the
     combination: may I send a request, and is it worth probing again. The
-    states that answer "no" to both -- ``UNCONFIGURED`` and ``NO_BINARY`` --
-    describe the installation rather than the process, so no amount of probing
-    resolves them and a stray success must not clear them.
+    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY`` and
+    ``BAD_IDENTITY`` -- describe the installation and its config rather than
+    the process, so no amount of probing resolves them and a stray success must
+    not clear them.
     """
 
     UNKNOWN = "unknown"
@@ -149,13 +150,14 @@ class ServiceState(Enum):
     UNRESPONSIVE = "unresponsive"
     UNCONFIGURED = "unconfigured"
     NO_BINARY = "no_binary"
+    BAD_IDENTITY = "bad_identity"
     FOREIGN = "foreign"
 
 
 # Probing cannot change these: they are facts about the install, not the
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
-_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 # Only the opening state may spawn. Every other non-ready state has already
 # either spawned once (STARTING / FAILED), found the data occupied
@@ -169,7 +171,7 @@ _PROBE_MIN_INTERVAL_S: float = 2.0
 # States where no write was ever going to land, so nothing was lost. Reporting
 # a loss here would tell an install that never configured a memory LLM that it
 # dropped turns of memory it never had.
-_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+_NEVER_HAD_MEMORY = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 
 class _HttpEverosAdapter:
@@ -548,7 +550,29 @@ class EverosBackend:
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
-        self._validate_identity()
+        try:
+            self._validate_identity()
+        except ValueError as e:
+            # Caught here rather than left to the callers: all four of them fold
+            # it into ``logger.exception``, and a one-shot CLI run writes no log
+            # file, so the one message that names the key to edit reached nobody.
+            # Leaving ``_state`` unset was the other half -- ``store`` then filed
+            # a config error under the dropped-write counter and told the user
+            # the service was unavailable, which sent them to a server that was
+            # never broken.
+            from rich.console import Console
+            from rich.markup import escape
+
+            self._state = ServiceState.BAD_IDENTITY
+            # Escaped: the message quotes the accepted-character class, and rich
+            # reads "[a-zA-Z0-9_.@+-]" as a markup tag and eats it -- leaving the
+            # user the pattern "^+$" to match their id against.
+            Console(stderr=True).print(
+                f"[yellow]Long-term memory is off: {escape(str(e))}[/yellow]\n"
+                "[dim]Fix memory.userId / memory.agentId in your config.json, "
+                "then start a new session.[/dim]"
+            )
+            return
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
