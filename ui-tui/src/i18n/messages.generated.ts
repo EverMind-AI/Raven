@@ -572,6 +572,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.menu_aria': 'actions for {name}',
     'gui.cron.never': 'never run',
     'gui.cron.new_output': 'Schedule "{name}" produced something new',
+    'gui.cron.missed_x': 'Missed reminders while Raven was down: {count}',
     'gui.cron.next': '{when} - next {next}',
     'gui.cron.next_only': 'next {next}',
     'gui.cron.none':
@@ -1742,6 +1743,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.menu_aria': '{name} 的操作',
     'gui.cron.never': '还没跑过',
     'gui.cron.new_output': '定时任务「{name}」有新产出',
+    'gui.cron.missed_x': 'Raven 停机期间错过的提醒：{count}',
     'gui.cron.next': '{when} · 下次 {next}',
     'gui.cron.next_only': '下次 {next}',
     'gui.cron.none': '还没有定时任务。点右上角新建一个，比如「每天早八点汇总昨天的错误日志」。',
