@@ -6,9 +6,11 @@ Scope: `ui/` only. No wire-protocol change, no server change.
 ## Problem
 
 The served page is a demo shell that paints fixture data, plus a live layer
-that boots afterwards and takes the page over by reassigning the shell's
-bindings -- 75 shared mutable globals at the time of writing (the exact,
-current number is `node ui/scripts/count-shared-globals.mjs`). Every class
+that boots afterwards and takes the page over by reassigning bindings it does
+not own -- 75 of them by the narrow count taken at the time of writing, which
+read only the names the demo shell declares one-per-line; the gate now counts
+every binding the live layer writes without owning, and the exact current
+number is `node ui/scripts/count-shared-globals.mjs`. Every class
 of bug the page is known for -- fixture data flashing before real data, the
 double splash, a stale snapshot hijacking a live session -- is a race
 between the two writers this structure creates.
