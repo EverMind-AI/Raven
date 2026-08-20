@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useRef, useState, useSyncExternalStore } fro
 import { flushSync } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { open as openChip } from '../../shell/chips'
 import { openPath as wsOpenPath } from '../workspace/store'
 import * as store from './store'
 
@@ -162,10 +163,18 @@ function PreLinked({ text }: { text: string }): ReactElement {
           onClick={(e) => e.stopPropagation()}>{piece}</a>,
       )
     } else {
-      /* `.pth` is a contract: the document-level handler opens `dataset.p`. */
+      /* The chip opens itself, and has to: stopPropagation is needed because
+         the chip sits inside a step row that would toggle under it, and
+         React's stopPropagation stops the NATIVE event too -- so the
+         document-level click listener in shell/chips.ts never sees this one.
+         Dropping the openChip call here breaks click-to-open outright.
+         The keyboard path does go through chips.ts, as it went through the
+         handler chips.ts replaced: nothing stops keydown, and the
+         preventDefault there is also what keeps the button's own
+         Enter-activates-a-click from opening the file a second time. */
       out.push(
         <button key={i} className="pth" data-p={k.path}
-          onClick={(e) => { e.stopPropagation(); shell().pathOpen?.(k.path as string) }}>{piece}</button>,
+          onClick={(e) => { e.stopPropagation(); openChip({ p: k.path as string, dir: false }) }}>{piece}</button>,
       )
     }
     done = k.at + k.len
@@ -181,9 +190,12 @@ function DtlHead({ name, hunk, copyText, openPath }: {
 }): ReactElement {
   return (
     <div className="dhd">
+      {/* Opens itself for the same reason as the path chips above: the
+          document handler never sees a click React stopped, and the stop is
+          needed for the detail block underneath. */}
       {openPath ? (
         <button className="nm pth" data-p={openPath} title={openPath}
-          onClick={(e) => { e.stopPropagation(); shell().pathOpen?.(openPath) }}>{name}</button>
+          onClick={(e) => { e.stopPropagation(); openChip({ p: openPath, dir: false }) }}>{name}</button>
       ) : <span className="nm">{name}</span>}
       {hunk && (hunk.add || hunk.del) ? (
         <span className="ct"><span className="a">+{hunk.add}</span> <span className="d">-{hunk.del}</span></span>

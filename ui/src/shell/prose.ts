@@ -3,11 +3,11 @@
  * rather than a component -- it has no state, no DOM and no lifecycle, and
  * every caller hands it a string and puts the result somewhere itself.
  *
- * Two seams, both reads, both through DS.prose: whether a string is a path
- * that can actually be opened, and what a markdown link's local target
- * resolves to. Everything else here is layout. The clicks the emitted chips
- * carry (.pth, .artf) are still the legacy shell's -- this file only says
- * which strings earn one.
+ * Three seams, all through DS.prose: whether a string is a path that can
+ * actually be opened, what a markdown link's local target resolves to, and
+ * what opening one does. Everything else here is layout. This file only says
+ * which strings earn a chip; the click those chips carry belongs to
+ * shell/chips.ts, which reads the same source.
  */
 
 import { ds, t } from './bridge'
@@ -24,6 +24,12 @@ export interface ProseSource {
   pathOf(s: string): string | null
   /* What a markdown link's local target resolves to, or null. */
   linkTargetOf(u: string): ProseTarget | null
+  /* What clicking the resulting chip does. Takes the resolved target rather
+     than the raw string: the two resolvers above already decided what the
+     string was, and re-deciding it at click time is how the two halves drift
+     apart. Optional because a source that renders prose nobody can click --
+     the transcript's own tests do -- has nothing to say here. */
+  open?(target: ProseTarget): void
 }
 
 const source = (): ProseSource => ds<ProseSource>('prose')

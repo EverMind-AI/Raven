@@ -6,6 +6,7 @@ import * as mount from './mount'
 import * as store from './store'
 
 import type { Shell } from '../../shell/bridge'
+import type { ProseTarget } from '../../shell/prose'
 import type { TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -38,7 +39,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     down: () => {},
     attNotes: () => ['[attachments]'],
     attImage: () => undefined,
-    pathOpen: () => {},
     copyToClip: () => {},
     hunkFromEdit: (o, n) => ({ rows: [['del', o], ['add', n]], add: 1, del: 1 }),
     hunkFromWrite: (c) => ({ rows: [['add', c]], add: 1, del: 0 }),
@@ -237,6 +237,52 @@ describe('transcript island, tool episodes', () => {
     expect(dtl.querySelector('.bd pre')?.textContent).toBe('aaa')
     act(() => { row.click() })
     expect((row.nextElementSibling as HTMLElement).hidden).toBe(true)
+  })
+
+  /* The chip's click is the island's own, and has to be: React's
+     stopPropagation -- which the chip needs so the row underneath does not
+     toggle -- stops the native event too, so shell/chips.ts never sees it.
+     Without these two cases, dropping the openChip call would leave
+     click-to-open dead with the whole suite still green. */
+  describe('a path chip in tool output', () => {
+    const wireProse = (open: (at: ProseTarget) => void): void => {
+      window.DS = { ...window.DS, prose: { pathOf: () => null, linkTargetOf: () => null, open } }
+    }
+
+    function chip(): HTMLElement {
+      act(() => {
+        const st = mount.step()
+        st.tool('run', { cmd: 'pytest' }).done(true, 'wrote /tmp/out.log just now', 5)
+        st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+        st.seal()
+      })
+      act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+      const row = $$('.wkin .wrow')[0] as HTMLElement
+      act(() => { row.click() })
+      return (row.nextElementSibling as HTMLElement).querySelector<HTMLElement>('.bd pre .pth')!
+    }
+
+    it('opens the path it carries, through the prose seam', () => {
+      const opened: Array<{ p: string; dir: boolean }> = []
+      wireProse((at) => opened.push(at))
+      const el = chip()
+      expect(el.dataset.p).toBe('/tmp/out.log')
+      act(() => { el.click() })
+      expect(opened).toEqual([{ p: '/tmp/out.log', dir: false }])
+    })
+
+    it('never reaches a document-level listener, so the island must open it', () => {
+      wireProse(() => {})
+      /* Armed AFTER the chip is on screen: getting there takes two clicks of
+         its own, and those do reach the document. */
+      const el = chip()
+      let atDocument = 0
+      const spy = (): void => { atDocument += 1 }
+      document.addEventListener('click', spy)
+      act(() => { el.click() })
+      document.removeEventListener('click', spy)
+      expect(atDocument).toBe(0)
+    })
   })
 
   it('shows a failure on the row, on the summary chip, and opens the fold unasked', () => {

@@ -6,21 +6,6 @@
    some IMEs still send instead of isComposing. */
 const composing = (e) => !!(e.isComposing || e.keyCode === 229);
 
-/* Same reason as the copy button below: prose is replaced on every answer. */
-document.addEventListener('click', (e) => {
-  const p = e.target.closest && e.target.closest('code.pth');
-  if (p) pathOpen(p.dataset.p);
-  const a = e.target.closest && e.target.closest('.artf');
-  if (a) (a.dataset.d ? dirOpen : pathOpen)(a.dataset.p);
-});
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' && e.key !== ' ') return;
-  const p = document.activeElement;
-  if (!p || !p.classList) return;
-  if (p.classList.contains('pth')) { e.preventDefault(); pathOpen(p.dataset.p); }
-  if (p.classList.contains('artf')) { e.preventDefault(); (p.dataset.d ? dirOpen : pathOpen)(p.dataset.p); }
-});
-
 /* Code blocks come and go with every answer, so the click is caught once here
    rather than bound per block. The text comes from the DOM the reader sees. */
 document.addEventListener('click', (e) => {

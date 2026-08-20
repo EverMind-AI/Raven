@@ -1,8 +1,8 @@
-/* -- workspace: the rpc DataSource + the transcript's path resolvers -----
+/* -- workspace: the rpc DataSource + the prose chips' resolvers ----------
    The renderer is the workspace island (ui/src/features/workspace/); this
    file only knows how to speak fs.* over /rpc and how to resolve the paths
-   the transcript makes clickable. Installing onto the seam replaces the
-   fixture source before the first paint. */
+   an answer makes clickable. Installing onto the seam replaces the fixture
+   source before the first paint. */
 
 function relToWorkspace(p) {
   const s = String(p || '');
@@ -26,20 +26,19 @@ const relToWsRoot = (p) => {
    names the workspace, or Raven touched that file this session -- and since the
    viewer is no longer confined to the workspace, the second case now counts
    wherever the file lives. Everything else stays plain text. */
-wsPathOf = (s) => {
+const livePathOf = (s) => {
   const t = String(s).trim().replace(/:\d+(?::\d+)?$/, '');
   if (!t || /\s/.test(t)) return null;
   if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(t)) return relToWorkspace(t) || t;
   const hit = WS.changes.find((c) => c.key === t || wsShortPath(c.key) === t);
   return hit ? hit.key : null;
 };
-pathOpen = (rel) => RavenIslands.workspace.showFile(rel);
 
 /* An explicit markdown link is the author handing something over, so the live
    resolver is broader than the bare-span one above: absolute paths, ~ paths
    and workspace-relative shapes all count, extension decides file-or-folder.
    file:// is stripped rather than rejected -- models write it out of habit. */
-linkTargetOf = (u) => {
+const liveLinkTargetOf = (u) => {
   let t = String(u).trim().replace(/^file:\/\//, '');
   if (!t || /\s|[<>"']/.test(t)) return null;
   const dirMark = /\/$/.test(t);
@@ -53,7 +52,14 @@ linkTargetOf = (u) => {
   return { p: t, dir: dirMark || !/\.\w{1,8}$/.test(t) };
 };
 
-dirOpen = (p) => RavenIslands.workspace.openDir(p);
+/* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
+   seam by the time this runs, and replacing it before the first paint is the
+   whole point. */
+DS.prose = {
+  pathOf: livePathOf,
+  linkTargetOf: liveLinkTargetOf,
+  open: ({ p, dir }) => (dir ? RavenIslands.workspace.openDir(p) : RavenIslands.workspace.showFile(p)),
+};
 
 DS.workspace = {
   canBrowse: true,
