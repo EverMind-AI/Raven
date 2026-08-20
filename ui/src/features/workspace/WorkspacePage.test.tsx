@@ -59,7 +59,6 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
       store.sync()
     },
     wsPick: (tab) => shellCalls.push(['wsPick', tab]),
-    drawWsAgents: () => {},
   }
   window.RavenShell = fakeShell
   /* The file view renders markdown through the bundle's renderer, which reads

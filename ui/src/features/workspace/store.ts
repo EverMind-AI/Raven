@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 
 import * as browser from '../browser/mount'
+import * as agents from '../subagents/mount'
 import { ds, shell, t } from '../../shell/bridge'
 import { md } from '../../shell/prose'
 
@@ -65,8 +66,8 @@ export function redraw(): void {
   set({})
 }
 
-/* The routing the legacy drawWs kept, minus the two tabs that never left the
-   legacy layer: agents and browser are dispatched before this runs. Marking
+/* The routing the legacy drawWs kept, minus the two tabs with islands of
+   their own: agents and browser are dispatched before this runs. Marking
    the changes seen happens HERE, synchronously, because the legacy callers
    run bumpWs() right after drawWs() and count on the render having marked
    them -- the React render itself lands later. */
@@ -87,19 +88,20 @@ export function setRenderer(f: () => ReactElement): void {
 let root: Root | null = null
 
 /* What the drawWs shim calls. The island owns #wsBody for its own views;
-   the agents tab still belongs to its legacy renderer and the browser tab
-   to the browser island, so this root steps aside (unmounts) and hands them
-   the cleared box -- the same box, no wrapper, because .ws-body[data-view]
+   the agents tab belongs to the subagents island and the browser tab to the
+   browser island, so this root steps aside (unmounts) and hands them the
+   cleared box -- the same box, no wrapper, because .ws-body[data-view]
    styles its direct children. */
 export function draw(): void {
   const host = document.getElementById('wsBody')
   if (!host) return
   const view = verb('wsView')()
-  /* The browser island's root must leave while the DOM it owns is intact --
-     BEFORE any wipe -- and its frame watch must drop whenever this draw
-     lands anywhere but a visible browser view: what its own drawWs wrapper
-     did while the dispatch was legacy. */
+  /* Each tab island's root must leave while the DOM it owns is intact --
+     BEFORE any wipe -- and the browser's frame watch must drop whenever this
+     draw lands anywhere but a visible browser view: what its own drawWs
+     wrapper did while the dispatch was legacy. */
   browser.detach()
+  agents.detach()
   if (view.tab === 'browser' || view.tab === 'agents') {
     if (root) {
       root.unmount()
@@ -109,7 +111,7 @@ export function draw(): void {
     delete host.dataset.view
     if (view.tab === 'agents') {
       host.dataset.view = 'agents'
-      verb('drawWsAgents')(host)
+      agents.draw(host)
       browser.hidden()
     } else {
       browser.draw(host)

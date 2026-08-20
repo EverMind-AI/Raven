@@ -21,5 +21,8 @@ window.RavenShell = {
   wsView: () => ({ tab: wsTab, open: wsOpen, picked: wsPicked }),
   wsState: () => WS,
   wsPick: (tab) => wsPick(tab),
-  drawWsAgents: (box) => drawWsAgents(box),
+  sessionKey: () => cur,
+  dur: (ms) => dur(ms),
+  plainTitle: (s) => plainTitle(s),
+  agentStagePaint: (box, ctx, opts) => { if (agentPaint) agentPaint(box, ctx, opts); },
 };

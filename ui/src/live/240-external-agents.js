@@ -262,12 +262,13 @@ function dagSvg(d) {
   });
 
   d.els = new Map();
+  const sel = RavenIslands.subagents.sel();
   nodes.forEach((n) => {
     const p = at.get(n.id);
     const g = svgEl('g', { transform: `translate(${p.x} ${p.y})`, role: 'button', tabindex: '0' }, 'nd');
     g.dataset.st = n.status || 'pending';
     g.dataset.node = n.id;
-    if (dagNode && dagNode.run_id === d.run_id && dagNode.node === n.id) g.dataset.sel = '1';
+    if (sel && sel.run_id === d.run_id && sel.node === n.id) g.dataset.sel = '1';
     g.appendChild(svgEl('rect', { width: DAG_W, height: DAG_H, rx: 9 }));
     const mark = dagMark(n.status, 17, DAG_H / 2);
     g.appendChild(mark);
@@ -440,8 +441,9 @@ function dagTouch(d) {
    graph rebuilt around it. */
 function dagSelect(d) {
   if (!dagLive(d)) return;
+  const sel = RavenIslands.subagents.sel();
   d.els.forEach((slot, id) => {
-    const on = dagNode && dagNode.run_id === d.run_id && dagNode.node === id;
+    const on = sel && sel.run_id === d.run_id && sel.node === id;
     if (on) slot.g.dataset.sel = '1';
     else delete slot.g.dataset.sel;
   });
@@ -459,8 +461,7 @@ function dagSummary(d) {
    second transcript view inside the sheet: same panel, same renderer, and the
    sheet stays the map rather than becoming the territory. */
 function dagOpenNode(runId, n) {
-  dagNode = { run_id: runId, node: n.id, agent: n.subagent, label: n.id };
-  agentOpen = null;
+  RavenIslands.subagents.openDagNode(runId, n);
   if (!wsOpen) setWs(true);
   wsPick('agents');
   drawWs();
@@ -484,54 +485,17 @@ delegReadDag = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur 
    couple of short retries cover the gap between the call and its row. */
 delegOpenSpawn = (agent, label) => {
   setWs(true, 'agents');
-  const match = () => AGENTS.find((x) => x.kind !== 'dag'
+  const match = () => RavenIslands.subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))
     && (!agent || (x.agent || 'raven') === (agent || 'raven')));
   const attempt = (n) => {
     const it = match();
-    if (it) { agentOpenRow(it); return; }
+    if (it) { RavenIslands.subagents.openRow(it); return; }
     if (n >= 4) return;
-    agentsRefresh(true);
+    RavenIslands.subagents.refresh(true);
     setTimeout(() => attempt(n + 1), 700);
   };
   attempt(0);
-};
-
-/* One dag node's own transcript: what it was asked, what it did on the way, and
-   what it answered. Painted by the same function a spawned call's transcript is,
-   so the two kinds of delegated work read the same way and only one of them has
-   to be kept append-only -- a node polled while it runs used to be torn down and
-   rebuilt on every tick, which closed every fold the reader had opened. */
-function dagNodePaint(box, it) {
-  const row = AGENTS.find((a) => a.kind === 'dag' && a.run_id === it.run_id && a.node === it.node);
-  return rpc.call('dag.node', { run_id: it.run_id, node: it.node, session_key: cur })
-    .then((r) => {
-      if (!document.body.contains(box)) return;
-      const n = (r && r.node) || {};
-      agentPaint(
-        box,
-        { messages: n.messages || [], status: row ? row.status : null },
-        { key: `dag:${it.run_id}:${it.node}`, empty: T('gui.dag.node_empty') },
-      );
-      /* Said plainly rather than left to a reader wondering where the rest went:
-         the file on disk is whole, this is its head. Once, not once per poll. */
-      if (n.output_truncated && !box.querySelector(':scope > .wsnote')) {
-        box.appendChild(mk('div', 'wsnote', T('gui.dag.truncated')));
-      }
-    })
-    .catch((e) => {
-      if (!document.body.contains(box)) return;
-      agentDrawn.key = null;
-      box.innerHTML = '';
-      box.appendChild(mk('div', 'wsempty', (e && e.message) || String(e)));
-    });
-}
-
-dagNodeRender = (box, it) => {
-  /* A reopened panel draws into a new box, so the paint has to start over even
-     though the node it is drawing has not changed. */
-  agentDrawn.key = null;
-  dagNodePaint(box, it);
 };
 
 /* Dev-only hook, beside __clarify and __approve and for the same reason: the

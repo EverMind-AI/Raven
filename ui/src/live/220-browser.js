@@ -6,16 +6,14 @@
 /* Absent, not merely unusable. `avail: false` means the server has the surface
    and cannot use it right now (no chromium); this means the server does not
    have it at all -- a -32601 from any call. The set is shared: the browser
-   island tracks its own surface, but `subagent.*` (230-tabs.js) and the demo
-   shell's empty states still read these. */
+   island tracks its own surface, but the `subagent.*` source (230-tabs.js)
+   still reads these. */
 const RPC_ABSENT = new Set();
 const rpcGone = (name, e) => {
   if (e && e.code === -32601) RPC_ABSENT.add(name);
   return RPC_ABSENT.has(name);
 };
 const rpcHas = (name) => !RPC_ABSENT.has(name);
-/* The shell draws the empty states, and it is outside this closure. */
-rpcAbsent = (name) => RPC_ABSENT.has(name);
 
 DS.browser = {
   embedded: true,

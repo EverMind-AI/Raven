@@ -55,7 +55,13 @@ export interface Shell {
   wsView?(): WsPanelView
   wsState?(): unknown
   wsPick?(tab: string): void
-  drawWsAgents?(box: HTMLElement): void
+  sessionKey?(): string
+  dur?(ms: number): string
+  plainTitle?(s: string): string
+  /* The transcript bridge: draws a delegated run's record into a stage box
+     with the transcript's own renderer (live-only; the demo global it calls
+     through stays null, and the island never asks without a record). */
+  agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
 }
 
 declare global {

@@ -12,6 +12,8 @@ import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
 import { SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
+import * as subagents from './features/subagents/mount'
+import * as subagentsStore from './features/subagents/store'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
 import { md } from './shell/prose'
@@ -86,6 +88,19 @@ window.RavenIslands = {
     detach: browser.detach,
     hidden: browser.hidden,
   },
+  /* What the legacy layers still reach for: wsReset clears the list with the
+     session, and the dag sheet (live/240-external-agents.js) opens nodes,
+     reads rows and marks the open selection. */
+  subagents: {
+    draw: subagents.draw,
+    detach: subagents.detach,
+    reset: subagentsStore.reset,
+    refresh: subagentsStore.refresh,
+    rows: subagentsStore.rows,
+    openRow: subagentsStore.openRow,
+    openDagNode: subagentsStore.openDagNode,
+    sel: subagentsStore.sel,
+  },
 }
 
 /* The transcript's link handler lives with the island now; it arms itself
@@ -102,9 +117,9 @@ if (connHost) createRoot(connHost).render(<ConnApp />)
 createRoot(skillsHost).render(<SkillsApp />)
 
 /* The workspace island mounts lazily: #wsBody is shared ground -- the agents
-   tab still draws into it from the legacy layers and the browser tab through
-   its own island root, so the workspace root exists only while a workspace
-   view is up (see workspace/store.draw). */
+   and browser tabs draw into it through their own island roots, so the
+   workspace root exists only while a workspace view is up (see
+   workspace/store.draw). */
 workspace.setRenderer(() => createElement(WsApp))
 
 window.RavenIslands = {
