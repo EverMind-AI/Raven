@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent.direct_chat import direct_root
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
+from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root, spawn_root
 
 if TYPE_CHECKING:
@@ -80,8 +81,6 @@ async def instances_list(
     """Every instance this session has used, most recently updated first."""
     loop = _loop(agent_loop_factory)
     manager = getattr(loop, "subagents", None)
-    tools = getattr(loop, "tools", None)
-    dag_tool = tools.get("run_subagent_dag") if tools is not None else None
     handoff = getattr(loop, "_direct_handoff", None)
     session_key = str(params.get("session_key") or "")
 
@@ -89,7 +88,9 @@ async def instances_list(
         "instances": reconcile_instance_rows(
             get_registry().list_instances(session_key),
             live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
-            active_run_ids=(lambda: set(dag_tool.active_run_ids()) if dag_tool is not None else set()),
+            # Every graph tool, not just the registered one -- see
+            # ``raven.agent.subagent_dag.live``.
+            active_run_ids=(lambda: live_run_ids(loop)),
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }

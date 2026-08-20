@@ -87,7 +87,7 @@ class SpawnTool(Tool):
 
             listing = format_agent_listing(agents)
             base += (
-                " Pick the agent for the job with `agent` -- there is no default, so choose "
+                " Pick the agent for the job with `subagent` -- there is no default, so choose "
                 f"deliberately from: {listing}."
             )
             # The one moment a wrong choice is visible: the model is reading this
@@ -114,7 +114,7 @@ class SpawnTool(Tool):
         agents = self._agents()
         names = sorted(a.name for a in agents)
         if names:
-            props["agent"] = {
+            props["subagent"] = {
                 "type": "string",
                 "enum": names,
                 "description": "Which agent runs this task. Required: pick one from the list.",
@@ -127,18 +127,18 @@ class SpawnTool(Tool):
                 "conversation with a resumable sub-agent. Reuse the same handle to "
                 "continue that session. Omit it and one is assigned automatically and "
                 "reported when the call finishes, so any run can be continued later. "
-                f"Accepted for `agent` in {stateful_names} -- against any other one a handle "
+                f"Accepted for `subagent` in {stateful_names} -- against any other one a handle "
                 "continues nothing and the call is rejected."
             ),
         }
-        # `agent` is required only once there is a roster to require it from. An
+        # `subagent` is required only once there is a roster to require it from. An
         # empty one is a table whose every row failed to build; demanding a value
         # the enum cannot offer would be an unsatisfiable schema, and the manager
         # still resolves an omitted name to the generic built-in row.
         return {
             "type": "object",
             "properties": props,
-            "required": ["task", "agent"] if names else ["task"],
+            "required": ["task", "subagent"] if names else ["task"],
         }
 
     def _is_stateful(self, agent: str | None) -> bool:
@@ -179,19 +179,29 @@ class SpawnTool(Tool):
         self,
         task: str,
         label: str | None = None,
-        agent: str | None = None,
+        subagent: str | None = None,
         instance: str | None = None,
         **kwargs: Any,
     ) -> str:
-        """Spawn a subagent to execute the given task."""
-        if (refusal := self._reject_useless_instance(agent, instance)) is not None:
+        """Spawn a subagent to execute the given task.
+
+        ``agent`` is accepted from ``kwargs`` because that is what this parameter
+        was called until the field was unified on ``subagent``. Left to fall into
+        ``kwargs`` it would be swallowed and ``subagent`` would stay ``None``,
+        which ``SubagentManager.spawn`` resolves to the generic built-in row --
+        so the old spelling would run the task on a different agent than the one
+        it named, and report success. A rejection would be honest too, but this
+        is a rename we made: doing what the call plainly means costs three lines.
+        """
+        subagent = subagent or kwargs.pop("agent", None)
+        if (refusal := self._reject_useless_instance(subagent, instance)) is not None:
             return refusal
         # Minted rather than left empty so every run of a resumable sub-agent is
         # addressable afterwards. Filling the field the model would have filled
         # is what keeps the rest of the dispatch path unchanged.
-        minted = not instance and self._is_stateful(agent)
+        minted = not instance and self._is_stateful(subagent)
         if minted:
-            instance = mint_handle(label or task, fallback=agent or "raven")
+            instance = mint_handle(label or task, fallback=subagent or "raven")
         org = self._cur()
         # Cleared before the call rather than only on the stateless path: an earlier
         # stateful call whose metadata went uncollected (no tool-event sink on this
@@ -204,7 +214,7 @@ class SpawnTool(Tool):
             origin_channel=org.channel,
             origin_chat_id=org.chat_id,
             session_key=org.session_key,
-            agent=agent,
+            agent=subagent,
             instance=instance,
             instance_auto=minted,
             workspace=workdir.current(),

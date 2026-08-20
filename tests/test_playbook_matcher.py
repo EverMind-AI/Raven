@@ -164,7 +164,7 @@ def _spec(name: str, *, keywords: list[str], description: str = "does a thing") 
         description=description,
         mode="dag",
         triggers=Triggers(keywords=keywords),
-        nodes=[{"id": "a", "agent": "raven", "promptTemplate": "go"}],
+        nodes=[{"id": "a", "subagent": "raven", "promptTemplate": "go"}],
     )
 
 

@@ -146,3 +146,152 @@ async def test_every_origin_records_the_playbook_address(tmp_path):
     await loop._process_message(cron_req, origin=Origin.CRON)
 
     assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1"} in stub.contexts
+
+
+def test_a_playbook_config_that_is_on_actually_registers_the_tools(tmp_path) -> None:
+    """The one path production takes: construct the loop *with* a playbook config.
+
+    Every other test in the suite assembles the playbook runtime directly, which
+    is why an ordering bug in ``AgentLoop.__init__`` survived a full green run:
+    the build read ``self._mcp_servers`` several assignments before that field
+    existed, raised ``AttributeError`` into the guard that turns a build failure
+    into "feature disabled", and left ``playbooks.enabled: true`` doing nothing
+    but writing one warning line. Asserting on the registry is what makes that
+    reachable -- a runtime that fails to build registers no tools.
+
+    ``create_playbook`` unconditionally, ``load_playbook`` because the builtin
+    layer ships a library, so it is never empty on a real install.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+
+    assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
+    assert loop.tools.has("create_playbook")
+    assert loop.tools.has("load_playbook")
+
+
+def test_a_playbook_config_that_is_off_tells_the_model_nothing(tmp_path) -> None:
+    """Off, neither entry exists -- the library is invisible rather than refused."""
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=False),
+    )
+
+    assert loop._playbooks is None
+    assert not loop.tools.has("create_playbook")
+    assert not loop.tools.has("load_playbook")
+
+
+def test_both_graph_tools_are_one_surface_to_a_consumer(tmp_path) -> None:
+    """Who dispatched a run must not be observable from outside.
+
+    A ``mode: dag`` playbook is dispatched by the engine's own graph tool, which
+    is deliberately unregistered -- the model never calls it. Every consumer that
+    asks a graph tool something, though, has to get the same answer for that run
+    as for one the model composed: where its progress goes, whether it is live,
+    whether a cancel lands. Asking the registered instance alone answered "not
+    happening" to all three, which on the page meant a playbook's graph never
+    appeared in the conversation and its stop button reported nothing to stop.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+
+    tools = loop.dag_tools()
+    assert len(tools) == 2, "the registered instance and the engine's private one"
+    assert tools[0] is loop.tools.get("run_subagent_dag")
+    assert tools[1] is not tools[0], "the private one is a second instance, not the same object"
+
+    sink = object()
+    loop.set_dag_progress_sink(sink)
+    assert [t._sink for t in tools] == [sink, sink], "progress reaches the page from either"
+
+    # Cancel consults both. Neither owns this id, so the honest answer is False --
+    # what matters is that the private one was asked at all.
+    assert loop.cancel_dag_run("nope") is False
+    tools[1]._cancels["run-x"] = _Flag()
+    assert loop.cancel_dag_run("run-x") is True, "a run only the engine owns is still cancellable"
+
+
+class _Flag:
+    def __init__(self) -> None:
+        self.set_called = False
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+def test_liveness_is_the_union_across_graph_tools(tmp_path) -> None:
+    """A run either tool owns is in flight; a broken tool is not fatal.
+
+    Advisory by design: what this answer decides is whether a row is drawn as
+    running, and a graph tool that cannot say must not turn that into an error
+    the panel shows instead of a list.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+    registered, private = loop.dag_tools()
+
+    registered._cancels["from-the-model"] = _Flag()
+    private._cancels["from-a-playbook"] = _Flag()
+    assert loop.active_dag_run_ids() == {"from-the-model", "from-a-playbook"}
+
+    class _Broken:
+        def active_run_ids(self):
+            raise RuntimeError("gone")
+
+    loop.dag_tools = lambda: [_Broken(), private]
+    assert loop.active_dag_run_ids() == {"from-a-playbook"}, "one broken tool must not hide the other"
+
+
+def test_a_runtime_that_cannot_build_leaves_the_feature_off(tmp_path, monkeypatch) -> None:
+    """A library that fails to load is not a reason to refuse every turn.
+
+    This guard is also what hid the ordering bug for a release: it turned an
+    AttributeError into a warning line and an agent that quietly had no
+    playbooks. Kept, because the alternative is a broken library taking down the
+    loop -- but now asserted, so "off" is a tested outcome rather than a
+    side effect nobody looked at.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    def _boom(self, cfg):
+        raise RuntimeError("library is a rock")
+
+    monkeypatch.setattr(AgentLoop, "_build_playbook_runtime", _boom)
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+
+    assert loop._playbooks is None
+    assert not loop.tools.has("load_playbook") and not loop.tools.has("create_playbook")
+    assert loop.dag_tools() == [loop.tools.get("run_subagent_dag")], "only the registered one is left"

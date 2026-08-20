@@ -182,7 +182,7 @@ async def test_dag_records_go_to_history_while_nodes_run_in_the_bound_workdir(tm
     tool.set_context("web", "chat-1")
 
     with bind(session):
-        await tool.execute(nodes=[{"id": "a", "agent": "stub", "prompt_template": "hi"}])
+        await tool.execute(nodes=[{"id": "a", "subagent": "stub", "prompt_template": "hi"}])
 
     await asyncio.wait_for(reached.wait(), timeout=5)
 
@@ -196,7 +196,7 @@ def _write_run_dir(root: Path, run_id: str) -> None:
     rdir = root / run_id
     rdir.mkdir(parents=True)
     (rdir / "graph.json").write_text(
-        json.dumps({"nodes": [{"id": "a", "agent": "stub", "prompt_template": "hi"}]}),
+        json.dumps({"nodes": [{"id": "a", "subagent": "stub", "prompt_template": "hi"}]}),
         encoding="utf-8",
     )
 

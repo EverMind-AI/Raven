@@ -129,7 +129,7 @@ class _FakeGenerator:
             description="generated from: " + user_input.splitlines()[0][:40],
             mode="dag",
             triggers=Triggers(keywords=["weekly scan"]),
-            nodes=[NodeSpec(id="scan", agent="research-raven", prompt_template="scan ${params.target}")],
+            nodes=[NodeSpec(id="scan", subagent="research-raven", prompt_template="scan ${params.target}")],
             params={"target": ParamSpec(required=True, description="what to scan?")},
         )
         return GeneratedPlaybook(spec=spec, notes=["Assumption: weekly cadence", "Missing capability: mcp[fs]"])

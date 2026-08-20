@@ -128,7 +128,9 @@ class AskUserTool(Tool):
         """One host-side question outside a model tool call.
 
         For host machinery that must confirm with the user before the model
-        is even involved (the playbook funnel's whole-run confirm gate).
+        is even involved. One caller: the graph-level confirm gate, which
+        ``AgentLoop._confirm_graph`` puts in front of a whole DAG -- asked
+        before the run is billed, so a refusal costs nothing.
         Returns ``None`` when the round-trip is structurally unavailable (no
         broker, no conversation) -- the caller decides what that means -- and
         otherwise the user's answer, which is ``""`` on timeout or

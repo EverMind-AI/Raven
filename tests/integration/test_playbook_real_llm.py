@@ -83,7 +83,7 @@ async def test_case(case):
     assert spec.mode == expect["mode"], f"mode: got {spec.mode}, want {expect['mode']}"
 
     if "agents_used" in expect:
-        used = {n.agent for n in spec.nodes or []}
+        used = {n.subagent for n in spec.nodes or []}
         assert set(expect["agents_used"]) <= used, f"agents: want {expect['agents_used']} within {used}"
     if "node_count" in expect:
         assert spec.nodes is not None and len(spec.nodes) == expect["node_count"]

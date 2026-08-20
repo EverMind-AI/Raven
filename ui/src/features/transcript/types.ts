@@ -208,7 +208,7 @@ export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean
   branch?: (text: string) => void
-  dagRows?: (runId: string) => Promise<Array<{ node: string; status: string }>>
+  dagRows?: (runId: string) => Promise<Array<{ node: string; status: string; subagent?: string | null; instance?: string | null }>>
   openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Whether a detached lane host is parked rather than discarded: leaving a

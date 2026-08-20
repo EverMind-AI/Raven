@@ -80,7 +80,7 @@ entry point and not the other is no longer a state that exists.
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
-the `agent` parameter constrains the same set. All three capabilities render positive *or*
+the `subagent` parameter constrains the same set. All three capabilities render positive *or*
 negative, because "no tag" and "the roster does not say" are indistinguishable otherwise.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 

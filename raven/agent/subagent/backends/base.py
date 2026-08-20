@@ -54,6 +54,18 @@ def bounded_delta(
     return emit
 
 
+class SubagentNoAnswerError(Exception):
+    """The run spent its whole round budget and never produced an answer.
+
+    Raised rather than returned so the node fails. It used to fall out of the
+    loop and return "Task completed but no final response was generated" as the
+    run's *output* -- so a step that had fetched thirty-five pages and written
+    nothing was recorded ``completed``, wearing a green tick, and the step
+    downstream merged that sentence as if it were the research. A wrong answer
+    that announces itself is recoverable; one that reads as done is not.
+    """
+
+
 class SubagentActionAbortedError(Exception):
     """A safety decision terminated the operation the sub-agent asked for.
 

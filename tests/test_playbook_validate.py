@@ -8,8 +8,8 @@ from raven.playbook.validate import (
 )
 
 
-def _node(nid, agent="research-raven", template="do it", **over):
-    return NodeSpec(id=nid, agent=agent, prompt_template=template, **over)
+def _node(nid, subagent="research-raven", template="do it", **over):
+    return NodeSpec(id=nid, subagent=subagent, prompt_template=template, **over)
 
 
 def _spec(nodes, params=None):
@@ -32,10 +32,10 @@ def test_unknown_agent_is_an_error():
     was reported invalid, and one naming a deleted agent was reported fine.
     """
     known = ["research-raven", "code-raven"]
-    errors = validate_structure(_spec([_node("a", agent="gpt-9000")]), known_agents=known)
+    errors = validate_structure(_spec([_node("a", subagent="gpt-9000")]), known_agents=known)
     assert any("not registered" in e for e in errors)
     assert validate_structure(_spec([_node("a")]), known_agents=known) == []
-    assert validate_structure(_spec([_node("a", agent="gpt-9000")])) == []
+    assert validate_structure(_spec([_node("a", subagent="gpt-9000")])) == []
 
 
 def test_reference_must_be_inside_depends_on():
@@ -70,21 +70,30 @@ def test_cycles_and_unknown_deps_are_errors():
 _STATEFUL = {"research-raven"}
 
 
-def test_instance_rules_chain_and_who_may_set_the_skills():
+def test_instance_members_must_form_a_chain():
     # No dependency chain between same-instance members: they would run concurrently.
     concurrent = [_node("a", instance="w"), _node("b", instance="w")]
     errors = validate_graph_nodes(concurrent, set(), stateful_agents=_STATEFUL)
     assert any("no dependency chain" in e for e in errors)
-    # Only the node that opens the session may set its skills. The older rule
-    # demanded every member declare the *same* list, which let the file repeat it
-    # on members 2 and 3 where it had no effect -- reading as if each step
-    # configured its own tools.
-    late = [_node("a", instance="w", skills=["s1"]), _node("b", instance="w", skills=["s1"], depends_on=["a"])]
-    assert any(
-        "resumed session keeps the menu" in e for e in validate_graph_nodes(late, set(), stateful_agents=_STATEFUL)
-    )
     ok = [_node("a", instance="w", skills=["s1"]), _node("b", instance="w", depends_on=["a"])]
     assert validate_graph_nodes(ok, set(), stateful_agents=_STATEFUL) == []
+
+
+def test_a_continuation_node_may_now_declare_its_own_skills():
+    """The old rule 9 is gone with the mechanism that justified it.
+
+    It refused ``skills`` on any member after the first, because a resumed
+    raven-loop session keeps the system prompt -- and its skill menu -- from the
+    turn that opened it. The engine no longer puts the list there: it folds it
+    into the step's own prompt, a user message appended on every node. So a
+    continuation node's list now takes effect, and refusing it would reject a
+    graph that works.
+    """
+    late = [
+        _node("a", instance="w", skills=["s1"]),
+        _node("b", instance="w", skills=["s2"], depends_on=["a"]),
+    ]
+    assert validate_graph_nodes(late, set(), stateful_agents=_STATEFUL) == []
 
 
 def test_instance_needs_a_stateful_agent():

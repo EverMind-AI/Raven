@@ -45,7 +45,7 @@ class AgentCapabilities:
 
     Defaults are permissive so an agent missing from the map -- a test double, a
     backend built outside the config path -- is never rejected by these checks.
-    An unknown ``agent`` name is already the runner's error to raise.
+    An unknown ``subagent`` name is already the runner's error to raise.
     """
 
     stateful: bool = True
@@ -67,7 +67,7 @@ def validate_capabilities(
         spec (`SubAgentDagSpec`):
             The parsed graph spec.
         capabilities (`dict[str, AgentCapabilities]`):
-            Per-agent capabilities, keyed by the name a node's ``agent``
+            Per-agent capabilities, keyed by the name a node's ``subagent``
             field carries. Names absent from the map are not checked.
 
     Returns:
@@ -110,7 +110,7 @@ def _check_instance_reuse(
     for node in spec.nodes:
         if node.instance is None:
             continue
-        groups.setdefault((node.agent, node.instance), []).append(node.id)
+        groups.setdefault((node.subagent, node.instance), []).append(node.id)
 
     for (subagent, instance), node_ids in groups.items():
         if len(node_ids) < 2:
@@ -162,7 +162,7 @@ def _instance_groups(spec: SubAgentDagSpec) -> dict[tuple[str, str], list[DagNod
     for node in spec.nodes:
         if node.instance is None:
             continue
-        groups.setdefault((node.agent, node.instance), []).append(node)
+        groups.setdefault((node.subagent, node.instance), []).append(node)
     return groups
 
 
@@ -223,10 +223,10 @@ def _injection_notices(spec: SubAgentDagSpec, capabilities: dict[str, AgentCapab
     """
     notices: list[str] = []
     for node in spec.nodes:
-        caps = capabilities.get(node.agent)
+        caps = capabilities.get(node.subagent)
         if node.skills is not None and caps is not None and not caps.injectable_skills:
             notices.append(
-                f"node '{node.id}': agent '{node.agent}' cannot take injected skills "
+                f"node '{node.id}': agent '{node.subagent}' cannot take injected skills "
                 f"(only a built-in raven agent can), so its 'skills' list is ignored"
             )
         if node.mcps is not None and not MCPS_IMPLEMENTED:
@@ -236,7 +236,7 @@ def _injection_notices(spec: SubAgentDagSpec, capabilities: dict[str, AgentCapab
             )
         elif node.mcps is not None and caps is not None and not caps.injectable_mcps:
             notices.append(
-                f"node '{node.id}': agent '{node.agent}' cannot take injected mcp servers, "
+                f"node '{node.id}': agent '{node.subagent}' cannot take injected mcp servers, "
                 f"so its 'mcps' list is ignored"
             )
     return notices
@@ -247,7 +247,7 @@ def _check_path_placeholders(
     capabilities: dict[str, AgentCapabilities],
 ) -> None:
     """Reject path placeholders aimed at an agent that cannot read local files."""
-    caps = capabilities.get(node.agent)
+    caps = capabilities.get(node.subagent)
     if caps is None or caps.reads_local_files:
         return
 
@@ -260,7 +260,7 @@ def _check_path_placeholders(
         return
 
     raise DagValidationError(
-        f"node '{node.id}' passes local file paths to sub-agent '{node.agent}', which the "
+        f"node '{node.id}' passes local file paths to sub-agent '{node.subagent}', which the "
         f"roster tags [no-local-files]: it cannot open them, so the path would reach it as "
         f"meaningless text. Replace each with the content form ({'; '.join(offenders)}), or "
         f"move the node to a sub-agent tagged [local-files]. Then call run_subagent_dag again "

@@ -432,3 +432,77 @@ describe('transcript island, lane lifetime', () => {
     expect(stage().textContent).toContain('streaming')
   })
 })
+
+describe('transcript island, delegated calls', () => {
+
+  it('names the agent a spawn ran on, under either argument spelling', () => {
+    /* These arguments are the model's own, recorded with the call, so a
+       conversation opened from history hands us both spellings for as long as
+       those transcripts exist. Reading only the new one dropped the agent out
+       of every delegated row: the label fell back to "raven" whichever agent
+       had actually run. */
+    act(() => {
+      const st = mount.step()
+      st.tool('spawn', { task: 'dig', subagent: 'research-raven' }).done(true, 'started', 5)
+      st.tool('spawn', { task: 'dig', agent: 'code-raven', instance: 'refactor' }).done(true, 'started', 5)
+      st.seal()
+    })
+    const rows = $$('.wk .wrow').map((el) => el.textContent || '')
+    expect(rows.join(' | ')).toContain('research-raven')
+    expect(rows.join(' | ')).toContain('code-raven @refactor')
+    expect(rows.join(' | ')).not.toContain('gui.deleg.self')
+  })
+
+  it('builds a playbook load a chip per node from the run that started', () => {
+    /* A dag call the model makes carries `nodes`, so the chips come from the
+       arguments. The load of a `mode: dag` playbook carries `{name, params}`
+       and the graph exists only once the engine assembled it -- which is the
+       run-started payload. Without reading it the card took the run id and then
+       dropped every node update, because setChip only updates chips that are
+       already there. */
+    act(() => {
+      const st = mount.step()
+      st.tool('load_playbook', { name: 'topic-briefing', params: { topic: 'crows' } })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r1',
+        nodes: [
+          { id: 'tb-scan', subagent: 'research-raven' },
+          { id: 'tb-brief', subagent: 'content-raven' },
+        ],
+      })
+      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'tb-scan', status: 'completed' })
+    })
+    const chips = $$('.nds .nd')
+    expect(chips).toHaveLength(2)
+    expect(chips.map((c) => c.textContent).join(' ')).toContain('tb-scan')
+    /* The label the load produced survives: overwriting it in the dag branch
+       left the row unable to say which playbook was loaded. */
+    expect($('.wk')?.textContent).toContain('topic-briefing')
+  })
+
+  it('rebuilds a playbook load chips from disk when it saw no events', async () => {
+    /* The restore path, which is what the receipt's `DAG <run>:` lead exists
+       for: a card replayed from history sees no `run_started` at all, so the
+       nodes can only come from `dag.get`. Its rows went through the same
+       update-only `setChip`, so a load card -- whose arguments never carried a
+       graph -- kept the run id and showed no strip. */
+    wire({
+      dagRows: async () => [
+        { node: 'tb-scan', status: 'completed', subagent: 'research-raven' },
+        { node: 'tb-brief', status: 'running', subagent: 'content-raven' },
+      ],
+    })
+    await act(async () => {
+      const st = mount.step()
+      st.tool('load_playbook', { name: 'topic-briefing' })
+        .done(true, "DAG r9: started 'topic-briefing' (2 steps); results will be delivered when the run completes.", 5)
+      st.seal()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    const chips = $$('.nds .nd')
+    expect(chips).toHaveLength(2)
+    expect(chips.map((c) => c.getAttribute('data-st'))).toEqual(['completed', 'running'])
+  })
+})
+

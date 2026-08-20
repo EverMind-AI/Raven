@@ -196,7 +196,7 @@ BUILTIN_AGENTS + role_pool.py            playbook 自己的第 4 份, 与上面�
 
 **backend** = "这个 agent 怎么执行任务"的那段代码，接口只有 `async run(task, ...) -> str`。四种 kind 各一个实现（`RavenLoopBackend` 进程内 / `CliAgentBackend` 子进程读 transcript / `AcpAgentBackend` 协议握手 / `OpenAIApiBackend` HTTP）。进度、并发闸、配额、回注都是 manager 的事，不在 backend 里——接入方式的全部差异被关在 backend 内部，这正是消费方能只认名字的原因。
 
-**roster** = 渲染进工具描述、给模型看的名单文本，形如 `claude_code [stateful, local-files, live-progress] (描述...)`。它是模型唯一的信息来源——不在 roster 上的 agent 对模型等于不存在。三个能力标签正负都显式渲染（"没有标签"和"表里没说"对模型分不清）。工具描述负责告知、`agent` 参数的 `enum` 负责限制，两者必须来自同一个集合。
+**roster** = 渲染进工具描述、给模型看的名单文本，形如 `claude_code [stateful, local-files, live-progress] (描述...)`。它是模型唯一的信息来源——不在 roster 上的 agent 对模型等于不存在。三个能力标签正负都显式渲染（"没有标签"和"表里没说"对模型分不清）。工具描述负责告知、`subagent` 参数的 `enum` 负责限制，两者必须来自同一个集合。
 
 ---
 
@@ -208,7 +208,7 @@ BUILTIN_AGENTS + role_pool.py            playbook 自己的第 4 份, 与上面�
 
 | 字段 | 类型 | 必填/默认 | 说明 |
 |---|---|---|---|
-| `name` | string | 必填 | 全表唯一，`^[a-z0-9][a-z0-9_-]*$`，**创建时定、之后不可改**。模型在 `spawn(agent=)` 和节点 `agent` 里写的就是它 |
+| `name` | string | 必填 | 全表唯一，`^[a-z0-9][a-z0-9_-]*$`，**创建时定、之后不可改**。模型在 `spawn(subagent=)` 和节点 `subagent` 里写的就是它 |
 | `kind` | enum | 必填 | `builtin` / `cli` / `acp` / `openai`——接入方式，消费方只用它挑工厂分支 |
 | `description` | string | 必填 | 给模型看的能力说明，写职责与边界 |
 | `enabled` | boolean | 默认 `true` | 是否出现在 roster。记录用户意图，不由探测推导。**内置行没法"删"**（不写等于用包内默认），关掉一条内置行的唯一手段就是它 |
@@ -363,7 +363,7 @@ class AgentRegistry:
 | 字段 | 类型 | 必填/默认 | 说明 |
 |---|---|---|---|
 | `id` | string | 必填 | 任务名，`^[A-Za-z0-9_-]+$`，**会话内唯一**（后续图可引用它的输出），成为产物文件名 |
-| `agent` | string | 必填 | 调哪个 agent——注册表的 name（旧字段名 `subagent`，改名并扩语义） |
+| `subagent` | string | 必填 | 调哪个 agent——注册表的 name。**D5 曾把它改名 `agent`，已回退**，见 §14 |
 | `promptTemplate` | string | 必填 | 这一步做什么，就是注入的那段 prompt。占位符见 §4.4 |
 | `dependsOn` | list[string] | 默认 `[]` | 执行顺序，同时是 `{{ }}` 引用白名单（default-deny） |
 | `skills` | list[string] | 可选 | 注入本节点会话的 skills。收窄过滤器而非装载：只能从本机已有 skill 目录里挑，且叠在 `requires.tools` 过滤之上 |
@@ -375,9 +375,9 @@ class AgentRegistry:
 
 ```yaml
 nodes:
-  - {id: a1, agent: research-raven, dependsOn: [],   skills: [市场调研]}
-  - {id: b,  agent: code-raven,     dependsOn: [a1]}
-  - {id: a2, agent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
+  - {id: a1, subagent: research-raven, dependsOn: [],   skills: [市场调研]}
+  - {id: b,  subagent: code-raven,     dependsOn: [a1]}
+  - {id: a2, subagent: research-raven, dependsOn: [b],  skills: [代码审计], mcps: [github]}
 ```
 
 **闸只有一级，在整张图这一层，而且它是 dag 自己的字段**（图级 `confirm`，D13；playbook 的顶层 `confirm` 注入它）。节点级 `confirm` 不做——它要求 runner 具备 pause/resume，而"批准一张图"本身是完整语义：审的时候看到的是全图，点头就是对包含那一步的整张图点头。
@@ -720,7 +720,7 @@ fills = {"draft": {"promptTemplate": "按 Acme 的定价页写一段对比"}}
 | 维度 | 关系 |
 |---|---|
 | `nodes[]` 的**字段集** | playbook ⊆ dag，任何时刻成立 |
-| `nodes[]` 的**必填性** | **playbook ≤ dag（更松）**。dag 的 `required` 是 `id` / `agent` / `promptTemplate`；playbook 可以留空 `promptTemplate` 交模型补 |
+| `nodes[]` 的**必填性** | **playbook ≤ dag（更松）**。dag 的 `required` 是 `id` / `subagent` / `promptTemplate`；playbook 可以留空 `promptTemplate` 交模型补 |
 
 差额由 `fills` 补齐，最终由 dag 的校验兜底。**实现时不要照抄 dag 的 `required` 到 playbook 的 model 上**——
 那会让"留空"过不了文件校验。
@@ -812,7 +812,7 @@ backend object, because the DAG tool and the sub-agent manager build separate ba
 | playbook 用外部 agent | 校验拒：`agent 'claude_code' is not registered` | 表上有就能用 |
 | `instance` 共享会话 | 生成器与 `playbook validate` 拒；手写直接跑则**静默丢弃**（executor 组 `tool_nodes` 时不带它） | 内置行恒 stateful，写了就生效（并需要 §5.3 末那道并发闸） |
 | handle 跨 run 复用 | instance registry 的 key 是 `pb-*` | key 用 `node.agent` 真名，与 spawn / dag 同一命名空间 |
-| trace 归因 | 派发名 `pb-<node>` 看不出用了哪个 agent | 节点自带 `agent`，合成名机制整体删除 |
+| trace 归因 | 派发名 `pb-<node>` 看不出用了哪个 agent | 节点自带 `subagent`，合成名机制整体删除 |
 
 ---
 
@@ -948,7 +948,7 @@ P5  G/H/I 随各期分摊
 | `"raven"` 保留名 | 归通用 builtin 行 |
 | name vs id | name；不可改；无别名机制 |
 | builtin `liveProgress` | `true`（已按代码实测） |
-| 合成名 / `run_with_roles` | 删除；节点自带 `agent`，runner 查 registry |
+| 合成名 / `run_with_roles` | 删除；节点自带 `subagent`，runner 查 registry |
 | `instance` 语义 | 只管上下文延续；本期非链头节点禁传 `skills`/`mcps`（实现限制），`promptTemplate` 不受限 |
 | 节点级 `confirm` | **不做**。闸只在整张图一级。附带一条**本稿提出、尚未拍板**的产品要求：确认卡要展示哪些步骤有对外副作用（判据是节点 agent 的 mcp / tools 含写操作），否则"一次审批一张图"缺信息 |
 | name 唯一性的校验档位 | load 期去重加 warning，硬拒只在写入路径。**修正首稿**：schema 层硬拒会让 raven 起不来，见 §3.1 |
@@ -1063,7 +1063,9 @@ P5  G/H/I 随各期分摊
 ### 12.4 仍未做
 
 - **C4/D10 的文案定稿**：`spawn` 描述已改（带 NOTE 标记）、编排指导 skill 正文未动——模型面措辞，按 §0.5 交算法侧。
-- **J 组**：整期未动（漏斗仍在跑；executor 已经预留 `confirmed=` 参数，J8 落地时把它去掉即可）。
+- **J 组**：写下本节时整期未动。**后来做了** —— J1-J18 全部落地，见 §13；漏斗、门控、
+  declines、contenders 四套机制已删除，`confirmed=` 参数也随之去掉。本行保留原判断以
+  存档，实际状态以 §13 为准。
 - **mcps 注入**：按方案单独一期；现在写了就降级告知（`MCPS_IMPLEMENTED = False`）。
 - `test_cli_update_notice.py` 的 7 个失败**在 `origin/main` 上就存在**（stash 后复跑确认），与本方案无关。
 
@@ -1115,7 +1117,7 @@ J1-J18 全部落地，与 A-I 同一分支。**删掉的比新增的多**：`mat
 | J5 | `run_playbook` → `load_playbook`（文件改名），新增 `fills`，新增缺口回路，`mode` 不进签名 |
 | J6 | `_apply_fills`：键是作者写的 plain id；**目标字段必须确实留空**，否则整体拒 |
 | J7 | `MAX_GAP_ROUNDS = 2`，键是 (会话, 剧本)；派发成功后重置预算 |
-| J8 | executor 把 `spec.confirm` 传成 dag 的图级 `confirm`；`ask` 经 `SubAgentDagTool.set_ask` late-bind 到 `ask_user` |
+| J8 | executor 把 `spec.confirm` 传成 dag 的图级 `confirm`；**asker 从构造器进**（`SubAgentDagTool(ask=...)`，接 `AgentLoop._confirm_graph`）。首稿写的 `set_ask` late-bind **被评审判成洞并删掉**：setter 意味着漏接也能跑，只是永远不问人——我的测试每处都手动接了线，于是测试全绿而**生产那个实例从来没人接**，闸是死的。构造器强制传参把漏接从一种运行状态变成建不起来 |
 | J9 | `DagNodeSpec.agent` / `prompt_template` 可为空（pattern 放开 + 默认 `""`），**`validate_and_order` 兜底拒空** |
 | J10/b/c/d | 新 `raven/playbook/router.py`：`select_playbooks` 按关键词命中数排序取 top-K，配置住 `playbooks.router`；**自己一份实例**，不混进 skill router |
 | J11 | `disabled` = 不进 `listing()` 也不进 `names()`（enum），`[disabled]` 标记删除；CLI 走 `allow_disabled=True` |
@@ -1165,3 +1167,106 @@ ui-tui: tsc --noEmit / prettier / lint:rpc          clean, generated.ts in sync
 
 补完 **92.55%**，且 ratchet 是往上走的——之前担心"删掉高覆盖代码（门控 100%、role_pool 80%）
 会把总数拖下来"没有发生。
+
+## 14. D5 改名回退：字段回到 `subagent`
+
+D5 把节点字段从 `subagent` 改名 `agent`（§11 那行的理由是"口径统一"）。**这个决定已回退** ——
+维护者的判断是一个概念两个名字比名字不够统一更贵。
+
+### 14.1 回退的是哪一层
+
+| 层 | 改名前（!130） | 现在 |
+|---|---|---|
+| 节点字段（模型面 JSON Schema、playbook 文件） | `agent` | **`subagent`** |
+| `spawn` 的参数 | `agent` | **`subagent`** |
+| 落盘的节点状态、`dag_run_started` / `dag_node_updated` 负载、两个前端 | `subagent`（从未改过） | `subagent` |
+| 配置里的那张表 | `subagents.agents[]` | `subagents.agents[]`（**不动**） |
+| `AgentRegistry` / `AgentRow` / `AgentCaps` | 表相关的类名 | 不动 |
+
+**容器与角色是两个轴,各留各的词**:表列的是身份（`agents[]` 里的行），字段说的是"这一步由谁以子身份跑"
+（`subagent`）。改名回退只统一了后者 —— 同一个对象在 schema 里和磁盘上不再有两个名字。
+
+### 14.2 为什么这个方向便宜
+
+D5 那次改名之所以看着"更统一"，是因为它对齐了容器名；但它**打破的是更老的那个拼法** ——
+`agent` 是 playbook 文件侧一直在用的名字（见 `playbook/types.py` 的历史说明：
+"the step's target field was spelled `agent` here and `subagent` there"），
+而 `subagent` 是落盘与线上契约侧一直在用的名字。
+
+两个方向的代价不对称：
+
+- **统一到 `subagent`**（本次）：改模型面 schema + 作者面文件 + 一条存量剧本迁移。
+  **线上契约零改动、`generated.ts` 零改动、两个前端零改动、无数据迁移** —— 因为落盘键本来就是 `subagent`。
+- 统一到 `agent`（不做）：要改 `DagRunStartedNode` / `DagSnapshotNode` 两个 `extra=forbid` 的 wire 模型、
+  重新生成契约与两份客户端、改两个前端。破坏性契约变更，换来的只是命名整齐。
+
+### 14.3 迁移
+
+存量剧本**全部**写的是 `agent:`（不只是 !130 之后写的 —— 那是 playbook 侧一直的拼法），
+所以 `_migrate_legacy_nodes` 里这条改写是**无条件**的，不挂在任何标记上：节点带 `agent` 且不带
+`subagent` 时改写键名。`extra="forbid"` 意味着不迁移就是静默失效 —— 剧本加载报 warning、
+从库里消失，正是本方案评审抓到的那类 bug。
+
+`_reader.py` 保留一条 `agent` 兜底，覆盖 !130 那一个版本期间写下的 `graph.json`。
+
+## 15. `skills` / `mcps` 从 dag 工具参数上撤下
+
+维护者定的：**模型组图时只该关心传什么 prompt**。这两个字段从 `run_subagent_dag` 的参数里删除，
+playbook 侧保留，由**引擎在派发那一步消费**。
+
+### 15.1 改了什么
+
+| 层 | 之前 | 现在 |
+|---|---|---|
+| `_NODE_SCHEMA`（模型读的工具定义） | 8 个字段 | **6 个** —— `id` / `subagent` / `promptTemplate` / `dependsOn` / `inputs` / `instance` |
+| `DagNodeSpec`（数据模型） | 8 个字段 | **不动** —— playbook 文件解析成它，字段必须在 |
+| executor 派发 | 把 `skills` / `mcps` 原样传给 dag | `skills` 折进这一步的 `promptTemplate`（一句建议）；`skills: []` 与 `mcps` 走 note，不进 prompt |
+| playbook 校验规则 9 | 同句柄非链头禁写 `skills` / `mcps` | **删除** |
+
+省下的模型面成本：节点 schema 从 3019 字符降到 2516（约 **148 token / 每次请求**），
+外加不必再教模型 `None` / `[]` / 列表 那套三值语义。
+
+### 15.2 `skills` 的语义由维护者定死了：一句建议
+
+> "这里所谓的 skills 其实只是注入到节点 agent 的上下文，告诉他这些 skills 可以优先用，仅此而已，
+> 没有只能看到哪些或者一定要用哪些的说法。"
+
+所以它折进这一步的 `promptTemplate`，随任务描述一起交给跑这一步的 agent，**既不是过滤器也不是命令**：
+
+| | 表达得出吗 |
+|---|---|
+| "这几个跟这活相关，优先考虑" | ✅ 这就是它 |
+| "只让这一步看见这几个技能" | ❌ 菜单不再被过滤，其余技能照样在它眼前 |
+| "这一步必须用某个技能" | ❌ 用哪个始终是那个 agent 现场按上下文定的 |
+
+原来的 `skills_allow` 是**菜单过滤器**——决定哪几条 skill 摘要写进 subagent 的 system prompt
+（`raven_loop.py` 的 `build_subagent_prompt`）。那条路的机制**一行没删**，只是不再有人往里喂：
+模型面没有这个字段，executor 改成折进 prompt。想把两者都接上是可行的（且对模型零成本），
+但那需要区分"开会话的那个节点"——resume 时整条沿用历史里的 system prompt，收窄在续会话的节点上
+静默失效。按上面这个语义，不需要那条路。
+
+`skills: []` 因此**没有含义了**：它既不是"只看见零个"（限制），也不是"禁止用"（命令）。
+按不写处理，**但派发时明确回报一句**——文件里写着 `skills: []` 看起来是提了要求的，
+静默丢弃就是这次一路在修的那类 bug。真要"这一步别用技能"，写在 `promptTemplate` 里。
+
+### 15.3 `mcps` 为什么不拼进 prompt
+
+维护者说的是"把相应的东西拼进 prompt"，这一条我偏了，理由是它拼不出东西来：
+subagent 的工具注册表是一份写死的七个（`raven_loop.py` 起：读/写/改文件、列目录、执行命令、
+网页搜索、网页抓取），**没有任何 mcp 接入路径**。把 `mcps: [github]` 拼成"你可以用 github"，
+它手上没有那个工具，只能说做不到或者编 —— 那正是本方案评审判定的假承诺。
+所以它保持"声明 + 明确回报未生效"，等 mcps 注入那一期真建出来再说。
+
+### 15.4 规则 9 为什么必须跟着删
+
+它的全部依据是"resume 时整条沿用历史里的 system prompt，所以只有链头的 `skills` 生效"。
+`skills` 现在落在 `promptTemplate` 上，那是**每个节点都追加的 user message**，
+链上任何一个节点写了都同样到达那一步的 agent。依据消失了，规则留着就变成一条会拒掉合法图的假规则。
+
+### 15.5 留下的一处死角
+
+dag 侧的 `skills` 处理还在（`_resolve_node` 的 per-node 窄化、`_check_injection_on_continuation`、
+`_injection_notices`）。模型不再被告知这个字段、executor 不再传它，所以**没有生产路径会喂到它**，
+它今天只被测试直接调用。删掉是净收益，但会连带动 `_NodeBuild` / `Injectable` / `MCPS_IMPLEMENTED`
+一串，本轮没做，记在这里。
+

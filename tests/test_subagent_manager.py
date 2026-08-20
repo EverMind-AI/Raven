@@ -737,3 +737,170 @@ async def test_announcement_no_longer_tells_the_model_to_drop_technical_detail()
 
     assert 'Do not mention technical details like "subagent" or task IDs' not in submitted[0].text
     assert "out of what you say to the user" in submitted[0].text
+
+
+class _ToolThenAnswerProvider(LLMProvider):
+    """One tool call, then a final answer -- the shape a real run has."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+            )
+        return LLMResponse(content="final answer", finish_reason="stop")
+
+
+async def test_a_builtin_run_records_what_it_did_on_the_way(tmp_path) -> None:
+    """The in-process lane hands its turns to the collector like the acp lane does.
+
+    It always had them -- the loop builds the whole message list and passes it to
+    ``on_messages`` -- and simply never offered them, so a built-in sub-agent was
+    the one kind whose detail view could show nothing between the prompt and the
+    answer: the DAG runner writes ``<node>.transcript.jsonl`` from the collector,
+    and the collector was empty for this lane alone.
+
+    Only the middle goes in: the reader puts the prompt and the answer back
+    around it, so carrying either here would draw it twice, and the system prompt
+    is not part of the account of a run at all.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_ToolThenAnswerProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        answer = await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None)
+
+    assert answer == "final answer"
+    roles = [m.get("role") for m in did.transcript]
+    assert roles == ["assistant", "tool"], "the tool call and its result, which is what was missing"
+    assert not [m for m in did.transcript if str(m.get("content") or "") == "do it"], "the reader adds the prompt"
+
+
+async def test_a_resumed_builtin_run_records_only_its_own_turns(tmp_path) -> None:
+    """A resumed instance arrives with history, which is not this node's work.
+
+    Slicing from a constant index would replay every earlier node of a shared
+    ``instance`` as this one's, which reads as one step having done all of it.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    history = [
+        {"role": "system", "content": "you are a subagent"},
+        {"role": "user", "content": "an earlier node's task"},
+        {"role": "assistant", "content": "an earlier node's answer"},
+    ]
+    backend = RavenLoopBackend(provider=_ToolThenAnswerProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("this node's task", task_id="n2", workspace=tmp_path, executor=None, history=history)
+
+    contents = [str(m.get("content")) for m in did.transcript]
+    assert contents, "the run still did something worth recording"
+    assert not [c for c in contents if "earlier node" in c], "history is not this node's account"
+
+
+async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:
+    """A panel watches a running node through the collector, so the account has
+    to exist before the answer does.
+
+    Asserted from inside the run: the tool the sub-agent calls reads the
+    collector mid-flight, which is the only vantage point that can tell
+    "published on the way" from "published at the end". Publishing only at the
+    end left a running node showing its prompt and nothing else, which reads as
+    a node that is stuck.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    seen: list[int] = []
+
+    class _Watching(_ToolThenAnswerProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs):
+            # Called once before any tool result exists, once after.
+            cur = activity.current()
+            seen.append(len(cur.transcript) if cur is not None else -1)
+            return await super().chat(messages, tools=tools, model=model, **kwargs)
+
+    backend = RavenLoopBackend(provider=_Watching(), model="stub", agent_home=tmp_path)
+    with activity.collecting() as did:
+        await backend.run("do it", task_id="n3", workspace=tmp_path, executor=None)
+
+    assert seen[0] == 0, "nothing has happened yet on the first model call"
+    assert seen[1] > 0, "the tool call and its result are visible before the answer is"
+    assert len(did.transcript) >= seen[1], "the final write is not smaller than the mid-flight one"
+
+
+class _AlwaysToolsProvider(LLMProvider):
+    """Never stops calling tools -- what a research task actually looked like."""
+
+    def __init__(self, answer_when_toolless: str | None = "here is what I have") -> None:
+        super().__init__(api_key="test")
+        self.rounds = 0
+        self.toolless_calls = 0
+        self._answer = answer_when_toolless
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        if not tools:
+            self.toolless_calls += 1
+            return LLMResponse(content=self._answer or "", finish_reason="stop")
+        self.rounds += 1
+        return LLMResponse(
+            content="",
+            finish_reason="tool_calls",
+            tool_calls=[ToolCallRequest(id=f"c{self.rounds}", name="list_dir", arguments={"path": "."})],
+        )
+
+
+async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> None:
+    """The budget ending is not the same as having nothing to say.
+
+    A research node spent all fifteen rounds on web_fetch, never answered, and
+    the run's entire output was "Task completed but no final response was
+    generated" -- 51 bytes, recorded ``completed``, and merged by the next step
+    as if it were the research. Everything it fetched was in the message list
+    the whole time, so the last round asks for an answer with no tools attached:
+    unable to call another, the model writes one.
+    """
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _AlwaysToolsProvider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    out = await backend.run("research it", task_id="n1", workspace=tmp_path, executor=None)
+
+    assert out == "here is what I have"
+    assert provider.rounds == RavenLoopBackend._MAX_ITERATIONS, "the budget is still a budget"
+    assert provider.toolless_calls == 1, "asked exactly once, after the rounds ran out"
+
+
+async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_path) -> None:
+    """Raised, not returned. A node that produced nothing must not wear a tick
+    while the step downstream merges its placeholder as data."""
+    from raven.agent.subagent.backends.base import SubagentNoAnswerError
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(
+        provider=_AlwaysToolsProvider(answer_when_toolless=None), model="stub", agent_home=tmp_path
+    )
+
+    with pytest.raises(SubagentNoAnswerError, match="no answer"):
+        await backend.run("research it", task_id="n2", workspace=tmp_path, executor=None)
