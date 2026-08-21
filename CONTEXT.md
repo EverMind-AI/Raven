@@ -620,6 +620,23 @@ is sent anywhere).
 _Avoid_: calling the unredacted Bundle a "report" — only the redacted tarball leaves
 the machine.
 
+**Trajectory Replay** (`raven/trajectory/replay.py`):
+Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
+recorded model replies (`llm.output`) and tool results (`tool.output`) are fed back
+in recording order through a `ReplayProvider` and a `ReplayToolRegistry` while the
+live agent-loop code runs for real. No real tool ever executes, and the replay run
+emits no spans (tracing is disabled for its duration).
+_Avoid_: confusing with a real re-run against live models/tools — that is evolver
+evaluation, not replay.
+
+**Replay Divergence** (`raven/trajectory/replay.py`):
+The point where the live harness's request stops matching the recording — the
+expected outcome once a bug is fixed, not an error. Detected per model call
+(model id, message roles/contents, tool-call names+arguments, offered tool names,
+under nonce/timestamp/cache-control normalization) and per tool call (name +
+arguments). Policy `strict` halts at the first divergence; `warn` reports and
+keeps feeding by order.
+
 ### Workspace & Onboarding
 
 **Workspace**:

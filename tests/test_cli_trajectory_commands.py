@@ -53,7 +53,7 @@ def test_group_registered_on_app() -> None:
 
 
 def test_subcommand_help() -> None:
-    for cmd in ("save", "report", "verdict", "pin", "unpin", "list"):
+    for cmd in ("save", "report", "replay", "verdict", "pin", "unpin", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
         assert r.exit_code == 0, cmd
 
@@ -427,3 +427,98 @@ def test_list_empty(state) -> None:
     r = runner.invoke(trajectory_app, ["list"])
     assert r.exit_code == 0
     assert "No attempts found" in r.stdout
+
+
+# ── replay ────────────────────────────────────────────────────────────
+
+
+def _replay_bundle(root, *, recorded_input=None):
+    """A minimal replayable bundle: one turn, one content-only model reply."""
+    bundle = root / "att-r"
+    (bundle / "artifacts").mkdir(parents=True)
+    (bundle / "artifacts" / "turn.json").write_text(
+        json.dumps({"content": "go", "channel": "cli", "chat_id": "direct"}), encoding="utf-8"
+    )
+    (bundle / "artifacts" / "out.json").write_text(
+        json.dumps({"content": "done", "finish_reason": "stop", "tool_calls": [], "usage": {}}), encoding="utf-8"
+    )
+    llm_attrs = {"llm.output.artifact_path": "artifacts/out.json"}
+    if recorded_input is not None:
+        (bundle / "artifacts" / "in.json").write_text(json.dumps(recorded_input), encoding="utf-8")
+        llm_attrs["llm.input.artifact_path"] = "artifacts/in.json"
+    spans = [
+        {
+            "traceId": "att-r",
+            "spanId": "llm-0",
+            "name": "llm.call",
+            "attributes": {"attempt.id": "att-r", "session.key": "cli:direct", **llm_attrs},
+        },
+        {
+            "traceId": "att-r",
+            "spanId": "turn-0",
+            "name": "session.turn",
+            "attributes": {
+                "attempt.id": "att-r",
+                "session.key": "cli:direct",
+                "turn.input.artifact_path": "artifacts/turn.json",
+            },
+        },
+    ]
+    (bundle / "spans.jsonl").write_text("".join(json.dumps(s) + "\n" for s in spans), encoding="utf-8")
+    (bundle / "manifest.json").write_text(json.dumps({"format_version": 1, "attempt_id": "att-r"}), encoding="utf-8")
+    return bundle
+
+
+def test_replay_unknown_target_exits_1(state) -> None:
+    r = runner.invoke(trajectory_app, ["replay", "no-such-id"])
+    assert r.exit_code == 1
+    assert "raven trajectory save" in r.stdout
+
+
+def test_replay_bundle_path_runs_to_completion(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path)
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle)])
+
+    assert r.exit_code == 0, r.output
+    assert "model calls: 1/1" in r.stdout
+    assert "turns: 1/1" in r.stdout
+    assert "No divergence" in r.stdout
+
+
+def test_replay_by_attempt_id_finds_bundle_under_state(state) -> None:
+    _replay_bundle(state / "bundles")
+
+    r = runner.invoke(trajectory_app, ["replay", "att-r"])
+
+    assert r.exit_code == 0, r.output
+    assert "Replay ran to the end" in r.stdout
+
+
+def test_replay_strict_divergence_exits_2(state, tmp_path) -> None:
+    """A recorded request that cannot match the live one (wrong message count)
+    halts a strict replay: exit code 2, divergence details printed."""
+    bundle = _replay_bundle(
+        tmp_path,
+        recorded_input={"model": "m", "messages": [{"role": "user", "content": "never"}], "tools": []},
+    )
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--strict"])
+
+    assert r.exit_code == 2, r.output
+    assert "divergence" in r.stdout
+    assert "llm call #1" in r.stdout
+    assert "Replay halted" in r.stdout
+
+
+def test_replay_warn_reports_divergence_but_completes(state, tmp_path) -> None:
+    bundle = _replay_bundle(
+        tmp_path,
+        recorded_input={"model": "m", "messages": [{"role": "user", "content": "never"}], "tools": []},
+    )
+
+    r = runner.invoke(trajectory_app, ["replay", str(bundle), "--warn"])
+
+    assert r.exit_code == 0, r.output
+    assert "divergence(s)" in r.stdout
+    assert "Replay ran to the end" in r.stdout

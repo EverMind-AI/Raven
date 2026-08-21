@@ -20,6 +20,9 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``report``   — the shippable form: the redacted copy packed into a
   ``.tar.gz``, delivered through the pluggable :class:`report.Uploader`
   (v1: local file only).
+- ``replay``   — deterministic replay. Feeds a bundle's recorded model
+  replies and tool results back through the live harness (mock replay: no
+  real tool ever executes), with strict/warn divergence policies.
 
 The address unit is the **attempt** (``attempt.id`` on every span): one task
 try, possibly spanning several turns. Without an explicitly opened attempt
@@ -38,6 +41,16 @@ from raven.trajectory.redact import (
     collect_known_secrets,
     redact_bundle,
     scan_residuals,
+)
+from raven.trajectory.replay import (
+    Divergence,
+    Recording,
+    ReplayProvider,
+    ReplayReport,
+    ReplayState,
+    ReplayToolRegistry,
+    load_recording,
+    run_replay,
 )
 from raven.trajectory.report import LocalTarballUploader, Uploader, get_uploader, pack_report
 from raven.trajectory.store import (
@@ -60,9 +73,15 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "Divergence",
     "KnownSecret",
     "LocalTarballUploader",
+    "Recording",
     "RedactionReport",
+    "ReplayProvider",
+    "ReplayReport",
+    "ReplayState",
+    "ReplayToolRegistry",
     "ResidualFinding",
     "Uploader",
     "Verdict",
@@ -72,6 +91,7 @@ __all__ = [
     "is_pinned",
     "iter_spans",
     "latest_verdict",
+    "load_recording",
     "pack_report",
     "pin",
     "pins",
@@ -79,6 +99,7 @@ __all__ = [
     "record_verdict",
     "redact_bundle",
     "resolve_attempt_id",
+    "run_replay",
     "scan_residuals",
     "span_log_paths",
     "unpin",

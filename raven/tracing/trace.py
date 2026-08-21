@@ -66,7 +66,19 @@ class Span:
     )
 
     def __init__(
-        self, name, kind, *, trace_id, span_id, parent, session_key, channel, chat_id, start, source=None, attempt_id=None
+        self,
+        name,
+        kind,
+        *,
+        trace_id,
+        span_id,
+        parent,
+        session_key,
+        channel,
+        chat_id,
+        start,
+        source=None,
+        attempt_id=None,
     ):
         self.name = name
         self.kind = kind
@@ -456,3 +468,14 @@ def current_attempt(session_key: str | None) -> str | None:
 
 def enabled() -> bool:
     return config.enabled()
+
+
+def suppress():
+    """Context manager: disable tracing for the current task tree only.
+
+    For runs that must not reach the live store (e.g. a trajectory replay is a
+    mock re-run — its spans would mint fake trajectories). Task-local via a
+    context variable, so real turns running concurrently in the same process
+    keep tracing; tasks spawned inside the block inherit the suppression.
+    """
+    return config.suppress()

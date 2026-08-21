@@ -398,3 +398,48 @@ def test_attempt_id_survives_detached_and_checkpoint(trace_dir):
         trace.end_attempt("cli:c")
     for sp in _spans_written(trace_dir):
         assert sp["attributes"]["attempt.id"] == aid
+
+
+def test_suppress_silences_only_its_own_block(trace_dir):
+    with trace.span("session.turn", session_key="cli:s"):
+        pass
+    with trace.suppress():
+        assert not trace.enabled()
+        with trace.span("session.turn", session_key="cli:s"):
+            with trace.span("llm.call"):
+                pass
+    assert trace.enabled()
+    with trace.span("tool.call"):
+        pass
+
+    names = [sp["name"] for sp in _spans_written(trace_dir)]
+    assert names == ["session.turn", "tool.call"], "suppressed spans must not be emitted"
+
+
+def test_suppress_is_task_local(trace_dir):
+    """A concurrent task keeps tracing while another task suppresses —
+    the contract that lets a replay run beside real turns in one process."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def suppressed_task():
+        with trace.suppress():
+            started.set()
+            await release.wait()
+            with trace.span("llm.call"):
+                pass
+
+    async def live_task():
+        await started.wait()
+        with trace.span("session.turn", session_key="cli:live"):
+            pass
+        release.set()
+
+    async def main():
+        await asyncio.gather(suppressed_task(), live_task())
+
+    asyncio.run(main())
+
+    names = [sp["name"] for sp in _spans_written(trace_dir)]
+    assert names == ["session.turn"], "only the live task's span may be emitted"

@@ -10,6 +10,9 @@ wrappers over the trajectory layer:
   (:func:`raven.trajectory.bundle.collect_bundle`; auto-pins the id).
 - ``report``  — re-pack, redact a copy (three layers, original untouched),
   preview residual suspects, and produce a shareable ``.tar.gz``.
+- ``replay``  — feed a bundle's recorded model replies and tool results back
+  through the live harness (:func:`raven.trajectory.replay.run_replay`; no
+  real tool code runs, no spans are emitted).
 - ``verdict`` — record a task-outcome label (source fixed to ``user``).
 - ``pin`` / ``unpin`` — grant / revoke the never-purge retention promise.
 - ``list``    — aggregate addressable attempts from the trace logs so users
@@ -18,6 +21,7 @@ wrappers over the trajectory layer:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import tempfile
@@ -182,6 +186,58 @@ def trajectory_report(
         console.print("  [dim]local backend: nothing was uploaded — hand the file over yourself[/dim]")
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+@trajectory_app.command("replay")
+def trajectory_replay(
+    target: str = typer.Argument(..., metavar="BUNDLE_OR_ID", help="Bundle directory, or an attempt/trace id"),
+    strict: bool = typer.Option(
+        False,
+        "--strict/--warn",
+        help="strict: halt at the first divergence; warn (default): report divergences and keep feeding",
+    ),
+) -> None:
+    """Replay a saved trajectory through the live harness (mock replay: recorded
+    model replies and tool results are fed back; no real tool code runs).
+
+    Exit codes: 0 — replayed to the end; 1 — bad target; 2 — replay halted
+    (strict divergence, or the recording ran out mid-replay).
+    """
+    from raven.trajectory.replay import run_replay
+
+    bundle_dir = Path(target)
+    if not (bundle_dir / "manifest.json").is_file():
+        bundle_dir = tracing_config.state_dir() / "bundles" / target
+        if not (bundle_dir / "manifest.json").is_file():
+            console.print(
+                f"[red]no bundle found for {target!r}[/red] — run [cyan]raven trajectory save {target}[/cyan] first"
+            )
+            raise typer.Exit(code=1)
+
+    mode = "strict" if strict else "warn"
+    try:
+        report = asyncio.run(run_replay(bundle_dir, mode=mode))
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    streamed = f" ({report.llm_calls_streamed} streamed)" if report.llm_calls_streamed else ""
+    console.print(f"Replayed [cyan]{bundle_dir.name}[/cyan] ({mode} mode)")
+    console.print(
+        f"  turns: {report.turns_replayed}/{report.turns_recorded}"
+        f"  model calls: {report.llm_calls_replayed}/{report.llm_calls_recorded}{streamed}"
+        f"  tool calls: {report.tool_calls_replayed}/{report.tool_calls_recorded}"
+    )
+    if report.divergences:
+        console.print(f"[yellow]{len(report.divergences)} divergence(s):[/yellow]")
+        for div in report.divergences:
+            console.print(f"  [yellow]{escape(div.render())}[/yellow]")
+    else:
+        console.print("[green]No divergence — the harness reproduced the recording.[/green]")
+    if report.halted:
+        console.print("[red]Replay halted before the end of the recording.[/red]")
+        raise typer.Exit(code=2)
+    console.print("[green]✓[/green] Replay ran to the end of the recorded turns.")
 
 
 @trajectory_app.command("verdict")
