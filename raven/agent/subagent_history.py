@@ -106,6 +106,54 @@ def dag_root(session_dir: Path) -> Path:
     return session_history_root(session_dir) / _DAG_DIRNAME
 
 
+def add_turn_to_instance_log(
+    session_dir: Path | None,
+    *,
+    meta: dict[str, Any],
+    prompt: str | None,
+    output: str | None = None,
+    error: str | None = None,
+    activity: Any = None,
+    kind: str = "",
+) -> None:
+    """Add one finished turn to the instance's own conversation log.
+
+    Every lane that owns a record calls this, because an instance's conversation
+    is spread across all of them: the same handle can be dispatched by ``spawn``,
+    run as a DAG node and then direct-chatted, and only the union is that
+    instance's conversation.
+
+    Typed loosely and failing silently for the same reason the rest of this
+    module is: an audit trail must never take down the run it describes.
+    """
+    agent = str(meta.get("agent") or "")
+    handle = str(meta.get("handle") or meta.get("instance") or "")
+    if session_dir is None or not agent or not handle:
+        return
+    # A transport that narrated as it went already has that prose on the steps it
+    # was said before, so the closing row is what it said last -- not `output`,
+    # which is every burst joined for the caller receiving the answer. A lane
+    # that cannot tell them apart reports None and `output` stands in whole.
+    closing = getattr(activity, "closing", None)
+    answer = output if closing is None else (closing or None)
+    try:
+        from raven.agent.subagent.instance_log import append_turn
+
+        append_turn(
+            session_dir,
+            agent=agent,
+            handle=handle,
+            session_key=str(meta.get("session_key") or ""),
+            kind=kind,
+            prompt=prompt,
+            messages=getattr(activity, "transcript", None),
+            answer=answer,
+            error=error,
+        )
+    except Exception as exc:  # noqa: BLE001 - the instance log may not break a run
+        logger.warning("Subagent instance log could not be updated: {}", exc)
+
+
 class SpawnRecord:
     """One ``spawn`` call's on-disk record: ``spawn/<call_id>/``.
 
@@ -121,8 +169,13 @@ class SpawnRecord:
     losing it must never take down the run it is describing.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, session_dir: Path | None = None, task: str | None = None) -> None:
         self.dir = directory
+        # Kept so `finish` can add this turn to the instance's own log: that file
+        # is addressed by (agent, handle) under the session, which the record
+        # directory's path does not spell out.
+        self.session_dir = session_dir
+        self.task = task
 
     @classmethod
     def open(
@@ -133,7 +186,7 @@ class SpawnRecord:
         task: str,
         meta: dict[str, Any],
     ) -> "SpawnRecord":
-        record = cls(spawn_root(session_dir) / make_call_id(task_id))
+        record = cls(spawn_root(session_dir) / make_call_id(task_id), session_dir=Path(session_dir), task=task)
         try:
             record.dir.mkdir(parents=True, exist_ok=True)
             (record.dir / "prompt.md").write_text(task, encoding="utf-8")
@@ -185,6 +238,15 @@ class SpawnRecord:
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Subagent history at {} could not be finished: {}", self.dir, exc)
+        add_turn_to_instance_log(
+            self.session_dir,
+            meta=self._read_meta(),
+            prompt=self.task,
+            output=output,
+            error=error,
+            activity=activity,
+            kind="spawn",
+        )
 
     def _read_meta(self) -> dict[str, Any]:
         try:

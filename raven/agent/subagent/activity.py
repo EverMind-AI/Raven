@@ -67,6 +67,21 @@ class RunActivity:
     # transport can see it. Not part of as_meta: it is written to its own file
     # beside the record, not into a meta.json read on every panel poll.
     transcript: list[dict[str, Any]] = field(default_factory=list)
+    # Where this run's ACP frames sit in its connection's journal: the file, the
+    # byte range this call occupied, and where the connection's own handshake
+    # ends. A pointer rather than the frames themselves -- they are already a
+    # file, and meta.json is read on every poll of a panel that polls often.
+    frames: dict[str, Any] = field(default_factory=dict)
+    # What the run said after its last step, when the transport can tell that
+    # apart from what it said on the way. `None` is "this lane cannot say" and
+    # the full output stands in; `""` is "it ended on a step and said nothing
+    # after it", which is a different fact and must not fall back.
+    closing: str | None = None
+    # What this run was asked, so a reader watching it can show the turn's own
+    # prompt before the turn lands. No file holds it yet for the reader that
+    # matters: the record's `prompt.md` is addressed by a task id, and the
+    # instance log gets the row only at the end.
+    prompt: str | None = None
 
     @property
     def tokens(self) -> int | None:
@@ -93,6 +108,8 @@ class RunActivity:
             meta["thought_chars"] = self.thought_chars
         if self.step_counts:
             meta["step_counts"] = self.step_counts
+        if self.frames:
+            meta["acp_frames"] = self.frames
         return meta
 
 
@@ -108,8 +125,23 @@ instead of a prompt and nothing until the end. Entries live exactly as long as
 their ``collecting`` block."""
 
 
+_live_instances: dict[tuple[str, str, str], RunActivity] = {}
+"""The same activities, addressed the way a *conversation* reader has to ask.
+
+``_live`` is keyed by the record's own directory, which is what the panel
+watching one call already holds. A reader of an instance's conversation holds
+``(session_key, agent, handle)`` and nothing else -- the record name is a task id
+it never saw -- so the same run is indexed twice rather than having that reader
+guess at a directory layout. Entries live exactly as long as their ``collecting``
+block, as ``_live``'s do."""
+
+
 @contextmanager
-def collecting(live_key: str | None = None) -> Iterator[RunActivity]:
+def collecting(
+    live_key: str | None = None,
+    instance: tuple[str, str, str] | None = None,
+    prompt: str | None = None,
+) -> Iterator[RunActivity]:
     """Collect one run's activity for the duration of the block.
 
     Opened by whoever owns the record -- the spawn manager, or the DAG runner for
@@ -120,22 +152,39 @@ def collecting(live_key: str | None = None) -> Iterator[RunActivity]:
 
     ``live_key`` registers the activity in the live index for the duration of
     the block, so a reader can watch the run before its record lands on disk.
+    ``instance`` is ``(session_key, agent, handle)`` and registers it a second
+    time for the reader that watches an instance's conversation rather than one
+    call.
+
+    ``prompt`` is set here rather than by a call afterwards so that it is in
+    place the moment the run becomes findable: a reader landing in the gap would
+    otherwise see a turn with steps and no question, and drop the prompt row it
+    had already drawn.
     """
-    activity = RunActivity()
+    activity = RunActivity(prompt=prompt)
     token = _current.set(activity)
     if live_key:
         _live[live_key] = activity
+    if instance:
+        _live_instances[instance] = activity
     try:
         yield activity
     finally:
         _current.reset(token)
         if live_key:
             _live.pop(live_key, None)
+        if instance:
+            _live_instances.pop(instance, None)
 
 
 def live(key: str) -> RunActivity | None:
     """The activity of a run in flight, or None once it has finished."""
     return _live.get(key)
+
+
+def live_instance(session_key: str, agent: str, handle: str) -> RunActivity | None:
+    """The activity of the turn this instance is answering, if it is answering one."""
+    return _live_instances.get((session_key, agent, handle))
 
 
 def current() -> RunActivity | None:
@@ -173,6 +222,13 @@ def note_usage(usage: Any) -> None:
         logger.debug("subagent activity: unreadable usage report ({})", exc)
 
 
+def note_frames(frames: dict[str, Any] | None) -> None:
+    """Record where this run's wire frames live. Replaced, not merged."""
+    activity = _current.get()
+    if activity is not None and isinstance(frames, dict) and frames:
+        activity.frames = dict(frames)
+
+
 def note_steps(counts: dict[str, int] | None) -> None:
     """Record how many updates of each kind the run produced."""
     activity = _current.get()
@@ -206,6 +262,31 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     activity.transcript = [m for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
+def note_closing(text: str | None) -> None:
+    """Record what the run said after its last step, for a lane that can tell.
+
+    Separate from the transcript because it is not a row in it: it is what the
+    reader of the record appends as the closing message, and the transcript is
+    everything before that.
+    """
+    activity = _current.get()
+    if activity is not None and text is not None:
+        activity.closing = text
+
+
+def append_closing(text: str) -> None:
+    """Add to the closing message a run has already reported.
+
+    For a line raven itself appends to the reply after the agent has stopped --
+    the partial-turn notice. It has to reach the closing row too, or the one
+    sentence saying the answer is incomplete is missing from exactly the record
+    a reader goes to for the answer.
+    """
+    activity = _current.get()
+    if activity is not None and activity.closing is not None:
+        activity.closing = f"{activity.closing}{text}"
+
+
 def note_transcript(messages: list[dict[str, Any]] | None) -> None:
     """Record the run's own transcript, for the lane that can actually see one.
 
@@ -217,11 +298,15 @@ def note_transcript(messages: list[dict[str, Any]] | None) -> None:
 
 
 __all__ = [
+    "append_closing",
     "RunActivity",
     "collecting",
     "current",
     "set_transcript",
     "live",
+    "live_instance",
+    "note_closing",
+    "note_frames",
     "note_steps",
     "note_thoughts",
     "note_tool_call",

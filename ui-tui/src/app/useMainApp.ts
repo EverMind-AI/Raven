@@ -36,7 +36,14 @@ import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } from './chatStream.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
-import { $directChat, bindScrollReader, directKey, recallScroll, viewKeyOf } from './directChatStore.js'
+import {
+  $directChat,
+  bindScrollReader,
+  isViewWorking,
+  recallScroll,
+  viewKeyOf,
+  visibleRows
+} from './directChatStore.js'
 import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './directChatSync.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
@@ -47,6 +54,7 @@ import { patchTurnState, useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
+import { useDirectStepPoll } from './useDirectStepPoll.js'
 import { useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
 import { useSessionLifecycle } from './useSessionLifecycle.js'
@@ -262,18 +270,15 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // `historyItems` stays the main conversation's throughout -- session save,
   // /export and the slash handlers all read it, and none of them mean "whatever
   // is on screen".
-  const visibleItems = useMemo(
-    () =>
-      directChat.active === null
-        ? historyItems
-        : (directChat.transcripts.get(directKey(directChat.active.agent, directChat.active.handle)) ?? []),
-    [directChat, historyItems]
-  )
+  const visibleItems = useMemo(() => visibleRows(directChat, historyItems), [directChat, historyItems])
 
   const virtualRows = useMemo<TranscriptRow[]>(
     () => visibleItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
     [messageId, visibleItems]
   )
+
+  // Stable, so the poll's effect is not torn down and re-armed on every render.
+  const sidRef = useCallback(() => getUiState().sid, [])
 
   const viewKey = viewKeyOf(directChat.active)
   const directChatRef = useRef(directChat.active)
@@ -559,6 +564,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
       void fetchDirectHistory(rpc, getUiState().sid, directChatRef.current)
     }
   }, [rpc, viewKey])
+
+  // The instance on screen is re-read while it works; see `useDirectStepPoll`
+  // for why that is a read rather than a stream.
+  useDirectStepPoll(rpc, sidRef, directChat.active, isViewWorking(directChat))
 
   const answerClarify = useCallback(
     (answer: string) => {

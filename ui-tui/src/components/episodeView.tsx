@@ -3,12 +3,15 @@
 // See NOTICES.md.
 
 import { activeColorTier, Box, NoSelect, Text } from '@hermes/ink'
-import { memo, useEffect, useState } from 'react'
+import { useStore } from '@nanostores/react'
+import { memo, useEffect, useMemo, useState } from 'react'
 
 import type { Segment } from '../domain/episodeSummary.js'
 import type { Theme } from '../theme.js'
 import type { Episode, EpisodeTool, Msg } from '../types.js'
 
+import { $directChat, viewKeyOf } from '../app/directChatStore.js'
+import { $folds, toggleFold } from '../app/foldStore.js'
 import {
   callFailed,
   failureNote,
@@ -396,6 +399,7 @@ export const EpisodeView = memo(function EpisodeView({
   episodes,
   live = false,
   openKeys,
+  scope = '',
   t,
   text
 }: {
@@ -404,23 +408,21 @@ export const EpisodeView = memo(function EpisodeView({
   episodes: Episode[]
   live?: boolean
   openKeys?: readonly string[]
+  /** Which transcript these folds belong to, so two views never share one. */
+  scope?: string
   t: Theme
   text?: string
 }) {
   // One fold set: `seg:<id>` a stretch of work, `call:<id>` one call's detail,
-  // `rsn:<n>` an episode's chain of thought. `openKeys` seeds it -- the folds are
-  // click-driven, so this is the only way to render an opened one.
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(openKeys))
-  const toggle = (key: string) =>
-    setOpen(prev => {
-      const next = new Set(prev)
-
-      if (!next.delete(key)) {
-        next.add(key)
-      }
-
-      return next
-    })
+  // `rsn:<n>` an episode's chain of thought.
+  //
+  // Held outside this component (see `foldStore`) so that a row the runtime
+  // replaces -- a step landing in a turn still running -- does not close what
+  // the reader just opened. `openKeys` still seeds it, for a caller rendering a
+  // fixed state and for the tests.
+  const stored = useStore($folds)
+  const open = useMemo(() => new Set([...(openKeys ?? []), ...(stored[scope] ?? [])]), [openKeys, scope, stored])
+  const toggle = (key: string) => toggleFold(scope, key)
 
   const lastIdx = episodes.length - 1
   const now = useNow(live && episodes.length > 0)
@@ -534,6 +536,52 @@ export const EpisodeView = memo(function EpisodeView({
 })
 
 // History path: a committed `kind: 'episodes'` message.
+// A per-message identity for the fold scope, stable while the message grows.
+//
+// The fold ids are not all unique on their own: `seg:` and `call:` carry the
+// transport's call ids, but `rsn:<n>` is an index that restarts at 0 in every
+// message. One scope per *view* therefore put every turn's first thought under
+// one key, and opening one turn's reasoning opened all of them.
+//
+// Two stable discriminators, in this order:
+//
+//  - the message's first tool call, which is the transport's own id and is the
+//    same string before and after the turn lands, so a fold survives the settle
+//    read as well as the polls;
+//  - the row the message was folded from (`foldId`), for a turn that called
+//    nothing at all -- it only thought and answered. That message's text grows
+//    while it streams, so it is replaced on every poll, and keying it on the
+//    object closed the reader's fold each time.
+//
+// The object is the last resort, for a message that came from neither -- the
+// main transcript's own rows, which are not replaced while they are read.
+const foldIds = new WeakMap<object, string>()
+let foldSeq = 0
+
+const messageFoldId = (msg: Msg): string => {
+  const firstCall = msg.episodes?.find(ep => ep.tools.length > 0)?.tools[0]?.id
+
+  if (firstCall !== undefined) {
+    return firstCall
+  }
+
+  if (msg.foldId !== undefined) {
+    return msg.foldId
+  }
+
+  const hit = foldIds.get(msg)
+
+  if (hit !== undefined) {
+    return hit
+  }
+
+  const next = `m${++foldSeq}`
+
+  foldIds.set(msg, next)
+
+  return next
+}
+
 export const EpisodeMessage = memo(function EpisodeMessage({
   cols,
   compact,
@@ -545,5 +593,10 @@ export const EpisodeMessage = memo(function EpisodeMessage({
   msg: Msg
   t: Theme
 }) {
-  return <EpisodeView cols={cols} compact={compact} episodes={msg.episodes ?? []} t={t} text={msg.text} />
+  // The view is read here rather than threaded down as a prop: only one
+  // transcript is ever on screen, and this is the adapter that knows which. The
+  // message part keeps two turns in that view from sharing a fold.
+  const scope = `${viewKeyOf(useStore($directChat).active)}:${messageFoldId(msg)}`
+
+  return <EpisodeView cols={cols} compact={compact} episodes={msg.episodes ?? []} scope={scope} t={t} text={msg.text} />
 })

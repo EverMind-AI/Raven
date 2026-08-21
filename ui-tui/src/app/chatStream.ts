@@ -46,7 +46,7 @@ import {
   markRunning,
   viewKeyOf
 } from './directChatStore.js'
-import { scheduleInstanceRefresh } from './directChatSync.js'
+import { scheduleInstanceRefresh, settleDirectHistory } from './directChatSync.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { patchUiState } from './uiStore.js'
@@ -175,6 +175,11 @@ const dispatchDirect = (
       // No recordMessageComplete: that commits turnController's buffer into the
       // main transcript, and this turn never filled it.
       state.turns.delete(viewKeyOf(target))
+      // The record now holds this turn, steps and all. Until it is read back,
+      // the view shows the last live snapshot of those steps and a reply that
+      // streamed in beside them; this is what replaces both with the settled
+      // account.
+      settleDirectHistory(target)
       // Not `patchUiState({busy: false})`: this turn is one of several that may
       // be in flight, and the user may be watching a different one. `markRunning`
       // / `clearRunning` own that projection.
@@ -299,6 +304,11 @@ const dispatch = (
       return
     }
     case 'subagent.delivered': {
+      // A finished spawn moved the registry, so the strip has to re-read: its
+      // row is the only thing that says whether that instance is still working,
+      // and a row left reading `running` keeps its chip pulsing and its
+      // conversation view polling for a turn that ended.
+      scheduleInstanceRefresh()
       // The seam where a delegated run's result re-entered the turn; without
       // it the retelling that follows reads as the model speaking unprompted.
       if (sys) {

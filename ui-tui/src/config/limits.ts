@@ -20,3 +20,9 @@ export const THINKING_COT_MAX = 160
 // (each scroll < viewport-1) and produces smooth motion. wheelAccel.ts
 // ramps this on sustained scrolls.
 export const WHEEL_SCROLL_STEP = 1
+
+// How often the instance on screen is re-read while it is answering. Its steps
+// live only in the runtime's in-flight activity, so this is the one thing that
+// makes them appear before the turn ends. Fast enough to read as live, slow
+// enough that a folded read of one conversation is not a per-frame cost.
+export const DIRECT_STEP_POLL_MS = 400

@@ -137,12 +137,16 @@ def build_raven_config_router() -> APIRouter:
 
     @router.get("/subagents/instances/history")
     async def instance_history(session_id: str, agent: str, handle: str) -> dict:
-        """One instance's past direct turns, for a view being (re)opened.
+        """One instance's conversation: what is on record, plus what it is doing now.
 
         The records on disk are the only memory of a direct chat: it is
         deliberately absent from the session transcript, and its live events are
         published out of band rather than stored, so a reload has nowhere else
         to read it from.
+
+        Also read while a turn runs, which is what the ``live`` flag on a row is
+        for: the steps of a turn in flight are in the runtime's own activity and
+        in no file, and the event stream carries only the reply text.
         """
         client = await GatewayClient.shared()
         return await client.call(

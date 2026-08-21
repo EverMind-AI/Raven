@@ -6311,15 +6311,32 @@
       "DirectTurn": {
         "type": "object",
         "additionalProperties": false,
-        "description": "One side of one direct-chat turn, read back from its record directory.",
+        "description": "One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.",
         "required": ["call_id", "role", "content", "at_ms"],
         "properties": {
           "call_id": { "type": "string" },
-          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "role": { "type": "string", "enum": ["user", "assistant", "tool"] },
           "content": { "type": "string" },
           "at_ms": { "type": "integer" },
           "prompt_path": { "type": "string" },
-          "out_path": { "type": "string" }
+          "out_path": { "type": "string" },
+          "reasoning_content": {
+            "type": "string",
+            "description": "The thought that preceded this turn, where the transport reports one."
+          },
+          "tool_calls": {
+            "type": "array",
+            "description": "What this turn called on the way, matched to a later role='tool' row by id.",
+            "items": { "$ref": "#/components/schemas/TranscriptToolCall" }
+          },
+          "tool_call_id": {
+            "type": "string",
+            "description": "On a role='tool' row, the call it answers."
+          },
+          "live": {
+            "type": "boolean",
+            "description": "Set on a row from a turn still running, which no record holds yet. Such rows are a snapshot: the next read replaces them, and the record replaces them once the turn lands."
+          }
         }
       },
       "UsageSnapshot": {

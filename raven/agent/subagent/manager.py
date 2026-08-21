@@ -490,36 +490,48 @@ class SubagentManager:
                 kwargs["on_messages"] = state.save
             if on_delta is not None and getattr(backend, "streams", False):
                 kwargs["on_delta"] = on_delta
-            try:
-                executor = build_executor(
-                    self._sandbox_config,
-                    effective_workspace,
-                    self._owned_ids,
-                    self._home_volume(effective_workspace),
-                )
-                async with executor:
-                    reply = await backend.run(
-                        text,
-                        task_id=task_id,
-                        workspace=effective_workspace,
-                        executor=executor,
-                        session_key=session_key,
-                        instance=handle,
-                        provider=self.provider,
-                        model=self.model,
-                        **kwargs,
+            # Collected here as the spawn lane does it: a direct turn is a turn of
+            # the same instance's conversation, and without this it contributed
+            # only a prompt and an answer to the instance log while a spawned
+            # call beside it contributed every step.
+            #
+            # Indexed by instance as well, which is how the conversation view
+            # reaches it: the record name is a task id no reader of an instance
+            # ever saw, so without this the steps of the turn on screen were
+            # published and unreachable until the log landed at turn end.
+            with activity.collecting(
+                live_key=record.dir.name, instance=(session_key, agent, handle), prompt=text
+            ) as did:
+                try:
+                    executor = build_executor(
+                        self._sandbox_config,
+                        effective_workspace,
+                        self._owned_ids,
+                        self._home_volume(effective_workspace),
                     )
-            except asyncio.CancelledError:
-                await _write_spawn_status(session_key, agent, handle, "cancelled")
-                record.finish(status="cancelled")
-                raise
-            except Exception as exc:
-                await _write_spawn_status(session_key, agent, handle, "failed")
-                record.finish(status="failed", error=f"Error: {exc}")
-                raise DirectChatError(record.meta()) from exc
-            await _write_spawn_status(session_key, agent, handle, "completed")
-            record.finish(status="completed", output=reply)
-            return reply, record.meta()
+                    async with executor:
+                        reply = await backend.run(
+                            text,
+                            task_id=task_id,
+                            workspace=effective_workspace,
+                            executor=executor,
+                            session_key=session_key,
+                            instance=handle,
+                            provider=self.provider,
+                            model=self.model,
+                            **kwargs,
+                        )
+                except asyncio.CancelledError:
+                    await _write_spawn_status(session_key, agent, handle, "cancelled")
+                    record.finish(status="cancelled", activity=did)
+                    raise
+                except Exception as exc:
+                    await _write_spawn_status(session_key, agent, handle, "failed")
+                    record.finish(status="failed", error=f"Error: {exc}", activity=did)
+                    raise DirectChatError(record.meta()) from exc
+                await _write_spawn_status(session_key, agent, handle, "completed")
+                record.finish(status="completed", output=reply, activity=did)
+                return reply, record.meta()
 
     @asynccontextmanager
     async def _hold_instance_slot(self, session_key: str, agent: str, handle: str) -> AsyncIterator[None]:
@@ -704,8 +716,12 @@ class SubagentManager:
         # tool calls and token cost the run got as far as producing -- a failed
         # run's are the ones worth keeping. Keyed into the live index by the
         # record's own directory name, so `subagent.context` can serve the run
-        # while it is still in flight.
-        with activity.collecting(live_key=record.dir.name) as did:
+        # while it is still in flight, and by instance so the conversation view
+        # can: a spawned call is a turn of the same instance a direct chat talks
+        # to, and watching it there is the same question.
+        with activity.collecting(
+            live_key=record.dir.name, instance=(session_key or "", agent or "", handle), prompt=task
+        ) as did:
             try:
                 await _write_spawn_status(session_key, agent, handle, "running")
                 backend = self._resolve_backend(agent)

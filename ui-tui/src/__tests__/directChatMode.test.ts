@@ -10,6 +10,7 @@ import {
   getDirectChat,
   getDirectTranscript,
   isDirectTarget,
+  isViewWorking,
   leaveDirect,
   MAIN_VIEW_KEY,
   markRunning,
@@ -18,7 +19,8 @@ import {
   rememberScroll,
   resetDirectChat,
   sendingPausedReason,
-  setDirectTranscript
+  setDirectTranscript,
+  visibleRows
 } from '../app/directChatStore.js'
 import { coreCommands } from '../app/slash/commands/core.js'
 import { getUiState, resetUiState } from '../app/uiStore.js'
@@ -259,5 +261,93 @@ describe('/instance', () => {
 
   it('says so when the session has no instances', () => {
     expect(run('')).toContain('no sub-agent instances')
+  })
+})
+
+describe('isViewWorking', () => {
+  const row = (agent: string, handle: string, status: string) =>
+    ({ agent, handle, status, createdAtMs: 1, kind: 'acp', sessionKey: 's1', updatedAtMs: 1 }) as never
+
+  it('is false with no view on screen', () => {
+    expect(isViewWorking(getDirectChat())).toBe(false)
+  })
+
+  it('follows a turn this client sent', () => {
+    enterDirect('A', 'one')
+    expect(isViewWorking(getDirectChat())).toBe(false)
+
+    markRunning({ agent: 'A', handle: 'one' })
+    expect(isViewWorking(getDirectChat())).toBe(true)
+
+    clearRunning({ agent: 'A', handle: 'one' })
+    expect(isViewWorking(getDirectChat())).toBe(false)
+  })
+
+  it('follows a turn dispatched somewhere else, which only the strip reports', () => {
+    // A spawn the main agent made, or a DAG node. The wire tags an instance on
+    // the four events of a direct turn only, so nothing marks this view running
+    // and the row is the sole signal that the instance is working.
+    enterDirect('A', 'one')
+    patchDirectChat({ instances: [row('A', 'one', 'running')] })
+    expect(isViewWorking(getDirectChat())).toBe(true)
+
+    patchDirectChat({ instances: [row('A', 'one', 'pending')] })
+    expect(isViewWorking(getDirectChat())).toBe(true)
+
+    patchDirectChat({ instances: [row('A', 'one', 'completed')] })
+    expect(isViewWorking(getDirectChat())).toBe(false)
+  })
+
+  it('reads the row of the instance on screen and no other', () => {
+    enterDirect('A', 'one')
+    patchDirectChat({ instances: [row('B', 'two', 'running'), row('A', 'other', 'running')] })
+
+    expect(isViewWorking(getDirectChat())).toBe(false)
+  })
+
+  it('is false for an instance with no row at all', () => {
+    enterDirect('A', 'gone')
+    patchDirectChat({ instances: [] })
+
+    expect(isViewWorking(getDirectChat())).toBe(false)
+  })
+})
+
+describe('visibleRows', () => {
+  const main = [{ role: 'assistant' as const, text: 'raven said this' }]
+
+  it('shows the main conversation when no instance is on screen', () => {
+    expect(visibleRows(getDirectChat(), main)).toEqual(main)
+  })
+
+  it('never shows zero rows for an instance not read yet', () => {
+    // The read is an rpc, so this view is empty for a round trip -- and a render
+    // with nothing in it leaves the main conversation on screen until the read
+    // lands, which is what "switching in shows Raven's messages, then they
+    // vanish a few seconds later" was.
+    enterDirect('Coder', 'h1')
+    const rows = visibleRows(getDirectChat(), main)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.role).toBe('system')
+    expect(rows[0]!.text).not.toBe('raven said this')
+  })
+
+  it('shows the instance own rows as soon as there are any', () => {
+    enterDirect('Coder', 'h1')
+    setDirectTranscript(directKey('Coder', 'h1'), [{ role: 'user' as const, text: 'the task' }])
+
+    expect(visibleRows(getDirectChat(), main).map(m => m.text)).toEqual(['the task'])
+  })
+
+  it('keeps the two views apart', () => {
+    setDirectTranscript(directKey('Coder', 'h1'), [{ role: 'user' as const, text: 'coder' }])
+    setDirectTranscript(directKey('Writer', 'h2'), [{ role: 'user' as const, text: 'writer' }])
+
+    enterDirect('Writer', 'h2')
+    expect(visibleRows(getDirectChat(), main).map(m => m.text)).toEqual(['writer'])
+
+    leaveDirect()
+    expect(visibleRows(getDirectChat(), main)).toEqual(main)
   })
 })
