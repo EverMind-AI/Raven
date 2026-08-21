@@ -135,8 +135,11 @@ class InstanceRegistry:
     ) -> None:
         """Record or update one third-party CLI spawn's status.
 
-        A row's status is one of ``running`` | ``completed`` | ``failed`` |
-        ``cancelled``. ``agent_id`` carries forward from any existing record
+        A row's status is one of ``idle`` | ``running`` | ``completed`` |
+        ``failed`` | ``cancelled``. ``idle`` is an instance the user created and
+        has not addressed yet, and it is deliberately not one of the two
+        ``reconcile_instance_rows`` rewrites: it is true across a restart, where
+        an unfinished ``running`` is not. ``agent_id`` carries forward from any existing record
         when not given, so a status write after a successful create does not
         erase the session id ``commit`` already stored for that handle.
         """

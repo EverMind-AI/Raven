@@ -12,8 +12,8 @@ talks to the Runtime only via the RPC protocol. Single-session per client in v0.
 **Overlay**:
 A modal layer over the chat view, tracked in `overlayStore` and driven by keyboard. Kinds
 split into RPC-driven (Confirm, Approval, Clarify, Sudo, Secret) and user-toggled (Agents,
-Model Picker, Picker, Pager) overlays; the FPS counter is a separate component, not an
-overlay-store kind.
+Model Picker, Picker, Pager, New Instance Picker) overlays; the FPS counter is a separate
+component, not an overlay-store kind.
 
 **MessageLine**:
 The UI element rendering one transcript row in the chat view.
@@ -83,6 +83,15 @@ refused is a *second* prompt to the instance already mid-reply, which would seri
 instance's handle anyway. A sub-agent's turn is not cancellable: Ctrl+C means the main
 agent's turn, as it always did.
 _Avoid_: "sub-agent session" - that is the CLI-side session a handle resumes, not this view.
+
+**New Instance Picker** (`ui-tui/src/components/newInstancePicker.tsx`):
+The `/new-instance` overlay: pick a sub-agent, get a fresh instance of it, and land in its
+Direct Chat. Lists only agents that are enabled and stateful, since those are the only ones
+a direct chat can address, and shows how many instances of each are already open. Opened
+with no argument; `/new-instance <agent>` skips it and creates directly. Distinct from the
+Subagents Overlay, which configures *which* sub-agents exist rather than instantiating one.
+_Avoid_: "add agent" - nothing is added to the roster; an agent that already exists gets
+another instance.
 
 **Instance Chip** (`ui-tui/src/components/instanceChips.tsx`):
 One entry in the strip above the composer, naming a sub-agent instance this session has

@@ -14,6 +14,7 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
+import type { SubagentsInstanceCreateResult } from '../../../rpc/generated.js'
 import type { Msg, PanelSection } from '../../../types.js'
 import type { StatusBarMode } from '../../interfaces.js'
 import type { SlashCommand } from '../types.js'
@@ -26,7 +27,13 @@ import { getLocale, isLocale, setLocale } from '../../../i18n/index.js'
 import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
-import { enterDirect, getDirectChat, isDirectTarget, leaveDirect } from '../../directChatStore.js'
+import {
+  enterDirect,
+  getDirectChat,
+  isDirectTarget,
+  leaveDirect,
+  rememberInstance
+} from '../../directChatStore.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 
@@ -239,6 +246,41 @@ export const coreCommands: SlashCommand[] = [
 
       enterDirect(row.agent, row.handle)
       ctx.transcript.sys(`talking to ${row.agent}/${row.handle} directly -- Esc returns to Raven`)
+    }
+  },
+
+  {
+    help: 'create a sub-agent instance and chat with it (no arg opens the picker)',
+    name: 'new-instance',
+    usage: '/new-instance [<agent>]',
+    run: (arg, ctx) => {
+      // The whole name, not the first token: agent names may contain spaces,
+      // and there is no subcommand here to take the first one.
+      const agent = arg.trim()
+
+      if (!agent) {
+        return patchOverlayState({ newInstance: true })
+      }
+
+      if (!ctx.sid) {
+        return ctx.transcript.sys('no active session')
+      }
+
+      ctx.gateway
+        .rpc<SubagentsInstanceCreateResult>(
+          'subagents.instance.create',
+          { agent, session_key: ctx.sid },
+          { quiet: true }
+        )
+        .then(
+          ctx.guarded<SubagentsInstanceCreateResult>(r => {
+            const { instance } = r
+            rememberInstance(instance)
+            enterDirect(instance.agent, instance.handle)
+            ctx.transcript.sys(`talking to ${instance.agent}/${instance.handle} directly -- Esc returns to Raven`)
+          })
+        )
+        .catch(ctx.guardedErr)
     }
   },
 

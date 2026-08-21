@@ -14,7 +14,12 @@ from typing import Any
 import pytest
 
 from raven.agent.subagent import instances as instances_mod
-from raven.rpc.methods.instances import instances_forget, instances_history, instances_list
+from raven.rpc.methods.instances import (
+    instances_create,
+    instances_forget,
+    instances_history,
+    instances_list,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -796,3 +801,90 @@ async def test_an_earlier_crashed_prompt_survives_a_new_turn(tmp_path: Path) -> 
         (True, "the one running now"),
         (True, "working"),
     ]
+
+
+def _real_manager(tmp_path: Path) -> Any:
+    """A real ``SubagentManager``: ``create_instance``'s whole job is the two
+    roster checks it makes, and a double would assert against its own answer."""
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _StubProvider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    return SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path / "home",
+        session_dir=lambda key: tmp_path / "sessions" / key,
+    )
+
+
+def _create_loop(tmp_path: Path) -> Any:
+    from raven.agent.subagent.direct_chat import DirectChatHandoff
+
+    return _FakeLoop(_real_manager(tmp_path), DirectChatHandoff())
+
+
+async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Path) -> None:
+    loop = _create_loop(tmp_path)
+
+    out = await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+
+    row = out["instance"]
+    assert row["agent"] == "raven"
+    assert row["status"] == "idle"
+    assert row["sessionKey"] == "s1"
+    assert row["handle"].startswith("raven-")
+
+
+async def test_a_created_instance_is_listed_for_that_session(tmp_path: Path) -> None:
+    """The row has to survive the read path too: an idle row must not be
+    reconciled to 'interrupted' the way a dead 'running' one is."""
+    loop = _create_loop(tmp_path)
+
+    created = await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(loop))
+
+    assert [(r["handle"], r["status"]) for r in out["instances"]] == [(created["instance"]["handle"], "idle")]
+
+
+async def test_a_creation_is_announced_to_the_main_agent(tmp_path: Path) -> None:
+    """The user creating an instance is what the main agent has to be told; a
+    turn it could already see is not the interesting case."""
+    loop = _create_loop(tmp_path)
+
+    created = await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(loop))
+
+    assert out["pending_handoff_count"] == 1
+
+    block = loop._direct_handoff.take("s1")
+    assert f"raven / {created['instance']['handle']}" in block
+    assert "created by the user at" in block
+
+
+async def test_a_creation_is_announced_only_to_its_own_session(tmp_path: Path) -> None:
+    loop = _create_loop(tmp_path)
+
+    await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
+    out = await instances_list({"session_key": "s2"}, agent_loop_factory=_factory(loop))
+
+    assert out["pending_handoff_count"] == 0
+
+
+async def test_instance_create_refuses_an_agent_that_is_not_on_the_roster(tmp_path: Path) -> None:
+    loop = _create_loop(tmp_path)
+
+    with pytest.raises(RuntimeError, match="disabled or no longer configured"):
+        await instances_create({"session_key": "s1", "agent": "nope"}, agent_loop_factory=_factory(loop))
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(loop))
+    assert out["instances"] == []
+    assert out["pending_handoff_count"] == 0
+
+
+async def test_instance_create_without_a_live_loop_fails_rather_than_reporting_success() -> None:
+    """Unlike the reads in this module, a create is an action: an empty answer
+    would leave the picker announcing an instance that does not exist."""
+    with pytest.raises(RuntimeError, match="no agent loop"):
+        await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=None)

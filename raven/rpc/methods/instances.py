@@ -9,6 +9,9 @@ instance registry, ``reconcile_instance_rows``, the record directories the
 runtime writes) rather than deriving a second answer, so the two surfaces cannot
 come to disagree about what an instance is or which ones are still alive.
 
+The one write here is ``subagents.instance.create``: the user's own way to
+start an instance, since every other creation path runs for the main agent.
+
 No cancel method, and since a direct chat runs on its own lane
 (``raven.spine.turn.direct_lane``) that now means it cannot be cancelled at all:
 ``turn.cancel`` looks up the *session's* turn, which is the main agent's. That is
@@ -97,6 +100,56 @@ async def instances_list(
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }
+
+
+async def instances_create(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """Create one instance of a sub-agent, and tell the main agent it happened.
+
+    The only creation path the *user* drives. Every other one runs for the main
+    agent -- a spawn binds a handle to a delegated task, a DAG node to a graph
+    node -- so without this an agent nothing has been delegated to cannot be
+    direct-chatted at all.
+
+    The row and its two refusals belong to ``SubagentManager.create_instance``;
+    what belongs here is the announcement, because a creation is a client action
+    where a turn is something the loop ran. The row is read back out of the
+    registry rather than assembled here, so what the client draws is what was
+    actually persisted.
+
+    Unlike every read in this module, a session with no agent loop raises rather
+    than degrading to empty: this is an action, and an empty answer would leave
+    the client announcing an instance that was never made.
+    """
+    loop = _loop(agent_loop_factory)
+    manager = getattr(loop, "subagents", None)
+    if manager is None:
+        raise RuntimeError("Cannot create a sub-agent instance: no agent loop in this session.")
+
+    session_key = str(params.get("session_key") or "")
+    created = await manager.create_instance(session_key=session_key, agent=str(params.get("agent") or ""))
+
+    row = next(
+        (
+            r
+            for r in get_registry().list_instances(session_key)
+            if r.get("agent") == created.agent and r.get("handle") == created.handle
+        ),
+        None,
+    )
+    if row is None:
+        raise RuntimeError(f"Sub-agent instance {created.agent}/{created.handle} was not recorded.")
+
+    # Announced only once the row has been read back: the main agent must not be
+    # told about an instance whose creation the caller was told had failed.
+    handoff = getattr(loop, "_direct_handoff", None)
+    if handoff is not None:
+        handoff.record_created(session_key, created)
+
+    return {"instance": row}
 
 
 async def instances_history(
@@ -415,12 +468,17 @@ def register_instance_methods(
     async def _history(params: dict[str, Any]) -> dict[str, Any]:
         return await instances_history(params, agent_loop_factory=agent_loop_factory)
 
+    async def _create(params: dict[str, Any]) -> dict[str, Any]:
+        return await instances_create(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.instances", _list)
+    dispatcher.register("subagents.instance.create", _create)
     dispatcher.register("subagents.instance.history", _history)
     dispatcher.register("subagents.instance.forget", instances_forget)
 
 
 __all__ = [
+    "instances_create",
     "instances_forget",
     "instances_history",
     "instances_list",

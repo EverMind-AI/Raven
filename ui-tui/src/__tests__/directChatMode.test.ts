@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   appendDirectDelta,
@@ -22,12 +22,14 @@ import {
   setDirectTranscript,
   visibleRows
 } from '../app/directChatStore.js'
+import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { coreCommands } from '../app/slash/commands/core.js'
 import { getUiState, resetUiState } from '../app/uiStore.js'
 
 beforeEach(() => {
   resetDirectChat()
   resetUiState()
+  resetOverlayState()
 })
 
 describe('directChatStore', () => {
@@ -349,5 +351,124 @@ describe('visibleRows', () => {
 
     leaveDirect()
     expect(visibleRows(getDirectChat(), main)).toEqual(main)
+  })
+})
+describe('visibleRows on an instance with no turns', () => {
+  // `/new-instance` makes a zero-turn instance reachable: it is created and
+  // entered before anything has been said to it, and the history read answers
+  // `{turns: []}`. Before that, every listed instance had been spawned, so an
+  // empty transcript only ever meant "the read has not landed".
+  it('says it is reading only while the read is still out', () => {
+    enterDirect('Raven-PPT', 'raven-ppt-a1b2c3')
+    expect(visibleRows(getDirectChat(), [])[0]!.text).toContain('reading')
+  })
+
+  it('does not keep saying it is reading once the read came back empty', () => {
+    enterDirect('Raven-PPT', 'raven-ppt-a1b2c3')
+    setDirectTranscript(directKey('Raven-PPT', 'raven-ppt-a1b2c3'), [])
+
+    const row = visibleRows(getDirectChat(), [])[0]!
+    expect(row.text).not.toContain('reading')
+    expect(row.text.length).toBeGreaterThan(0)
+  })
+
+  it('still shows the turns once there are any', () => {
+    enterDirect('Raven-PPT', 'raven-ppt-a1b2c3')
+    setDirectTranscript(directKey('Raven-PPT', 'raven-ppt-a1b2c3'), [{ role: 'user', text: 'hi' }])
+    expect(visibleRows(getDirectChat(), []).map(r => r.text)).toEqual(['hi'])
+  })
+})
+
+describe('/new-instance', () => {
+  const cmd = coreCommands.find(c => c.name === 'new-instance')!
+
+  const row = {
+    agent: 'Raven-PPT',
+    createdAtMs: 5,
+    handle: 'raven-ppt-a1b2c3',
+    kind: 'cli',
+    sessionKey: 's1',
+    status: 'idle',
+    updatedAtMs: 5
+  }
+
+  const run = (arg: string, rpc = vi.fn(() => Promise.resolve({ instance: row })), sid: null | string = 's1') => {
+    const said: string[] = []
+    const errors: unknown[] = []
+    cmd.run(
+      arg,
+      {
+        gateway: { rpc },
+        guarded:
+          <T,>(fn: (r: T) => void) =>
+          (r: null | T) => {
+            if (r !== null) {
+              fn(r)
+            }
+          },
+        guardedErr: (e: unknown) => errors.push(e),
+        sid,
+        transcript: { sys: (t: string) => said.push(t) }
+      } as never,
+      'new-instance'
+    )
+    return { errors, rpc, said }
+  }
+
+  it('opens the picker with no argument, and calls nothing', () => {
+    const { rpc } = run('')
+
+    expect(getOverlayState().newInstance).toBe(true)
+    expect(rpc).not.toHaveBeenCalled()
+    expect(getDirectChat().active).toBeNull()
+  })
+
+  it('creates and switches when given an agent name', async () => {
+    const { rpc } = run('Raven-PPT')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(rpc).toHaveBeenCalledWith(
+      'subagents.instance.create',
+      { agent: 'Raven-PPT', session_key: 's1' },
+      { quiet: true }
+    )
+    expect(getDirectChat().active).toEqual({ agent: 'Raven-PPT', handle: 'raven-ppt-a1b2c3' })
+    expect(getOverlayState().newInstance).toBe(false)
+  })
+
+  it('puts the new chip on the strip without waiting for a refresh', async () => {
+    run('Raven-PPT')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getDirectChat().instances.map(r => r.handle)).toEqual(['raven-ppt-a1b2c3'])
+  })
+
+  it('takes a multi-word agent name verbatim', () => {
+    const { rpc } = run('General Agent')
+
+    expect(rpc).toHaveBeenCalledWith(
+      'subagents.instance.create',
+      { agent: 'General Agent', session_key: 's1' },
+      { quiet: true }
+    )
+  })
+
+  it('refuses without a session rather than calling the gateway', () => {
+    const { rpc, said } = run('Raven-PPT', vi.fn(() => Promise.resolve({ instance: row })), null)
+
+    expect(rpc).not.toHaveBeenCalled()
+    expect(said.join('\n')).toContain('no active session')
+  })
+
+  it('stays on the main conversation when the create is refused', async () => {
+    const rpc = vi.fn(() => Promise.reject(new Error('is stateless')))
+    const { errors } = run('Researcher', rpc as never)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(getDirectChat().active).toBeNull()
+    expect(errors).toHaveLength(1)
   })
 })

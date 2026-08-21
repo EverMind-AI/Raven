@@ -124,6 +124,15 @@ class SubagentRow(_Strict):
             "and one must not read as the other. Absent from a server that predates discovery."
         ),
     )
+    stateful: bool = Field(
+        default=False,
+        description=(
+            "Reusing a handle continues this agent's conversation rather than starting a fresh "
+            "one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a "
+            "stateless agent, so a picker that offers one is offering a refusal. Absent from a "
+            "server that predates this, which reads as 'not offered' rather than as an error."
+        ),
+    )
     builtin: bool = Field(
         default=False,
         description=(
@@ -1576,10 +1585,25 @@ class SubagentsInstancesResult(_Strict):
     instances: list[InstanceRow]
     pending_handoff_count: int = Field(
         description=(
-            "Direct-chat turns this session has not yet reported to its main agent. "
-            "Display only; the runtime owns the list and clears it on the next main-agent turn."
+            "Direct-chat turns, and instances the user created, that this session has not yet "
+            "reported to its main agent. Display only; the runtime owns the list and clears it "
+            "on the next main-agent turn."
         ),
     )
+
+
+class SubagentsInstanceCreateParams(_Strict):
+    session_key: str
+    agent: str = Field(
+        description=(
+            "Which sub-agent to instantiate. Must be enabled and stateful: a direct chat is a "
+            "continuation, and against a stateless agent every turn would start over."
+        ),
+    )
+
+
+class SubagentsInstanceCreateResult(_Strict):
+    instance: InstanceRow
 
 
 class SubagentsInstanceHistoryParams(_Strict):
@@ -2825,6 +2849,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
     # subagents.instance*
     "subagents.instances": (SubagentsInstancesParams, SubagentsInstancesResult),
+    "subagents.instance.create": (SubagentsInstanceCreateParams, SubagentsInstanceCreateResult),
     "subagents.instance.history": (SubagentsInstanceHistoryParams, SubagentsInstanceHistoryResult),
     "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
     # system.*

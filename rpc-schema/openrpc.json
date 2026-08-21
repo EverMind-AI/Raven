@@ -1490,8 +1490,39 @@
             },
             "pending_handoff_count": {
               "type": "integer",
-              "description": "Direct-chat turns not yet reported to the main agent. Display only."
+              "description": "Direct-chat turns, and instances the user created, not yet reported to the main agent. Display only."
             }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "subagents.instance.create",
+      "summary": "Create one instance of an enabled, stateful sub-agent and switch to it.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Which sub-agent to instantiate. Must be enabled and stateful: a direct chat is a continuation, and against a stateless agent every turn would start over."
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentsInstanceCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["instance"],
+          "properties": {
+            "instance": { "$ref": "#/components/schemas/InstanceRow" }
           }
         }
       },
@@ -6192,6 +6223,10 @@
           "building": {
             "type": "boolean",
             "description": "A vendored folder's venv is being built right now (`subagents.build`). Its own flag rather than `test_running`: a build and a test are different verbs on the same row, and one must not read as the other. Absent from a server that predates discovery."
+          },
+          "stateful": {
+            "type": "boolean",
+            "description": "Reusing a handle continues this agent's conversation rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error."
           },
           "builtin": {
             "type": "boolean",

@@ -96,6 +96,20 @@ export const enterDirect = (agent: string, handle: string) => switchTo({ agent, 
 
 export const leaveDirect = () => switchTo(null)
 
+/**
+ * Put one instance on the strip now, without waiting for the next refresh.
+ *
+ * The registry has no change notification, so the strip is re-read on a
+ * debounce (`scheduleInstanceRefresh`) -- long enough that an instance the user
+ * just created is switched into before its own chip exists. The row written
+ * here is the one the server persisted rather than a guess, so the refresh
+ * behind it agrees instead of correcting.
+ */
+export const rememberInstance = (row: InstanceRow) => {
+  const rest = $directChat.get().instances.filter(r => !(r.agent === row.agent && r.handle === row.handle))
+  patchDirectChat({ instances: [row, ...rest] })
+}
+
 export const isDirectTarget = (a: DirectTargetRef | null, b: DirectTargetRef | null) =>
   a !== null && b !== null && a.agent === b.agent && a.handle === b.handle
 
@@ -169,6 +183,7 @@ export const isRunning = (state: DirectChatState, target: DirectTargetRef | null
 // The one line a direct view shows before its first read lands. Muted, because
 // it is a status and not something anybody said.
 const READING = 'reading this instance\u2019s conversation\u2026'
+const UNUSED = 'nothing said to this instance yet \u2014 type to start'
 
 /**
  * Which rows the chat view shows: the main conversation, or one instance's.
@@ -179,6 +194,13 @@ const READING = 'reading this instance\u2019s conversation\u2026'
  * moment ago, so the *main* conversation stayed visible until the read landed
  * and then vanished. One line is what makes the swap paint, and saying what is
  * happening beats a blank.
+ *
+ * Absent and empty are different states, and only the map can tell them apart:
+ * `get` answers `undefined` while the read is still out and `[]` once it has
+ * landed carrying nothing. Collapsing them left a user-created instance saying
+ * it was reading for as long as it stayed unused -- an instance entered before
+ * anything was said to it is the one case where the read legitimately returns
+ * no turns, and `/new-instance` is what made it reachable.
  */
 export const visibleRows = (state: DirectChatState, main: Msg[]): Msg[] => {
   const active = state.active
@@ -187,9 +209,13 @@ export const visibleRows = (state: DirectChatState, main: Msg[]): Msg[] => {
     return main
   }
 
-  const rows = state.transcripts.get(directKey(active.agent, active.handle)) ?? []
+  const rows = state.transcripts.get(directKey(active.agent, active.handle))
 
-  return rows.length > 0 ? rows : [{ kind: 'slash', role: 'system', text: READING }]
+  if (rows === undefined) {
+    return [{ kind: 'slash', role: 'system', text: READING }]
+  }
+
+  return rows.length > 0 ? rows : [{ kind: 'slash', role: 'system', text: UNUSED }]
 }
 
 /** Statuses the registry uses for a turn that has not finished. */

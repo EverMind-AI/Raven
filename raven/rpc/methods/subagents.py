@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.agent.subagent.backends import agent_meta
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -259,6 +260,10 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # rather than `test_running`: a build and a test are different
                 # verbs on the same row, and one must not read as the other.
                 "building": building,
+                # Read from the same derivation the roster and the DAG pre-check
+                # use, never from `kind`: an acp row's statefulness comes from its
+                # own capability snapshot and an openai row's from a declaration.
+                "stateful": agent_meta(cfg).stateful,
                 "builtin": source == "builtin",
                 "group": _group(cfg, result.status),
                 "upgrade_to": _upgrade_transport(cfg, source),
