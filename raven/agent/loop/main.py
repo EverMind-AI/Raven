@@ -3178,7 +3178,7 @@ class AgentLoop:
                             loop_fail_key[0],
                             loop_fail_streak,
                             loop_fail_key[1],
-                            suggest_find_skill=self.tools.get("find_skill") is not None,
+                            suggest_find_skill=self.tools.offers_by_name("find_skill"),
                         )
                     )
                     loop_fail_streak = 0  # fire once per fresh streak

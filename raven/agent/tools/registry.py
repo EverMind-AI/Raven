@@ -135,6 +135,22 @@ class ToolRegistry:
         channel = self._channel.get()
         return channel is None or channel in tool.channels
 
+    def offers_by_name(self, name: str) -> bool:
+        """Whether ``name`` is a tool the model can actually reach right now.
+
+        The question every caller reaching for ``get(name) is not None`` meant.
+        Registration was a fair proxy for availability until the off switch
+        stopped unregistering: a withheld tool stays in ``_tools``, which is what
+        makes the switch reversible, so ``get`` now answers "this build has such a
+        tool" rather than "you may use it".
+
+        It matters wherever the answer becomes prompt text: advertising a tool the
+        operator switched off, which ``execute`` then refuses, is the one thing
+        the switch is supposed to make impossible.
+        """
+        tool = self._tools.get(name)
+        return tool is not None and self.offers(tool)
+
     def offers(self, tool: Tool, withheld: "frozenset[str] | None" = None) -> bool:
         """Whether ``tool`` is reachable at all right now.
 
