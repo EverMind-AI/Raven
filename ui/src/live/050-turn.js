@@ -98,7 +98,7 @@ function onEvent(ev) {
     }
     busy = false;
     noteRow(p.message || 'error', p.detail || p.reason || '',
-      lastAsk ? { retry: () => send(lastAsk) } : null);
+      lastAsk ? { retry: () => liveSend(lastAsk) } : null);
     goState(); drawMeter(); drawList();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
@@ -208,7 +208,6 @@ function finishTurn(usage) {
   RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
   busy = false;
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
-  const outTok = usage.output_tokens || usage.completion_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);
   const s = sess(cur);
@@ -219,7 +218,7 @@ function finishTurn(usage) {
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || live.say.trim().slice(0, 80));
   resetTurnState();
   drawMeter(); goState(); drawList(); down();
-  if (q.length) { const nx = q.shift(); drawQ(); send(nx); }
+  if (q.length) { const nx = q.shift(); drawQ(); liveSend(nx); }
 }
 
 /* The session's title IS the user's first message (first line, capped) — set

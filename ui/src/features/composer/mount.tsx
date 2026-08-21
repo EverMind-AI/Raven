@@ -104,13 +104,6 @@ export function setLiveAnchor(ms: number): void {
   store.setLiveAnchor(ms)
 }
 
-export const attsPending = (): number => store.attsPending()
-
-export function takeAtts(): string[] {
-  ensure()
-  return store.takeAtts()
-}
-
 /* Its svg twin, for a node drawn inside a graph (the dag sheet still draws
    itself). Same three dots, same shared keyframes; only the element type
    differs. `y` is the baseline the bars used to stand on, so the dots are

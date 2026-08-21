@@ -66,7 +66,7 @@ DS.cron ??= {
     const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
       run: null, from: 'cron', job: j.id };
     SESS.unshift(s); cur = s.id; drawList(); openSession(s);
-    send(j.what);
+    DS.composer.send(j.what);
     toast(T('gui.cron.running_x', { name: j.name }));
   },
   openRun: async (j, run) => {

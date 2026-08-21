@@ -147,20 +147,14 @@ const mediaOf = (text) => {
   return paths.length ? { media: paths } : {};
 };
 
-send = function (text) {
-  /* The tray is the composer island's; what happens to a staged file when the
-     message leaves is not -- the note it becomes is what the reader's own
-     bubble renders from and what survives into session history. */
-  const pending = RavenIslands.composer.attsPending();
-  if (pending) { noteRow(T('gui.att.pending'), T('gui.att.pending_body', { n: pending })); return; }
-  const staged = RavenIslands.composer.takeAtts();
-  if (staged.length) {
-    const list = staged.map((p) => `- ${p}`).join('\n');
-    /* Handing over a file with nothing typed is a message in itself; the note
-       leads on its own rather than trailing a blank line. */
-    const note = `${T('gui.att.note')}\n${list}`;
-    text = text.trim() ? `${text}\n\n${note}` : `\n\n${note}`;
-  }
+/* Named, not anonymous, and that is the whole reason it has a name at all:
+   the retry affordance and the queue drain call it from two other files in this
+   layer, and they can no longer reach it as `send` -- that binding belongs to
+   the demo replay, which live mode must never run.
+   The attachment tray is not here any more. It is the composer island's, and so
+   is the note a staged file becomes; the island builds the message and hands it
+   over already folded. */
+function liveSend(text) {
   if (busy) { q.push(text); drawQ(); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
@@ -174,7 +168,7 @@ send = function (text) {
     killStatus();
     busy = false;
     noteRow(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)),
-      { retry: () => send(text) });
+      { retry: () => liveSend(text) });
     goState(); drawMeter();
   };
   if (!draft) {
@@ -221,7 +215,7 @@ function drainQueue() {
   if (busy || !q.length) return;
   const nx = q.shift();
   drawQ();
-  send(nx);
+  liveSend(nx);
 }
 
 /* True between our own turn.cancel and its response. The cancelled EVENT is
@@ -232,7 +226,11 @@ function drainQueue() {
    made by another client on the same session. */
 let cancelInFlight = false;
 
-halt = function () {
+/* The two actions, installed on the source the composer already asks. `stop`
+   is the go button's other half and the Escape key's; `send` is what the island
+   hands a folded message to. */
+DS.composer.send = liveSend;
+DS.composer.stop = function () {
   const owner = cur;
   cancelInFlight = true;
   rpc.call('turn.cancel', { session_key: cur })

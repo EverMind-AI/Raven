@@ -47,6 +47,8 @@ DS.composer ??= {
     : ''),
   slash: SLASH,
   pickHint: 'demo：正式版在这里选文件或直接拖进来',
+  send: (text) => send(text),
+  stop: () => halt(),
 };
 
 const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.test(s) ? RUNS.fix : RUNS.gtm;

@@ -396,15 +396,42 @@ export function fireSend(): void {
   const ta = field()
   const v = ta ? ta.value.trim() : ''
   if (!v && !hasAtts()) return
+  /* The tray is this island's, and so is what becomes of a staged file when the
+     message leaves: the note is what the reader's own bubble renders from and
+     what survives into session history. The page layer used to do this by
+     reaching back in here (RavenIslands.composer.attsPending / takeAtts), which
+     was the only direction available while `send` was a shell verb. */
+  const pending = attsPending()
+  if (pending) {
+    /* Before the field is cleared, which is a change: the page layer ran this
+       same check AFTER this function had already emptied the textarea, so a
+       send refused for a still-uploading file took the typed message with it. */
+    shell().noteRow?.(t('gui.att.pending'), t('gui.att.pending_body', { n: pending }))
+    return
+  }
+  let text = v
+  const staged = takeAtts()
+  if (staged.length) {
+    const list = staged.map((p) => `- ${p}`).join('\n')
+    /* Handing over a file with nothing typed is a message in itself, so the note
+       leads on its own rather than trailing a blank line -- which is what this
+       plain concatenation gives, because `v` is already trimmed above. The line
+       this replaces branched on `text.trim()` and picked between two strings
+       that are equal for every input that can reach here; it made sense while
+       the page layer received the raw field value, and stopped when the island
+       started trimming before the hand-off. */
+    const note = `${t('gui.att.note')}\n${list}`
+    text = `${text}\n\n${note}`
+  }
   if (ta) ta.value = ''
   fitField()
   verb('draftDrop')()
-  verb('send')(v)
+  source().send(text)
   goPaint()
 }
 
 export function goClick(): void {
-  if (source().busy()) verb('halt')()
+  if (source().busy()) source().stop()
   else fireSend()
 }
 

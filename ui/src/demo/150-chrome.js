@@ -44,7 +44,7 @@ document.addEventListener('keydown', (e) => {
     if ($('#xaPage').dataset.open === 'true') return closeXa();
     if ($('#connPage').dataset.open === 'true') return closeConn();
     if (setIsOpen()) return closeSet();
-    if (busy) return halt();
+    if (busy) return DS.composer.stop();
   }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault(); setRail(true); toggleFind(true);
