@@ -126,8 +126,10 @@ class MCPConnectionManager:
     """Owns every MCP connection of one agent loop.
 
     ``post_connect`` runs after each successful connect — the loop passes
-    ``_apply_disabled_tools`` so the blacklist covers freshly registered
-    MCP tool names. ``on_state_change`` receives a status snapshot dict on
+    ``_report_reserved_disabled_tools``, so an off switch naming a freshly
+    registered MCP tool is reported if it names one of the meta-tools the loop
+    owns. Withholding the tool itself needs nothing here: it is decided per
+    request from the tool array. ``on_state_change`` receives a status snapshot on
     every transition (the gateway broadcasts it as ``mcp.status``);
     ``on_oauth_event`` receives ``(event, payload)`` from the OAuth flow
     (``oauth.pending`` / ``oauth.done``).

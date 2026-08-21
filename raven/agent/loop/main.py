@@ -531,15 +531,28 @@ class AgentLoop:
             now_fn=now_fn,
         )
         self.sessions = session_manager or SessionManager(workspace)
-        # Tool names to omit from the registry — applied after default-tool
-        # registration and after MCP connect so it can blacklist either group.
-        # Used by eval harnesses (e.g. BCP) that need a strict tool subset.
+        # Off switches with no config file behind them: an eval harness that
+        # needs a strict tool subset passes its list here directly
+        # (benchmarks/appworld/agent_cli.py is the only such caller).
+        #
+        # Deliberately NOT where the config's own switches arrive. Those are read
+        # live per request instead -- see `_withheld_tool_names`. A boot-time copy
+        # of `tools.disabled_tools` unioned in here would make the switch one-way
+        # forever: the page can take a name back out of the file, but nothing can
+        # take it out of a set captured before the process started, so a tool that
+        # was off at launch could never be turned back on.
         self._disabled_tools = set(disabled_tools or [])
+        from raven.config.live import LiveConfig
+
+        self._live_config = LiveConfig()
         # Entries already reported as naming a tool this switch does not own, so
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()
         self._tool_search_config = tool_search_config
         self.tools = ToolRegistry()
+        # Asked once per assembled tool array, so an off switch flipped now is
+        # honoured by the next request rather than the next restart.
+        self.tools.set_withheld_source(self._withheld_tool_names)
 
         # Context engine — the single ContextAssembler.
         # Constructed here (after self.tools) so the factory can capture
@@ -756,7 +769,7 @@ class AgentLoop:
         # that dependency, and the two orderings are not compatible -- see
         # ``_build_playbook_runtime``.
         self._build_playbooks()
-        self._apply_disabled_tools()
+        self._report_reserved_disabled_tools()
 
         # LazyProvider defers the litellm import behind a background prewarm
         # thread (see providers.lazy); the window this constructor just
@@ -767,47 +780,76 @@ class AgentLoop:
         if hasattr(provider, "on_built"):
             provider.on_built = self.refresh_context_window
 
-    def _apply_disabled_tools(self) -> None:
-        """Unregister tools whose names appear in ``tools.disabled_tools``.
+    def _report_reserved_disabled_tools(self) -> None:
+        """Tell the operator about an off switch the loop cannot honour.
 
-        Run after :meth:`_register_default_tools` (here) and after MCP connect
-        (see :meth:`_connect_mcp`) so the blacklist can cover either group.
-        Silent on misses — eval configs commonly carry an over-broad list
-        that's a no-op for tools that weren't registered in this build.
+        All this function does now. Withholding a tool is decided per request by
+        :meth:`_withheld_tool_names`, which is what makes a switch flipped now
+        take effect on the next turn -- this used to *unregister* the tool, and a
+        preference expressed by destroying its subject is one that cannot be
+        reversed: nothing remembered what to put back.
 
-        Resolved rather than looked up directly: an entry may name an MCP tool
-        by the raw spelling it carried before its name was sanitised, and an off
-        switch that stops matching is an off switch that stops switching off.
+        The MCP meta-tools are the one exemption, and it is theirs by ownership
+        rather than by policy: :meth:`_sync_mcp_meta_tools` registers them while
+        some connected server serves resources or prompts and withdraws them when
+        none does, so it owns those five names for the life of the loop. An entry
+        naming one is a preference nothing can act on -- reported here once,
+        ignored where the array is built.
 
-        The MCP meta-tools are exempt, and the exemption is enforced here rather
-        than trusted to callers. Their presence is not a preference:
-        :meth:`_sync_mcp_meta_tools` registers them while some connected server
-        serves resources or prompts and withdraws them when none does, so it
-        owns those five names for the life of the loop. An entry naming one
-        would not switch it off -- the next connect re-gates and puts it back --
-        it would only make every connect unregister and re-register the set,
-        which moves the tool array and costs each live conversation its cached
-        prompt prefix. Reported rather than silently dropped, once per entry.
+        Run after :meth:`_register_default_tools` and after MCP connect, so an
+        entry naming a tool from either group is resolvable by the time it is
+        checked. Silent on misses: an eval config commonly carries an over-broad
+        list that is a no-op in this build.
+
+        Reads the same two sources as :meth:`_withheld_tool_names`, so the notice
+        is about the entry the operator can actually see -- most of them are in
+        the config file, which is no longer copied into ``_disabled_tools``.
         """
-        if not self._disabled_tools:
-            return
+        from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
 
+        entries = set(disabled_tool_names(self._live_config)) | self._disabled_tools
+        if not entries:
+            return
         reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
-        for entry in list(self._disabled_tools):
-            for registered in self.tools.resolve_configured(entry):
-                if registered in reserved:
-                    if entry not in self._disabled_tools_reserved_warned:
-                        self._disabled_tools_reserved_warned.add(entry)
-                        logger.warning(
-                            "tools.disabled_tools names '{}', which raven registers and withdraws on its "
-                            "own as MCP servers serving resources or prompts come and go. The entry has "
-                            "no effect; remove it to keep the config honest.",
-                            entry,
-                        )
-                    continue
-                self.tools.unregister(registered)
+        for entry in sorted(entries):
+            if entry in self._disabled_tools_reserved_warned:
+                continue
+            if any(name in reserved for name in self.tools.resolve_configured(entry)):
+                self._disabled_tools_reserved_warned.add(entry)
+                logger.warning(
+                    "tools.disabled_tools names '{}', which raven registers and withdraws on its "
+                    "own as MCP servers serving resources or prompts come and go. The entry has "
+                    "no effect; remove it to keep the config honest.",
+                    entry,
+                )
+
+    def _withheld_tool_names(self) -> frozenset[str]:
+        """Which tools are not on offer right now, read live.
+
+        The registry asks this when it assembles a tool array. Reserved names are
+        removed here rather than at the switch: ``_sync_mcp_meta_tools`` owns those
+        five for the life of the loop (it registers them while some connected
+        server serves resources or prompts and withdraws them when none does), so
+        an entry naming one is a preference the loop cannot honour -- reported
+        above, ignored here.
+
+        Constructor-supplied names are unioned in because an eval harness passes
+        them directly rather than through a config file; a file-less run would
+        otherwise lose its blacklist entirely. Nothing copies the config's own
+        list in there -- see the note in ``__init__`` on why that made the switch
+        one-way.
+        """
+        from raven.config.live import disabled_tool_names
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        configured = set(disabled_tool_names(self._live_config)) | set(self._disabled_tools)
+        withheld: set[str] = set()
+        for entry in configured:
+            withheld.update(self.tools.resolve_configured(entry))
+        return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES))
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Point the loop and everything it built at a new provider/model.
@@ -1037,7 +1079,7 @@ class AgentLoop:
 
         # Plugin-contributed tools (e.g. EverOS's ``understand_media``).
         # Registered last so a plugin can override a built-in by name if
-        # it deliberately contributes the same name; ``_apply_disabled_tools``
+        # it deliberately contributes the same name; ``_withheld_tool_names``
         # still runs afterward and can strip any of them.
         for tool in self.plugin_tools:
             self.tools.register(tool)
@@ -1999,7 +2041,7 @@ class AgentLoop:
         name that is also in ``disabled_tools``, and a server that just arrived
         may be the first one to serve resources or prompts.
         """
-        self._apply_disabled_tools()
+        self._report_reserved_disabled_tools()
         self._sync_mcp_meta_tools()
 
     def _sync_mcp_meta_tools(self) -> None:
@@ -2024,7 +2066,7 @@ class AgentLoop:
         switch off. The predicate is ``all(...)`` over the set, so one name
         missing reads as "the set is not installed" and puts the whole set back;
         anything else that removes a single member turns every connect into an
-        unregister-and-re-register of all of them. ``_apply_disabled_tools``
+        unregister-and-re-register of all of them. ``_withheld_tool_names``
         therefore skips them by name, which makes this method their sole owner:
         they exist exactly while a connected server serves the primitive.
         """

@@ -181,7 +181,7 @@ class TestGatingIsIdempotent:
         back. So an entry here could never switch one off -- it could only turn
         every connect into an unregister-and-re-register of all of them, which
         moves the tool array and costs each live conversation its cached prompt
-        prefix. ``_apply_disabled_tools`` skips them by name instead.
+        prefix. ``_withheld_tool_names`` drops them by name instead.
         """
         loop = _loop(workspace, disabled=[READ_RESOURCE_NAME])
         taken: list[str] = []
@@ -200,12 +200,23 @@ class TestGatingIsIdempotent:
         assert [n for n in taken if n in RESOURCE_TOOL_NAMES] == [], taken
 
     async def test_the_exemption_is_by_name_not_a_blanket_skip(self, workspace):
-        """A server's own tool named in ``disabled_tools`` still goes."""
+        """A server's own tool named in ``disabled_tools`` is withheld; the meta
+        tools named beside it are not.
+
+        Asserted on what is *offered* rather than on what is registered, which is
+        the whole of the change here: a switched-off tool stays in the registry and
+        is left out of the assembled array. Expressing the preference by
+        unregistering made it irreversible -- nothing remembered what to put back
+        -- so the array is now filtered per assembly instead.
+        """
         loop = _loop(workspace, disabled=["mcp_svc_search"])
         with patch(_PATCH, new=_connect(_Caps(resources=object()))):
             await loop.apply_mcp_config({"svc": _cfg()})
-        assert not loop.tools.has("mcp_svc_search")
-        assert all(loop.tools.has(n) for n in RESOURCE_TOOL_NAMES)
+
+        offered = {d["function"]["name"] for d in loop.tools.get_definitions()}
+        assert "mcp_svc_search" not in offered
+        assert loop.tools.has("mcp_svc_search"), "withheld, not destroyed -- it has to be reversible"
+        assert RESOURCE_TOOL_NAMES <= offered
 
     async def test_the_meta_tools_see_the_manager_that_registered_them(self, workspace):
         # Registered bound to the live manager, so the schema they advertise names

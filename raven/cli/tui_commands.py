@@ -523,7 +523,6 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             session_manager=session_manager,
             workdir_resolver=workdir_resolver,
             mcp_servers=config.tools.mcp_servers,
-            disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,

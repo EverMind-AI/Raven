@@ -1,8 +1,11 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+from collections.abc import Callable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
+
+from loguru import logger
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.providers.base import RunMeta
@@ -78,6 +81,36 @@ class ToolRegistry:
         # turns from different channels, and a plain field would let whichever
         # turn set it last decide what the others are shown.
         self._channel: ContextVar[str | None] = ContextVar("tool_registry_channel", default=None)
+        # Asked, not stored: the operator's off switches are a *preference*, and
+        # a preference read once at startup is one the operator cannot change.
+        # See ``set_withheld_source``.
+        self._withheld: Callable[[], frozenset[str]] | None = None
+
+    def set_withheld_source(self, source: "Callable[[], frozenset[str]] | None") -> None:
+        """Install the answer to "which tools has the operator switched off".
+
+        A callable rather than a set, because the point is that it can change
+        while the process runs. It is asked once per assembly (see
+        :meth:`get_definitions`), so it is free to be a cached read of a file
+        whose mtime it watches.
+
+        This replaces unregistering the tool. Unregistering expressed the
+        preference by destroying the thing it was a preference about, so turning a
+        tool back on was not merely unimplemented but unimplementable -- nothing
+        remembered what to put back. Withholding is reversible by construction,
+        and it is the same shape the channel restriction already has.
+        """
+        self._withheld = source
+
+    def withheld_names(self) -> frozenset[str]:
+        """The current off switches, or an empty set when nobody installed a source."""
+        if self._withheld is None:
+            return frozenset()
+        try:
+            return self._withheld()
+        except Exception:  # noqa: BLE001 - a bad read must not cost the turn its tools
+            logger.warning("tools: could not read the disabled-tool list; offering everything")
+            return frozenset()
 
     def set_channel(self, channel: str | None) -> None:
         """Record the channel this turn is answering on (turn-local).
@@ -92,14 +125,31 @@ class ToolRegistry:
     def offers_on_this_channel(self, tool: Tool) -> bool:
         """Whether this turn's channel may see ``tool`` at all.
 
-        The one predicate behind both surfaces a tool can be reached through --
-        the schema and tool-search -- so a channel-bound tool cannot be hidden
-        from one and found through the other.
+        The channel half of :meth:`offers`. Kept separate because the two answer
+        different questions -- one is what the surface can carry, the other is
+        what the operator asked for -- and only the second one moves while the
+        process runs.
         """
         if tool.channels is None:
             return True
         channel = self._channel.get()
         return channel is None or channel in tool.channels
+
+    def offers(self, tool: Tool, withheld: "frozenset[str] | None" = None) -> bool:
+        """Whether ``tool`` is reachable at all right now.
+
+        The one predicate behind both surfaces a tool can be reached through --
+        the schema and tool-search -- so a tool cannot be hidden from one and
+        found through the other. That invariant is why the off switch belongs
+        here and not at either call site.
+
+        ``withheld`` is passed in when a caller is testing many tools at once, so
+        the source is asked once per assembly rather than once per tool.
+        """
+        if not self.offers_on_this_channel(tool):
+            return False
+        names = self.withheld_names() if withheld is None else withheld
+        return tool.name not in names
 
     def register(self, tool: Tool, *, origin: "MCPToolRef | None" = None) -> None:
         """Register a tool, recording where it came from if it has an origin.
@@ -200,8 +250,15 @@ class ToolRegistry:
         return tool.metadata_owner(params or {}).take_metadata()
 
     def get_definitions(self) -> list[dict[str, Any]]:
-        """Tool definitions in OpenAI format, minus those this channel cannot use."""
-        return [tool.to_schema() for tool in self._tools.values() if self.offers_on_this_channel(tool)]
+        """Tool definitions in OpenAI format, minus those not on offer right now.
+
+        Assembled per LLM call, which is what makes an off switch take effect on
+        the next turn rather than the next restart: the list is computed here, so
+        the only thing a preference has to do is be readable by the time this
+        runs.
+        """
+        withheld = self.withheld_names()
+        return [tool.to_schema() for tool in self._tools.values() if self.offers(tool, withheld)]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
@@ -224,8 +281,18 @@ class ToolRegistry:
         # answer whose point is that there is nothing to try.
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
+        # A withheld tool is still in ``_tools`` by construction -- that is what
+        # makes the switch reversible -- so the off switch has to be answered here
+        # too, or it is an omission from the array rather than a block. Two ways a
+        # name arrives anyway: a model calling from habit rather than from the
+        # array (an eval harness leaving only ``execute`` still gets asked for
+        # ``read_file``), and a switch flipped mid-conversation, where the array is
+        # fresh and the history is not.
+        #
+        # The channel half of ``offers`` cannot move in here: its ContextVar is
+        # unset on internally-initiated calls, so testing it would refuse them all.
         tool = self._tools.get(name)
-        if not tool:
+        if not tool or name in self.withheld_names():
             # No catalog listing on the end of it. Unfolded, every schema is
             # already in this request and a list only repeats it; folded, a
             # cataloged tool is reached through ``tool_call``, which appends the

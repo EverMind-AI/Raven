@@ -32,9 +32,12 @@ const TOOL_DANGER = new Set(['write_file', 'edit_file', 'exec']);
 let disabledToolsLive = [];
 let pluginsDisabledLive = [];
 
+/* The engine re-reads tools.disabledTools once per assembled tool array, so the
+   toggle lands on the next turn. Not the same promise as the plugin toggle below:
+   plugins.disabled is still read at startup, and its toast still says so. */
 function persistDisabledTools() {
   rpc.call('settings.set', { key: 'tools.disabledTools', value: disabledToolsLive })
-    .then(() => toast('已保存 · 重启引擎后生效'))
+    .then(() => toast('已保存 · 下一轮对话生效'))
     .catch((e) => toast(`保存失败：${e.message || e}`));
 }
 

@@ -939,14 +939,18 @@ class ToolsConfig(Base):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
     disabled_tools: list[str] = Field(default_factory=list)
-    """Tool names to unregister after default-tool registration and MCP connect.
+    """Tool names to withhold from the assembled tool array and refuse at dispatch.
     The general off switch for a tool this deploy does not want, and the only one
     that covers a tool with an unconfigured stand-in variant (``deep_research``),
     where clearing the tool's own config only swaps which variant registers. Also
     used by eval harnesses (e.g. BrowseComp-Plus) to constrain the agent to a
     specific tool subset. Names match those in ``ToolRegistry`` (e.g.
-    ``read_file``, ``web_search``, or ``mcp_bcp-search_search``). Read at startup,
-    so a change needs a restart.
+    ``read_file``, ``web_search``, or ``mcp_bcp-search_search``).
+
+    Re-read once per assembled array, so a change takes effect on the next turn
+    rather than the next restart. The tool stays registered either way: expressing
+    the preference by unregistering made it irreversible, because nothing
+    remembered what to put back.
 
     The MCP meta-tools -- ``list_mcp_resources``, ``list_mcp_resource_templates``,
     ``read_mcp_resource``, ``list_mcp_prompts``, ``get_mcp_prompt`` -- are the one

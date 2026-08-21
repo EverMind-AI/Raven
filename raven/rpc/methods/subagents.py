@@ -471,7 +471,9 @@ async def _run_installer(installer: "Path", folder_name: str) -> tuple[int, str]
     return proc.returncode or 0, (out or b"").decode("utf-8", "replace")
 
 
-async def _build_vendored(name: str, folder: "Path", installer: "Path") -> None:
+async def _build_vendored(
+    name: str, folder: "Path", installer: "Path", agent_loop_factory: "AgentLoopFactory | None" = None
+) -> None:
     """Build one vendored folder's venv, recording why if it did not work.
 
     The verdict is read back off the filesystem rather than taken from the exit
@@ -485,14 +487,22 @@ async def _build_vendored(name: str, folder: "Path", installer: "Path") -> None:
     code, out = await _run_installer(installer, folder.name)
     if venv_ready(checkout_of(folder)):
         _BUILD_ERROR.pop(name, None)
-        logger.info("Built the vendored sub-agent {!r}", name)
+        # Re-compose the table, or the agent is installed and uncallable. What a
+        # build changes is readiness, which lives on the filesystem -- and the
+        # roster the dispatching model reads is a snapshot taken the last time
+        # `apply` ran, which nothing here would otherwise trigger. So the page
+        # showed the row ready (it re-discovers per request) while the model's own
+        # list still did not have the name in it, and the only way to be believed
+        # was to restart. Same call a config write makes, for the same reason.
+        _hot_apply(agent_loop_factory)
+        logger.info("Built the vendored sub-agent {!r} and refreshed the agent table", name)
         return
     tail = out.strip().splitlines()
     _BUILD_ERROR[name] = tail[-1] if tail else f"install.sh exited {code}"
     logger.warning("Building the vendored sub-agent {!r} failed: {}", name, _BUILD_ERROR[name])
 
 
-async def subagents_build(params: dict) -> dict:
+async def subagents_build(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Start building one vendored folder's venv. Returns as soon as it is under way.
 
     Not awaited, unlike every other method here: one of these is a few hundred MB
@@ -526,7 +536,7 @@ async def subagents_build(params: dict) -> dict:
         raise SubagentNotFoundError(detail, data={"name": name, "detail": detail})
 
     _BUILD_ERROR.pop(name, None)
-    task = asyncio.ensure_future(_build_vendored(name, folder, installer))
+    task = asyncio.ensure_future(_build_vendored(name, folder, installer, agent_loop_factory))
     _BUILDING[name] = task
     # Identity-checked on the way out, so a later call's entry is never removed
     # by an earlier call's completion.
@@ -642,11 +652,17 @@ def register_subagents_methods(
     async def _remove(params: dict) -> dict:
         return await subagents_remove(params, agent_loop_factory=agent_loop_factory)
 
+    async def _build(params: dict) -> dict:
+        # Wrapped like the four writes above, and for the same reason: a finished
+        # build has to re-compose the agent table, or the folder is installed and
+        # the model still cannot name it.
+        return await subagents_build(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.add", _add)
     dispatcher.register("subagents.update", _update)
     dispatcher.register("subagents.toggle", _toggle)
     dispatcher.register("subagents.remove", _remove)
-    dispatcher.register("subagents.build", subagents_build)
+    dispatcher.register("subagents.build", _build)
     dispatcher.register("subagents.test", subagents_test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 

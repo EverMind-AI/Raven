@@ -261,20 +261,33 @@ async def test_lazy_connect_still_runs_once(workspace) -> None:
     assert loop.tools.has("mcp_svc_search")
 
 
-async def test_the_disabled_tools_blacklist_survives_a_connect(workspace) -> None:
-    """An MCP server can register a blacklisted name, so the blacklist has to be
-    re-applied after every connect -- not only after the first one."""
+async def test_a_blacklisted_mcp_tool_is_withheld_however_late_it_arrives(workspace) -> None:
+    """An MCP server can register a name the operator switched off, and it may do
+    so on any connect rather than only the first.
+
+    Nothing has to be re-applied for that now: withholding is decided when the
+    tool array is assembled, so a name arriving later is covered by the same read
+    as a name that was there all along. What this pins is the outcome -- the tool
+    is not offered -- and the two facts that follow from getting there by
+    withholding rather than by unregistering.
+    """
     loop = _loop(workspace, disabled_tools=["mcp_svc_search"])
 
     with patch(_PATCH, new=_fake_connect(["search", "fetch"])):
         await loop.apply_mcp_config({"svc": MCPServerConfig(url="https://svc.test/mcp")})
 
-    assert not loop.tools.has("mcp_svc_search")
-    assert loop.tools.has("mcp_svc_fetch")
+    offered = {d["function"]["name"] for d in loop.tools.get_definitions()}
+    assert "mcp_svc_search" not in offered
+    assert "mcp_svc_fetch" in offered
+
+    # Both are registered, so the server's record and the registry agree again.
+    # It used to hold 1 of the 2 it had connected, because the blacklist had
+    # unregistered the other behind its back -- and a record that disagrees with
+    # the registry is what made a later disconnect have to be careful about
+    # unregistering a name it never owned.
     (snap,) = loop.mcp_manager.status()
-    # The record tracks what survived the blacklist, so a later disconnect stays
-    # precise instead of unregistering a name it never owned.
-    assert snap["tool_count"] == 1
+    assert snap["tool_count"] == 2
+    assert loop.tools.has("mcp_svc_search")
 
 
 async def test_close_mcp_detaches_everything(workspace) -> None:

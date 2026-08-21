@@ -587,7 +587,12 @@ def test_extract_output_text_concatenates_message_output_only():
 @pytest.mark.parametrize("api_key", ["", "sk-test"])
 def test_disabled_tools_removes_deep_research_in_either_mode(tmp_path: Path, monkeypatch, api_key):
     """``deep_research`` registers in one of two variants; a disable must take out
-    both, not just the working one."""
+    both, not just the working one.
+
+    Asserted on what is offered rather than on what is registered: a switched-off
+    tool now stays in the registry and is left out of the assembled array, because
+    expressing the preference by unregistering made it irreversible.
+    """
     monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
     loop = AgentLoop(
         provider=_StubProvider(),
@@ -595,16 +600,19 @@ def test_disabled_tools_removes_deep_research_in_either_mode(tmp_path: Path, mon
         deep_research_config=DeepResearchToolConfig(api_key=api_key),
         disabled_tools=["deep_research"],
     )
-    assert loop.tools.get("deep_research") is None
-    assert "deep_research" not in loop.tools.tool_names
+    offered = {d["function"]["name"] for d in loop.tools.get_definitions()}
+    assert "deep_research" not in offered
 
 
 def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monkeypatch):
     """A disable must be an off switch, not just a startup one.
 
-    Promotion re-registers the working tool mid-session as soon as a key shows up
-    on disk. It keys off the stand-in still being registered, which a disable
-    removes -- so a key appearing later must not resurrect a disabled tool.
+    Promotion swaps the stand-in for the working tool as soon as a key shows up on
+    disk, and it is about whether a key is available rather than about what the
+    operator wants -- so it now runs for a switched-off tool too, and the swap is
+    harmless because the name is withheld either way. What has to hold is the
+    thing this test was always for: a key appearing later does not make a disabled
+    tool reachable.
     """
     import raven.config.update_tools as ut
 
@@ -615,12 +623,13 @@ def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monk
         deep_research_config=DeepResearchToolConfig(),
         disabled_tools=["deep_research"],
     )
-    assert loop.tools.get("deep_research") is None
+    offered = lambda: {d["function"]["name"] for d in loop.tools.get_definitions()}  # noqa: E731
+    assert "deep_research" not in offered()
 
     monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""})
     loop._maybe_promote_deep_research()
 
-    assert loop.tools.get("deep_research") is None
+    assert "deep_research" not in offered()
 
 
 # ── report location: the session working directory, not agent home ──

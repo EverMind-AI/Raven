@@ -83,6 +83,43 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_raven_home(tmp_path_factory, monkeypatch):
+    """Keep the suite out of the config file of whoever is running it.
+
+    ``get_config_path()`` answers ``RAVEN_HOME/config.json``, and anything reading
+    it at test time therefore reads a real person's preferences. The tool array is
+    assembled through one of those reads (``LiveConfig``, so an off switch takes
+    effect on the next turn rather than the next restart), which makes the
+    developer who has actually used that switch the one whose suite fails: a home
+    config carrying ``tools.disabledTools: ["deep_research"]`` reds three tests in
+    ``test_deep_research_tool.py`` and nothing in the failure points at the cause.
+
+    ``_current_config_path`` is reset alongside it because it wins over both and
+    is module-global: one test calling ``set_config_path`` otherwise aims every
+    later test in the process at that path.
+
+    The knob is ``HOME`` because it is the only one every test that isolates the
+    home itself can still beat, and this fixture must lose to all of them. Tests
+    do it two ways -- ``monkeypatch.setattr(Path, "home", ...)`` and
+    ``monkeypatch.setenv("HOME", ...)`` -- and the precedence runs
+    ``RAVEN_HOME`` > ``Path.home`` > ``HOME``. Setting ``RAVEN_HOME`` here beats
+    both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
+    ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
+    patch shadows it, and a later ``setenv`` replaces it.
+    """
+    from raven.config import loader
+
+    # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
+    # ``tmp_path`` as a workspace root and enumerate it, so a directory this
+    # fixture leaves in there shows up in their assertions; and a session-shared
+    # home would let one test read the config another one wrote.
+    home = tmp_path_factory.mktemp("default_home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(loader, "_current_config_path", None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_update_check(tmp_path, monkeypatch):
     """Keep the startup update check off the network and off the real disk.
 
