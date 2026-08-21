@@ -1257,8 +1257,11 @@ class SkillForgeRouterConfig(_Base):
     a same-named skill across sources into one slot; ``"qualified_id"``
     keeps them as separate entries (useful for telemetry experiments)."""
 
-    top_k: int = 5
-    """Final top-K returned from ``SkillForgeRouter.select``."""
+    top_k: int = 2
+    """Final top-K returned from ``SkillForgeRouter.select``. Also the no-gate
+    injection size: each hit is rendered in full into the system prefix, so
+    this defaults to match the gate's ``max_select`` rather than widening the
+    prompt whenever the gate happens to be unwired."""
 
     hub: HubSourceConfig = Field(default_factory=HubSourceConfig)
 

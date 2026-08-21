@@ -49,7 +49,7 @@ class TestDefaults:
         assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
-        assert c.top_k == 5
+        assert c.top_k == 2
         assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source);
         # disabled until an endpoint is set.

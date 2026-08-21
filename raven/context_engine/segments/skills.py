@@ -61,7 +61,7 @@ class SkillsSegmentBuilder:
         self,
         router: "SkillForgeRouter | None",
         *,
-        skill_top_k: int = 5,
+        skill_top_k: int = 2,
         rewriter: "QueryRewriter | None" = None,
         gate: "LLMGateFilter | None" = None,
         gate_pool_size: int = 10,
