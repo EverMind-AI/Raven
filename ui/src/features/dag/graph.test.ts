@@ -217,6 +217,19 @@ describe('dag clock', () => {
   it('floors at one second, so a node inside a single tick does not read as zero', () => {
     expect(took(node('a', [], { started_at: 1000, ended_at: 1001 }), 1001)).toBe('1000ms')
   })
+
+  /* The clock borrows the page's own formatter, which is optional on the Shell
+     interface -- so the case worth pinning is a shell that does not publish it.
+     It has to be loud: a blank string here reads as "this node has not started",
+     which is a sentence the column already uses and means something else, so
+     every clock in the graph would go quiet with nothing anywhere saying why.
+     The one fake most likely to omit the verb is a test's. */
+  it('refuses to blank the clock when the page has no formatter', () => {
+    window.RavenShell = { ...window.RavenShell!, dur: undefined }
+    expect(() => took(node('a', [], { started_at: 1000, ended_at: 3000 }), 9000)).toThrow(
+      'RavenShell.dur is not wired',
+    )
+  })
 })
 
 describe('dag ordering', () => {

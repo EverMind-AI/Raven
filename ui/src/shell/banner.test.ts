@@ -33,6 +33,10 @@ const host = (): HTMLElement => document.getElementById('bannerHost')!
 const banner = (): HTMLElement | null => host().querySelector('.banner')
 
 afterEach(() => {
+  /* A source, before the reset. `setFault` also draws, and a draw with no fault
+     left to show consults the seam -- so clearing the module's state needs a
+     source installed even after a case that deliberately ran without one. */
+  window.DS = { banner: { websearchNeeds: () => false } satisfies BannerSource }
   setFault(null)
   delete window.RavenShell
   delete window.DS
@@ -115,10 +119,26 @@ describe('the banner strip', () => {
     expect(host().querySelectorAll('.banner').length).toBe(1)
   })
 
-  it('says nothing when the source is not installed yet', () => {
+  /* This used to assert the opposite -- that a missing source draws nothing and
+     does not throw -- and it was written alongside the catch that made it true.
+     Both are gone. The catch could not fire on any page that exists (the seam
+     installs `DS.banner` at the top level of a layer concatenated in both
+     modes, and every caller of `draw` is inside a function), so the only thing
+     it could ever silence was a seam that had genuinely come apart: a rename,
+     or a manifest reorder putting the install after a draw. The failure it
+     bought was the websearch notice quietly never appearing again. */
+  it('throws rather than going quiet when its source is missing', () => {
     wire(true, false)
-    expect(() => draw()).not.toThrow()
-    expect(host().children.length).toBe(0)
+    expect(() => draw()).toThrow('DS.banner is not installed')
+  })
+
+  /* The half that must keep working without a source: a memory fault is this
+     module's own state, so it draws before the seam is consulted at all. */
+  it('still draws a memory fault with no source installed', () => {
+    wire(true, false)
+    setFault('disk full')
+    expect(banner()!.className).toBe('banner bad')
+    expect(banner()!.textContent).toContain('disk full')
   })
 
   it('does nothing at all when the host is not in the document', () => {

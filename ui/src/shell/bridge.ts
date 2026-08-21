@@ -171,3 +171,17 @@ export function ds<S>(domain: string): S {
   if (!source) throw new Error(`DS.${domain} is not installed`)
   return source
 }
+
+/* One optional verb, insisted on. Every verb above is declared optional because
+   the demo and live layers publish different subsets, but a caller that cannot
+   do its job without one should say so rather than degrade: `shell().dur?.(ms)
+   ?? ''` blanks a clock column forever and reports nothing, and the fake most
+   likely to omit the verb is a test's.
+   Lives here rather than beside its first caller because the module docstring
+   above is where this repo states the rule -- a silent fallback moves the
+   failure downstream -- and a helper enforcing it belongs with the rule. */
+export function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
+  const v = shell()[name]
+  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
+  return v as NonNullable<Shell[K]>
+}

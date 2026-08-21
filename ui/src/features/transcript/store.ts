@@ -1,5 +1,5 @@
 import * as dagNodes from '../dag/nodes'
-import { ds, shell, t } from '../../shell/bridge'
+import { ds, shell, t, verb } from '../../shell/bridge'
 import { md } from '../../shell/prose'
 
 import type {
@@ -18,18 +18,12 @@ import type { Shell } from '../../shell/bridge'
 
 export const source = (): TranscriptSource => ds<TranscriptSource>('transcript')
 
-function verb_<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
-  const v = shell()[name]
-  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
-  return v as NonNullable<Shell[K]>
-}
-
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
    window.RavenShell.md -> window.md -> back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
-export const durText = (ms: number): string => verb_('dur')(ms)
+export const durText = (ms: number): string => verb('dur')(ms)
 
 const shortPath = (p: string): string => {
   try {

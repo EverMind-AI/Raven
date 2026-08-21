@@ -72,16 +72,7 @@ function websearchNotice(): HTMLElement {
   return b
 }
 
-function source(): BannerSource {
-  /* Tolerated missing rather than thrown on: the banner is drawn from the boot
-     sequence, and a page that has not installed this source yet has no notice
-     to show anyway. */
-  try {
-    return ds<BannerSource>('banner')
-  } catch {
-    return { websearchNeeds: () => false }
-  }
-}
+const source = (): BannerSource => ds<BannerSource>('banner')
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text: string): HTMLElementTagNameMap[K] {
   const n = document.createElement(tag)
