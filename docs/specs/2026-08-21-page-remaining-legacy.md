@@ -1,6 +1,10 @@
 # What is left of the served page's legacy layers
 
-Status: accepted as an inventory, not as a plan for any one piece. Every number
+Status: accepted as an inventory, not as a plan for any one piece. Two of its
+plan calls have since been corrected by the work: the sheet dock's shape (see
+Axis 1) and onboarding's "open question" (see the last section). Both were wrong
+in the same direction -- reasoning from the code's shape rather than measuring
+what it does. Every number
 below is measured on `639eb25a` and is not kept current; re-measure before acting
 on it -- `!159`, `!161` and `!162` were open against that commit and move some of
 it, so anything landed since has already made a row here optimistic.
@@ -58,24 +62,45 @@ distance to the next declaration, which is what produced the 173 above.
 
 | piece | file | lines | target shape |
 |---|---|---|---|
-| `showOnboard` | `demo/160-boot.js` | 204 | **undecided** -- see below |
+| `showOnboard` | `demo/160-boot.js` | 204 | island -- `features/onboard/`; this cell said *undecided* and that is settled, see below |
 | dag sheet svg (`dagSvg` + `drawDag`) | `live/240-external-agents.js` | 156 | island (half done: geometry is already `RavenIslands.dag`) |
 | `openDetail` | `demo/120-capabilities.js` | 113 | island (the caps detail drawer) |
-| clarify sheet | `live/070-notify.js` | 112 | writer, in the sheet family |
+| clarify sheet | `live/070-notify.js` | 112 | the rack's next tenant, beside the approval sheet -- not a writer, for the reason below |
 | settings toolset (`renderToolset`, `toolLine`, `toolCredRow`) | `demo/130`, `demo/120` | 96 | into the settings island, which currently delegates it back out -- and this row is an **Axis 2** reduction, not an Axis 1 move; see below |
-| `approveSheet` | `demo/040-state.js` | 57 | writer, in the sheet family |
-| the sheet dock (`sheetSession` .. `sheetsSync`) | `demo/040-state.js` | 47 | writer -- the host the sheets live in |
+| `approveSheet` | `demo/040-state.js` | 57 | **next** -- `features/composer/approve.ts` on the composer's bag (`!182`, open); decided, not landed |
+| the sheet dock (`sheetSession` .. `sheetsSync`) | `demo/040-state.js` | 47 | **moved** -- `features/composer/sheets.ts` (`!180`); this row said *writer* and that was wrong, see below |
 | `upShade` | `live/210-update-notice.js` | 39 | writer |
 | `hubSkeleton` | `demo/152-skills.js` | 26 | into the skills island |
 | `menuAt` | `demo/040-state.js` | 13 | writer |
 | `toast` | `demo/040-state.js` | 11 | writer |
 | small (`ico`, `mkMcpRow`, `authFail`, two install buttons) | various | ~120 | fold into whoever ends up owning each |
 
-About 1,000 lines, and the shape column matters more than the total: **most of
-it is not island work.** The rule the migration has settled on is the one
-`shell/lightbox.ts` states -- a thing that owns one node appended to a host,
-belonging to no page's root, is a writer; a thing that owns a container and a
-list is an island. Six of the twelve rows above are writers.
+About 1,000 lines, and the shape column matters more than the total. The rule
+the migration has settled on is the one `shell/lightbox.ts` states -- a thing
+that owns one node appended to a host, belonging to no page's root, is a writer;
+a thing that owns a container and a list is an island.
+
+**Applying that rule to the sheets gave the wrong answer, and the correction is
+worth more than the rows it fixes.** This table called the sheet dock a writer.
+It owns `#sheetRack` and a `Map` of element sets keyed by conversation, which is
+a container plus a list -- an island by the rule as stated. Worse, the
+classification decided the price and the price was backwards: as a writer its six
+names each needed a `window.` publish for the concat layers that call them,
+taking the page's published surface from 19 to 25, on a migration whose point is
+to shrink it. As members of a bag that already existed they needed none.
+
+The question the rule does not ask is **whose**. `#sheetRack` sits inside
+`.dock`, one node above the composer card in the same markup, and every mutation
+of the rack ends in `dockLift()` -- which was already
+`RavenIslands.composer.dockLift`. The dock had been calling into the composer
+island across the layer boundary all along. So the shape question ("writer or
+island") is second; the ownership question comes first, and answering it is what
+makes a move cost nothing.
+
+That reclassifies the sheet family: the approval sheet goes in beside the rack
+rather than into `shell/`, and the clarify sheet follows it. Of the rows above,
+the ones that really are writers are `upShade`, `menuAt` and `toast` -- each one
+node appended to a host that belongs to no island.
 
 ### What looks like drawing and is not
 
@@ -319,23 +344,46 @@ Suggested order:
 | 5 | onboarding | `showOnboard` | 204 | yes |
 
 Batch 0 first and in parallel because it costs no publish. Batch 1 next because
-it is the only one whose pieces are coupled to each other. Batch 5 last because
-it is the one open design question.
+it is the only one whose pieces are coupled to each other.
 
-## The open question: onboarding
+Batch 5 was last "because it is the one open design question". It is not one any
+more -- see below -- so its place in the order is now just its size.
 
-`showOnboard` is 204 lines of hand-built DOM in `demo/160-boot.js` with **zero**
-`RavenIslands` references, and there is no onboarding island. It is the largest
-single piece left and the only one whose target shape is not already implied by
-a precedent.
+## Onboarding: the question was closed, and the answer was already there
 
-It is neither shape cleanly. It owns a container and a multi-step flow, which
-says island. But it runs once, before anything else is on screen, and its host
-is the boot sequence rather than a page -- and an island that mounts during boot
-inverts the order the rest of the migration relies on, where `main.tsx` has run
-and published before any legacy script calls anything.
+This section used to say `showOnboard`'s shape was undecided because it runs
+during boot, before `main.tsx` has published anything, which "inverts the order
+the rest of the migration relies on". **That is not true, and the rest of the
+argument had already been answered by the code.** Three measurements:
 
-Decide this before starting it, not during.
+**`main.tsx` runs first.** `page.html` carries exactly two scripts and
+`/*__MODERN__*/` is the first of them (`ui/build.py` splices the seam and demo
+layers into the second, and appends live to it). Checked on the built page
+rather than read off the markers: `document.scripts.length` is 2,
+`document.scripts[0]` is the one containing `RavenIslands`, and by the time the
+`load` event fires `window.RavenIslands` is already populated. So every publish
+and every island key is in place before any demo or live code runs, let alone
+before an overlay opens. There is no inverted order.
+
+**Its data side is already inverted.** `showOnboard(be)` takes its backend as a
+parameter -- `{ options, saveKey, setModel, recheck }` -- with the live layer
+mapping those onto the setup RPCs and the demo layer passing
+`demoOnbBackend()`. That is a `DS` source in everything but where it is
+installed. The "zero `RavenIslands` references" this section led with is true and
+irrelevant: it does not reach for the page because it is handed what it needs.
+
+**So the shape is the ordinary one.** It owns a container (`#onb`) and a
+multi-step flow, which is an island by the stated rule; it goes to
+`features/onboard/` and the backend it already takes becomes the source it
+already resembles. Nothing about boot changes that.
+
+What *was* actually blocking is a thing this section never mentioned: **there was
+no way to look at the flow.** `?onboard=1` on a live page forces the real flow,
+which writes -- `saveKey` and `setModel` hit the config. The canned version, which
+writes nothing, was reachable only on `file://` or `?stub=1`, and both of those
+blank the live data as well. Against a real `serve` there was no risk-free way to
+open that screen, and a 204-line flow needs opening more than once. `?onboard=demo`
+now does it (`!181`), which is the prerequisite this section should have named.
 
 ## Endgame, once Axis 1 is empty and Axis 2 is deliberate
 
