@@ -351,3 +351,47 @@ async def test_round_trip_through_the_real_broker():
     assert params["recommended"] == "uv"
     assert params["total"] == 1
     assert params["timeout_s"] <= 5.0
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatch_and_the_real_clarify_respond_route():
+    """The production entry point is the registry, not ``execute`` directly, and
+    the answer arrives over the real ``clarify.respond`` handler. Neither layer
+    is exercised by the tests above, and both can reject a call the tool would
+    have accepted -- the schema validator runs in between.
+    """
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods.question import register_question_methods
+    from raven.tui_rpc.question_broker import QuestionBroker
+
+    dispatcher = Dispatcher()
+
+    async def send_frame(frame: dict) -> None:
+        params = frame["params"]
+        reply = await dispatcher.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "clarify.respond",
+                "params": {"request_id": params["request_id"], "answer": "uv"},
+            }
+        )
+        assert reply["result"]["ok"] is True
+
+    broker = QuestionBroker(send_frame, timeout_s=5.0)
+    register_question_methods(dispatcher, question_broker=broker)
+    registry = ToolRegistry()
+    registry.register(AskUserTool(broker=broker, conversation_id="tui:test"))
+
+    answered = await registry.execute(
+        "ask_user",
+        {"questions": [{"question": "Which?", "header": "Pkg", "options": ["uv", "pip"], "recommended": 0}]},
+    )
+    assert 'User answered: "Which?" -> "uv".' in answered
+
+    # A rejection has to survive the registry intact -- it is the steer the model
+    # reads, and the registry appends to it rather than replacing it.
+    rejected = await registry.execute("ask_user", {"questions": [{"question": "Ship?", "options": ["yes"]}]})
+    assert "exactly one option" in rejected
+    assert "filler" in rejected
