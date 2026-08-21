@@ -66,8 +66,10 @@ export interface Shell {
   dur?(ms: number): string
   plainTitle?(s: string): string
   /* The transcript bridge: draws a delegated run's record into a stage box
-     with the transcript's own renderer (live-only; the demo global it calls
-     through stays null, and the island never asks without a record). */
+     with the transcript's own renderer. Forwards to DS.agents.stagePaint,
+     which the fixture source omits -- no runs to hand out means no record to
+     paint -- so the optional call there is the guard, and the island never
+     asks without a record anyway. */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
   /* Transcript island verbs: the tail-follow, the attachment image bytes,
      the lightbox, and the diff builders the workspace panel already owns. */

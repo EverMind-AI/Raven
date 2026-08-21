@@ -32,13 +32,13 @@ DS.agents = {
      move on screen without being reopened, and every judgement about what
      that takes belongs to the island that is drawing it. */
   watch: (fn) => { agentsWatch = fn; },
+  /* Draws a delegated run's record with the transcript's own renderer -- the
+     transcript island, which owns the incremental bookkeeping too (what is
+     already drawn, the held-back streaming answer, the working glyph, the
+     scroll). Reached through the shell's agentStagePaint verb, which forwards
+     to whatever this source offers; a member here rather than its own binding,
+     because a painter is only ever wanted for a record, and this is the source
+     the records come from. */
+  stagePaint: (box, r, opts) => RavenIslands.transcript.agentStage(box, r, opts),
 };
 setInterval(() => { if (agentsWatch) agentsWatch(); }, 2000);
-
-/* ── the transcript bridge ─────────────────────────────────────────────
-   Draws a delegated run's record with the transcript's own renderer -- the
-   transcript island now, which owns the incremental bookkeeping too (what is
-   already drawn, the held-back streaming answer, the working glyph, the
-   scroll). Published to the subagents island through the shell's
-   agentStagePaint verb; this assignment is what arms that verb in live mode. */
-agentPaint = (box, r, opts) => RavenIslands.transcript.agentStage(box, r, opts);
