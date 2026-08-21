@@ -120,16 +120,12 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     by_name = {row["name"]: row for row in result["rows"]}
 
     # Coder/Researcher already claim the claude_code/mirothinker presets, so
-    # those two are excluded from the unconfigured-preset rows. The built-in rows
-    # lead the list: they are on the agent table whether config mentions them or
-    # not, so an overlay that omitted them would be hiding half the roster the
-    # model dispatches to.
+    # those two are excluded from the unconfigured-preset rows. The built-in row
+    # leads the list: it is on the agent table whether config mentions it or not,
+    # so an overlay that omitted it would be hiding the agent every unnamed spawn
+    # already dispatches to.
     assert set(by_name) == {
         "raven",
-        "research-raven",
-        "code-raven",
-        "data-raven",
-        "content-raven",
         "Coder",
         "Researcher",
         "codex",
@@ -139,10 +135,10 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     }
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
-    assert by_name["research-raven"]["group"] == "builtin"
-    assert by_name["research-raven"]["builtin"] is True
-    assert by_name["research-raven"]["configured"] is False
-    assert by_name["research-raven"]["enabled"] is True
+    assert by_name["raven"]["group"] == "builtin"
+    assert by_name["raven"]["builtin"] is True
+    assert by_name["raven"]["configured"] is False
+    assert by_name["raven"]["enabled"] is True
     assert all(row["probe_status"] == "unknown" for row in result["rows"])
     assert all(row["probe_detail"] == "" for row in result["rows"])
     # group must still resolve correctly without a probe: openai keyed by its
@@ -601,25 +597,25 @@ async def test_toggling_a_builtin_row_creates_its_override(config_path: Path) ->
     write nothing but the switch, so the description and skills keep coming from
     the package's own row.
     """
-    result = await subagents_toggle({"name": "research-raven", "enabled": False})
+    result = await subagents_toggle({"name": "raven", "enabled": False})
     assert result == {"enabled": False}
 
-    stored = [e for e in _stored(config_path) if e["name"] == "research-raven"]
+    stored = [e for e in _stored(config_path) if e["name"] == "raven"]
     assert len(stored) == 1
     assert stored[0]["kind"] == "builtin"
     assert stored[0]["enabled"] is False
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["research-raven"]["enabled"] is False
+    assert rows["raven"]["enabled"] is False
     # And the switch is all it overrode: the description still comes from the
     # package's row. A write dumps the whole model, so applying the stored row
     # field-for-field would blank the only line the model reads about this agent.
-    assert "Deep retrieval" in rows["research-raven"]["description"]
+    assert "in-process sub-agent" in rows["raven"]["description"]
     # Still on the list -- switched off is not deleted, and it has to stay
     # reachable to be switched back on.
-    assert rows["research-raven"]["group"] == "builtin"
+    assert rows["raven"]["group"] == "builtin"
 
-    await subagents_toggle({"name": "research-raven", "enabled": True})
+    await subagents_toggle({"name": "raven", "enabled": True})
     assert (await subagents_list({"probe": False}))["rows"] != []
 
 
@@ -628,4 +624,277 @@ async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: 
     from raven.rpc.errors import ConfigValidationError
 
     with pytest.raises(ConfigValidationError):
-        await subagents_update({"name": "Coder", "new_name": "research-raven"})
+        await subagents_update({"name": "Coder", "new_name": "raven"})
+
+
+# --------------------------------------------------------------- building a vendored folder
+
+
+@pytest.fixture(autouse=True)
+def _no_build_state_between_tests():
+    """Empty the module-level build maps around each test.
+
+    ``_BUILDING`` and ``_BUILD_ERROR`` are process-wide by design -- a build
+    outlives the request that started it, and the row's flag is read from a later
+    one -- so without this a task left behind by one test is a task the next one
+    finds under the same name, and the pair pass or hang depending on order.
+
+    Cancelled, never awaited: each task belongs to its own test's event loop,
+    which is already closed by the time the next test runs, and awaiting one from
+    a different loop is what turned this cleanup into the hang it exists to
+    prevent.
+    """
+    from raven.rpc.methods.subagents import _BUILD_ERROR, _BUILDING
+
+    def clear() -> None:
+        for task in list(_BUILDING.values()):
+            task.cancel()
+        _BUILDING.clear()
+        _BUILD_ERROR.clear()
+
+    clear()
+    yield
+    clear()
+
+
+def _vendored_tree(tmp_path: Path, *, script: str) -> Path:
+    """A `subagents/` tree with one folder and a stand-in installer.
+
+    The real `install.sh` runs `uv sync` -- minutes and hundreds of MB -- so what
+    is exercised here is everything around it: the lookup, the one-at-a-time
+    guard, and that the verdict is read off the filesystem rather than taken from
+    the exit status.
+    """
+    root = tmp_path / "subagents"
+    folder = root / "raven-probe"
+    (folder / "Build").mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps(
+            {
+                "name": "Raven-Probe",
+                "kind": "cli",
+                "description": "d",
+                "command": "{PYTHON} {SUBAGENT_DIR}/run.py {prompt}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text("{}", encoding="utf-8")
+    (folder / "install.py").write_text("", encoding="utf-8")
+    (folder / "Build" / "pyproject.toml").write_text("", encoding="utf-8")
+    (root / "install.sh").write_text(script, encoding="utf-8")
+    return root
+
+
+def _installer(monkeypatch: pytest.MonkeyPatch, *, code: int = 0, output: str = "", builds: Path | None = None):
+    """Stand in for `_run_installer`, optionally producing the launcher.
+
+    Never a real subprocess: every async test gets a fresh event loop, and the
+    second fork in one process waits forever on the child watcher the first loop
+    left behind -- which turned a wrong verdict into a hang instead of a failure.
+    """
+
+    async def fake(_installer_path: Path, _folder_name: str) -> tuple[int, str]:
+        if builds is not None:
+            launcher = builds / ".venv" / "bin" / "raven"
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+            launcher.chmod(0o755)
+        return code, output
+
+    monkeypatch.setattr("raven.rpc.methods.subagents._run_installer", fake)
+
+
+async def test_build_starts_and_the_row_reports_it_ready_afterwards(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    _installer(monkeypatch, builds=root / "raven-probe" / "Build")
+
+    before = await subagents_list({"probe": False})
+    assert [r for r in before["rows"] if r["name"] == "Raven-Probe"][0]["enabled"] is False
+
+    result = await subagents_build({"name": "Raven-Probe"})
+    assert result == {"building": True, "detail": ""}
+    await _BUILDING["Raven-Probe"]
+
+    after = await subagents_list({"probe": False})
+    row = [r for r in after["rows"] if r["name"] == "Raven-Probe"][0]
+    assert row["enabled"] is True, "the readiness verdict is re-read, not remembered"
+    assert row["building"] is False
+
+
+async def test_a_build_that_leaves_no_launcher_is_a_failure_whatever_it_exited(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`exit 0` is not the claim that matters.
+
+    The installer does several things per folder; the one this feature needs is a
+    launcher raven can start. Trusting the status would report an agent ready that
+    the dispatching model then fails on.
+    """
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILD_ERROR, _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    _installer(monkeypatch, code=0, output="resolved 0 packages\n")
+
+    await subagents_build({"name": "Raven-Probe"})
+    await _BUILDING["Raven-Probe"]
+
+    assert "resolved 0 packages" in _BUILD_ERROR["Raven-Probe"]
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+    assert row["enabled"] is False
+    assert row["probe_detail"] == _BUILD_ERROR["Raven-Probe"], "the page shows why, not just that"
+
+
+async def test_a_silent_failure_still_names_the_exit_status(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An installer that fails without saying anything still has to leave the
+    reader something to act on."""
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILD_ERROR, _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    _installer(monkeypatch, code=2, output="   \n")
+
+    await subagents_build({"name": "Raven-Probe"})
+    await _BUILDING["Raven-Probe"]
+
+    assert "exited 2" in _BUILD_ERROR["Raven-Probe"]
+
+
+async def test_a_second_build_reports_the_running_one_rather_than_starting_another(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two `uv sync` runs against one directory is how a venv ends up half-written."""
+    import asyncio as aio
+
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    gate: aio.Event = aio.Event()
+    calls: list[int] = []
+
+    async def held(_installer_path: Path, _folder_name: str) -> tuple[int, str]:
+        calls.append(1)
+        await gate.wait()
+        return 0, ""
+
+    monkeypatch.setattr("raven.rpc.methods.subagents._run_installer", held)
+
+    first = await subagents_build({"name": "Raven-Probe"})
+    await aio.sleep(0)  # let the task reach the installer before asking again
+    second = await subagents_build({"name": "Raven-Probe"})
+
+    assert first["detail"] == ""
+    assert second["building"] is True and "already running" in second["detail"]
+    assert len(calls) == 1, "the second call must not start a second build"
+
+    gate.set()
+    await _BUILDING["Raven-Probe"]
+
+
+async def test_a_row_being_built_reads_as_working_not_as_broken(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Leaving "venv not built -- run install.sh" up for the minutes a build takes
+    reads as nothing having happened."""
+    import asyncio as aio
+
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    gate: aio.Event = aio.Event()
+
+    async def held(_installer_path: Path, _folder_name: str) -> tuple[int, str]:
+        await gate.wait()
+        return 0, ""
+
+    monkeypatch.setattr("raven.rpc.methods.subagents._run_installer", held)
+
+    await subagents_build({"name": "Raven-Probe"})
+    await aio.sleep(0)
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+
+    assert row["building"] is True
+    assert row["probe_status"] != "missing"
+    assert "install.sh" not in row["probe_detail"]
+
+    gate.set()
+    await _BUILDING["Raven-Probe"]
+
+
+async def test_an_unbuilt_folder_reports_missing_so_the_page_offers_install(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pairing test for the one below: `missing` is what the page reads as
+    "offer Install", and the unbuilt venv is the state that button fixes."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+
+    assert row["probe_status"] == "missing"
+    assert "venv not built" in row["probe_detail"]
+
+
+async def test_a_folder_missing_only_a_credential_does_not_offer_install(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its venv is built and its problem is a key, which the installer cannot mint
+    -- it scaffolds `.env` from `.env.example`, whose bare `NAME=` lines
+    `api_key_present` correctly reads as absent. So the button would return in
+    seconds having changed nothing, and the row says what is wrong instead.
+
+    `attention` rather than a new wire field: the page already renders that status
+    as the detail line, and already gates Install on `missing`, so the fact lands
+    where it is needed without a fifth place to declare the row's shape.
+    """
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _vendored_tree(tmp_path, script="")
+    launcher = root / "raven-probe" / "Build" / ".venv" / "bin" / "raven"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: False)
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+
+    assert row["enabled"] is False
+    assert row["probe_status"] == "attention"
+    assert "no LLM credential" in row["probe_detail"]
+
+
+async def test_building_a_name_no_folder_carries_is_refused(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_build({"name": "claude_code"})

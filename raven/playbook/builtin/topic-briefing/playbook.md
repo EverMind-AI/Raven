@@ -31,21 +31,21 @@ params:
     description: Who is the briefing for?
 nodes:
   - id: scan_recent
-    subagent: research-raven
+    subagent: raven
     promptTemplate: >-
       Research the most recent developments on "${params.topic}": what changed
       lately, what is announced or rumored, what the trade press says. Cite
       every claim. Write your findings to a markdown file and keep them
       factual -- no synthesis yet.
   - id: scan_players
-    subagent: research-raven
+    subagent: raven
     promptTemplate: >-
       Map the key players around "${params.topic}": who matters, what each
       one's position or offering is, and where they visibly disagree or
       compete. Cite every claim. Write your findings to a markdown file and
       keep them factual -- no synthesis yet.
   - id: brief
-    subagent: content-raven
+    subagent: raven
     dependsOn: [scan_recent, scan_players]
     promptTemplate: >-
       Merge the two research files into one briefing on "${params.topic}" for

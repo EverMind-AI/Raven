@@ -1321,6 +1321,41 @@
       ]
     },
     {
+      "name": "subagents.build",
+      "summary": "Start building one vendored sub-agent's venv, and return as soon as it is under way.",
+      "description": "Not awaited, unlike every other method here: one of these is a few hundred MB of downloads, so holding the request open would time it out on the client and leave the build running with nobody able to see it. The row carries `building` until it finishes, which is what the page watches; success is read back off the filesystem rather than from the installer's exit status. Idempotent while running -- a second call for the same name reports the one already in flight rather than starting a second `uv sync` against the same directory.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsBuildResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["building", "detail"],
+          "properties": {
+            "building": {
+              "type": "boolean",
+              "description": "True once the build is under way, including when one was already running."
+            },
+            "detail": {
+              "type": "string",
+              "description": "Why nothing new was started, or \"\" when this call started it."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/SubagentNotFound"
+        }
+      ]
+    },
+    {
       "name": "subagents.toggle",
       "summary": "Enable or disable a configured sub-agent.",
       "params": [
@@ -6150,6 +6185,14 @@
           "description": { "type": "string" },
           "enabled": { "type": "boolean" },
           "configured": { "type": "boolean" },
+          "vendored": {
+            "type": "boolean",
+            "description": "Discovered under `subagents/` rather than written into config: one of the raven builds that ship beside this one, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (an unbuilt venv leaves it listed and disabled). Absent from a server that predates discovery."
+          },
+          "building": {
+            "type": "boolean",
+            "description": "A vendored folder's venv is being built right now (`subagents.build`). Its own flag rather than `test_running`: a build and a test are different verbs on the same row, and one must not read as the other. Absent from a server that predates discovery."
+          },
           "builtin": {
             "type": "boolean",
             "description": "A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. `enabled` is the only action it takes."

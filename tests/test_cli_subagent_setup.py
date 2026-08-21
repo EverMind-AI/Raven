@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -80,6 +81,16 @@ class _ScriptedSelect:
                 self._answers.pop(index)
                 return _Answer(answer)
         raise AssertionError(f"unscripted prompt: {message}")
+
+    def confirm(self, message: str, **_kwargs: Any) -> Any:
+        """Same script, same matching. Kept beside ``select`` because the build
+        offer is a confirm and the key choice is a select, and a run reaches both."""
+        self.asked.append(message)
+        for index, (needle, answer) in enumerate(self._answers):
+            if needle in message:
+                self._answers.pop(index)
+                return _Answer(answer)
+        raise AssertionError(f"unscripted confirm: {message}")
 
     @staticmethod
     def Choice(_title: str, value: Any = None, **_kwargs: Any) -> Any:  # noqa: N802 - questionary's spelling
@@ -205,26 +216,14 @@ def test_write_key_creates_from_the_template_and_locks_it_down(tmp_path: Path) -
 
 
 # --------------------------------------------------------------------------- registration
-
-
-def test_register_records_a_warning_instead_of_raising(tmp_path: Path) -> None:
-    # One folder's installer failing must not take the wizard down with it.
-    _folder(tmp_path, "raven-code")
-    folder = subagent_setup.discover(tmp_path)[0]
-    (folder.path / "install.py").write_text(
-        "import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n", encoding="utf-8"
-    )
-    warnings: list[str] = []
-    assert subagent_setup.register(folder, warnings) is False
-    assert warnings and "boom" in warnings[0]
-
-
-def test_register_succeeds_on_a_zero_exit(tmp_path: Path) -> None:
-    _folder(tmp_path, "raven-code")
-    folder = subagent_setup.discover(tmp_path)[0]
-    warnings: list[str] = []
-    assert subagent_setup.register(folder, warnings) is True
-    assert warnings == []
+#
+# There is none here any more. This step used to end by running the folder's
+# `install.py` to write a config row; `vendored_agents` materializes a row per
+# folder on every table build instead, so the folder being on disk is what puts
+# it on the table. The written row was strictly worse: it baked in the folder's
+# absolute path and outranked the discovered one, so an upgrade that moved the
+# tree left it naming a launcher that no longer existed.
+# See tests/test_subagent_vendored_agents.py for what replaced it.
 
 
 # --------------------------------------------------------------------------- the step
@@ -256,12 +255,11 @@ def test_configure_skips_a_folder_that_is_not_built(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     scripted = _ScriptedSelect([])
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
-    monkeypatch.setattr(subagent_setup, "register", lambda *_a, **_kw: pytest.fail("registered an unbuilt agent"))
-    assert subagent_setup.configure_subagents(warnings=[]) == 0
-    assert scripted.asked == []
+    assert subagent_setup.configure_subagents(warnings=[]) == 0, "an unbuilt folder is not a ready agent"
+    assert scripted.asked == [], "and it is never asked whose key it should spend"
 
 
-def test_configure_inherit_registers_without_writing_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_inherit_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -273,7 +271,7 @@ def test_configure_inherit_registers_without_writing_a_key(tmp_path: Path, monke
     assert "inherit" in scripted.offered[0] and "own" in scripted.offered[0]
 
 
-def test_configure_own_key_writes_it_then_registers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -289,15 +287,19 @@ def test_configure_own_key_writes_it_then_registers(tmp_path: Path, monkeypatch:
     assert "CODE_API_KEY=sk-mine" in (tmp_path / "raven-code" / ".env").read_text(encoding="utf-8")
 
 
-def test_configure_skip_registers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_skip_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "subagents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
     monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
     scripted = _ScriptedSelect([("Set up", "skip")])
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
-    monkeypatch.setattr(subagent_setup, "register", lambda *_a, **_kw: pytest.fail("registered a skipped agent"))
     assert subagent_setup.configure_subagents(warnings=[]) == 0
+
+    # Skipping declines the key choice, not the agent: the row is discovered from
+    # the folder either way. What "skip" costs it is a key of its own, so it
+    # inherits the host's LLM at dispatch.
+    assert not (tmp_path / "raven-code" / ".env").exists()
 
 
 def test_configure_falls_back_to_this_ravens_llm_on_a_bad_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -452,3 +454,87 @@ def test_an_oauth_sign_in_is_not_a_key_to_lend(tmp_path: Path, monkeypatch: pyte
 def test_a_literal_key_anywhere_is_a_key_to_lend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _host_config(tmp_path, monkeypatch, {"custom": {"apiKey": "sk-x", "apiBase": "http://10.0.0.9:3000/v1"}})
     assert subagent_setup.host_can_lend_a_key() is True
+
+
+# --------------------------------------------------------------------------- the build offer
+#
+# Everything past `_offer_to_build`'s first guard was unreached: the older test
+# pointed `subagents_root` at a tree with no `install.sh`, so the function
+# returned on the missing-installer branch and the confirm, the `bash install.sh
+# <folder>` call and the "re-read `venv_ready` rather than trust the exit status"
+# check never ran.
+
+
+def _tree_with_installer(tmp_path: Path, *, venv: bool = False) -> Path:
+    _folder(tmp_path, "raven-code", venv=venv)
+    (tmp_path / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    return tmp_path
+
+
+def _build_call(monkeypatch: pytest.MonkeyPatch, *, code: int = 0, builds: Path | None = None) -> list[list[str]]:
+    """Stand in for the installer subprocess, recording the argv it was given."""
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kwargs: Any) -> Any:
+        seen.append(argv)
+        if builds is not None:
+            launcher = builds / ".venv" / "bin" / "raven"
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+            launcher.chmod(0o755)
+        return SimpleNamespace(returncode=code, stdout="", stderr="uv sync failed\n")
+
+    monkeypatch.setattr(subagent_setup.subprocess, "run", fake_run)
+    return seen
+
+
+def test_declining_the_build_leaves_the_folder_alone_and_asks_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", False)])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    calls = _build_call(monkeypatch)
+
+    assert subagent_setup.configure_subagents(warnings=[]) == 0
+    assert calls == [], "declining must not run the installer"
+    assert not any("Set up" in asked for asked in scripted.asked), "and must not go on to the key question"
+
+
+def test_accepting_runs_the_installer_for_that_folder_then_asks_about_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", True), ("Set up", "inherit")])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    calls = _build_call(monkeypatch, builds=root / "raven-code" / "Raven-main")
+
+    assert subagent_setup.configure_subagents(warnings=[]) == 1
+    assert calls == [["bash", str(root / "install.sh"), "raven-code"]], "one folder, not the whole tree"
+
+
+def test_a_build_that_leaves_no_launcher_warns_whatever_it_exited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`returncode == 0` is not the claim that matters.
+
+    The script does several things per folder; the one this step needs is a
+    launcher raven can start. Trusting the status would carry on to the key
+    question for an agent that cannot run.
+    """
+    root = _tree_with_installer(tmp_path)
+    monkeypatch.setattr(subagent_setup, "subagents_root", lambda: root)
+    monkeypatch.setattr(subagent_setup, "host_can_lend_a_key", lambda: True)
+    scripted = _ScriptedSelect([("Build it now", True)])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    _build_call(monkeypatch, code=0, builds=None)
+    warnings: list[str] = []
+
+    assert subagent_setup.configure_subagents(warnings=warnings) == 0
+    assert warnings and "build failed" in warnings[0]
+    assert not any("Set up" in asked for asked in scripted.asked)

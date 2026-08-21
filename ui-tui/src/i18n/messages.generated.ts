@@ -1449,6 +1449,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.builtin': 'Built in',
     'gui.agent.builtin_h':
       "Raven's own agents. Always available, nothing to install; switch one off to keep it off the roster.",
+    'gui.agent.vendored': 'Shipped with Raven',
+    'gui.agent.vendored_h':
+      'Separate Raven builds that came with this install. Nothing to connect - each is a folder on disk, so removing one means removing its folder. One that is not built yet stays off the roster until it is.',
+    'gui.agent.install': 'Install',
+    'gui.agent.installing': 'Installing...',
+    'gui.agent.install_note':
+      "Downloads this build's dependencies (a few hundred MB) and takes a few minutes. It keeps running if you leave this page.",
+    'gui.agent.packaged_note':
+      'Name and description come with the package, not from config, so there is nothing to connect or save here.',
     'gui.agent.inprocess': 'in-process',
     'gui.agent.kind_builtin': 'built in'
   },
@@ -2609,6 +2618,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.set.prm.file_only': '只能在配置文件里修改，改完重启 raven 生效：',
     'gui.agent.builtin': '内置',
     'gui.agent.builtin_h': 'Raven 自己的智能体。始终可用、无需安装；关掉某一个即可让它不出现在名单里。',
+    'gui.agent.vendored': '随 Raven 一起装的',
+    'gui.agent.vendored_h':
+      '随本次安装一起来的几个独立 Raven 构建。无需连接 —— 每一个都是磁盘上的一个目录，要移除就是删掉那个目录。没构建完的会一直不出现在名单里。',
+    'gui.agent.install': '安装',
+    'gui.agent.installing': '正在安装...',
+    'gui.agent.install_note': '会下载这个构建的依赖(几百 MB),要几分钟。离开这个页面也会继续跑。',
+    'gui.agent.packaged_note': '名称和描述随安装包一起来,不在配置里,所以这里没有可连接或可保存的东西。',
     'gui.agent.inprocess': '进程内',
     'gui.agent.kind_builtin': '内置'
   }

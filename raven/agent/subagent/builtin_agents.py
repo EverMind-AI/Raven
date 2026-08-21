@@ -1,19 +1,30 @@
-"""The built-in agent rows the package ships, and how config overrides them.
+"""The built-in agent row the package ships, and how config overrides it.
 
-These are the rows a user does not have to write. They are seeds rather than
-defaults-in-a-field: a row here exists whether or not config mentions it, and a
-config row of the same name is a *field-level* override -- writing
-``{"name": "research-raven", "skills": [...]}`` retunes that agent's skill menu
-and leaves its description alone. There is deliberately no way to delete one,
+There is exactly one: the in-process raven loop, on the same table as the
+external agents so that ``spawn`` and a DAG node pick from one roster -- a
+built-in agent only reachable by omitting the ``subagent`` argument is an agent
+the model cannot be told about.
+
+It is a seed rather than a default-in-a-field: the row exists whether or not
+config mentions it, and a config row of the same name is a *field-level*
+override -- writing ``{"name": "raven", "skills": [...]}`` retunes its skill menu
+and leaves its description alone. There is deliberately no way to delete it,
 because "not written" already means "use the package's row"; ``enabled: false``
 is how a row leaves the roster.
 
-The descriptions are the model's only account of what each agent is for, so they
-are charters and boundaries rather than personas, and they are the same strings
-the playbook generator used to read out of ``roles_default.yaml`` -- moved here
-because the agent registry is what resolves an agent name now, and having the
-agent layer import its own roster out of :mod:`raven.playbook` would invert that
-dependency.
+**Four more rows used to be here** -- ``research-raven``, ``code-raven``,
+``data-raven``, ``content-raven`` -- inherited from the playbook role pool that
+predated this table. They were removed because they were not agents. The backend
+factory reads four fields off a row (``model``, ``restrict_to_workspace``,
+``tools``, ``skills``) and all four were unset on all four rows, so every one of
+them dispatched the same provider, the same model, the same tool set and the same
+system prompt; the sub-agent was never even told which name it was running under.
+What they did have was five distinct descriptions on the roster, which is why the
+dispatching model wrote ``research-raven`` on a node -- it was picking off a menu,
+not from the work. The per-step differentiation that mattered was always in the
+node's ``promptTemplate``, and that is untouched by their removal. Re-adding a
+specialised row is a matter of writing one with a real narrowing on it; a row
+whose only content is a description is a label the table lends false authority to.
 """
 
 from __future__ import annotations
@@ -34,40 +45,12 @@ GENERIC_AGENT = "raven"
 
 _SEEDS: tuple[dict[str, Any], ...] = (
     {
-        "name": "research-raven",
-        "description": (
-            "Deep retrieval and fact-checking: multi-source search, source-credibility judgment, "
-            "adjudication when retrieved results conflict, research conclusions delivered with "
-            "citations. No claims without a source."
-        ),
-    },
-    {
-        "name": "code-raven",
-        "description": (
-            "Repository-level code work: understand the existing code structure, locate where a "
-            "change lands, implement with unit tests, hands-on terminal work. Follow the repo's "
-            "existing abstractions; never build a parallel system."
-        ),
-    },
-    {
-        "name": "data-raven",
-        "description": (
-            "The whole data chain: data discovery, SQL workflows, statistics and causal judgment, "
-            "quantified impact. Conclusions must be verifiable by an executable comparison or a "
-            "programmatic assertion."
-        ),
-    },
-    {
-        "name": "content-raven",
-        "description": (
-            "Text and presentation deliverables: writing, rewriting, removing the AI flavor, "
-            "producing final copy under format and tone constraints, self-review. Conclusions "
-            "first; hard constraints (word count, structure) outrank style."
-        ),
-    },
-    {
         "name": GENERIC_AGENT,
-        "description": "General-purpose sub-agent with no capability bias; the whole tool set, no skill narrowing.",
+        "description": (
+            "Raven's own in-process sub-agent: the whole tool set and the whole skill catalogue, "
+            "no capability bias. Put what this step must accomplish in its prompt -- that is the "
+            "only thing that shapes the run."
+        ),
     },
 )
 
@@ -122,8 +105,9 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
     roster the model reads does not reshuffle because a user retuned one agent.
     Rows naming something the package does not ship are appended in config order.
 
-    A config row overrides a seed field-by-field, using only the fields the row
-    actually set (``model_fields_set``) -- a row that mentions ``skills`` must not
+    A config row overrides a seed field-by-field, using only the fields that say
+    something (see :func:`_overrides` -- not ``model_fields_set``, which a stored
+    row arrives with fully populated) -- a row that mentions ``skills`` must not
     silently reset ``description`` to the schema default and blank the agent out of
     the roster.
 

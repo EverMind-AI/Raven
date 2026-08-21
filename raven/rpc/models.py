@@ -105,6 +105,25 @@ class SubagentRow(_Strict):
     description: str
     enabled: bool
     configured: bool
+    vendored: bool = Field(
+        default=False,
+        description=(
+            "Discovered under `subagents/` rather than written into config: one of the raven "
+            "builds that ship beside this one, materialized as a row on every table build. Like "
+            "`builtin` it leaves `configured` false -- there is no config entry to delete, and "
+            "removing it means removing its folder -- but unlike `builtin` it is a real "
+            "subprocess with a command, so it is probed and it can be unready (an unbuilt venv "
+            "leaves it listed and disabled). Absent from a server that predates discovery."
+        ),
+    )
+    building: bool = Field(
+        default=False,
+        description=(
+            "A vendored folder's venv is being built right now (`subagents.build`). Its own flag "
+            "rather than `test_running`: a build and a test are different verbs on the same row, "
+            "and one must not read as the other. Absent from a server that predates discovery."
+        ),
+    )
     builtin: bool = Field(
         default=False,
         description=(
@@ -1465,6 +1484,17 @@ class SubagentsToggleResult(_Strict):
     enabled: bool
 
 
+class SubagentsBuildParams(_Strict):
+    name: str
+
+
+class SubagentsBuildResult(_Strict):
+    building: bool
+    """True once the build is under way, including when one was already running."""
+    detail: str
+    """Why nothing new was started, or "" when this call started it."""
+
+
 class SubagentsProbeParams(_Strict):
     pass
 
@@ -2759,6 +2789,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.add": (SubagentsAddParams, SubagentsAddResult),
     "subagents.update": (SubagentsUpdateParams, SubagentsUpdateResult),
     "subagents.remove": (SubagentsRemoveParams, SubagentsRemoveResult),
+    "subagents.build": (SubagentsBuildParams, SubagentsBuildResult),
     "subagents.toggle": (SubagentsToggleParams, SubagentsToggleResult),
     "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
     "subagents.test": (SubagentsTestParams, SubagentsTestResult),

@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent.subagent.presets import (
@@ -153,12 +156,39 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # because "configured" drives the delete button and a seed row cannot be
     # deleted: not writing one is what "use the default" means.
     from raven.agent.subagent.builtin_agents import merge_builtin_seeds
+    from raven.agent.subagent.vendored_agents import (
+        discover_vendored_rows,
+        merge_vendored_seeds,
+        vendored_state,
+    )
 
-    builtin_cfgs = [c for c in merge_builtin_seeds(configured) if getattr(c, "kind", None) == "builtin"]
-    external = [c for c in configured if getattr(c, "kind", None) != "builtin"]
+    # Composed exactly the way ``AgentRegistry.apply`` composes it, and for the
+    # same reason the registry exists at all: this list is what a human reads to
+    # answer "what can the model dispatch to", so a view assembled from a
+    # different subset of the sources is a view that disagrees with the runtime.
+    # It did: the vendored rows were on the table and absent here, which reads as
+    # "the four agents did not install" on the one screen built to tell you they
+    # had.
+    vendored = discover_vendored_rows()
+    vendored_names = {getattr(c, "name", "") for c in vendored}
+    unready = vendored_state()
+    merged = merge_vendored_seeds(configured, vendored)
+
+    builtin_cfgs = [c for c in merge_builtin_seeds(merged) if getattr(c, "kind", None) == "builtin"]
+    external = [c for c in merged if getattr(c, "kind", None) != "builtin"]
+    configured_names = {getattr(c, "name", "") for c in configured}
 
     entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
-    entries += [(c, "config") for c in external]
+    # A discovered row is reported as its own source, not as "config": there is no
+    # config entry to delete, and the delete button reads ``configured``. Removing
+    # one means removing its folder. A row the user has also written by hand is
+    # theirs, so it keeps the config source and its delete button.
+    entries += [
+        (c, "config" if getattr(c, "name", "") in configured_names else "vendored")
+        if getattr(c, "name", "") in vendored_names
+        else (c, "config")
+        for c in external
+    ]
     entries += [(c, "preset") for c in preset_cfgs]
 
     verdicts = TestStateStore().load(entries)
@@ -189,6 +219,26 @@ async def _rows(*, probe: bool = True) -> list[dict]:
 
     rows: list[dict] = []
     for (cfg, source), result in zip(entries, results, strict=True):
+        # The probe launches nothing: for a cli row it checks the command's first
+        # token, which for one of these is the interpreter and always exists. So a
+        # folder with no venv probed "ready" and this page called it installed
+        # while the roster -- correctly -- refused to advertise it. The readiness
+        # verdict overrides the probe for a vendored row, and carries the reason,
+        # because "not ready" without "why" sends the reader looking.
+        building = (task := _BUILDING.get(cfg.name)) is not None and not task.done()
+        if source == "vendored" and (verdict := unready.get(cfg.name)) and not verdict.ready:
+            # A build in flight outranks the reason it is fixing: leaving "venv not
+            # built -- run install.sh" on screen for the minutes a build takes
+            # reads as nothing having happened.
+            # And a reason the installer cannot fix is `attention`, not `missing`:
+            # `missing` is what the page reads as "offer Install", and offering it
+            # for a folder whose venv is already built and whose problem is a
+            # credential is offering a button that returns in seconds having
+            # changed nothing. `attention` renders the reason instead, which is
+            # what that folder needs a human to read.
+            detail = _BUILD_ERROR.get(cfg.name) or verdict.detail
+            missing = verdict.buildable and not building
+            result = replace(result, status="missing" if missing else "attention", detail="" if building else detail)
         last = result.last_test
         task = _RUNNING.get(cfg.name)
         rows.append(
@@ -201,6 +251,14 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # off the roster); a preset row has none until it is configured.
                 "enabled": bool(getattr(cfg, "enabled", True)) if source != "preset" else False,
                 "configured": source == "config",
+                # Discovered under ``subagents/`` rather than written anywhere.
+                # The page needs to tell the two apart: one is deletable, the
+                # other is a folder on disk.
+                "vendored": source == "vendored",
+                # A vendored folder's venv is being built right now. Its own flag
+                # rather than `test_running`: a build and a test are different
+                # verbs on the same row, and one must not read as the other.
+                "building": building,
                 "builtin": source == "builtin",
                 "group": _group(cfg, result.status),
                 "upgrade_to": _upgrade_transport(cfg, source),
@@ -380,6 +438,90 @@ async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactor
 _RUNNING: dict[str, asyncio.Task] = {}
 
 
+# name -> the in-flight build task, and name -> why the last one failed ("" once
+# one succeeds). Separate from `_RUNNING`: a build and a test are different verbs
+# on the same row and one must not cancel or shadow the other.
+_BUILDING: dict[str, asyncio.Task] = {}
+_BUILD_ERROR: dict[str, str] = {}
+
+
+async def _run_installer(installer: "Path", folder_name: str) -> tuple[int, str]:
+    """Run the tree's installer for one folder. Returns ``(exit status, output)``.
+
+    Its own function so a test can stand in for it. Spawning a real subprocess
+    from an async test is what made these tests hang rather than fail: every test
+    gets a fresh event loop, and the second one to fork in a process waits forever
+    on a child watcher the first loop left behind. The seam is here rather than in
+    the test because the alternative is patching ``asyncio`` itself.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "bash",
+        str(installer),
+        folder_name,
+        cwd=str(installer.parent),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    return proc.returncode or 0, (out or b"").decode("utf-8", "replace")
+
+
+async def _build_vendored(name: str, folder: "Path", installer: "Path") -> None:
+    """Build one vendored folder's venv, recording why if it did not work.
+
+    The verdict is read back off the filesystem rather than taken from the exit
+    status: the script does several things per folder, and "it returned 0" is not
+    the same claim as "this checkout now has a launcher raven can start". Nothing
+    is returned -- the caller is long gone by the time this finishes, and the page
+    learns the outcome by seeing the row go ready in a later list.
+    """
+    from raven.agent.subagent.vendored_agents import checkout_of, venv_ready
+
+    code, out = await _run_installer(installer, folder.name)
+    if venv_ready(checkout_of(folder)):
+        _BUILD_ERROR.pop(name, None)
+        logger.info("Built the vendored sub-agent {!r}", name)
+        return
+    tail = out.strip().splitlines()
+    _BUILD_ERROR[name] = tail[-1] if tail else f"install.sh exited {code}"
+    logger.warning("Building the vendored sub-agent {!r} failed: {}", name, _BUILD_ERROR[name])
+
+
+async def subagents_build(params: dict) -> dict:
+    """Start building one vendored folder's venv. Returns as soon as it is under way.
+
+    Not awaited, unlike every other method here: one of these is a few hundred MB
+    of downloads, so holding the request open would time it out on the client and
+    leave the build running with nobody able to see it. The row carries
+    ``building`` until it finishes, which is what the page watches.
+
+    Idempotent while running -- a second call for the same name reports the one
+    already in flight rather than starting a second `uv sync` against the same
+    directory, which is how a venv ends up half-written.
+    """
+    from raven.agent.subagent.vendored_agents import installer_for, vendored_folder
+
+    name = params.get("name", "")
+    existing = _BUILDING.get(name)
+    if existing is not None and not existing.done():
+        return {"building": True, "detail": f"a build is already running for {name!r}"}
+
+    folder = vendored_folder(name)
+    if folder is None:
+        raise SubagentNotFoundError(f"no vendored sub-agent named {name!r}", data={"name": name})
+    installer = installer_for(folder)
+    if installer is None:
+        raise SubagentNotFoundError(f"the sub-agent tree holding {name!r} ships no install.sh", data={"name": name})
+
+    _BUILD_ERROR.pop(name, None)
+    task = asyncio.ensure_future(_build_vendored(name, folder, installer))
+    _BUILDING[name] = task
+    # Identity-checked on the way out, so a later call's entry is never removed
+    # by an earlier call's completion.
+    task.add_done_callback(lambda t: _BUILDING.pop(name, None) if _BUILDING.get(name) is t else None)
+    return {"building": True, "detail": ""}
+
+
 def _find(name: str, source: str) -> Any:
     """The config object a test should run against, by name and source.
 
@@ -492,6 +634,7 @@ def register_subagents_methods(
     dispatcher.register("subagents.update", _update)
     dispatcher.register("subagents.toggle", _toggle)
     dispatcher.register("subagents.remove", _remove)
+    dispatcher.register("subagents.build", subagents_build)
     dispatcher.register("subagents.test", subagents_test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
@@ -503,6 +646,7 @@ __all__ = [
     "subagents_update",
     "subagents_toggle",
     "subagents_remove",
+    "subagents_build",
     "subagents_test",
     "subagents_test_cancel",
     "register_subagents_methods",

@@ -21,6 +21,18 @@ function xaRowOf(r) {
        they are `configured: false` yet not something to install -- the page needs
        both facts to avoid offering a Connect button for a loop already running. */
     builtin: !!r.builtin,
+    /* The Raven builds this install shipped, discovered under `subagents/`.
+       Same shape of problem as `builtin` and the same reason it has to be
+       carried explicitly: `configured: false` with nothing to install, so the
+       page needs the flag to keep a Connect button off a row that has no preset
+       to connect from. This mapper is a whitelist -- a field it does not name is
+       a field the island never sees. */
+    vendored: !!r.vendored,
+    /* A build of this folder's venv is in flight. Carried because the row is the
+       only place the page learns it: `subagents.build` returns the moment the
+       build starts, so the button's own promise resolving proves nothing about
+       whether it finished. */
+    building: !!r.building,
     enabled: !!r.enabled,
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,
@@ -95,6 +107,11 @@ DS.xa = {
         name: row.name,
         description: row.description || undefined,
       });
+    } else if (op === 'build') {
+      /* Returns as soon as the build is under way, not when it is done: it is a
+         few hundred MB of downloads. The row's `building` flag is what says it is
+         still going, and the store polls the list while any row carries it. */
+      await rpc.call('subagents.build', { name: row.name });
     } else if (op === 'test_cancel') {
       await rpc.call('subagents.test_cancel', { name: row.name });
     } else if (op === 'test') {

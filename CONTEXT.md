@@ -67,14 +67,30 @@ The one list of agents raven can dispatch to, materialized once per process as a
 `AgentRegistry` that `spawn`, `run_subagent_dag` and the playbook generator all read.
 A row is a name plus a `kind` (`builtin` / `cli` / `acp` / `openai`) plus that kind's
 connection fields; `AgentCaps` and `Injectable` are *derived* from it, and are what a
-consumer branches on so that nothing has to switch on the transport. `builtin` rows are
-package seeds (`agent/subagent/builtin_agents.py`): they exist whether or not config
-mentions them, a config row of the same name is a field-level override, and `enabled:
-false` is the only way to take one off the roster. Read under the older key `thirdParty`
+consumer branches on so that nothing has to switch on the transport.
+Three sources compose it, weakest first: **vendored** rows discovered on the
+filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
+(`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, a
+config row of the same name is a field-level override, and `enabled: false` is the only
+way to take one off the roster. Read under the older key `thirdParty`
 too; the write path emits `agents`.
 _Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.
+
+**Vendored agent** (`agent/subagent/vendored_agents.py`):
+An agent row discovered under `subagents/` rather than written anywhere — one of the
+separate raven builds that ship beside this one, each its own checkout with its own venv
+and manifest. Materialized as a `cli` row on every table build, so a folder that is
+deleted stops being an agent and a manifest that changes is picked up without a stored
+copy to contradict it. Readiness (its venv built, and a credential of its own or a host
+provider key to inherit) decides `enabled`, not whether the row exists: an unready folder
+is listed and disabled, because a name the dispatching model can pick and then fail on is
+worse than no name, and hiding it would also hide "present, not set up" from the
+operations view. Not deletable through config — removing one means removing its folder,
+or setting `"enabled": false` in its own `subagent.json`.
+_Avoid_: "third-party agent" — these are raven's own builds, and nobody registered them;
+"builtin" — that is the in-process row, which has no subprocess and no venv.
 
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool

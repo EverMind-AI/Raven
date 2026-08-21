@@ -508,6 +508,13 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # nothing to lend by theirs. That question is "will inherit_llm return
         # non-empty", and only inherit_llm's own rule answers it.
         "raven/cli/subagent_setup.py",
+        # Where that same `inherit_llm` question moved to. The agent layer now
+        # asks it too, because it decides whether a discovered vendored agent
+        # reaches the roster at all -- and the roster must not offer one whose
+        # launcher will then find nothing to inherit. Same reasoning as above,
+        # same file the launcher itself reads: two readers of one credential that
+        # disagreed would advertise an agent that dies at its first dispatch.
+        "raven/agent/subagent/vendored_agents.py",
         # The skill hub's endpoint credential, read to store or forward it.
         "raven/config/update_skills.py",
         "raven/web_rpc/methods_config.py",

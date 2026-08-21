@@ -92,10 +92,20 @@ function UpgradeRow({ row }: { row: XaRow }): JSX.Element {
   )
 }
 
-/* One built-in row. Deliberately not the configured-agent card: two of that
-   card's three verbs mean nothing here (there is no command to test and no row
-   to disconnect), and drawing them disabled reads as something being wrong. */
-function BuiltinCard({ row }: { row: XaRow }): JSX.Element {
+/* One package-supplied row: a built-in agent, or one of the vendored builds.
+   Deliberately not the configured-agent card: two of that card's three verbs
+   mean nothing here (there is no command to test and no row to disconnect), and
+   drawing them disabled reads as something being wrong.
+
+   `toggle` is the one verb the two do not share. A built-in row's switch is
+   real -- `subagents.toggle` creates its override row on first use, and that is
+   the only way to take one off the roster. A vendored row has neither: it is not
+   in config and its name is not a built-in one, so the same call answers
+   `subagent_not_found`. Its membership is the folder's, so the way to take one
+   out is to remove or disable the folder (`"enabled": false` in its
+   `subagent.json`), which is what the section hint says. Offering a switch that
+   errors is worse than offering none. */
+function BuiltinCard({ row, toggle = true, install = false }: { row: XaRow; toggle?: boolean; install?: boolean }): JSX.Element {
   const st = stateOf(row)
   const open = () => store.sheetOpen(row)
   return (
@@ -116,15 +126,39 @@ function BuiltinCard({ row }: { row: XaRow }): JSX.Element {
       <div className={'mo' + (st.cls === 'ok' || st.cls === 'off' ? '' : ' ' + st.cls)}>{st.text}</div>
       <div className="one">{row.description || ''}</div>
       <div className="ctl">
-        <button
-          className="mini ghost"
-          onClick={(e) => {
-            e.stopPropagation()
-            void store.run('toggle', row, { enabled: !row.enabled })
-          }}
-        >
-          {t(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable')}
-        </button>
+        {/* Only the state Install fixes, plus the one it is already fixing.
+            `!row.enabled` alone also covered a folder its own `subagent.json`
+            switched off and one with no credential to spend, and for those the
+            button runs for minutes and comes back with the row unchanged -- and
+            since a vendored row deliberately has no switch, it would be the only
+            affordance offered and a dead end. `row.building` has to be in the
+            condition because a row being built reports `attention`, not
+            `missing`: dropping it would hide the button mid-build, which is the
+            one moment it has something to say. */}
+        {install && (row.building || row.probe_status === 'missing') ? (
+          <button
+            className="mini"
+            disabled={!!row.building}
+            title={t('gui.agent.install_note')}
+            onClick={(e) => {
+              e.stopPropagation()
+              void store.run('build', row, {})
+            }}
+          >
+            {t(row.building ? 'gui.agent.installing' : 'gui.agent.install')}
+          </button>
+        ) : null}
+        {toggle ? (
+          <button
+            className="mini ghost"
+            onClick={(e) => {
+              e.stopPropagation()
+              void store.run('toggle', row, { enabled: !row.enabled })
+            }}
+          >
+            {t(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable')}
+          </button>
+        ) : null}
         <button
           className="mini ghost"
           onClick={(e) => {
@@ -261,6 +295,12 @@ function XaSheet({ row }: { row: XaRow }): JSX.Element {
     if (drawer) drawer.dataset.open = 'true'
   }, [row])
   const st = stateOf(row)
+  /* Rows the package supplies: a built-in agent, or one of the vendored builds.
+     Neither `connect` nor `update` can act on one -- `subagents.add` wants a
+     preset name and answers `unknown preset: 'raven'` / `'Raven-PPT'`, and
+     `subagents.update` wants a config row to edit. Both buttons were offered
+     anyway, the built-in one since before this change. */
+  const packaged = !!row.builtin || !!row.vendored
   const nameRef = useRef<HTMLInputElement>(null)
   const descRef = useRef<HTMLTextAreaElement>(null)
   const keyRef = useRef<HTMLInputElement>(null)
@@ -285,7 +325,23 @@ function XaSheet({ row }: { row: XaRow }): JSX.Element {
           <div className="l2">{row.description || ''}</div>
         </div>
         <div className="dact">
-          {row.builtin ? (
+          {row.vendored ? (
+            /* Install is the one action a vendored row has, and only for the one
+               state it fixes: a folder whose dependencies are missing. A row
+               disabled because its manifest says so, or because nothing can pay
+               for its model, is not something Install can help -- it would run
+               for minutes and come back unchanged. */
+            row.building || row.probe_status === 'missing' ? (
+              <button
+                className="mini"
+                disabled={!!row.building}
+                title={t('gui.agent.install_note')}
+                onClick={() => void store.run('build', row, {})}
+              >
+                {t(row.building ? 'gui.agent.installing' : 'gui.agent.install')}
+              </button>
+            ) : null
+          ) : row.builtin ? (
             /* No connect (already running), no test (nothing to spend), no
                disconnect (not writing a row is what "use the default" means).
                The switch is the only action, and it is the only way to take one
@@ -365,9 +421,13 @@ function XaSheet({ row }: { row: XaRow }): JSX.Element {
             </div>
           ) : null}
           <div className="ctl">
-            <button className="mini" onClick={save}>
-              {t(row.configured ? 'gui.agent.save' : 'gui.agent.connect')}
-            </button>
+            {packaged ? (
+              <div className="hint">{t('gui.agent.packaged_note')}</div>
+            ) : (
+              <button className="mini" onClick={save}>
+                {t(row.configured ? 'gui.agent.save' : 'gui.agent.connect')}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -419,8 +479,15 @@ export function XaApp(): JSX.Element {
     return () => ob.disconnect()
   }, [])
   const builtin = s.rows.filter((a) => a.builtin)
-  const on = s.rows.filter((a) => a.configured && !a.builtin)
-  const off = s.rows.filter((a) => !a.configured && !a.builtin)
+  /* Vendored rows are their own group, and they have to come out of `off`:
+     that section's verb is "connect", and there is nothing to connect. They are
+     folders this install shipped, discovered on every start, so what a row there
+     actually offers is the same set a built-in row does -- a switch and a look
+     inside. A row a user has additionally written by hand arrives as configured
+     rather than vendored, and stays in `on` with its own delete button. */
+  const vendored = s.rows.filter((a) => a.vendored && !a.builtin)
+  const on = s.rows.filter((a) => a.configured && !a.builtin && !a.vendored)
+  const off = s.rows.filter((a) => !a.configured && !a.builtin && !a.vendored)
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
     <>
@@ -441,6 +508,20 @@ export function XaApp(): JSX.Element {
           <div className="fset">
             {builtin.map((row) => (
               <BuiltinCard key={row.name} row={row} />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {vendored.length ? (
+        <div className="csec">
+          <div className="hd">
+            <b>{t('gui.agent.vendored')}</b>
+            <span className="n">{String(vendored.length)}</span>
+          </div>
+          <div className="sec-hint">{t('gui.agent.vendored_h')}</div>
+          <div className="fset">
+            {vendored.map((row) => (
+              <BuiltinCard key={row.name} row={row} toggle={false} install />
             ))}
           </div>
         </div>
