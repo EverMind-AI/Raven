@@ -42,7 +42,13 @@
        Errors leave the gate open (v0.1 fallback, same as the TUI). */
     try {
       const setup = await rpc.call('setup.status', {});
-      if (setup.provider_configured === false || /[?&]onboard=1/.test(location.search)) {
+      /* ?onboard=demo asked for the canned flow, which the demo shell has
+         already put on screen. Both write into #onb, so opening this one would
+         replace it -- and the reader who asked for the version that writes
+         nothing would get the version that writes. */
+      const cannedInstead = /[?&]onboard=demo/.test(location.search);
+      if (!cannedInstead && (setup.provider_configured === false
+          || /[?&]onboard=1/.test(location.search))) {
         showOnboard({
           options: () => rpc.call('model.options', {}),
           saveKey: (slug, api_key, api_base) => rpc.call('model.save_key', {
