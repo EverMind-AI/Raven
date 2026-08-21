@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import * as composer from './features/composer/mount'
+import * as sheets from './features/composer/sheets'
 import * as dag from './features/dag/graph'
 import * as dagNodes from './features/dag/nodes'
 import { ConnApp } from './features/connections/ConnPage'
@@ -327,6 +328,16 @@ window.RavenIslands = {
     dockLift: composer.dockLift,
     liveAnchor: composer.liveAnchor,
     setLiveAnchor: composer.setLiveAnchor,
+    /* The sheet rack, which lives in `.dock` beside the composer card and
+       lifts it after every change. Six names rather than a nested object,
+       because the layers that call them call them by the names they have had
+       all along -- one destructure in demo/040-state.js binds them. */
+    sheetSession: sheets.session,
+    sheetAdd: sheets.add,
+    sheetRemove: sheets.remove,
+    sheetDropClass: sheets.dropClass,
+    sheetsSync: sheets.sync,
+    sheetsForget: sheets.forget,
   },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine
