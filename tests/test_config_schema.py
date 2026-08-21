@@ -103,3 +103,19 @@ def test_distinct_endpoint_labels_are_accepted() -> None:
         {"endpoints": [{"label": "primary", "apiKey": "sk-1"}, {"label": "backup", "apiKey": "sk-2"}]}
     )
     assert [e.label for e in section.endpoints] == ["primary", "backup"]
+
+
+def test_ask_user_timeout_is_configurable_per_surface() -> None:
+    """The wait belongs to the surface: a chat channel and a rendered page sit
+    out a silent user very differently, and 600s was hardcoded for both."""
+    from raven.config.schema import AskUserToolConfig, ToolsConfig
+
+    assert ToolsConfig().ask_user.timeout == 600
+    assert AskUserToolConfig(timeout=90).timeout == 90
+
+
+def test_ask_user_timeout_must_be_positive() -> None:
+    from raven.config.schema import AskUserToolConfig
+
+    with pytest.raises(ValidationError):
+        AskUserToolConfig(timeout=0)

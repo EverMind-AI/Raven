@@ -751,6 +751,17 @@ class ExecToolConfig(Base):
     extra_deny_patterns: list[str] = Field(default_factory=list)
 
 
+class AskUserToolConfig(Base):
+    """ask_user tool configuration.
+
+    ``timeout`` is the budget for one whole ask_user call, shared across every
+    question in the batch. It belongs to the surface rather than to the tool:
+    a chat channel and a rendered page sit out a silent user very differently.
+    """
+
+    timeout: int = Field(default=600, gt=0)  # seconds, per call not per question
+
+
 class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
@@ -831,6 +842,7 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    ask_user: AskUserToolConfig = Field(default_factory=AskUserToolConfig)
     media: MediaGenConfig = Field(default_factory=MediaGenConfig)
     deep_research: DeepResearchToolConfig = Field(default_factory=DeepResearchToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
