@@ -137,7 +137,21 @@ def _install_packaged_tree(packaged: Path, installed: Path) -> None:
                 ignore=shutil.ignore_patterns(".venv", "__pycache__", "*.pyc"),
                 dirs_exist_ok=True,
             )
+        # The tree's own files, `install.sh` above all: it builds a folder's venv,
+        # it knows each folder's optional-dependency extra, and it lives at the root
+        # rather than inside any folder. Copying only the folders produced a tree
+        # that listed four agents and could build none -- the page offered Install
+        # and the call answered "no install.sh", which reached the reader as a bare
+        # "subagent not found".
+        #
+        # After the folders, not before: nothing here may create `installed` ahead
+        # of a copy that might fail. An existing directory is what makes
+        # `subagents_root` choose it, so creating it first turns a failed copy from
+        # "degrade to the packaged tree" into "an empty tree and no agents at all".
         installed.mkdir(parents=True, exist_ok=True)
+        for entry in sorted(packaged.iterdir()):
+            if entry.is_file() and not entry.name.startswith("."):
+                shutil.copy2(entry, installed / entry.name)
         stamp.write_text(__version__, encoding="utf-8")
         logger.info("Installed the packaged sub-agent tree into {}", installed)
     except Exception as exc:  # noqa: BLE001 - the agents are optional, starting is not

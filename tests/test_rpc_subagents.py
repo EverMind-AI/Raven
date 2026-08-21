@@ -887,6 +887,33 @@ async def test_a_folder_missing_only_a_credential_does_not_offer_install(
     assert "no LLM credential" in row["probe_detail"]
 
 
+async def test_a_tree_with_no_installer_says_so_where_the_client_can_read_it(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason has to travel, not just be raised.
+
+    The dispatcher fills `data` from a handler's `detail` only when the handler
+    passed no `data` of its own, so naming the folder in `data` silently dropped
+    the sentence: the client received `message` (the error's code name,
+    "subagent_not_found") and nothing else. Measured on a real install -- a tree
+    copied without its `install.sh` offered Install and answered with two words
+    that named neither the tree nor the missing script.
+    """
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    (root / "install.sh").unlink()
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+
+    with pytest.raises(SubagentNotFoundError) as caught:
+        await subagents_build({"name": "Raven-Probe"})
+
+    assert caught.value.data is not None
+    assert "install.sh" in caught.value.data["detail"]
+    assert caught.value.data["name"] == "Raven-Probe"
+
+
 async def test_building_a_name_no_folder_carries_is_refused(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

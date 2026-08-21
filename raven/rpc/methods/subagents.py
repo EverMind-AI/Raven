@@ -506,12 +506,19 @@ async def subagents_build(params: dict) -> dict:
     if existing is not None and not existing.done():
         return {"building": True, "detail": f"a build is already running for {name!r}"}
 
+    # `detail` is repeated inside `data` deliberately: the dispatcher fills
+    # `data` from `detail` only when a handler passed no `data` of its own, so a
+    # call site passing both drops the human-readable half. Both of these
+    # reported as a bare "subagent_not_found" -- the code name, with the reason
+    # discarded before it left the process.
     folder = vendored_folder(name)
     if folder is None:
-        raise SubagentNotFoundError(f"no vendored sub-agent named {name!r}", data={"name": name})
+        detail = f"no vendored sub-agent named {name!r}"
+        raise SubagentNotFoundError(detail, data={"name": name, "detail": detail})
     installer = installer_for(folder)
     if installer is None:
-        raise SubagentNotFoundError(f"the sub-agent tree holding {name!r} ships no install.sh", data={"name": name})
+        detail = f"the sub-agent tree holding {name!r} ships no install.sh"
+        raise SubagentNotFoundError(detail, data={"name": name, "detail": detail})
 
     _BUILD_ERROR.pop(name, None)
     task = asyncio.ensure_future(_build_vendored(name, folder, installer))
