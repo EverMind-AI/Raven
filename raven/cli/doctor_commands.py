@@ -15,7 +15,7 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import typer
 from rich.console import Console
@@ -24,6 +24,8 @@ from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting, send_probe
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from raven.config.raven import RavenConfig
 
 console = Console()
@@ -113,6 +115,24 @@ class ProbeResult:
 
 
 @dataclass
+class ConfigHealth:
+    """What the config says that the migrations deliberately did not change.
+
+    The migrations run at load, so by the time this command looks there is
+    nothing pending -- they already happened, silently, one launch ago. What is
+    left for a person to ask about is the set of things Raven will not decide
+    on their behalf: a window they pinned that is smaller than the model can
+    hold, and a provider nothing could resolve. Both are legitimate
+    configurations and both are common mistakes, which is exactly why they need
+    somewhere to be asked rather than a rule that guesses.
+    """
+
+    findings: list[str] = field(default_factory=list)
+    fixes: list[str] = field(default_factory=list)
+    applied: list[str] = field(default_factory=list)
+
+
+@dataclass
 class DoctorReport:
     version: int = 1
     config_loaded: bool = False
@@ -122,6 +142,7 @@ class DoctorReport:
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
     probe: Optional[ProbeResult] = None
+    config_health: Optional[ConfigHealth] = None
 
     def exit_code(self) -> int:
         if self.paths is None or not self.paths.config_exists:
@@ -139,6 +160,122 @@ class DoctorReport:
         if self.memory is not None and self.memory.broken:
             return 2
         return 0
+
+
+def _routes_anywhere(provider: str) -> bool:
+    """Is this a provider name anything can route to?
+
+    Deliberately generous: it accepts a vendor Raven carries no spec for as long
+    as LiteLLM knows the name -- mistral and xai are supported exactly that way,
+    and reporting them as broken would be worse than saying nothing. What it
+    catches is a name nothing has ever heard of, which is a typo.
+    """
+    from raven.config.update_providers import ensure_routable_provider
+
+    try:
+        ensure_routable_provider(provider)
+    except KeyError:
+        # Only the answer this asks for. A broader catch would file a genuine
+        # fault in the lookup as an ordinary "unroutable" finding, which reads
+        # as the user's problem instead of ours -- and `provider use` catches
+        # exactly this one for the same reason.
+        return False
+    return True
+
+
+def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
+    """Ask the two questions the migrations refuse to answer for the user.
+
+    ``fix`` is the consent: without it this only reports, because the finding is
+    a value someone may have meant -- a window pinned below the model is a real
+    configuration for a self-hosted endpoint served smaller than the catalogue
+    thinks.
+
+    The provider checks are reported and never fixed, and that is not an
+    omission. Only the user knows which vendor they meant to pay: the load-time
+    migration already tried the derivation and wrote down its answer wherever it
+    had one, so a provider still blank here is one the derivation could not
+    resolve. Guessing again in a command called ``--fix`` would be the same
+    guess under a more confident name.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.providers.rates import resolve_context_window
+
+    health = ConfigHealth()
+    defaults = config.agents.defaults
+    pinned = defaults.context_window_tokens
+    model = defaults.model
+
+    if pinned and model:
+        real = resolve_context_window(model)
+        if real and pinned < real:
+            health.findings.append(
+                f"contextWindowTokens is pinned to {pinned:,}, but {model} holds {real:,}. "
+                f"Everything is sized against the pin: the history budget, when the Curator "
+                f"starts paying for a slow path, and when memory consolidation archives."
+            )
+            health.fixes.append("remove agents.defaults.contextWindowTokens so the window follows each model")
+
+    provider = (getattr(defaults, "provider", "") or "").strip()
+    # ``auto`` counts as unset, the way ``Config._match_provider`` counts it. The
+    # migration leaves the literal in place when it cannot resolve a vendor, so
+    # this is a reachable state and precisely the legacy case this check is for.
+    # Read as a name instead, it is unroutable, and the user is told to fix a
+    # typo they did not make while the real advice goes unsaid.
+    if not provider or provider == "auto":
+        health.findings.append(
+            "agents.defaults.provider is not set, so the vendor serving "
+            f"{model or 'your model'} is derived from its id. A model id does not name whose "
+            "credential answers for it, and the derivation walks a list -- with two vendors "
+            "configured, which one pays can come down to their order in it."
+        )
+        if provider == "auto":
+            health.findings.append(
+                "  (your config says `auto`, which is the retired spelling of unset -- it never detected anything)"
+            )
+        health.findings.append(f"  raven provider use {model or '<model>'} --provider <name>")
+    elif not _routes_anywhere(provider):
+        health.findings.append(
+            f"agents.defaults.provider is {provider!r}, which nothing routes to. "
+            "Every call resolves against a vendor that does not exist, so the credential "
+            "it would use is never found."
+        )
+        health.findings.append("  raven provider list  # the names this accepts")
+
+    if fix and health.fixes:
+        path = get_config_path()
+        try:
+            raw = read_raw_or_raise(path)
+            raw.get("agents", {}).get("defaults", {}).pop("contextWindowTokens", None)
+            raw.get("agents", {}).get("defaults", {}).pop("context_window_tokens", None)
+            _write_config_preserving_mode(path, raw)
+        except Exception as exc:  # noqa: BLE001 -- reported, never fatal
+            health.findings.append(f"could not write the fix: {exc}")
+        else:
+            health.applied = list(health.fixes)
+            health.fixes = []
+
+    return health
+
+
+def _write_config_preserving_mode(path: "Path", raw: dict) -> None:
+    """Atomic replace that carries the original's mode across.
+
+    ``os.replace`` swaps the inode, so the mode of what lands is the temp
+    file's: a config the user tightened to owner-only (it holds
+    ``providers.*.apiKey``) would come back world-readable. Same rule the
+    loader's migration writer follows.
+    """
+    import json as _json
+    import os as _os
+
+    tmp = path.with_name(f"{path.name}.doctorfix.{_os.getpid()}")
+    tmp.write_text(_json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        _os.chmod(tmp, path.stat().st_mode & 0o7777)
+    except OSError:
+        pass
+    _os.replace(tmp, path)
 
 
 def _gather_static_checks() -> DoctorReport:
@@ -488,12 +625,27 @@ def _render_human_output(report: DoctorReport) -> None:
         )
         console.print("Run [cyan]raven provider list[/cyan] / [cyan]raven provider set[/cyan] to fix routing.")
 
+    health = report.config_health
+    if health and (health.findings or health.applied):
+        console.print("\n[bold]Config[/bold]")
+        for line in health.findings:
+            console.print(
+                f"  [yellow]![/yellow] {line}" if not line.startswith("  ") else f"  [dim]{line.strip()}[/dim]"
+            )
+        for line in health.applied:
+            console.print(f"  [green]fixed[/green] {line}")
+        if health.fixes:
+            console.print("  [dim]Run [cyan]raven doctor --fix[/cyan] to apply:[/dim]")
+            for line in health.fixes:
+                console.print(f"    [dim]- {line}[/dim]")
+
 
 def register(app: typer.Typer) -> None:
     @app.command()
     def doctor(
         probe: bool = typer.Option(False, "--probe", help="Send a test message to verify the LLM responds."),
         json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON (CI-friendly)."),
+        fix: bool = typer.Option(False, "--fix", help="Apply the config fixes this reports, where one exists."),
         timeout: int = typer.Option(
             15,
             "--timeout",
@@ -501,13 +653,20 @@ def register(app: typer.Typer) -> None:
             min=1,
         ),
     ) -> None:
-        """Health-check Raven config, routing, and (optionally) the LLM."""
+        """Health-check Raven config, routing, and (optionally) the LLM.
+
+        ``--fix`` is consent, not a mode: without it the config findings are
+        reported and nothing is written, because each one is a value somebody
+        may have meant.
+        """
         report = _gather_static_checks()
 
         if report.config_loaded:
+            from raven.config.loader import load_config
             from raven.config.raven import load_raven_config
 
             report.memory = _probe_memory(load_raven_config())
+            report.config_health = _inspect_config_health(load_config(), fix=fix)
 
         if probe and report.routing is not None and report.routing.provider is not None:
             report.probe = _run_llm_probe(timeout_s=timeout)

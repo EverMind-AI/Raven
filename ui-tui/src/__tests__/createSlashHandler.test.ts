@@ -51,7 +51,31 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('sends a bare /model switch with no provider param', async () => {
+  it('refuses a model id with no provider, and says how to name one', async () => {
+    // An id alone does not name a credential: `openrouter` serving
+    // `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5`
+    // are both real and cost different money. Guessing is what this removes.
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      '/model needs a provider. Run /model to pick one, or: /model <provider> x-model'
+    )
+  })
+
+  it('refuses a prefixed id too: a prefix is routing syntax, not a credential', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model openrouter/anthropic/claude-opus-4-5')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+  })
+
+  it('takes the two-word form as provider then model', async () => {
     patchUiState({ sid: 'sid-abc' })
 
     const ctx = buildCtx({
@@ -61,12 +85,158 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
+      provider: 'openrouter',
       session_id: 'sid-abc',
+      scope: 'session',
       value: 'x-model'
     })
+  })
+
+  it('applies the same rule to --default', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/model some-model --default')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    // Both spellings keep the flag: this assertion used to pin the version that
+    // dropped it, so following our own advice quietly downgraded the scope.
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      '/model needs a provider. Run /model --default to pick one, or: /model <provider> some-model --default'
+    )
+  })
+
+  it('sends scope default and leaves the status bar alone when the session kept its own model', async () => {
+    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() =>
+          Promise.resolve({
+            applied: true,
+            previous: null,
+            value: 'new-default',
+            scope: 'default',
+            applies_to_session: false
+          })
+        )
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
+      key: 'model',
+      provider: 'openrouter',
+      session_id: 'sid-abc',
+      scope: 'default',
+      value: 'new-default'
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    // This conversation chose its own model, so painting the new default into
+    // the status bar would show a model it is not on.
+    expect(getUiState().info?.model).toBe('session-model')
+  })
+
+  it('updates the status bar for /model --default when the session was following the default', async () => {
+    // The common case: a fresh conversation that never switched reads the
+    // default, so a default-scoped switch moves it immediately. Leaving the bar
+    // alone here showed the old model for the life of the session, because the
+    // bar is only refreshed on session.create / session.resume.
+    patchUiState({ sid: 'sid-abc', info: { model: 'old-default', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() =>
+          Promise.resolve({
+            applied: true,
+            previous: null,
+            value: 'new-default',
+            scope: 'default',
+            applies_to_session: true
+          })
+        )
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(getUiState().info?.model).toBe('new-default')
+  })
+
+  it('reports an unapplied switch as an error and leaves the status bar alone', async () => {
+    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() => Promise.resolve({ applied: false, previous: null, value: 'x-model' }))
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('error: model switch was not applied: x-model')
+    expect(getUiState().info?.model).toBe('session-model')
+  })
+
+  it('strips --default from any position and opens the picker when nothing is left', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'leading' }))
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model --default openrouter leading')).toBe(true)
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      expect.objectContaining({ value: 'leading', scope: 'default' })
+    )
+
+    const picker = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+    expect(createSlashHandler(picker)('/model --default')).toBe(true)
+    expect(picker.gateway.rpc).not.toHaveBeenCalled()
+  })
+
+  it('carries --default into the picker it opens', () => {
+    // Dropped here, the picker's selection was a session-scoped switch while
+    // looking like it had changed the default. `useMainApp.onModelSelect` reads
+    // this value back to append the flag.
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+
+    expect(createSlashHandler(ctx)('/model --default')).toBe(true)
+    expect(getOverlayState().modelPicker).toBe('default')
+
+    resetOverlayState()
+    expect(createSlashHandler(ctx)('/model')).toBe(true)
+    expect(getOverlayState().modelPicker).toBe(true)
+  })
+
+  it('keeps --default in the refusal it tells the user to follow', () => {
+    // The refusal is advice, and advice that silently downgrades the scope is
+    // worse than no advice: the user follows it and is told the switch worked.
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+
+    expect(createSlashHandler(ctx)('/model gpt-4.1 --default')).toBe(true)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+
+    const said = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
+    expect(said).toContain('/model <provider> gpt-4.1 --default')
+
+    const plain = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+    expect(createSlashHandler(plain)('/model gpt-4.1')).toBe(true)
+    const plainSaid = (plain.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
+    expect(plainSaid).not.toContain('--default')
   })
 
   it('parses a --provider suffix into a structured provider param', async () => {
@@ -84,6 +254,7 @@ describe('createSlashHandler', () => {
       key: 'model',
       provider: 'openrouter',
       session_id: 'sid-abc',
+      scope: 'session',
       value: 'claude-sonnet-4.6'
     })
   })

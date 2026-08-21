@@ -70,12 +70,6 @@ export class ModelNotAvailableError extends RpcError {
     this.name = 'ModelNotAvailableError'
   }
 }
-export class ModelSwitchInTurnError extends RpcError {
-  constructor(f: JsonRpcErrorObject) {
-    super(f)
-    this.name = 'ModelSwitchInTurnError'
-  }
-}
 export class ConfigFieldReadonlyError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
     super(f)
@@ -124,7 +118,6 @@ const CODE_TO_CTOR: Record<number, new (f: JsonRpcErrorObject) => RpcError> = {
   [-32006]: SkillNotFoundError,
   [-32007]: SkillPinConflictError,
   [-32008]: ModelNotAvailableError,
-  [-32009]: ModelSwitchInTurnError,
   [-32010]: ConfigFieldReadonlyError,
   [-32011]: ConfigValidationError,
   [-32012]: NotSupportedInV01Error,

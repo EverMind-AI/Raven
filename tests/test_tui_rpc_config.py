@@ -22,7 +22,6 @@ from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
     ModelNotAvailableError,
-    ModelSwitchInTurnError,
 )
 from raven.tui_rpc.methods.config import (
     CONFIG_WRITABLE_KEYS,
@@ -150,6 +149,23 @@ class _FakeLoop:
         self.provider = provider
         self.model = model
         self.switches: list[tuple[object, str]] = []
+        self.session_bindings: dict[str, object] = {}
+        self.provider_pool = None
+
+    def session_model(self, session_key: str) -> str:
+        binding = self.session_bindings.get(session_key)
+        return binding.model if binding is not None else self.model
+
+    def has_session_binding(self, session_key: str) -> bool:
+        return session_key in self.session_bindings
+
+    def set_session_binding(self, session_key: str, binding: object) -> None:
+        self.session_bindings[session_key] = binding
+
+    def set_default_binding(self, binding: object) -> None:
+        self.provider = binding.provider
+        self.model = binding.model
+        self.switches.append((binding.provider, binding.model))
 
     def set_provider(self, provider: object, model: str) -> None:
         self.provider = provider
@@ -163,7 +179,6 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     loop = _FakeLoop("old-prov", "old-model")
     new_provider = SimpleNamespace(name="new-prov")
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
     monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
     monkeypatch.setattr(
         config_mod,
@@ -176,13 +191,14 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
             "key": "model",
             "value": "anthropic/claude-opus-4-8",
             "provider": "anthropic",
-            "session_id": "tui:default",
+            "scope": "default",
         },
         agent_loop_factory=lambda: loop,
     )
 
     assert result["applied"] is True
     assert result["value"] == "anthropic/claude-opus-4-8"
+    assert result["scope"] == "default"
     assert loop.model == "anthropic/claude-opus-4-8"
     assert loop.provider is new_provider
     # Routed through set_provider, so everything holding the old provider
@@ -196,55 +212,102 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
 
 
-async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
-    # A bare `/model <name>` carries no provider; _set_model must derive it from
-    # the model so a previously-forced provider does not silently mis-route.
-    # Configured, because an id naming a vendor with no section is deliberately
-    # left on `auto`: pinning it would stop routing before the fallback that lets
-    # a gateway serve that vendor's models.
-    _pin(fake_home, "auto", {"anthropic": {"api_key": "sk-ant"}})
+async def test_config_set_model_without_a_provider_is_refused(fake_home: Path) -> None:
+    """The boundary where the rule can actually be enforced. A model id does not
+    name whose credential serves it -- `openrouter` serving
+    `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5` are
+    both real and bill different accounts -- and a prefix is LiteLLM routing
+    syntax, not evidence about a key. This used to derive one."""
+    _pin(fake_home, "anthropic", {"anthropic": {"api_key": "sk-ant"}})
+
+    with pytest.raises(ConfigValidationError, match="needs a provider"):
+        await config_set(
+            {"key": "model", "value": "anthropic/claude-opus-4-8"},
+            agent_loop_factory=lambda: None,
+        )
+
+    # And nothing was written: a refused switch leaves the config alone.
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"].get("model") != "anthropic/claude-opus-4-8"
+
+
+async def test_config_set_model_with_a_provider_writes_the_pair(fake_home: Path) -> None:
+    _pin(fake_home, "anthropic", {"anthropic": {"api_key": "sk-ant"}})
 
     result = await config_set(
-        {"key": "model", "value": "anthropic/claude-opus-4-8"},
+        {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
         agent_loop_factory=lambda: None,
     )
+
     assert result["applied"] is True
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
 
 
-async def test_config_set_model_leaves_an_unconfigured_vendor_on_auto(fake_home: Path) -> None:
-    """The picker must not write a pin that stops routing.
-
-    A pin is answered with the named vendor's section whether or not it holds
-    credentials, so pinning an unconfigured one fails every request on a missing
-    key -- never reaching the fallback written for a gateway serving that
-    vendor's models. An OpenRouter-only install picking `anthropic/...` would
-    reach nothing at all.
+async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: Path, monkeypatch) -> None:
+    """A session switching its own model must not move anyone else's, and must
+    not rewrite the default a new session starts on.
     """
-    _pin(fake_home, "auto", {"openrouter": {"api_key": "sk-or"}})
-
-    await config_set({"key": "model", "value": "anthropic/claude-opus-4-8"}, agent_loop_factory=lambda: None)
-
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "auto"
-
-
-async def test_config_set_model_rejected_during_active_turn(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: True)
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
 
-    with pytest.raises(ModelSwitchInTurnError):
-        await config_set(
-            {
-                "key": "model",
-                "value": "anthropic/claude-opus-4-8",
-                "session_id": "tui:default",
-            },
-            agent_loop_factory=lambda: SimpleNamespace(provider=None, model="x"),
-        )
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "session_id": "tui:a",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["scope"] == "session"
+    assert result["session_id"] == "tui:a"
+    assert loop.session_bindings["tui:a"].model == "anthropic/claude-opus-4-8"
+    assert "tui:b" not in loop.session_bindings, "another session must not move"
+    assert loop.switches == [], "a session switch is not a default change"
+
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5", (
+        "a new session must still start on the configured default"
+    )
+
+
+async def test_config_set_model_is_not_refused_mid_turn(fake_home: Path, monkeypatch) -> None:
+    """The running turn holds the binding it started on, so the switch lands on
+    the session's next turn rather than being rejected.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "old-model")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "session_id": "tui:busy"},
+        agent_loop_factory=lambda: loop,
+    )
+    assert result["applied"] is True
 
 
 async def test_config_set_model_unconstructable_preserves_previous(fake_home: Path, monkeypatch) -> None:
@@ -258,7 +321,6 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
     def _boom(_cfg):
         raise RuntimeError("no api key")
 
-    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
     monkeypatch.setattr(config_mod, "make_provider", _boom)
     monkeypatch.setattr(
         config_mod,
@@ -272,6 +334,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
             {
                 "key": "model",
                 "value": "broken/model",
+                "provider": "broken",
                 "session_id": "tui:default",
             },
             agent_loop_factory=lambda: loop,
@@ -385,54 +448,6 @@ async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home
     assert cfg["agents"]["defaults"]["provider"] == "openai"
 
 
-async def test_a_bare_id_the_pinned_provider_does_serve_keeps_the_pin(fake_home: Path) -> None:
-    """Refusing every bare id would break the case where the pin was right.
-
-    A user who configured a spec-less vendor and types one of its model names is
-    not being ambiguous -- that provider serves it. Asked of its own list and the
-    catalogue rather than assumed either way.
-    """
-    _pin(fake_home, "mistral", {"mistral": {"api_key": "sk-mistral"}})
-
-    result = await config_set(
-        {"key": "model", "value": "mistral-large-latest"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "mistral"
-    # Stored naming its provider, which is what every surface writes: the same
-    # input through `raven provider use` produced the qualified form while this
-    # one kept it bare, so the two disagreed about what the user had chosen.
-    assert cfg["agents"]["defaults"]["model"] == "mistral/mistral-large-latest"
-
-
-async def test_a_local_deployment_keeps_its_pin_for_any_bare_id(fake_home: Path) -> None:
-    """Its server names whatever models it likes, and it holds no key to mis-route."""
-    _pin(fake_home, "ollama_chat", {"ollama_chat": {"api_base": "http://gpu-box:11434"}})
-
-    result = await config_set(
-        {"key": "model", "value": "some-local-build"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "ollama_chat"
-
-
-async def test_a_prefixed_id_no_spec_matches_still_hands_routing_back(fake_home: Path) -> None:
-    """Unchanged: the prefix names the vendor, so the pin has no claim on it."""
-    _pin(fake_home, "openai")
-
-    result = await config_set(
-        {"key": "model", "value": "mistral/mistral-large-latest"},
-        agent_loop_factory=lambda: None,
-    )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "auto"
-
-
 async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> None:
     """The picker sends one with every selection; that path must not reach the gate."""
     _pin(fake_home, "openai")
@@ -446,23 +461,272 @@ async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> 
     assert cfg["agents"]["defaults"]["provider"] == "azure_openai"
 
 
-async def test_a_bare_id_the_pinned_provider_lists_itself_keeps_the_pin(fake_home: Path) -> None:
-    """The provider's own curated list is evidence too, and it stores ids bare.
-
-    `model.add_model` writes what the user typed, so a hand-added id sits there
-    unprefixed. Reading only the catalogue's prefixed spelling would refuse a model
-    the user had already told us this provider serves.
+async def test_a_session_switch_is_written_to_the_session_record(fake_home: Path, monkeypatch, tmp_path) -> None:
+    """The in-memory override dies with the process, so the record is the only
+    place the choice survives -- and a write nobody reads is worse than none.
     """
-    _pin(
-        fake_home,
-        "mistral",
-        {"mistral": {"api_key": "sk-mistral", "models": ["some-private-tune"]}},
+    import raven.tui_rpc.methods.config as config_mod
+    from raven.session.manager import SessionManager
+
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "old-model")
+    loop.sessions = SessionManager(tmp_path)
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "session_id": "tui:a",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    stored = loop.sessions.peek("tui:a")
+    assert stored is not None
+    assert stored.metadata["model"] == "anthropic/claude-opus-4-8"
+    assert stored.metadata["provider"] == "anthropic"
+
+
+async def test_a_session_switch_reports_the_model_it_replaced(fake_home: Path, monkeypatch) -> None:
+    """``previous`` is the session's own model, not the global default."""
+    import raven.tui_rpc.methods.config as config_mod
+
+    loop = _FakeLoop("old-prov", "boot-model")
+    loop.session_bindings["tui:a"] = SimpleNamespace(provider=object(), model="was-on-this")
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
     )
 
     result = await config_set(
-        {"key": "model", "value": "some-private-tune"},
-        agent_loop_factory=lambda: None,
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "session_id": "tui:a"},
+        agent_loop_factory=lambda: loop,
     )
-    assert result["applied"] is True
-    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
-    assert cfg["agents"]["defaults"]["provider"] == "mistral"
+
+    assert result["previous"] == "was-on-this"
+
+
+async def test_an_unknown_scope_is_rejected(fake_home: Path) -> None:
+    """A client typo must not silently degrade to a session switch."""
+    with pytest.raises(ConfigValidationError):
+        await config_set(
+            {"key": "model", "value": "anthropic/claude-opus-4-8", "session_id": "tui:a", "scope": "globl"},
+            agent_loop_factory=None,
+        )
+
+
+async def test_a_switch_goes_through_the_pool_when_the_loop_has_one(fake_home: Path, monkeypatch) -> None:
+    """The pool is what makes a switch reuse a provider instead of rebuilding
+    one per switch; without this the production path is never exercised.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    asked: list[tuple[str, str | None]] = []
+    pooled = SimpleNamespace(provider=SimpleNamespace(name="pooled"), model="anthropic/claude-opus-4-8")
+
+    class _Pool:
+        def bind(self, model: str, provider_name: str | None = None):
+            asked.append((model, provider_name))
+            return pooled
+
+    loop = _FakeLoop("old-prov", "old-model")
+    loop.provider_pool = _Pool()
+
+    def _must_not_build(_cfg):
+        raise AssertionError("a loop with a pool must not build its own provider")
+
+    monkeypatch.setattr(config_mod, "make_provider", _must_not_build)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "session_id": "tui:a"},
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert asked == [("anthropic/claude-opus-4-8", "anthropic")]
+    assert loop.session_bindings["tui:a"] is pooled
+
+
+# ----------------------------------------------------------------------------
+# Scope is never widened
+# ----------------------------------------------------------------------------
+
+
+async def test_a_session_scope_without_a_session_id_is_refused_not_widened(fake_home: Path, monkeypatch) -> None:
+    """An explicit ``scope="session"`` with no session must not fall through to
+    the default branch.
+
+    The TUI sends ``session_id: ctx.sid``, which is null until the first
+    ``session.create`` resolves and after a failed one. Widening the scope
+    there rewrites ``agents.defaults.model`` on disk and moves every session
+    that never chose its own model -- from a request that asked for the
+    opposite.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    for absent in (None, ""):
+        with pytest.raises(ConfigValidationError):
+            await config_set(
+                {
+                    "key": "model",
+                    "value": "anthropic/claude-opus-4-8",
+                    "scope": "session",
+                    "session_id": absent,
+                },
+                agent_loop_factory=lambda: loop,
+            )
+
+    assert loop.switches == [], "a refused switch must not move the default binding"
+    assert loop.session_bindings == {}
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
+
+
+async def test_a_default_scope_with_a_session_id_still_writes_the_default(fake_home: Path, monkeypatch) -> None:
+    """``/model X --default`` sends both ``scope="default"`` and the caller's
+    session id, and the scope has to win.
+
+    Without the scope conjunct the session id alone decides, and the switch
+    silently becomes an override on the asking session -- the file is never
+    written, so nothing a new session starts on ever changes.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "scope": "default",
+            "session_id": "tui:a",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["scope"] == "default"
+    assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
+    assert "tui:a" not in loop.session_bindings, "a default switch is not a session override"
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+
+
+async def test_a_default_switch_reports_whether_it_moved_the_asking_session(fake_home: Path, monkeypatch) -> None:
+    """The scope alone cannot tell a client whether to repaint the status bar.
+
+    A session that never chose a model reads the default, so a default-scoped
+    switch moves it; a session with its own binding stays where it is. The
+    client cannot see the difference, so the server answers it.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    loop = _FakeLoop("old-prov", "old-model")
+    loop.session_bindings["tui:chose"] = SimpleNamespace(provider="own-prov", model="own/model")
+
+    params = {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "scope": "default"}
+
+    followed = await config_set({**params, "session_id": "tui:followed"}, agent_loop_factory=lambda: loop)
+    assert followed["applies_to_session"] is True
+
+    chose = await config_set({**params, "session_id": "tui:chose"}, agent_loop_factory=lambda: loop)
+    assert chose["applies_to_session"] is False
+
+
+async def test_a_session_switch_always_applies_to_its_own_session(fake_home: Path, monkeypatch) -> None:
+    import raven.tui_rpc.methods.config as config_mod
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "session_id": "tui:a"},
+        agent_loop_factory=lambda: _FakeLoop("old-prov", "old-model"),
+    )
+    assert result["applies_to_session"] is True
+
+
+async def test_a_model_switch_before_the_first_message_writes_no_session_file(tmp_path, monkeypatch) -> None:
+    """``session.create`` is lazy: it mints a key and writes nothing until the
+    session's first real save. Persisting the model here used to manufacture a
+    zero-message record, which ``/sessions list`` then showed as an untitled
+    row for every switch made before saying anything."""
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.config import _remember_session_model
+
+    sessions = SessionManager(tmp_path)
+    loop = SimpleNamespace(sessions=sessions)
+
+    _remember_session_model(loop, "tui:fresh", "vendor-a/model", "anthropic")
+
+    assert sessions.exists("tui:fresh") is False
+    assert [s for s in sessions.list_sessions() if s.get("session_key") == "tui:fresh"] == []
+    # In memory it is remembered, so the session's first real save carries it.
+    assert sessions.get_or_create("tui:fresh").metadata["model"] == "vendor-a/model"
+
+
+async def test_a_model_switch_on_a_saved_session_is_persisted_at_once(tmp_path) -> None:
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.config import _remember_session_model
+
+    sessions = SessionManager(tmp_path)
+    record = sessions.get_or_create("tui:saved")
+    sessions.save(record)
+    loop = SimpleNamespace(sessions=sessions)
+
+    _remember_session_model(loop, "tui:saved", "vendor-b/model", "openrouter")
+
+    reread = SessionManager(tmp_path).peek("tui:saved")
+    assert reread.metadata["model"] == "vendor-b/model"
+    assert reread.metadata["provider"] == "openrouter"

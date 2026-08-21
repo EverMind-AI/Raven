@@ -260,9 +260,10 @@ def test_bad_config_warns_again_after_recovery(tmp_path: Path, capsys) -> None:
 # Pre-0.1.11 bootstraps dumped every schema default to disk, and back then
 # ``contextWindowTokens`` defaulted to 65536. A pin outranks the model's real
 # window by design, so on upgraded installs that fossil silently caps every
-# model at 64k. It is cleared once, under a ``configVersion`` stamp -- the
-# value itself carries no provenance, so the stamp is the only thing separating
-# "we planted this" from "the user chose this".
+# model at 64k. It is cleared once, under a watermark kept in a sidecar next to
+# the config (see ``_stamp_path``) -- the value itself carries no provenance, so
+# the watermark is the only thing separating "we planted this" from "the user
+# chose this".
 
 
 def _defaults(path: Path) -> dict:
@@ -297,13 +298,80 @@ def test_legacy_context_window_pin_dropped_in_snake_case_too(tmp_path: Path) -> 
 
 def test_context_window_pin_survives_once_stamped(tmp_path: Path) -> None:
     """The user's own 65536 is theirs. Same value, same file -- but the stamp
-    says this config already had its one pass, so the pin stands."""
+    says this config already had its one pass, so the pin stands.
+
+    The stamp is the literal a shipped build wrote, not ``CURRENT_CONFIG_VERSION``.
+    Written from the constant, this precondition moves every time the mark is
+    bumped, so it can only ever test the generation it was run under -- which is
+    how the re-run below went unnoticed.
+    """
     p = tmp_path / "config.json"
     _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536}}})
-    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
 
     assert load_config(p).agents.defaults.context_window_tokens == 65536
     assert _defaults(p)["contextWindowTokens"] == 65536
+
+
+def test_a_later_generation_does_not_reopen_a_migration_already_run(tmp_path: Path) -> None:
+    """The user this protects read our own notice and acted on it.
+
+    0.1.11 cleared their fossil and told them: "Put the line back if you did want
+    that number". They did. Their stamp says 1. Bumping the mark to 2 for an
+    unrelated migration must not delete it a second time -- and must not print
+    the same invitation again.
+    """
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"contextWindowTokens": 65536, "model": "anthropic/claude-opus-4-5"}}})
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.agents.defaults.context_window_tokens == 65536
+    assert _defaults(p)["contextWindowTokens"] == 65536
+    assert [n for n in drain_migration_notices() if "contextWindowTokens" in n] == []
+
+
+def test_the_provider_migration_survives_a_legacy_top_level_block(tmp_path: Path) -> None:
+    """The probe validates a strict ``Config``, and this migration runs before
+    the shims that relocate legacy blocks. A config still carrying a top-level
+    ``skillRouter`` used to fail the probe, be skipped with a DEBUG line, and be
+    stamped anyway -- so it was never retried. It lands on the oldest configs,
+    which are the ones most likely to still say ``auto``.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"model": "claude-opus-4-5", "provider": "auto"}},
+            "providers": {"anthropic": {"apiKey": "sk-test"}},
+            "skillRouter": {"enabled": True},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert _defaults(p)["provider"] == "anthropic"
+
+
+def test_a_later_generation_still_runs_its_own_migration(tmp_path: Path) -> None:
+    """The other half of the floor: gen-1 configs are behind on gen 2 and must
+    pick it up. Without this, "do not re-run the old one" and "never run the new
+    one" look identical from the outside.
+    """
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"model": "claude-opus-4-5", "provider": "auto"}},
+            "providers": {"anthropic": {"apiKey": "sk-test"}},
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert _defaults(p)["provider"] == "anthropic"
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
 def test_other_context_window_pins_are_never_touched(tmp_path: Path) -> None:
@@ -481,3 +549,99 @@ def test_migration_temp_file_is_process_scoped(tmp_path: Path) -> None:
         loader.Path.write_text = original  # type: ignore[method-assign]
 
     assert any(name.startswith("config.json.migrating.") and name.endswith(str(os.getpid())) for name in seen)
+
+
+def test_save_config_writes_only_what_differs_from_the_defaults(tmp_path: Path) -> None:
+    """A dump of everything is lossless on reload, but it freezes today's
+    defaults into the user's file -- and then a default we improve later never
+    reaches anyone who already has one. `contextWindowTokens: 65536` got there
+    exactly this way."""
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+
+    p = tmp_path / "config.json"
+    save_config(Config(), p)
+
+    assert json.loads(p.read_text(encoding="utf-8")) == {}
+    assert p.stat().st_size < 100
+
+
+def test_save_config_keeps_every_value_the_user_chose(tmp_path: Path) -> None:
+    from raven.config.loader import save_config
+    from raven.config.schema import Config
+
+    p = tmp_path / "config.json"
+    chosen = Config.model_validate(
+        {"agents": {"defaults": {"model": "x/y"}}, "providers": {"anthropic": {"apiKey": "sk-a"}}}
+    )
+    save_config(chosen, p)
+
+    written = json.loads(p.read_text(encoding="utf-8"))
+    assert written == {"agents": {"defaults": {"model": "x/y"}}, "providers": {"anthropic": {"apiKey": "sk-a"}}}
+    # And it reloads to the same config: dropping a value equal to its default
+    # is what makes this lossless.
+    reloaded = load_config(p)
+    assert reloaded.agents.defaults.model == "x/y"
+    assert reloaded.providers.get("anthropic").api_key == "sk-a"
+    assert reloaded.agents.defaults.max_tool_iterations == Config().agents.defaults.max_tool_iterations
+
+
+# ── The implicit provider ───────────────────────────────────────────────
+
+
+def test_an_auto_provider_is_written_down_as_what_it_resolved_to(tmp_path: Path) -> None:
+    """``auto`` never detected anything: a bare id walked PROVIDERS in registry
+    order and took the first configured claimant, so `gpt-4.1` went to
+    openrouter over openai on an array index. The migration writes down the same
+    answer -- behaviour unchanged, but now readable and arguable."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "openrouter": {"apiKey": "sk-o"}},
+            "agents": {"defaults": {"model": "gpt-4.1", "provider": "auto"}},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "openrouter"
+    assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "openrouter"
+
+
+def test_an_absent_provider_is_migrated_too(tmp_path: Path) -> None:
+    """Absent meant auto -- the field defaulted to it."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}},
+            "agents": {"defaults": {"model": "claude-opus-4-5"}},
+        },
+    )
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+
+
+def test_an_explicit_provider_is_never_rewritten(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {"anthropic": {"apiKey": "sk-a"}, "openrouter": {"apiKey": "sk-o"}},
+            "agents": {"defaults": {"model": "gpt-4.1", "provider": "anthropic"}},
+        },
+    )
+    before = p.read_bytes()
+
+    assert load_config(p).agents.defaults.provider == "anthropic"
+    assert p.read_bytes() == before
+
+
+def test_a_provider_that_cannot_be_resolved_is_left_blank(tmp_path: Path) -> None:
+    """No configured provider serves that model. Filling the blank with a vendor
+    picked to have something there is the guess this whole change removes; an
+    empty provider is reported where it is used instead."""
+    p = tmp_path / "config.json"
+    _write(p, {"providers": {}, "agents": {"defaults": {"model": "some/unknown-model", "provider": "auto"}}})
+
+    assert load_config(p).agents.defaults.provider in ("", "auto")
+    assert json.loads(p.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "auto"

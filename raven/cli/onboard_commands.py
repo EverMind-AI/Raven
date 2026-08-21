@@ -1165,25 +1165,20 @@ def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
 
 
 def _persist_default_model(model: Optional[str], provider: str) -> None:
-    """Patch ``agents.defaults.model`` and the pin that overrides it.
+    """Patch ``agents.defaults.model`` and the provider that serves it.
 
-    Both, always. ``agents.defaults.provider`` wins over whatever a model id
-    names, so writing the model alone leaves the wizard's own choice routed to
-    whichever provider was pinned before -- with that provider's key. The rule
-    for what to pin is ``providers.pin``, the same one the picker and
-    ``raven provider use`` ask.
+    Both, always. ``agents.defaults.provider`` decides whose credential a model
+    id is sent on, so writing the model alone leaves the wizard's own choice
+    routed to whoever was named before -- with that vendor's key. The wizard
+    asks for the provider before the model, so it always has one; nothing is
+    derived here, which is the same rule ``/model`` and ``raven provider use``
+    enforce.
     """
     if not model:
         return
-    from raven.config.loader import load_config
     from raven.config.update import set_default_model
-    from raven.providers import pin
 
-    try:
-        pinned = load_config().agents.defaults.provider or ""
-    except Exception:
-        pinned = ""
-    set_default_model(model, provider=pin.resolve(model, provider=provider, pinned=pinned))
+    set_default_model(model, provider=provider)
 
 
 # ---------------------------------------------------------------------------
@@ -1883,9 +1878,12 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 # re-pick instead of leaving a model whose provider has no key.
                 from raven.config.update import set_default_model
 
-                # The pin goes with it: left behind it would route the next model
-                # the user picks to the provider whose key was just removed.
-                set_default_model("", provider="auto")
+                # The provider goes with it: left behind it would route the next
+                # model the user picks to the vendor whose key was just removed.
+                # Cleared to "", not to "auto" -- that sentinel is retired, and
+                # the migration that rewrites it will not come back for a config
+                # already stamped at the current generation.
+                set_default_model("", provider="")
             console.print(
                 _t(
                     f"  [green]✓ Removed {_provider_label(target)}'s configuration.[/green]",

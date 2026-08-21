@@ -664,3 +664,258 @@ class TestASelfManagedServerCanStillBeBroken:
 
         assert "rerank" not in info.configured
         assert "rerank" not in info.unbuilt
+
+
+# ── raven doctor --fix ──────────────────────────────────────────────────
+#
+# The migrations run at load, so nothing is ever "pending" by the time this
+# command looks. What is left to ask about is what they deliberately do not
+# decide: a window the user pinned below what the model holds, and a provider
+# nothing could resolve. Both are legitimate configurations, which is why they
+# are reported and only written with --fix.
+
+
+def _pinned_config(home: Path, **defaults: object) -> Path:
+    cfg = home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps(
+            {
+                "providers": {"anthropic": {"apiKey": "sk-a"}},
+                "agents": {
+                    "defaults": {
+                        "model": "anthropic/claude-opus-4-5",
+                        "provider": "anthropic",
+                        **defaults,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_doctor_reports_a_pin_that_caps_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("32,768" in f and "1,000,000" in f for f in health.findings)
+    assert health.fixes and not health.applied
+    # Reported only: no consent, no write.
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_doctor_fix_removes_the_pin_and_keeps_the_file_mode(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    # Not 65536: that is the retired default the loader clears on its own, so a
+    # fixture using it would be testing the migration instead of this check.
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    cfg.chmod(0o600)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert health.applied and not health.fixes
+    assert "contextWindowTokens" not in json.loads(cfg.read_text())["agents"]["defaults"]
+    # config.json holds providers.*.apiKey, so a replacing writer owns the mode.
+    assert cfg.stat().st_mode & 0o777 == 0o600
+
+
+def test_doctor_says_nothing_about_a_pin_that_matches_the_model(tmp_path, monkeypatch) -> None:
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=1_000_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+
+    assert _inspect_config_health(load_config(cfg), fix=False).findings == []
+
+
+def test_doctor_fix_reports_a_write_it_could_not_make(tmp_path, monkeypatch) -> None:
+    """A read-only home is a reason to say so, not to crash the health check --
+    the rest of the report is still worth printing."""
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config import loader
+    from raven.config.loader import load_config
+    from raven.providers import rates
+
+    cfg = _pinned_config(tmp_path, contextWindowTokens=32768)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda *a, **k: 1_000_000)
+    monkeypatch.setattr(loader, "get_config_path", lambda: cfg)
+    monkeypatch.setattr(
+        "raven.cli.doctor_commands._write_config_preserving_mode",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("read-only file system")),
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=True)
+
+    assert any("could not write the fix" in f for f in health.findings)
+    assert health.applied == []
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["contextWindowTokens"] == 32768
+
+
+def test_the_fix_writer_survives_a_mode_it_cannot_read(tmp_path, monkeypatch) -> None:
+    """Preserving the mode is best-effort: a filesystem that will not answer
+    `stat` is not a reason to leave the fix unwritten."""
+    from raven.cli.doctor_commands import _write_config_preserving_mode
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("os.chmod", lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
+
+    _write_config_preserving_mode(cfg, {"agents": {"defaults": {"model": "x/y"}}})
+
+    assert json.loads(cfg.read_text())["agents"]["defaults"]["model"] == "x/y"
+
+
+def test_doctor_reports_a_config_that_names_no_provider(tmp_path) -> None:
+    """The check that had to wait for the explicit-provider rule.
+
+    Before it, ``provider`` defaulted to ``auto`` and blank never happened. After
+    it, blank means the load-time migration could not resolve the vendor -- so
+    every call falls back to deriving it from the model id, which is the guess
+    the rule exists to end.
+
+    The fixture has to be genuinely unresolvable, which is the check's whole
+    scope: with a configured vendor that serves the model, the migration fills
+    the blank in during ``load_config`` and there is nothing left to report.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": ""}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    # Reported, never fixed: the migration already tried the derivation and had
+    # no answer, so only the user knows which vendor they meant to pay.
+    assert not health.fixes
+
+
+def test_doctor_reads_a_leftover_auto_as_unset_not_as_a_typo(tmp_path) -> None:
+    """`auto` is the state this check exists for, and it is reachable.
+
+    `_migrate_auto_provider` leaves the literal in place when it cannot resolve a
+    vendor, so a config can still say `auto` after `load_config` -- and
+    `Config._match_provider` already treats it as unset (`forced != "auto"`).
+    Read as a name instead, it is unroutable, and the user is told to fix a typo
+    they did not make while the advice that would help goes unsaid.
+
+    Neither of the checks around this one used a literal `auto`, which is how
+    the gap survived to review.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = tmp_path / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        json.dumps({"agents": {"defaults": {"model": "some/unclaimed-model", "provider": "auto"}}}),
+        encoding="utf-8",
+    )
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("provider is not set" in f for f in health.findings)
+    assert any("raven provider use" in f for f in health.findings)
+    assert any("retired spelling of unset" in f for f in health.findings)
+    assert not any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
+def test_doctor_reports_a_provider_nothing_routes_to(tmp_path) -> None:
+    """A typo written before `provider use` started checking the name. Every
+    call then resolves against a vendor that does not exist.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "antropic"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert any("nothing routes to" in f for f in health.findings)
+    assert not health.fixes
+
+
+def test_doctor_accepts_a_vendor_only_litellm_knows(tmp_path) -> None:
+    """The counterweight. Raven carries no spec for mistral, so "no spec of
+    ours" cannot be the test -- reporting it as broken would be worse than
+    saying nothing.
+    """
+    from raven.cli.doctor_commands import _inspect_config_health
+    from raven.config.loader import load_config
+
+    cfg = _pinned_config(tmp_path)
+    raw = json.loads(cfg.read_text())
+    raw["agents"]["defaults"]["provider"] = "mistral"
+    raw["agents"]["defaults"]["model"] = "mistral/mistral-large-latest"
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    health = _inspect_config_health(load_config(cfg), fix=False)
+
+    assert health.findings == []
+
+
+def test_doctor_prints_the_config_section_it_found(tmp_path, monkeypatch, capsys) -> None:
+    """The renderer, not just the check: a finding nothing prints is a finding
+    the user never gets."""
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(
+            findings=["contextWindowTokens is pinned to 32,768"],
+            fixes=["remove agents.defaults.contextWindowTokens"],
+        ),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "Config" in out
+    assert "pinned to 32,768" in out
+    assert "raven doctor --fix" in out
+    assert "remove agents.defaults.contextWindowTokens" in out
+
+
+def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
+    from raven.cli.doctor_commands import ConfigHealth, DoctorReport, PathsInfo, _render_human_output
+
+    report = DoctorReport(
+        config_loaded=True,
+        paths=PathsInfo(config_path=str(tmp_path / "config.json"), config_exists=True, config_valid=True),
+        config_health=ConfigHealth(applied=["remove agents.defaults.contextWindowTokens"]),
+    )
+
+    _render_human_output(report)
+
+    out = capsys.readouterr().out
+    assert "fixed" in out
+    assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"
