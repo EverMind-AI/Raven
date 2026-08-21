@@ -38,9 +38,14 @@ function set(patch: Partial<XaState>): void {
 
 export const source = (): XaSource => ds<XaSource>('xa')
 
+/* What to show a reader when a call fails. The server's own sentence first: a
+   rejected rpc frame carries `message` as the error's *code name*
+   ("subagent_not_found") and the reason, when there is one, under `data.detail`.
+   Reading `message` first therefore showed the code name and hid the sentence
+   written to explain it. */
 const failure = (e: unknown): string => {
-  const err = e as { message?: string; detail?: string } | null
-  return (err && (err.message || err.detail)) || String(e)
+  const err = e as { message?: string; detail?: string; data?: { detail?: string } } | null
+  return (err && ((err.data && err.data.detail) || err.detail || err.message)) || String(e)
 }
 
 export function open(): void {
@@ -48,7 +53,10 @@ export function open(): void {
   void source()
     .load(true)
     .then((rows) => set({ rows, epoch: state.epoch + 1 }))
-    .catch((e: unknown) => shell().toast(t('gui.agent.failed', { detail: String(e) })))
+    /* Through `failure` like every other rejection here: the rpc client rejects
+       with the error frame verbatim, and `String()` on that object is
+       "[object Object]" -- not a hard-to-read reason but no reason at all. */
+    .catch((e: unknown) => shell().toast(t('gui.agent.failed', { detail: failure(e) })))
 }
 
 export function close(): void {

@@ -271,6 +271,57 @@ describe('xa island', () => {
     expect(screen.getByText('claude_code')).toBeTruthy()
   })
 
+  it("shows the server's reason rather than the error's code name", async () => {
+    /* A rejected rpc frame is `{code, message, data}`, and `message` is the code
+       name -- "subagent_not_found". The sentence that explains it rides in
+       `data.detail`. Reading `message` first put the code name on screen and hid
+       the explanation: a tree copied without its `install.sh` offered Install and
+       answered with two words naming neither the tree nor the script. */
+    const { toasts } = install([row()], {
+      act: async () => {
+        throw { code: -32017, message: 'subagent_not_found', data: { detail: "the tree ships no install.sh" } }
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.agent.test').click()
+    })
+    expect(toasts.some((x) => x.includes('install.sh'))).toBe(true)
+    expect(toasts.some((x) => x.includes('subagent_not_found'))).toBe(false)
+  })
+
+  it('reads the reason when the load that opens the page is the thing that fails', async () => {
+    /* The same fix one function up, on the path that runs before anything is on
+       screen. `String()` on a rejected rpc frame is "[object Object]", so this
+       one showed no reason at all rather than a hard-to-read one. */
+    const { toasts } = install([row()], {
+      load: async () => {
+        throw { code: -32603, message: 'internal_error', data: { detail: 'the config failed to validate' } }
+      },
+    })
+    await act(async () => {
+      store.open()
+      await Promise.resolve()
+    })
+    expect(toasts.some((x) => x.includes('the config failed to validate'))).toBe(true)
+    expect(toasts.some((x) => x.includes('[object Object]'))).toBe(false)
+  })
+
+  it('falls back to the code name when the frame carries no reason', async () => {
+    /* The pairing case: preferring `data.detail` must not lose the only thing
+       there is when a frame has none. */
+    const { toasts } = install([row()], {
+      act: async () => {
+        throw { code: -32017, message: 'subagent_not_found' }
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.agent.test').click()
+    })
+    expect(toasts.some((x) => x.includes('subagent_not_found'))).toBe(true)
+  })
+
   it('repaints its own sheet after another page borrowed the drawer', async () => {
     install([row()])
     await mount()

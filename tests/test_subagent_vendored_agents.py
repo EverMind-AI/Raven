@@ -380,7 +380,39 @@ class TestInstallingTheWheelsOwnTree:
         packaged.mkdir(parents=True)
         for name in ("raven-one", "raven-two"):
             _folder(packaged, name, manifest={**_MANIFEST, "name": name})
+        # The tree's own files, which live beside the folders rather than inside
+        # any of them -- the shape the real tree has.
+        (packaged / "install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (packaged / "install.sh").chmod(0o755)
+        (packaged / "README.md").write_text("the tree\n", encoding="utf-8")
         return packaged
+
+    def test_the_trees_own_files_come_with_it(self, tmp_path: Path) -> None:
+        """``install.sh`` above all, and it is not inside any folder.
+
+        It is what builds a folder's venv and it knows each folder's optional
+        dependency extra, so a tree copied without it lists every agent and can
+        build none. Measured on a real install: the page offered Install, the call
+        answered "no install.sh", and that reached the reader as a bare "subagent
+        not found" -- see the reason's own journey in ``subagents_build``.
+        """
+        installed = tmp_path / "home" / "subagents"
+
+        va._install_packaged_tree(self._packaged(tmp_path), installed)
+
+        assert (installed / "install.sh").is_file()
+        assert os.access(installed / "install.sh", os.X_OK), "copied without its mode, so nothing can run it"
+        assert (installed / "README.md").is_file()
+
+    def test_every_folder_can_name_its_installer_afterwards(self, tmp_path: Path) -> None:
+        """The end the copy exists for, asserted through the reader the page uses
+        rather than on the file: `installer_for` returning None is the exact state
+        that produced the unexplained failure."""
+        installed = tmp_path / "home" / "subagents"
+        va._install_packaged_tree(self._packaged(tmp_path), installed)
+
+        for folder in sorted(p for p in installed.iterdir() if p.is_dir()):
+            assert va.installer_for(folder) == installed / "install.sh", folder.name
 
     def test_a_fresh_install_lands_every_folder_in_the_raven_home(self, tmp_path: Path) -> None:
         installed = tmp_path / "home" / "subagents"
