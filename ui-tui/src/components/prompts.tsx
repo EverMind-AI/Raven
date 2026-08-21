@@ -200,6 +200,10 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
 
     if (n >= 1 && n <= choices.length) {
       onAnswer(choices[n - 1]!)
+    } else if (n === choices.length + 1) {
+      // The Other row is drawn with a number like every other row, so its
+      // number has to reach it too; Enter on the row already does.
+      setTyping(true)
     }
   })
 
@@ -264,7 +268,7 @@ export function ClarifyPrompt({ cols = 80, onAnswer, onCancel, req, t }: Clarify
       ))}
 
       <Text color={t.color.muted}>
-        {budget}↑/↓ select · Enter confirm · Tab add note · 1-{choices.length} quick pick · Esc/Ctrl+C cancel
+        {budget}↑/↓ select · Enter confirm · Tab add note · 1-{choices.length + 1} quick pick · Esc/Ctrl+C cancel
       </Text>
     </Box>
   )

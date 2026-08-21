@@ -146,4 +146,35 @@ describe('ClarifyPrompt', () => {
 
     expect(onAnswer).toHaveBeenCalledWith('hold')
   })
+
+  it('quick-picks the Other row by its own number', async () => {
+    const onAnswer = vi.fn()
+    const h = driven(onAnswer)
+
+    // The Other row is rendered as "3." beside two choices, so 3 has to reach
+    // it -- otherwise the list numbers a row the keyboard cannot select.
+    await h.key('3')
+    await h.type('something else entirely')
+    await h.key(ENTER)
+    h.unmount()
+
+    expect(onAnswer).toHaveBeenCalledWith('something else entirely')
+  })
+
+  it('names a quick-pick range that covers every row it draws', () => {
+    const frame = frameOf(<ClarifyPrompt onAnswer={noop} onCancel={noop} req={req()} t={DEFAULT_THEME} />)
+
+    // Two choices plus Other is three rows, so the hint has to say 1-3.
+    expect(frame).toContain('1-3 quick pick')
+  })
+
+  it('ignores a number past the last row', async () => {
+    const onAnswer = vi.fn()
+    const h = driven(onAnswer)
+
+    await h.key('9')
+    h.unmount()
+
+    expect(onAnswer).not.toHaveBeenCalled()
+  })
 })
