@@ -1,6 +1,10 @@
 /* ---- boot ---------------------------------------------------------- */
 (async () => {
-  if (!(await rpc.connect())) return;
+  /* The first connect is the one place where a socket that never opened really
+     does mean the session is not welcome: nothing has been served to this page
+     yet that could have come from a gateway which then went away. The rejoin
+     path decides differently, and has to -- see rpc.rejoin. */
+  if (!(await rpc.connect())) { authFail(); return; }
   try {
     const hello = await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE });
     if (hello && hello.platform) HOST_PLATFORM = hello.platform;
