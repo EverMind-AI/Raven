@@ -148,6 +148,42 @@ describe('the model picker', () => {
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['claude-sonnet-5'])
   })
 
+  it('keeps the moved selection after the term is cleared', () => {
+    install({ current: () => 'minimax-m3' })
+    mount()
+    openIt()
+    type('sonnet')
+    type('')
+    /* The move is the reader's now, not the term's. Clearing the field is how
+       you browse the rest of the provider a search just found for you, so the
+       column has to stay where the search put it -- and show that provider's
+       full list, not its one hit. */
+    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
+      'claude-opus-5',
+      'claude-sonnet-5',
+    ])
+  })
+
+  it('moves nothing when the term matches nothing at all', () => {
+    /* Opened on the second provider on purpose. Starting on the first one makes
+       this case unfalsifiable: there is no column below it to be wrongly moved
+       to, so a version that moved the selection anywhere it liked would land
+       back on it and the assertion would hold either way. */
+    install({ current: () => 'claude-sonnet-5' })
+    mount()
+    openIt()
+    type('nothing-like-this')
+    type('')
+    /* There is no better column to move to, so the selection must not wander --
+       a typo on the way to a search must not relocate the reader. */
+    expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
+      'claude-opus-5',
+      'claude-sonnet-5',
+    ])
+  })
+
   it('says no match rather than showing an empty column', () => {
     install()
     mount()
