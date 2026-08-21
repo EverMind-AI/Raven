@@ -113,81 +113,18 @@ $('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
 $('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
 $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
 
-/* ══ session-scoped sheets ════════════════════════════════════════
-   Everything that docks above the composer -- a clarify question, an approval
-   request, a dag graph -- belongs to the conversation it was raised in. Each was
-   appended straight into .dock-in, which is one element for the whole window, so
-   switching sessions left another conversation's question sitting over the
-   composer: still answerable, and answering it replied on behalf of a turn the
-   reader was no longer looking at.
+/* ══ session-scoped sheets ════════════════════════════════
+   The rack that holds everything docking above the composer -- a clarify
+   question, an approval request, a dag graph -- is the composer island's now,
+   filed per conversation so that switching sessions cannot leave another one's
+   question sitting over the field. See ui/src/features/composer/sheets.ts for
+   what that scoping is for and what it does not fix.
 
-   A sheet is filed under a session key on arrival and mounted only while that
-   session is open. Detached rather than destroyed, and the element is kept: the
-   question is still pending on the server, so coming back has to show the same
-   sheet -- with the reader's half-typed answer in it -- not a fresh one.
-
-   A detached sheet's document-level key handler is still live, which is the one
-   thing this scoping does not fix on its own. Each handler checks
-   `sheet.isConnected` for that reason: otherwise "1" typed in one conversation
-   would answer a question waiting in another. */
-const SHEETS = new Map();  // session key -> Set of sheet elements
-
-/* A draft is not a session yet (`cur` is null until the first message lands),
-   but a question can be asked during its first turn, so it needs a key of its
-   own rather than sharing one with every other draft-less state. */
-const sheetSession = () => cur || '(draft)';
-
-const sheetDock = () => document.querySelector('#sheetRack') || document.body;
-
-function sheetAdd(el, key) {
-  key = key || sheetSession();
-  el.dataset.sess = key;
-  let bucket = SHEETS.get(key);
-  if (!bucket) SHEETS.set(key, (bucket = new Set()));
-  bucket.add(el);
-  /* First child, not last: sheets are flow content now, and the newest belongs
-     on top of the stack, above the field it interrupts. */
-  const dock = sheetDock();
-  if (key === sheetSession()) dock.insertBefore(el, dock.firstChild);
-  dockLift();
-}
-
-function sheetRemove(el) {
-  const bucket = SHEETS.get(el.dataset.sess);
-  if (bucket) {
-    bucket.delete(el);
-    if (!bucket.size) SHEETS.delete(el.dataset.sess);
-  }
-  el.remove();
-  dockLift();
-}
-
-/* Retire the sheets of one class in one session's bucket, and only there: a new
-   question replaces the pending one it belongs beside, never one another
-   conversation is still waiting on. */
-function sheetDropClass(cls, key) {
-  const bucket = SHEETS.get(key || sheetSession());
-  if (!bucket) return;
-  [...bucket].forEach((el) => { if (el.classList.contains(cls)) sheetRemove(el); });
-}
-
-/* Called wherever the open session changes. Mount what belongs here, detach
-   everything else -- including sheets raised while the reader was away. */
-function sheetsSync() {
-  const here = sheetSession();
-  SHEETS.forEach((bucket, key) => bucket.forEach((el) => {
-    if (key === here) {
-      if (!el.isConnected) { const dock = sheetDock(); dock.insertBefore(el, dock.firstChild); }
-    } else if (el.isConnected) el.remove();
-  }));
-  dockLift();
-}
-
-/* A deleted conversation's pending question has nothing left to answer. */
-function sheetsForget(key) {
-  const bucket = SHEETS.get(key);
-  if (bucket) [...bucket].forEach(sheetRemove);
-}
+   One destructure, at this layer's top level so both layers see it: the live
+   parts are an IIFE nested in this script, and the four of them that raise or
+   retire a sheet keep calling these by name. */
+const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget } =
+  RavenIslands.composer;
 
 /* ══ approval sheet ═══════════════════════════════════════════════
    An approval request is the same kind of interruption as ask_user -- the turn
