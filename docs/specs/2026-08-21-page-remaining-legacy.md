@@ -85,11 +85,15 @@ caps page's **dispatch**, not a renderer. The same care is owed to the other
 `draw*` names in `demo/152` and `demo/153`, and to anything in `demo/160` that
 is boot order rather than drawing.
 
-## Axis 2: the 61 shell verbs, which the ratchet does not count
+## Axis 2: the shell verbs, which nothing counted until this was written
 
-`ui/src/shell/bridge.ts` declares `interface Shell` with **61 verbs**, and
-`demo/155-bridge.js` (75 lines) publishes **every one of them**. Five are
-required (`T`, `toast`, `menuAt`, `confirmAsk`, `showPage`).
+`ui/src/shell/bridge.ts` declares `interface Shell` with **61 verbs** on this
+document's baseline, and `demo/155-bridge.js` (75 lines) publishes **every one of
+them**. Five are required (`T`, `toast`, `menuAt`, `confirmAsk`, `showPage`).
+
+There is a gate on the number now -- see the end of this section -- and it reads
+**60**, the one difference being `setLang`. Every count below is the baseline's;
+re-measure before acting on one, as the status line says.
 
 The other 56 are optional in the type. The `?` there is doing a different job
 and `bridge.ts` says which: "Optional, so fakes that predate a helper stay
@@ -139,20 +143,30 @@ These run the opposite way to a strand:
 
 So the page's islands do not stand on their own: they stand on 61 answers from
 the layer this migration exists to retire, funnelled through one file. That is
-the larger of the two couplings and there is no gate on it -- a new verb can be
-added without anything objecting, and several have been.
+the larger of the two couplings and, when this was written, nothing gated it --
+a new verb could be added without anything objecting, and several had been.
 
 **This is not an argument for deleting verbs.** Some are permanent seams by
 design (`T` has to come from wherever the catalogue lives). It is an argument
 for the number being visible: the seam ratchet earned its keep by making one
-number go down on purpose, and the verb count is the number nobody is watching.
+number go down on purpose, and the verb count was the number nobody was
+watching.
 
 Recommendation: extend `ui/scripts/count-shared-globals.mjs`, or add a sibling
 script, to report the verb count with its own `EXPECTED`, so a verb added
 casually has to be argued for in the change that adds it.
 
-**Still open.** That script has since grown a second `EXPECTED`, but for Axis 3
-below, not for this. The verb count remains the number nobody is watching.
+**Done.** `ui/scripts/count-shared-globals.mjs` reports it under
+`EXPECTED_VERBS`, beside the two counts of the opposite direction. It reads the
+members of `interface Shell` rather than the publish side, which makes it a
+floor rather than the exact number of questions asked: `look` and `ntf` are
+namespaces carrying two and three methods, so sixty members are sixty-three
+callables.
+
+The number moved between this document's baseline and that gate landing: 61 here,
+**60** measured on `c65549c5`. `!159` took `setLang` out when the language pick
+became `DS.settings`'s, which is what an Axis 2 reduction looks like when it
+happens as a side effect of an Axis 1 move rather than on purpose.
 
 ## Axis 3: nine containers the live layer fills in place
 
