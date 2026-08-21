@@ -6,7 +6,19 @@ declaration.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# LiteLLM fetches its price and context table over the network at import unless
+# this is set, and setting it before first use is too late -- the remote table is
+# already loaded by then. The suite reads that table as a fixed input, the same
+# reason `_no_openrouter_network` keeps raven's own catalogue fetch off the wire,
+# so leaving it remote makes assertions depend on what a vendor published that
+# morning: a newly added row answered a lookup several tests had arranged to
+# miss, and they failed on numbers nobody in this repo had touched.
+# `setdefault`, so a developer can still point a run at the live table.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
