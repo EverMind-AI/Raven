@@ -30,11 +30,14 @@ plus the ``scripts_dir`` line and the SKILL.md body when present.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.tools.base import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
-from raven.skill_hub.policy import SkillPolicy, is_blocked
+from raven.skill_hub.policy import SkillPolicy, is_blocked, refuses_low_safety
+
+__all__ = ["FindSkillTool", "ReadSkillTool", "UseSkillTool"]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -72,15 +75,27 @@ def _lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
 
 
 class ReadSkillTool(Tool):
-    """Fetch a candidate skill's full SKILL.md body for fine-selection."""
+    """Fetch a candidate skill's full SKILL.md body for fine-selection.
+
+    Policy runs here too: for an instruction-only skill the body *is* the
+    payload, so a blocklisted or low-safety skill must be refused at the
+    read, not just at install time (``use_skill``). Under pull discovery
+    this tool is the first place a Hub skill's detail metadata — the only
+    payload carrying ``score_safety`` — is fetched, which makes it the
+    authoritative enforcement point for the remote sources.
+    """
 
     def __init__(
         self,
         client: "SkillHubClient | None" = None,
         registry: "SkillRegistry | None" = None,
+        *,
+        min_safety: float = 0.7,
+        blocklist: "Iterable[str] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
 
     @property
     def name(self) -> str:
@@ -90,8 +105,9 @@ class ReadSkillTool(Tool):
     def description(self) -> str:
         return (
             "Read a skill's full SKILL.md body — its actual instructions. Pass "
-            "the qualified id exactly as shown in the '# Skills' or '# Active "
-            "Skills' context (e.g. 'local/my-skill', 'hub/my-skill'). This does "
+            "the qualified id exactly as shown in the skill menu, a find_skill "
+            "result, or the '# Skills' / '# Active Skills' context (e.g. "
+            "'local/my-skill', 'hub/my-skill'). This does "
             "NOT download or run anything. Call it for any skill listed by "
             "description alone, whether to judge if it fits or because you have "
             "decided to follow it; a skill whose body is already shown in "
@@ -120,6 +136,9 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
+        if is_blocked(self._policy.blocklist, native):
+            return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
+
         if source in ("local", "everos"):
             meta = _lookup_on_disk(self._registry, source, native)
             if meta is None:
@@ -127,6 +146,8 @@ class ReadSkillTool(Tool):
                     f"Error: no {source} skill {native!r} found. Its body may "
                     f"already be present in the '# Skills' context."
                 )
+            if is_blocked(self._policy.blocklist, meta.name):
+                return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
             return f"## {meta.name}\n{meta.content}"
 
         if self._client is None:
@@ -141,6 +162,9 @@ class ReadSkillTool(Tool):
             meta = await self._client.get(native)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
             return f"Error: failed to read skill {skill_id!r} from the Hub: {e}"
+        refusal = self._policy.refusal_for_detail(meta, native)
+        if refusal is not None:
+            return f"Error: refusing to read hub skill: {refusal}."
         body = meta.get("skill_md") or ""
         name = meta.get("name") or native
         version = meta.get("version") or ""
@@ -300,4 +324,93 @@ class UseSkillTool(Tool):
         return f"{head}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{body}"
 
 
-__all__ = ["ReadSkillTool", "UseSkillTool"]
+_LIBRARY_BLURB = (
+    "The skill library (SkillHub) holds 110k+ vetted methodology skills across "
+    "16 categories: DEV, FRONTEND-UI, DEVOPS-INFRA, TESTING, SECURITY, DATA, "
+    "AI-ML, AUTH, DOC-PROC, WRITING, MULTIMEDIA, COMMS, WORKFLOW, PRODUCTIVITY, "
+    "META, OTHER."
+)
+
+
+class FindSkillTool(Tool):
+    """Search the skill library with an intent-bearing query (pull discovery).
+
+    The counterpart of the scent menu: the menu whispers what might exist,
+    this tool is how the model searches on its own terms. The query the model
+    writes mid-task carries the task's actual intent, which is exactly what
+    the retrieval stack (and the Hub reranker behind it) works best on.
+    """
+
+    def __init__(
+        self,
+        get_router: Callable[[], Any],
+        *,
+        hub_wired: bool = False,
+        min_safety: float = 0.7,
+        blocklist: "Iterable[str] | None" = None,
+    ) -> None:
+        self._get_router = get_router
+        self._hub_wired = hub_wired
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+
+    @property
+    def name(self) -> str:
+        return "find_skill"
+
+    @property
+    def description(self) -> str:
+        # The blurb must describe what is actually wired: without a Hub
+        # endpoint the search covers only the locally installed pool, and
+        # promising a 110k-skill library would send the model chasing
+        # results that cannot exist on this deployment.
+        scope = f"{_LIBRARY_BLURB} " if self._hub_wired else "It searches the locally installed skill pool. "
+        return (
+            f"Search the skill library for reusable methodology. {scope}"
+            "Facing an unfamiliar kind of task, search before improvising -- "
+            "there is usually an established approach. Also search when the "
+            "same approach has failed twice in a row, or when a task has run "
+            "many steps without converging. Write the query from the task's "
+            "actual intent (e.g. 'weekly aggregation SQL patterns'), include a "
+            "category word to narrow. Returns matching skills as id + "
+            "description; read one with read_skill(id)."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What you are trying to do, in retrieval-friendly words.",
+                },
+            },
+            "required": ["query"],
+        }
+
+    async def execute(self, query: Any = None, **_: Any) -> str:
+        if not query or not isinstance(query, str) or not query.strip():
+            return "Error: 'query' is required — describe what you are trying to do."
+        router = self._get_router()
+        if router is None:
+            return "Error: skill retrieval is not available in this deployment."
+        try:
+            hits = await router.select(query.strip(), history=[], k=8)
+        except Exception as exc:  # noqa: BLE001 - a search failure must not kill the turn
+            return f"Error: skill search failed ({exc})."
+        lines = []
+        for h in hits:
+            # Same advertising-time screen as the scent menu: blocklisted
+            # skills are never named, and a catalog hit already carrying a
+            # low score_safety is dropped (the authoritative hub check runs
+            # on the detail metadata in read_skill / use_skill).
+            meta = getattr(h, "meta", None) or {}
+            if is_blocked(self._policy.blocklist, getattr(h, "name", None), meta.get("skill_id"), meta.get("slug")):
+                continue
+            if refuses_low_safety(meta.get("score_safety"), self._policy.min_safety):
+                continue
+            desc = ((meta.get("description") or h.content or "").strip().splitlines() or [""])[0][:120]
+            lines.append(f"- {h.qualified_id}: {desc}")
+        if not lines:
+            return "No matching skills found. Try different wording, or proceed without one."
+        return "Matching skills (read one with read_skill(id)):\n" + "\n".join(lines)

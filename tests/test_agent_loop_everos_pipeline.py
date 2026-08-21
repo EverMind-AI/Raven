@@ -110,6 +110,8 @@ class _FakeBackend:
 
 
 def _make_agent(workspace: Path, *, backend=None) -> AgentLoop:
+    from raven.config.raven import SkillForgeConfig
+
     return AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
@@ -117,6 +119,9 @@ def _make_agent(workspace: Path, *, backend=None) -> AgentLoop:
         max_iterations=2,
         restrict_to_workspace=True,
         backend=backend,
+        # These tests assert the push pipeline's end-to-end effects (the
+        # everos skill body landing in the prompt); pull renders a menu only.
+        skill_forge_config=SkillForgeConfig(discovery="push"),
     )
 
 

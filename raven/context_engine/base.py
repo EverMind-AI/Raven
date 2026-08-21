@@ -82,6 +82,8 @@ class AssemblyContext:
     prefix: AssembledPrefix | None = None
     can_see_images: bool = True
     describe_tool: str | None = None
+    scent_text: str = ""
+    """Pull-mode skill hint for this turn; rendered into the user envelope."""
 
 
 @dataclass
