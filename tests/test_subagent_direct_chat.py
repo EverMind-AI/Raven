@@ -451,6 +451,101 @@ async def test_chat_with_a_disabled_agent_raises_and_records_nothing(tmp_path, m
     assert not root.exists()
 
 
+def _created_registry(manager, tmp_path, monkeypatch):
+    from raven.agent.subagent import manager as manager_mod
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
+    return registry
+
+
+@pytest.mark.asyncio
+async def test_create_instance_writes_one_idle_registry_row(tmp_path, monkeypatch):
+    """A user-created instance exists only as its registry row until a turn runs."""
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    registry = _created_registry(manager, tmp_path, monkeypatch)
+
+    created = await manager.create_instance(session_key="s1", agent="raven")
+
+    rows = registry.list_instances("s1")
+    assert [(r["agent"], r["handle"], r["status"]) for r in rows] == [("raven", created.handle, "idle")]
+    assert created.agent == "raven"
+    assert created.created_at_ms > 0
+
+
+@pytest.mark.asyncio
+async def test_create_instance_writes_no_record_directory(tmp_path, monkeypatch):
+    """``DirectChatRecord.open`` makes those per turn, and there is no turn yet
+    -- which is why a creation-only handoff entry can name no path."""
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    _created_registry(manager, tmp_path, monkeypatch)
+
+    created = await manager.create_instance(session_key="s1", agent="raven")
+
+    assert not direct_root(manager._session_dir("s1"), "raven", created.handle).exists()
+
+
+@pytest.mark.asyncio
+async def test_create_instance_mints_a_fresh_handle_each_time(tmp_path, monkeypatch):
+    """Two creations of one agent are two instances, not one reused twice."""
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    registry = _created_registry(manager, tmp_path, monkeypatch)
+
+    first = await manager.create_instance(session_key="s1", agent="raven")
+    second = await manager.create_instance(session_key="s1", agent="raven")
+
+    assert first.handle != second.handle
+    assert first.handle.startswith("raven-") and second.handle.startswith("raven-")
+    assert len(registry.list_instances("s1")) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_instance_refuses_a_stateless_agent(tmp_path, monkeypatch):
+    """``chat`` refuses one outright, so offering the instance would be offering
+    a conversation that cannot be had."""
+    from raven.config.schema import ThirdPartyOpenAISubagentConfig
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    registry = _created_registry(manager, tmp_path, monkeypatch)
+    manager.apply_agents(
+        [ThirdPartyOpenAISubagentConfig(name="stateless_ep", base_url="http://x", model="m", stateful=False)]
+    )
+
+    with pytest.raises(RuntimeError, match="stateless"):
+        await manager.create_instance(session_key="s1", agent="stateless_ep")
+
+    assert registry.list_instances("s1") == []
+
+
+@pytest.mark.asyncio
+async def test_create_instance_refuses_an_agent_that_is_not_on_the_roster(tmp_path, monkeypatch):
+    """Same refusal ``chat`` makes: without it the row would be written and the
+    first turn would then be answered by the built-in raven loop instead."""
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    registry = _created_registry(manager, tmp_path, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="disabled or no longer configured"):
+        await manager.create_instance(session_key="s1", agent="removed-agent")
+
+    assert registry.list_instances("s1") == []
+
+
+@pytest.mark.asyncio
+async def test_a_created_instance_can_then_be_chatted_with(tmp_path, monkeypatch):
+    """The join: what create_instance mints is addressable by the same chat()
+    that would have minted the row itself."""
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    registry = _created_registry(manager, tmp_path, monkeypatch)
+
+    created = await manager.create_instance(session_key="s1", agent="raven")
+    reply, _meta = await manager.chat(session_key="s1", agent="raven", handle=created.handle, text="hi")
+
+    assert reply == "re: hi"
+    rows = registry.list_instances("s1")
+    assert [(r["handle"], r["status"]) for r in rows] == [(created.handle, "completed")]
+
+
 @pytest.mark.asyncio
 async def test_chat_and_spawn_on_one_handle_do_not_interleave(tmp_path, monkeypatch):
     manager = _direct_chat_manager(tmp_path, monkeypatch)

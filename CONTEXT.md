@@ -765,15 +765,27 @@ _Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the Rav
 sat in whatever directory the run happened to use and had no `spawn` counterpart.
 
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
-The pointer block the runtime prepends to the user's next turn to the main agent after one
-or more Direct Chats: per instance, a UTC time span and the paths of each turn's
+The pointer block the runtime prepends to the user's next turn to the main agent after
+direct-chat activity: per instance, a UTC time span and the paths of each turn's
 `prompt.md` and `out.md`, inside `subagents/direct/<agent>/<handle>/<call_id>/` beside the
-Subagent history. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
+Subagent history. Activity, not only chats - a User-Created Instance is reported in its own
+right, and one with no turns yet names no path, because the record directories are made per
+turn. Carries no transcript text. Accumulated per session by `DirectChatHandoff`
 and taken-and-cleared on the next turn that has no `direct_target`, so a segment is reported
 exactly once. Every byte in it is raven-minted - agent names from config, handles from the
-registry, call ids from `make_call_id` - which is why it is prepended unwrapped; a field
-echoing a sub-agent's own reply would break that.
+registry (minted, never typed), call ids from `make_call_id` - which is why it is prepended
+unwrapped; a field echoing a sub-agent's own reply would break that.
 _Avoid_: "handoff summary" - it is deliberately not a summary; nothing in it is generated.
+
+**User-Created Instance** (`SubagentManager.create_instance`):
+A sub-agent instance the user started by hand rather than one the main agent produced by
+delegating. `subagents.instance.create` mints its handle and writes one registry row with
+status `idle`; nothing else exists until its first turn. Only an enabled, stateful agent can
+have one - the same two refusals `chat` makes, since a direct chat is a continuation. `idle`
+is deliberately not among the statuses `reconcile_instance_rows` rewrites: unlike an
+unfinished `running`, it stays true across a gateway restart.
+_Avoid_: "empty instance" - it is addressable and resumable from the moment it exists; what
+it lacks is turns, not capability.
 
 **Reply Streaming** (`raven/agent/subagent/backends/base.py`):
 Whether a Subagent backend hands its reply over as it forms - `SubagentBackend.streams`

@@ -21,9 +21,14 @@ from raven.agent.subagent.backends import (
     SubagentBackend,
 )
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
-from raven.agent.subagent.direct_chat import DirectChatError, DirectChatRecord, DirectTurnMeta
+from raven.agent.subagent.direct_chat import (
+    DirectChatCreation,
+    DirectChatError,
+    DirectChatRecord,
+    DirectTurnMeta,
+)
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
-from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_history import SpawnRecord
 from raven.config.schema import ExecToolConfig
@@ -415,6 +420,63 @@ class SubagentManager:
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
 
+    def _require_addressable(self, agent: str, *, doing: str) -> None:
+        """Raise unless ``agent`` can hold a direct chat at all.
+
+        Both conditions are properties of the *agent*, not of any one instance,
+        so every entry point into a direct chat has to make the same two checks
+        or they drift. Called before anything is opened, written or minted.
+
+        Disabled or absent is refused rather than allowed to fall through to
+        ``_resolve_backend``, which would answer as the built-in raven loop with
+        none of that agent's history and no sign to the caller that a
+        substitution happened (see ``enabled_third_party`` on why a shrunk
+        roster must fail loudly).
+
+        Stateless is refused because a direct chat is a *continuation*: against
+        such an agent every turn starts from nothing, so the conversation on
+        screen would be a sequence of unrelated first turns that reads as the
+        instance forgetting.
+        """
+        row = self.registry.get(agent)
+        if row is None or not row.enabled:
+            raise RuntimeError(
+                f"Cannot {doing}: {agent!r} is disabled or no longer configured, so it cannot "
+                "be addressed. Any records it already has remain on disk."
+            )
+        if not self.declared_stateful(agent):
+            raise RuntimeError(
+                f"Cannot {doing}: {agent!r} is stateless, so each turn would start a fresh "
+                "conversation with no memory of this one. Spawn it with a task instead."
+            )
+
+    async def create_instance(self, *, session_key: str, agent: str) -> DirectChatCreation:
+        """Mint one addressable instance of ``agent`` without running a turn.
+
+        How a user starts a direct chat with an agent nothing has delegated to
+        yet. This is not a new lifecycle: ``chat`` writes this same row itself on
+        an instance's first turn. What is new is that the instance can exist
+        before anything has been said to it.
+
+        The registry row is the only thing written. The per-turn record
+        directories are ``DirectChatRecord.open``'s, and no turn has run -- which
+        is why the handoff entry for a creation names no path.
+
+        The write goes to the registry directly rather than through
+        ``_write_spawn_status``: that helper swallows every failure, which is
+        right beside a spawn that runs regardless and wrong here, where the row
+        *is* the result and a silent loss would report an instance the user
+        cannot then see. ``upsert_spawn`` already tolerates a failed flush on its
+        own, so only a genuine failure reaches the caller.
+        """
+        self._require_addressable(agent, doing="create a new instance")
+
+        handle = mint_handle(agent)
+        created_at_ms = int(time.time() * 1000)
+        await get_registry().upsert_spawn(session_key, agent, handle, "idle")
+        logger.info("Created sub-agent instance {}/{} for session {}", agent, handle, session_key)
+        return DirectChatCreation(agent=agent, handle=handle, created_at_ms=created_at_ms)
+
     async def chat(
         self,
         *,
@@ -439,13 +501,9 @@ class SubagentManager:
         keep these exchanges out of the main agent's context, so the record
         directory is the only place the turn is written.
 
-        Raises ``RuntimeError`` up front, before anything is opened or
-        written, if ``agent`` names a third-party sub-agent that is disabled
-        or missing from the current config: ``_resolve_backend`` would
-        otherwise fall back to the built-in raven-loop backend and answer as
-        if it were that agent, with none of its history and no indication to
-        the caller that a substitution happened (see ``enabled_third_party``'s
-        docstring on why a shrunk roster must fail loudly, not silently).
+        Raises ``RuntimeError`` up front, before anything is opened or written,
+        for an agent that cannot hold a direct chat at all -- see
+        ``_require_addressable`` for which two conditions and why each is fatal.
         Raises ``DirectChatError`` (carrying this turn's ``DirectTurnMeta``)
         if the backend itself raises, so the caller's per-session handoff can
         still learn about a failed turn instead of never hearing about it.
@@ -457,23 +515,7 @@ class SubagentManager:
         the source of truth for one. A caller that streamed therefore has to not
         deliver the return value a second time.
         """
-        row = self.registry.get(agent)
-        if row is None or not row.enabled:
-            raise RuntimeError(
-                f"Cannot chat with instance {handle!r} of agent {agent!r}: this sub-agent is "
-                "disabled or no longer configured, so the instance cannot be addressed. "
-                "Its records remain on disk."
-            )
-        if not self.declared_stateful(agent):
-            # A direct chat is a *continuation*; against a stateless agent every
-            # turn starts from nothing, so the conversation on screen would be a
-            # sequence of unrelated first turns that reads as the instance
-            # forgetting. Refused rather than offered and disappointing.
-            raise RuntimeError(
-                f"Cannot chat with instance {handle!r}: {agent!r} is stateless, so each turn "
-                "would start a fresh conversation with no memory of this one. Spawn it with a "
-                "task instead."
-            )
+        self._require_addressable(agent, doing=f"chat with instance {handle!r}")
 
         session_dir = self._session_dir(session_key)
         effective_workspace = workspace or self.workspace

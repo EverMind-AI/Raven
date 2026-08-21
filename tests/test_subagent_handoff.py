@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.subagent.direct_chat import DirectChatHandoff, DirectTurnMeta
+from raven.agent.subagent.direct_chat import DirectChatCreation, DirectChatHandoff, DirectTurnMeta
 
 
 def _meta(
@@ -148,6 +148,84 @@ def test_a_missing_record_directory_is_marked_unavailable_and_still_counted(tmp_
     assert "out.md" not in block
 
 
+def _creation(agent="Raven-PPT", handle="raven-ppt-a1b2c3", created=1786000000000):
+    return DirectChatCreation(agent=agent, handle=handle, created_at_ms=created)
+
+
+def test_the_header_covers_creations_not_only_chats():
+    """A creation with no chat in it reads as a contradiction under the old
+    wording, to the model that has to act on the block."""
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+
+    assert h.take("s1").splitlines()[0] == "[subagent direct chat activity since your last turn]"
+
+
+def test_a_creation_with_no_turns_is_still_announced():
+    """The whole point of reporting a creation is the case where the user has
+    not used it yet."""
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+    block = h.take("s1")
+
+    assert "Raven-PPT / raven-ppt-a1b2c3" in block
+    assert "created by the user at 2026-" in block
+    assert "no turns yet" in block
+
+
+def test_a_creation_only_group_names_no_record_path():
+    """No turn has run, so ``DirectChatRecord.open`` has made no directory."""
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+    block = h.take("s1")
+
+    assert "subagents" not in block
+    assert "prompt.md" not in block
+    assert "out.md" not in block
+
+
+def test_a_creation_counts_toward_the_pending_count():
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+
+    assert h.pending_count("s1") == 1
+    assert h.take("s1") is not None
+    assert h.pending_count("s1") == 0
+
+
+def test_creations_do_not_leak_across_sessions():
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+
+    assert h.pending_count("s2") == 0
+    assert h.take("s2") is None
+
+
+def test_a_creation_and_that_instances_turns_share_one_heading():
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation(agent="Raven-Code", handle="refactor-auth"))
+    h.record("s1", _meta(call_id="c1"))
+    h.record("s1", _meta(call_id="c2"))
+    block = h.take("s1")
+
+    assert block.count("Raven-Code / refactor-auth") == 1
+    assert "created by the user at" in block
+    assert "no turns yet" not in block
+    assert "2 turns" in block
+    assert "c1/{prompt.md,out.md}" in block
+
+
+def test_a_creation_carries_no_subagent_authored_text():
+    """Same invariant the turn block relies on: the handle is minted and the
+    agent name comes from config, which is why the block needs no untrusted wrap."""
+    h = DirectChatHandoff()
+    h.record_created("s1", _creation())
+    block = h.take("s1")
+
+    assert block.count("raven-ppt-a1b2c3") == 1
+    assert "1786000000000" not in block
+
+
 def _loop_with_handoff(tmp_path, monkeypatch):
     """An AgentLoop whose provider records the message list it is handed and
     whose sandbox/MCP bring-up is stubbed out, mirroring the harness
@@ -234,7 +312,7 @@ async def test_an_ordinary_turn_carries_the_pending_block(tmp_path, monkeypatch)
     seen = await _run_ordinary_turn(loop, "what did you find?")
 
     user_text = seen[-1]["content"]
-    assert user_text.startswith("[subagent direct chats since your last turn]")
+    assert user_text.startswith("[subagent direct chat activity since your last turn]")
     assert user_text.endswith("what did you find?")
     assert loop._direct_handoff.pending_count("s1") == 0
 

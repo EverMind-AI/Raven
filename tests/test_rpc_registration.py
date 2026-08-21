@@ -117,11 +117,13 @@ def test_subagents_methods_are_registered() -> None:
 
 
 def test_instance_methods_are_registered() -> None:
-    """A declared method with no handler answers -32601; the direct-chat surface
-    calls all four on entry."""
+    """A declared method with no handler answers -32601, and the direct-chat
+    surface reaches every one of these: three on entry, and create from the
+    new-instance picker."""
     registered = _registered()
     for name in (
         "subagents.instances",
+        "subagents.instance.create",
         "subagents.instance.history",
         "subagents.instance.forget",
     ):

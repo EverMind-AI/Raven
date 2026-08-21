@@ -51,6 +51,19 @@ class DirectTurnMeta(NamedTuple):
     status: str
 
 
+class DirectChatCreation(NamedTuple):
+    """One instance the user made by hand, as the handoff block describes it.
+
+    Carries no directory: nothing is written for a creation but the registry
+    row, because the record directories are made per turn and no turn has run
+    (see ``SubagentManager.create_instance``).
+    """
+
+    agent: str
+    handle: str
+    created_at_ms: int
+
+
 class DirectChatError(RuntimeError):
     """A failed direct-chat turn, carrying that turn's ``DirectTurnMeta``.
 
@@ -187,7 +200,10 @@ class DirectChatRecord:
         (self.dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-_HANDOFF_HEADER = "[subagent direct chats since your last turn]"
+# "activity" rather than "chats": the block also reports an instance the user
+# created and has not spoken to, which under the narrower wording reads as a
+# contradiction to the model acting on it.
+_HANDOFF_HEADER = "[subagent direct chat activity since your last turn]"
 
 
 def _utc(ms: int) -> str:
@@ -196,8 +212,11 @@ def _utc(ms: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ms / 1000))
 
 
+_Entry = DirectTurnMeta | DirectChatCreation
+
+
 class DirectChatHandoff:
-    """The direct-chat turns a session owes its main agent, and their block.
+    """The direct-chat activity a session owes its main agent, and its block.
 
     Held by the runtime rather than the client: the runtime is what wrote the
     records, so it is what knows which ones the main agent has not been told
@@ -208,20 +227,29 @@ class DirectChatHandoff:
     may enter and leave an instance repeatedly, or go straight back to the main
     conversation without leaving at all.
 
+    An instance the user creates is an entry in its own right, not merely a line
+    on a turn that follows it: the case worth reporting is precisely the one
+    where nothing has been said to it yet, which no turn would carry.
+
     The rendered block is prepended straight to the user's own text, with no
     ``wrap_untrusted`` around it (contrast sub-agent tool output elsewhere in
     this codebase). That is safe only because every byte here is raven-minted,
     never sub-agent output: agent names come from config, handles from the
     registry, call ids from ``make_call_id``, and path segments are sanitized
-    through ``safe_path_segment``. A future field that echoes a sub-agent's own
-    reply text would break this invariant and must not be added here.
+    through ``safe_path_segment``. A user-created instance keeps that true: its
+    handle is minted by ``mint_handle``, never typed. A future field that echoes
+    a sub-agent's own reply text -- or a user-supplied handle -- would break this
+    invariant and must not be added here.
     """
 
     def __init__(self) -> None:
-        self._pending: dict[str, list[DirectTurnMeta]] = {}
+        self._pending: dict[str, list[_Entry]] = {}
 
     def record(self, session_key: str, meta: DirectTurnMeta) -> None:
         self._pending.setdefault(session_key, []).append(meta)
+
+    def record_created(self, session_key: str, creation: DirectChatCreation) -> None:
+        self._pending.setdefault(session_key, []).append(creation)
 
     def pending_count(self, session_key: str) -> int:
         return len(self._pending.get(session_key, ()))
@@ -233,19 +261,29 @@ class DirectChatHandoff:
         case returns before touching anything: this runs on every ordinary user
         turn, so it has to be free when there is nothing to say.
         """
-        metas = self._pending.pop(session_key, None)
-        if not metas:
+        entries = self._pending.pop(session_key, None)
+        if not entries:
             return None
-        return self._render(metas)
+        return self._render(entries)
 
-    def _render(self, metas: list[DirectTurnMeta]) -> str:
-        grouped: dict[tuple[str, str], list[DirectTurnMeta]] = {}
-        for meta in metas:
-            grouped.setdefault((meta.agent, meta.handle), []).append(meta)
+    def _render(self, entries: list["_Entry"]) -> str:
+        grouped: dict[tuple[str, str], list[_Entry]] = {}
+        for entry in entries:
+            grouped.setdefault((entry.agent, entry.handle), []).append(entry)
 
         lines = [_HANDOFF_HEADER]
-        for (agent, handle), turns in grouped.items():
+        for (agent, handle), group in grouped.items():
             lines.append(f"{agent} / {handle}")
+            turns = [e for e in group if isinstance(e, DirectTurnMeta)]
+            for creation in (e for e in group if isinstance(e, DirectChatCreation)):
+                # Said explicitly, because an instance sitting unused is what the
+                # main agent can act on and an absent turn line does not say it.
+                unused = "" if turns else ", no turns yet"
+                lines.append(f"  created by the user at {_utc(creation.created_at_ms)}{unused}")
+            if not turns:
+                # No turn has run, so no record directory exists to name. The
+                # same reason the missing-record branch below exists.
+                continue
             lines.append(f"  {self._span(turns)}")
             root = turns[0].directory.parent
             lines.append(f"  {root}{os.sep}")
@@ -272,4 +310,11 @@ class DirectChatHandoff:
         return f"{span} ({len(unlanded)} running at handoff time)" if unlanded else span
 
 
-__all__ = ["DirectChatError", "DirectChatHandoff", "DirectChatRecord", "DirectTurnMeta", "direct_root"]
+__all__ = [
+    "DirectChatCreation",
+    "DirectChatError",
+    "DirectChatHandoff",
+    "DirectChatRecord",
+    "DirectTurnMeta",
+    "direct_root",
+]

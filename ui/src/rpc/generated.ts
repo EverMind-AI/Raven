@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 129 methods, 72 component schemas.
+// 130 methods, 72 component schemas.
 
 /* eslint-disable */
 /**
@@ -610,6 +610,10 @@ export interface SubagentRow {
    * A vendored folder's venv is being built right now (`subagents.build`). Its own flag rather than `test_running`: a build and a test are different verbs on the same row, and one must not read as the other. Absent from a server that predates discovery.
    */
   building?: boolean;
+  /**
+   * Reusing a handle continues this agent's conversation rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error.
+   */
+  stateful?: boolean;
   /**
    * A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. `enabled` is the only action it takes.
    */
@@ -1498,9 +1502,19 @@ export interface SubagentsInstancesParams {
 export interface SubagentsInstancesResult {
   instances: InstanceRow[];
   /**
-   * Direct-chat turns not yet reported to the main agent. Display only.
+   * Direct-chat turns, and instances the user created, not yet reported to the main agent. Display only.
    */
   pending_handoff_count: number;
+}
+export interface SubagentsInstanceCreateParams {
+  session_key: string;
+  /**
+   * Which sub-agent to instantiate. Must be enabled and stateful: a direct chat is a continuation, and against a stateless agent every turn would start over.
+   */
+  agent: string;
+}
+export interface SubagentsInstanceCreateResult {
+  instance: InstanceRow;
 }
 export interface SubagentsInstanceHistoryParams {
   session_key: string;
@@ -2822,6 +2836,7 @@ export interface RpcMethods {
   'subagents.test': { params: SubagentsTestParams; result: SubagentsTestResult };
   'subagents.test_cancel': { params: SubagentsTestCancelParams; result: SubagentsTestCancelResult };
   'subagents.instances': { params: SubagentsInstancesParams; result: SubagentsInstancesResult };
+  'subagents.instance.create': { params: SubagentsInstanceCreateParams; result: SubagentsInstanceCreateResult };
   'subagents.instance.history': { params: SubagentsInstanceHistoryParams; result: SubagentsInstanceHistoryResult };
   'subagents.instance.forget': { params: SubagentsInstanceForgetParams; result: SubagentsInstanceForgetResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
@@ -3023,6 +3038,7 @@ export const RPC_METHODS = [
   "subagent.list",
   "subagents.add",
   "subagents.build",
+  "subagents.instance.create",
   "subagents.instance.forget",
   "subagents.instance.history",
   "subagents.instances",

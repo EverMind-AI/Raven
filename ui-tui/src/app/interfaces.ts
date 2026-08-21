@@ -100,6 +100,7 @@ export interface OverlayState {
   clarify: ClarifyReq | null
   confirm: ConfirmReq | null
   modelPicker: boolean
+  newInstance: boolean
   pager: null | PagerState
   picker: boolean
   secret: null | SecretReq

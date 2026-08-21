@@ -777,6 +777,10 @@ export interface SubagentRow {
    */
   building?: boolean;
   /**
+   * Reusing a handle continues this agent's conversation rather than starting a fresh one (`agent_meta`). What makes a row direct-chattable at all: `chat` refuses a stateless agent, so a picker that offers one is offering a refusal. Absent from a server that predates this, which reads as 'not offered' rather than as an error.
+   */
+  stateful?: boolean;
+  /**
    * A built-in agent: raven's own in-process loop, on the agent table whether or not config mentions it. Distinct from `configured`, which stays false for one -- not writing a row is how 'use the package's default' is spelled, so there is nothing to delete and no transport to connect. `enabled` is the only action it takes.
    */
   builtin?: boolean;
@@ -2188,9 +2192,27 @@ export interface SubagentsInstancesParams {
 export interface SubagentsInstancesResult {
   instances: InstanceRow[];
   /**
-   * Direct-chat turns not yet reported to the main agent. Display only.
+   * Direct-chat turns, and instances the user created, not yet reported to the main agent. Display only.
    */
   pending_handoff_count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceCreateParams".
+ */
+export interface SubagentsInstanceCreateParams {
+  session_key: string;
+  /**
+   * Which sub-agent to instantiate. Must be enabled and stateful: a direct chat is a continuation, and against a stateless agent every turn would start over.
+   */
+  agent: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceCreateResult".
+ */
+export interface SubagentsInstanceCreateResult {
+  instance: InstanceRow;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
