@@ -33,13 +33,15 @@ function Pick(): JSX.Element {
   const [query, setQuery] = useState('')
   const [prov, setProv] = useState(() => Math.max(0, providers.findIndex((p) => p.models.includes(current))))
 
+  const narrow = (term: string): string[][] => {
+    const needle = term.trim().toLowerCase()
+    return providers.map((p) =>
+      needle ? p.models.filter((m) => store.short(m).toLowerCase().includes(needle)) : p.models,
+    )
+  }
   const q = query.trim().toLowerCase()
-  const hits = providers.map((p) => (q ? p.models.filter((m) => store.short(m).toLowerCase().includes(q)) : p.models))
-  /* A term that empties the selected provider moves the selection to the first
-     one that still has something, rather than showing "no match" beside a
-     column that plainly has hits. */
-  const shown = hits[prov]?.length ? prov : hits.findIndex((h) => h.length)
-  const list = hits[shown] || []
+  const hits = narrow(query)
+  const list = hits[prov] || []
 
   /* Measured, so it has to run after the paint that gives it a size. Above the
      anchor when it fits, which is where the composer chip wants it; clamped
@@ -77,7 +79,7 @@ function Pick(): JSX.Element {
   useEffect(() => {
     if (q) return
     box.current?.querySelector('.models .tick')?.parentElement?.scrollIntoView({ block: 'nearest' })
-  }, [q, shown])
+  }, [q, prov])
 
   return (
     <div className="mpick" role="dialog" ref={box}>
@@ -87,7 +89,25 @@ function Pick(): JSX.Element {
           ref={field}
           placeholder={t('gui.picker.search_ph')}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value
+            setQuery(next)
+            /* A term that empties the selected provider moves the selection to
+               the first one that still has something, rather than showing "no
+               match" beside a column that plainly has hits.
+               Committed here rather than derived per render, which is what the
+               loop this replaced did by assigning to its index. Derived, the
+               move lasted exactly as long as the term: narrow to find a model,
+               delete the term to browse the rest of that provider's list, and
+               the popover threw you back to the provider you were not looking
+               at. A term that matches nothing moves nothing -- there is no
+               better column to move to, and the models side says so. */
+            const h = narrow(next)
+            if (!h[prov]?.length) {
+              const first = h.findIndex((x) => x.length)
+              if (first >= 0) setProv(first)
+            }
+          }}
           onKeyDown={(e) => {
             /* The picker keeps its keys: Escape here closes the popover, and the
                document chain behind it must not also take a page down. */
@@ -110,7 +130,7 @@ function Pick(): JSX.Element {
             <button
               key={p.id}
               className={'row' + (hits[i]!.length ? '' : ' dim')}
-              aria-selected={i === shown && hits[i]!.length > 0}
+              aria-selected={i === prov && hits[i]!.length > 0}
               onClick={() => {
                 if (hits[i]!.length) setProv(i)
               }}
