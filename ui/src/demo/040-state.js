@@ -123,75 +123,9 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    One destructure, at this layer's top level so both layers see it: the live
    parts are an IIFE nested in this script, and the four of them that raise or
    retire a sheet keep calling these by name. */
-const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget } =
-  RavenIslands.composer;
+const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
+  approveSheet } = RavenIslands.composer;
 
-/* ══ approval sheet ═══════════════════════════════════════════════
-   An approval request is the same kind of interruption as ask_user -- the turn
-   is blocked on the reader -- so it wears the same clothes: the sheet above the
-   composer, numbered options, Esc/close means no. A centred modal made the two
-   read as different classes of event and put the answer somewhere the reader
-   was not already looking. */
-function approveSheet(prompt, onAllow, onDeny) {
-  sheetDropClass('csheet');
-  const sheet = mk('div', 'csheet perm');
-  sheet.setAttribute('role', 'dialog');
-  sheet.setAttribute('aria-modal', 'true');
-  sheet.setAttribute('aria-label', T('gui.confirm.title'));
-
-  let answered = false;
-  const close = (fn) => {
-    if (answered) return;
-    answered = true;
-    document.removeEventListener('keydown', onKey, true);
-    sheetRemove(sheet);
-    if (fn) fn();
-  };
-
-  const head = mk('div', 'hd');
-  const q = mk('div', 'q', T('gui.confirm.title'));
-  const x = mk('button', 'ic tipdn');
-  x.appendChild(ico('M7 7l10 10M17 7 7 17'));
-  x.dataset.tip = T('gui.confirm.deny');
-  x.setAttribute('aria-label', T('gui.confirm.deny'));
-  x.onclick = () => close(onDeny);
-  head.append(q, x);
-  sheet.appendChild(head);
-
-  /* The request itself is the agent's own words about what it wants to do, so
-     it is quoted rather than restated. */
-  const body = mk('div', 'body');
-  body.appendChild(mk('div', 'what', prompt || ''));
-  const opts = [
-    [T('gui.confirm.allow'), () => close(onAllow)],
-    [T('gui.confirm.deny'), () => close(onDeny)],
-  ];
-  opts.forEach(([label, fn], i) => {
-    const b = mk('button', 'opt' + (i === 0 ? ' go' : ''));
-    b.append(mk('span', 'n', String(i + 1)), mk('span', null, label));
-    b.onclick = fn;
-    body.appendChild(b);
-  });
-  sheet.appendChild(body);
-
-  function onKey(e) {
-    // A sheet parked with another conversation is still listening; only the
-    // mounted one may be answered from the keyboard.
-    if (!sheet.isConnected || composingNow(e)) return;
-    if (e.key === 'Escape') { e.preventDefault(); return close(onDeny); }
-    const n = Number(e.key);
-    if (n === 1 || n === 2) { e.preventDefault(); opts[n - 1][1](); }
-  }
-  document.addEventListener('keydown', onKey, true);
-
-  sheetAdd(sheet);
-  const first = sheet.querySelector('.opt');
-  if (first && sheet.isConnected) first.focus();
-  return { close: () => close(null) };
-}
-/* live.js has its own composing() for the clarify sheet; this is the same
-   guard, named apart so neither file has to load first. */
-const composingNow = (e) => !!(e && (e.isComposing || e.keyCode === 229));
 
 /* Preview without an engine: __approve('rm -rf build/'). */
 window.__approve = (p) => approveSheet(p || 'rm -rf build/',
