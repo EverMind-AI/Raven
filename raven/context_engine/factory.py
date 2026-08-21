@@ -291,7 +291,7 @@ def _build_rewriter_and_gate(
         gate = LLMGateFilter(
             provider,
             max_select=int(getattr(skill_forge_config, "llm_gate_max_select", 2) or 2),
-            legacy_top_k=int(skill_forge_router_config.top_k or 5),
+            legacy_top_k=int(skill_forge_router_config.top_k or 2),
             model=getattr(skill_forge_config, "llm_gate_model", None) or model or None,
             temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
             max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),
