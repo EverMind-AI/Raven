@@ -4,6 +4,9 @@
  * answer -- with the steps folding behind one line once the answer lands.
  */
 
+import type { SnapshotRow } from '../dag/nodes'
+import type { DagNode } from '../dag/types'
+
 export interface Hunk {
   add: number
   del: number
@@ -11,13 +14,6 @@ export interface Hunk {
 }
 
 export type CallKind = 'plain' | 'spawn' | 'dag'
-
-export interface DagChip {
-  id: string
-  subagent: string | null
-  instance: string | null
-  st: string
-}
 
 export interface CallData {
   v: number
@@ -40,8 +36,27 @@ export interface CallData {
   /* spawn / dag cards */
   t0: number
   runId: string | null
-  chips: DagChip[]
-  chipsLive: boolean
+  /* The graph, in the shape features/dag holds it -- not a reduction of it. The
+     card used to keep four fields per node (id, agent, handle, status) and there
+     was nowhere for the rest to go: the dependencies that make it a graph, and
+     the template and inputs that say what each step was asked. */
+  nodes: DagNode[]
+  /* Whether the run has an identity, which is what makes a node openable. A node
+     that looked like a door before its run_id was known opened nothing. */
+  live: boolean
+  /* The node whose detail is open inside the card. View state, like `open`, and
+     the only thing that decides what the panel shows -- deriving a fallback from
+     it gave `null` two meanings, "nobody picked one" and "the reader closed it",
+     and the unasked open on a failure then could not be closed at all. */
+  sel: string | null
+  /* Whether the unasked open on a failure has already happened. Once, like the
+     step's own fold: a second failure does not reopen a panel the reader shut. */
+  selAuto: boolean
+  /* Whether that detail shows the whole prompt template or a clamp of it. */
+  selFull: boolean
+  /* Set once a `dag.get` has been asked for, so a card whose arguments carried no
+     graph asks once rather than on every re-render. */
+  asked: boolean
 }
 
 export interface StepData {
@@ -208,7 +223,11 @@ export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean
   branch?: (text: string) => void
-  dagRows?: (runId: string) => Promise<Array<{ node: string; status: string; subagent?: string | null; instance?: string | null }>>
+  /* `dag.get`'s own `run.files` rows, unreduced. They were being mapped down to
+     four fields on the way in, which is why a restored card could never show a
+     dependency or a prompt: the adapter (features/dag/nodes.ts) reads the wire
+     shape, so this seam does not need to know which fields matter. */
+  dagRows?: (runId: string) => Promise<SnapshotRow[]>
   openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
   /* Whether a detached lane host is parked rather than discarded: leaving a

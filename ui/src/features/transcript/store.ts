@@ -1,8 +1,9 @@
+import * as dagNodes from '../dag/nodes'
 import { ds, shell, t } from '../../shell/bridge'
 import { md } from '../../shell/prose'
 
 import type {
-  AnswerData, AskData, CallData, CallHandle, DagChip, DeliveredData, FoldData, HistoryMessage,
+  AnswerData, AskData, CallData, CallHandle, DeliveredData, FoldData, HistoryMessage,
   Hunk, Lane, NoteData, NoteHandle, QaData, Seg, StatusData, StepData, StepHandle, TranscriptSource,
 } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -351,6 +352,20 @@ function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
   return null
 }
 
+/* What the three `dag.*` events carry, as one type: the card reads `nodes` off
+   the first, node/status/times off the second, and a list of the same off the
+   third. The adapters in features/dag/nodes.ts do the reading -- this only has
+   to be loose enough to hand them. */
+export interface DagFeedPayload {
+  run_id?: string
+  node?: string
+  status?: string
+  started_at?: number
+  ended_at?: number
+  files?: Array<{ node?: string; status?: string }>
+  nodes?: Array<Record<string, unknown>>
+}
+
 /* The trail's dag card is bound to its run through these: run_id arrives on
    the first dag.* event, and the newest unbound card claims it. */
 let dagPending: { lane: Lane; call: CallData } | null = null
@@ -368,15 +383,24 @@ export const spawnAgentOf = (a: Record<string, unknown>): string =>
 
 /* The graph as a run-started payload carries it. Same shape the arguments path
    builds, so one renderer draws both. */
-function chipsFromPayload(p: { nodes?: Array<{ id?: string; subagent?: string; instance?: string }> } | null): DagChip[] {
-  return (p?.nodes || [])
-    .filter((n) => n && n.id)
-    .map((n): DagChip => ({
-      id: String(n.id), subagent: n.subagent || null, instance: n.instance || null, st: 'pending',
-    }))
+/* A failure is the one thing worth opening unasked -- the rule the step's own
+   fold already follows. Written into `sel` rather than derived at render time:
+   derived, it made `null` mean both "nobody picked one" and "the reader closed
+   it", so the panel it opened could not be shut. Once per card, so closing it
+   stays closed and a later failure does not reopen it.
+ *
+ * Called wherever the node list changes, because a card is built before its
+ * nodes have any state: the failure arrives afterwards, from an event or from
+ * `dag.get`. */
+function openFirstFailure(call: CallData): void {
+  if (call.selAuto || call.sel) return
+  const failed = call.nodes.find((n) => n.status === 'failed')
+  if (!failed) return
+  call.sel = failed.id
+  call.selAuto = true
 }
 
-export function dagFeed(type: string, p: { run_id?: string; node?: string; status?: string; files?: Array<{ node: string; status: string }>; nodes?: Array<{ id?: string; subagent?: string; instance?: string }> } | null): void {
+export function dagFeed(type: string, p: DagFeedPayload | null): void {
   if (!p) return
   if (type === 'dag.run_started' && dagPending) {
     dagLive.set(String(p.run_id), dagPending)
@@ -387,56 +411,67 @@ export function dagFeed(type: string, p: { run_id?: string; node?: string; statu
   const { lane, call } = f
   if (type === 'dag.run_started') {
     call.runId = String(p.run_id)
-    call.chipsLive = true
-    /* From the payload when the call's own arguments had none. A dag call the
-       model made carries `nodes`, so `newCallData` builds the chips from the
-       arguments; the load of a `mode: dag` playbook carries `{name, params,
-       fills}` and the graph is only known once the engine has assembled it --
-       which is this event. Without this the card was typed dag, took the run id,
-       and then dropped every `node_updated`, because `setChip` is update-only:
-       no chip strip, and no way from the trail back to the graph. */
-    if (!call.chips.length) call.chips = chipsFromPayload(p)
+    call.live = true
+    /* Merged, not assigned. A dag call the model made already holds the whole
+       request from its own arguments, and this event carries structure only -- so
+       letting it win would replace every prompt template with nothing. For the
+       load of a `mode: dag` playbook it is the other way round: the arguments are
+       `{name, params, fills}` and this event is the first time the graph exists at
+       all. Both cases are the same merge. */
+    call.nodes = dagNodes.merge(call.nodes, dagNodes.fromStarted(p))
+    /* Which is also when the rest of the request becomes worth asking for: the
+       event says who and in what order, never what each node was asked. */
+    if (call.open) hydrateDag(lane, call)
     bump(lane, call)
   } else if (type === 'dag.node_updated') {
-    setChip(lane, call, String(p.node), String(p.status))
+    call.nodes = dagNodes.applyUpdate(call.nodes, p)
+    openFirstFailure(call)
+    bump(lane, call)
   } else if (type === 'dag.run_completed') {
-    ;(p.files || []).forEach((x) => setChip(lane, call, x.node, x.status))
+    ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
     dagLive.delete(String(p.run_id))
+    openFirstFailure(call)
+    bump(lane, call)
   }
 }
 
-function setChip(lane: Lane, call: CallData, nodeId: string, st: string): void {
-  const chip = call.chips.find((c) => c.id === nodeId)
-  if (!chip) return
-  chip.st = st || 'pending'
-  bump(lane, call)
-}
-
-/* A card restored from history saw none of its run's events; recover the run
-   id from the result line and read the node states off disk. */
-function hydrateDag(lane: Lane, call: CallData): void {
+/* A card restored from history saw none of its run's events, so the run id has to
+   come out of the result line it kept. Separate from the read below because it is
+   needed earlier and costs nothing: a node is only openable once its run has an
+   identity, and that is true whether or not anyone opened the card. */
+function bindRun(call: CallData): void {
   if (call.runId) return
   const id = dagRunIdFrom(call.res)
   if (!id) return
   call.runId = id
-  call.chipsLive = true
+  call.live = true
+}
+
+/* Read the run back off disk: `dag.get` is the only source that carries state
+   *and* the whole request, so it serves two cases that used to be handled apart.
+   A card restored from history saw none of its events and needs everything; a
+   live card dispatched by the engine has structure from `run_started` and is
+   missing the templates and inputs. Merging covers both, and the merge is what
+   keeps the second from erasing what the first already knew.
+ *
+ * Asked once per card (`asked`), because it answers a question that cannot change
+ * for a finished run and because a card is re-rendered on every node update. */
+function hydrateDag(lane: Lane, call: CallData): void {
+  bindRun(call)
+  if (!call.runId || call.asked) return
   const rows = source().dagRows
   if (!rows) return
+  call.asked = true
+  const id = call.runId
   rows(id).then((list) => {
-    /* Built here when the call had none. `setChip` only updates chips that are
-       already there, and a `load_playbook` card has none -- its arguments are
-       `{name, params}` and the graph existed only inside the engine. Without
-       this the restored card kept the run id and showed no strip, which is the
-       case the receipt's run-id lead exists to serve. */
-    if (!call.chips.length) {
-      call.chips = (list || []).map((r): DagChip => ({
-        id: String(r.node), subagent: r.subagent || null, instance: r.instance || null, st: r.status || 'pending',
-      }))
-      bump(lane, call)
-      return
-    }
-    ;(list || []).forEach((r) => setChip(lane, call, r.node, r.status))
-  }).catch(() => { /* a run whose dir is gone still lists its nodes */ })
+    call.nodes = dagNodes.merge(call.nodes, dagNodes.fromSnapshot(list))
+    openFirstFailure(call)
+    bump(lane, call)
+  }).catch(() => {
+    /* A run whose dir is gone keeps whatever the card already had, and may be
+       asked again: the failure is about the read, not about the run. */
+    call.asked = false
+  })
 }
 
 function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], display?: string | null): CallData {
@@ -447,26 +482,20 @@ function newCallData(id: ReturnType<typeof actId>, kind: CallData['kind'], displ
     label: actLabel(id.name, a, display), rowLabel: '',
     done: false, ok: true, ms: 0, res: '', truncated: false,
     hunk: kind === 'plain' ? hunkFor(id.name, a) : null,
-    open: false, t0: Date.now(), runId: null, chips: [], chipsLive: false,
+    open: false, t0: Date.now(), runId: null, nodes: [], live: false, sel: null, selAuto: false, selFull: false, asked: false,
   }
   if (kind === 'spawn') {
     const who = spawnAgentOf(a) ? String(spawnAgentOf(a)) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
     c.rowLabel = c.label ? `${who} · ${c.label}` : who
   }
-  if (kind === 'dag') {
-    const nodes = Array.isArray(a.nodes) ? (a.nodes as Array<{ id?: string; subagent?: string; instance?: string }>).filter((n) => n && n.id) : []
-    const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
-    c.chips = nodes.map((n): DagChip => ({
-      id: String(n.id), subagent: n.subagent || null, instance: n.instance || null, st: 'pending',
-    }))
-    // Only when the arguments described a graph. A playbook load has none, and
-    // overwriting here threw away the name `actLabel` had produced -- the row
-    // stopped saying which playbook was loaded and read as a generic dag.
-    if (nodes.length) {
-      c.label = t('gui.deleg.dag_meta', { n: String(nodes.length), m: String(agents.length || 1) })
-      c.rowLabel = c.label
-    }
-  }
+  // The graph, when the call itself described one. A `load_playbook` in dag mode
+  // does not: its arguments are `{name, params, fills}` and the graph only exists
+  // once the engine has assembled it, so those nodes arrive later, from the
+  // run-started event or from `dag.get`. Neither label is written here -- the row
+  // reads `label` (the playbook's name, or nothing) beside the shape it derives
+  // from whatever nodes it has by then, which is a rendering decision and moves
+  // as the nodes do.
+  if (kind === 'dag') c.nodes = dagNodes.fromArgs(a)
   return c
 }
 
@@ -489,7 +518,11 @@ function callDone(lane: Lane, seg: StepData, c: CallData,
   if (diff && bridge().hunkFromUnified) c.hunk = bridge().hunkFromUnified!(diff) as Hunk
   if (c.kind === 'dag') {
     if (dagPending && dagPending.call === c) dagPending = null
-    hydrateDag(lane, c)
+    /* The id only. The rest of the run is read when someone opens the card:
+       asking here would be one request per dag card of every conversation
+       restored, for detail nobody has looked at. */
+    bindRun(c)
+    if (c.open) hydrateDag(lane, c)
   }
   if (!ok) seg.failed = true
   poke(lane)
@@ -736,6 +769,28 @@ export function toggleWork(lane: Lane, seg: StepData): void {
 
 export function toggleCall(lane: Lane, c: CallData): void {
   c.open = !c.open
+  /* Opening a dag card is what makes the rest of the request worth fetching: a
+     card the engine dispatched has only structure until then, and asking on
+     every card of every restored conversation would be a read per card for
+     detail nobody opened. */
+  if (c.open && c.kind === 'dag') hydrateDag(lane, c)
+  bump(lane, c)
+}
+
+/* The node whose detail the card shows. Clicking the open one closes it, which
+   is what makes the graph readable again without a second control.
+
+   Selecting rather than opening the run's transcript: the panel that does that
+   takes half the screen, and comparing two nodes' configuration is the thing a
+   reader of this card is most often doing. The panel is one explicit click away. */
+export function pickDagNode(lane: Lane, c: CallData, id: string): void {
+  c.sel = c.sel === id ? null : id
+  c.selFull = false
+  bump(lane, c)
+}
+
+export function toggleDagFull(lane: Lane, c: CallData): void {
+  c.selFull = !c.selFull
   bump(lane, c)
 }
 

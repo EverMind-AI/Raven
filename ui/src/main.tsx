@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import * as composer from './features/composer/mount'
 import * as dag from './features/dag/graph'
+import * as dagNodes from './features/dag/nodes'
 import { ConnApp } from './features/connections/ConnPage'
 import * as connections from './features/connections/store'
 import * as browser from './features/browser/mount'
@@ -200,6 +201,12 @@ window.RavenIslands = {
     gist: dag.gist,
     summary: dag.summary,
     took: dag.took,
+    /* The status glyphs, so the sheet and the transcript's own dag card draw one
+       alphabet rather than each keeping a copy of these four paths. */
+    MARKS: dag.MARKS,
+    /* And the adapter that turns a `dag.run_started` payload into nodes, so the
+       sheet and the card agree on what one is. */
+    fromStarted: dagNodes.fromStarted,
     W: dag.W,
     H: dag.H,
     GAP_X: dag.GAP_X,

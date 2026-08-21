@@ -83,8 +83,9 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
 
     The returned ``files`` list matches the shape the tool's
     ``dag_run_completed`` event publishes, so a consumer can feed it to the same
-    renderer. ``prompt_template`` is added per node -- it lives only in
-    ``graph.json``, and it is what the caller shows as a node's input.
+    renderer. ``prompt_template`` and ``inputs`` are added per node -- they live
+    only in ``graph.json``, and together they are what the caller shows as a
+    node's input: the template alone leaves every ``{{ inputs.k }}`` unexplained.
 
     ``finalized`` says whether ``manifest.json`` was present. When it was not,
     every node reports ``pending`` and the caller is expected to overlay live
@@ -125,6 +126,11 @@ async def read_run(backend: Any, root: str, run_id: str) -> dict:
                 "output_file": entry.get("output_file"),
                 "error": entry.get("error"),
                 "prompt_template": node.get("prompt_template"),
+                # Beside the template because it is the other half of what the
+                # node was asked: the template's `{{ inputs.k }}` says nothing
+                # about where k came from. Only from graph.json -- the manifest
+                # records what happened, not what was requested.
+                "inputs": node.get("inputs") if isinstance(node.get("inputs"), dict) else None,
             }
         )
 

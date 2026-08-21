@@ -1242,6 +1242,12 @@ export interface DagSnapshotNode {
   output_file?: string;
   error?: string;
   prompt_template?: string;
+  /**
+   * What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.
+   */
+  inputs?: {
+    [k: string]: JsonValue;
+  };
 }
 /**
  * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.

@@ -502,6 +502,13 @@ class DagSnapshotNode(_Strict):
     output_file: str | None = None
     error: str | None = None
     prompt_template: str | None = None
+    inputs: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "What this node was handed, per key: a literal string, {file: path}, or {node: id}. "
+            "The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from."
+        ),
+    )
 
 
 class DagTerminalOutput(_Strict):

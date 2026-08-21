@@ -154,14 +154,16 @@ function onEvent(ev) {
     /* The graph arrives whole, before any node runs. Filed under the
        conversation it belongs to: onEvent only ever runs for the open
        session, so the current key is the owning key on both paths. */
+    /* Through the same adapter the transcript's dag card reads (the bundle's
+       features/dag/nodes.ts): the payload was being unpacked field by field here
+       as well, so "what a node is" had two definitions that only happened to
+       agree. */
+    const started = RavenIslands.dag.fromStarted(p);
     DAGS.set(sheetSession(), {
       run_id: p.run_id,
       session: sheetSession(),
-      order: (p.nodes || []).map((n) => n.id),
-      nodes: new Map((p.nodes || []).map((n) => [n.id, {
-        id: n.id, subagent: n.subagent, instance: n.instance || null,
-        depends_on: n.depends_on || [], status: 'pending', started_at: null, ended_at: null,
-      }])),
+      order: started.map((n) => n.id),
+      nodes: new Map(started.map((n) => [n.id, n])),
       summary: null, done: false, folded: false,
     });
     drawDag();

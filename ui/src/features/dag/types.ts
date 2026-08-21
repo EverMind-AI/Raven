@@ -8,6 +8,13 @@
 
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'interrupted'
 
+/* Where one of a node's inputs came from. A bare string is a literal the caller
+   wrote inline; the other two name something to read. Kept as a union rather
+   than flattened to a display string because the three read differently and a
+   reader has to be able to tell "the word 'draft'" from "whatever node `draft`
+   produced". */
+export type NodeInput = string | { file: string } | { node: string } | Record<string, unknown>
+
 export interface DagNode {
   id: string
   subagent: string
@@ -16,6 +23,13 @@ export interface DagNode {
   status: NodeStatus | string
   started_at: number | null
   ended_at: number | null
+  /* What the node was asked to do, before rendering. The rendered prompt is a
+     different fact and lives behind `dag.node` -- this is the request, that is
+     what happened. Absent on a run whose source could not supply it. */
+  prompt_template?: string | null
+  /* The other half of the request: a template's `{{ inputs.k }}` does not say
+     where k came from. */
+  inputs?: Record<string, NodeInput> | null
 }
 
 /* What `dag.run_completed` reports. `total` is the server's count and can

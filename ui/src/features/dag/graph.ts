@@ -22,6 +22,23 @@ export const W = 136
 export const H = 44
 export const PAD = 10
 
+export interface Dims {
+  W: number
+  H: number
+  GAP_X: number
+  GAP_Y: number
+  PAD: number
+}
+
+/* The sheet above the composer has the width of the chat column to spend. */
+export const SHEET: Dims = { W, H, GAP_X, GAP_Y, PAD }
+
+/* The card inside the transcript does not, so the same graph is drawn smaller.
+   A second set of constants rather than a scale factor: the box holds text at a
+   fixed size, so what has to change is how much room the text gets, not how big
+   everything is. */
+export const CARD: Dims = { W: 132, H: 38, GAP_X: 166, GAP_Y: 50, PAD: 10 }
+
 /* Depth by longest path, which is what puts a node in the column after the last
    thing it waits for. Memoised, and guarded against a cycle it should never
    see: the server rejects a cyclic graph before running it, but a panel that
@@ -57,7 +74,8 @@ export function depths(nodes: DagNode[]): Map<string, number> {
    three and a fan-in back to one then reads as the diamond it is, instead of a
    staircase whose single nodes sit against the ceiling with their edges cutting
    diagonally down. */
-export function layout(nodes: DagNode[]): DagLayout {
+export function layout(nodes: DagNode[], dims: Dims = SHEET): DagLayout {
+  const { W, H, GAP_X, GAP_Y, PAD } = dims
   const depth = depths(nodes)
   const cols = new Map<number, DagNode[]>()
   nodes.forEach((n) => {
@@ -80,6 +98,33 @@ export function layout(nodes: DagNode[]): DagLayout {
   return { at, width, height }
 }
 
+/* The one mark a node wears, as geometry rather than as a drawn element: the
+   sheet builds SVG imperatively and the card builds it through React, and the
+   two used to keep their own copies of these paths. `running` is deliberately
+   absent -- it is the same three-bar glyph the turn's own row wears, which each
+   surface already has, and duplicating it here would be a second answer to what
+   "work in progress" looks like.
+
+   Centre-relative so a caller places it without knowing the box. */
+export const MARKS: Record<string, { d: string; cls: string }> = {
+  completed: { d: 'M-5 0l3.6 3.8 6.4 -7.6', cls: 'ok' },
+  failed: { d: 'M-4 -4l8 8M4 -4l-8 8', cls: 'bad' },
+  skipped: { d: 'M-4.5 0h9', cls: 'skip' },
+  interrupted: { d: 'M-4.5 0h9', cls: 'skip' },
+}
+
+/* One row per layer, deepest last: what the card's own sentence counts and what
+   a caller needs to know a graph is a chain rather than a fan-out. */
+export function layers(nodes: DagNode[]): number[] {
+  const depth = depths(nodes)
+  const per = new Map<number, number>()
+  nodes.forEach((n) => {
+    const k = depth.get(n.id) || 0
+    per.set(k, (per.get(k) || 0) + 1)
+  })
+  return [...per.keys()].sort((a, b) => a - b).map((k) => per.get(k) as number)
+}
+
 /* The nodes of a run in the server's order, skipping ids the map does not hold
    -- `order` and `nodes` are written together, but a reader of a run restored
    from disk should not crash on a mismatch. */
@@ -89,17 +134,22 @@ export const ordered = (d: DagRun): DagNode[] => d.order.map((id) => d.nodes.get
    how deep, who is doing it, and whether anything actually runs side by side. */
 export function gist(d: DagRun): string {
   const nodes = ordered(d)
-  const depth = depths(nodes)
-  const layers = new Map<number, number>()
-  nodes.forEach((n) => {
-    const k = depth.get(n.id) || 0
-    layers.set(k, (layers.get(k) || 0) + 1)
-  })
-  const widest = Math.max(...layers.values(), 1)
   const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
-  const bits = [t('gui.dag.count', { n: nodes.length, d: layers.size })]
-  bits.push(widest > 1 ? t('gui.dag.parallel', { n: widest }) : t('gui.dag.serial'))
+  const bits = [shape(nodes)]
   if (agents.length) bits.push(agents.join(' · '))
+  return bits.join(' · ')
+}
+
+/* How much work, how deep, and whether anything actually runs side by side --
+   the three facts that tell a chain from a fan-out. Split out of `gist` because
+   the transcript's own row says exactly this and nothing about agents: with the
+   agent names appended it no longer fit on one line, and the count of agents is
+   almost always one. */
+export function shape(nodes: DagNode[]): string {
+  const per = layers(nodes)
+  const widest = Math.max(...per, 1)
+  const bits = [t('gui.dag.count', { n: nodes.length, d: per.length })]
+  bits.push(widest > 1 ? t('gui.dag.parallel', { n: widest }) : t('gui.dag.serial'))
   return bits.join(' · ')
 }
 

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { GAP_X, GAP_Y, H, PAD, W, depths, gist, layout, ordered, summary, took } from './graph'
+import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, gist, layout, layers, ordered, shape, summary, took } from './graph'
 
 import type { Shell } from '../../shell/bridge'
 import type { DagNode, DagRun } from './types'
@@ -81,12 +81,41 @@ describe('dag depths', () => {
   })
 })
 
+describe('the shape of a graph', () => {
+  it('counts one entry per layer, deepest last', () => {
+    const nodes = [node('a'), node('b'), node('c', ['a', 'b']), node('d', ['c'])]
+    expect(layers(nodes)).toEqual([2, 1, 1])
+  })
+
+  it('says how much work, how deep, and whether anything is side by side', () => {
+    /* What the transcript's own row says, and the three facts that tell a chain
+       from a fan-out -- the count alone told a reader neither. */
+    expect(shape([node('a'), node('b'), node('c', ['a', 'b'])]))
+      .toBe('gui.dag.count {"n":3,"d":2} · gui.dag.parallel {"n":2}')
+    expect(shape([node('a'), node('b', ['a'])]))
+      .toBe('gui.dag.count {"n":2,"d":2} · gui.dag.serial')
+  })
+})
+
 describe('dag layout', () => {
   it('sizes the canvas from the widest column and the deepest path', () => {
     const nodes = [node('a'), node('b', ['a']), node('c', ['a'])]
     const { width, height } = layout(nodes)
     expect(width).toBe(PAD * 2 + GAP_X + W)
     expect(height).toBe(PAD * 2 + 2 * H + (GAP_Y - H))
+  })
+
+  it('sizes from the dims it is handed, not from the sheet it defaults to', () => {
+    /* The transcript's card draws the same graph smaller. Ignoring the argument
+       is silent: the card would lay itself out at the sheet's geometry and run
+       past its own edge, which no other assertion here would notice. */
+    const nodes = [node('a'), node('b', ['a'])]
+    expect(layout(nodes, CARD).width).toBe(CARD.PAD * 2 + CARD.GAP_X + CARD.W)
+    expect(layout(nodes, SHEET).width).toBe(SHEET.PAD * 2 + SHEET.GAP_X + SHEET.W)
+    expect(layout(nodes, CARD).width).toBeLessThan(layout(nodes, SHEET).width)
+    /* And the default is the sheet, which is what every existing caller relies
+       on by passing nothing. */
+    expect(layout(nodes).width).toBe(layout(nodes, SHEET).width)
   })
 
   it('centres each column on the midline, so a fan-out reads as a diamond', () => {
