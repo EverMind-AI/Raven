@@ -67,6 +67,13 @@ function upShade() {
       foot.appendChild(close);
       card.append(sub, cmd, foot);
     },
+    /* Takes down this card and no other. The caller that needs it is the rpc
+       client's rejoin, which used to do it by clearing the document of
+       `.upshade` -- and a document-wide sweep cannot tell a card it raised
+       itself from the one an upgrade watcher is still writing into. */
+    close() {
+      shade.remove();
+    },
   };
 }
 
@@ -173,20 +180,44 @@ function watchUpgrade(shade, since) {
   setTimeout(tick, 2500);
 }
 
+/* The validator for the build this page was loaded from. Kept here rather than
+   inside the watcher below because the rpc client's rejoin asks for it too: a
+   gateway that comes back on a different build cannot be lived with, and that
+   is the same question this watcher asks on a timer. */
+let distBase = null;
+
+const distProbe = async () => {
+  try {
+    const r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
+    if (!r.ok) return null;
+    return r.headers.get('etag') || r.headers.get('last-modified') || null;
+  } catch { return null; }
+};
+
+/* True only when the build is known to have CHANGED. An unreachable server, a
+   server that sends no validator, or a first look with nothing to compare
+   against all answer false -- reloading on a maybe would throw a live
+   transcript away for nothing. */
+async function distMoved() {
+  const tag = await distProbe();
+  if (tag === null || distBase === null) return false;
+  return tag !== distBase;
+}
+
 function watchForUpdates() {
   const note = $('#upnote');
   if (!note) return;
-  let base = null;
   const probe = async () => {
-    if (!note.hidden) return;
-    try {
-      const r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
-      if (!r.ok) return;
-      const tag = r.headers.get('etag') || r.headers.get('last-modified');
-      if (!tag) return;
-      if (base === null) { base = tag; return; }
-      if (tag !== base) showUpNote('ui');
-    } catch { /* serve unreachable; the connection banner already covers it */ }
+    /* Deliberately NOT skipped while a notice is already showing. It used to
+       be, and that is what made this watcher blind exactly when it mattered:
+       the version notice is up precisely when an upgrade is about to land, so
+       the one moment the built page really does change was the one moment
+       nothing was watching for it. showUpNote already arbitrates which notice
+       wins, so the ranking does not need a second gate here. */
+    const tag = await distProbe();
+    if (tag === null) return;
+    if (distBase === null) { distBase = tag; return; }
+    if (tag !== distBase) showUpNote('ui');
   };
   note.onclick = () => { if (upKind === 'ver') askUpgrade(); else window.location.reload(); };
   probe();

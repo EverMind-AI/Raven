@@ -1,4 +1,12 @@
 /* ---- rpc client -------------------------------------------------- */
+
+/* How long a rejoin keeps trying, and how long it ever sleeps between tries.
+   The ceiling matches the upgrade watcher's (20 minutes) on purpose: the reason
+   the gateway is away this long is almost always an upgrade, and the two should
+   not disagree about when to stop hoping. The 8s cap keeps a page left open
+   overnight from hammering a machine that is simply off. */
+const REJOIN_CEILING_MS = 1200000;
+const REJOIN_MAX_WAIT_MS = 8000;
 const rpc = {
   ws: null, next: 1, pending: new Map(), notify: {}, open: false,
   onReconnect: null,
@@ -23,15 +31,106 @@ const rpc = {
         const was = this.open; this.open = false;
         this.pending.forEach((p) => p.reject({ code: -1, message: 'connection closed' }));
         this.pending.clear();
-        if (!was) { authFail(); resolve(false); return; }
+        /* A socket that never opened is reported, not interpreted. It means one
+           of two very different things -- the gateway refused this session, or
+           there is no gateway right now -- and only the caller has the context
+           to tell them apart. Deciding here is what made an upgrade look like a
+           sign-in failure. */
+        if (!was) { resolve(false); return; }
         // In the DOM, not a toast: a silent drop mid-turn reads as the model
         // hanging forever, which is exactly the bug report this line answers.
         try { showStatus(T('gui.reconnecting')); } catch { /* pre-boot */ }
-        setTimeout(async () => {
-          if (await this.connect()) { if (this.onReconnect) this.onReconnect(); }
-        }, 1500);
+        this.rejoin();
       };
     });
+  },
+  /* Keep trying, with backoff, instead of the single 1.5s attempt this
+     replaces. The one thing that reliably takes the gateway away is an upgrade
+     replacing the installation under it, and an upgrade is minutes -- a cold
+     one measured nine. So the old retry was guaranteed to fire while the
+     backend was still absent, fail, and fall through to authFail(), which told
+     the reader their sign-in had expired and left the page there for good.
+
+     `alive()` is what separates absent from refused: the page is served by the
+     same process as /rpc, so an HTTP answer means the gateway is back and the
+     socket closing anyway is a real auth refusal. No answer means keep waiting.
+     Only when the first is true does this give up and say so. */
+  rejoin() {
+    if (this.rejoining) return;
+    this.rejoining = true;
+    const t0 = Date.now();
+    let wait = 1500;
+    let shade = null;
+    const alive = async () => {
+      try {
+        const r = await fetch('/', { method: 'HEAD', cache: 'no-store' });
+        return r.status !== 401 && r.status !== 403 ? r : null;
+      } catch { return null; }
+    };
+    /* Takes down a card this rejoin raised, and only that one. Both give-up
+       exits below end in authFail(), which paints a red bar and nothing that
+       clears a full-window shade -- the card has no dismiss affordance unless
+       something calls fail() on it, and nothing here does. A shade left behind
+       is therefore the same dead end this function exists to remove, with a
+       blur over the rest of the window. */
+    const drop = () => { if (shade) { shade.close(); shade = null; } };
+    const tick = async () => {
+      if (Date.now() - t0 > REJOIN_CEILING_MS) { this.rejoining = false; drop(); authFail(); return; }
+      if (await this.connect()) {
+        this.rejoining = false;
+        /* The gateway that came back may be serving a different build than the
+           one this page was loaded from -- that is exactly the upgrade case --
+           and the running scripts cannot be swapped in place. Reload onto it,
+           and only then; a plain drop and recover must not throw the transcript
+           away. */
+        if (await distMoved()) {
+          /* Clear the marker before reloading, because this reload races the
+             upgrade watcher's own. Whichever poller loses would otherwise come
+             back up, read a marker that is still live, and drop the upgrade
+             card over a page that is already healthy on the new build -- then
+             reload a second time to clear it. */
+          upMarkClear();
+          window.location.reload();
+          return;
+        }
+        /* Same build after all -- the gateway just restarted. Take the card
+           back down, since there is nothing left to wait for and no reload
+           coming to remove it. */
+        drop();
+        if (this.onReconnect) this.onReconnect();
+        return;
+      }
+      /* The socket refused while HTTP answers: the gateway is there and this
+         session is not welcome. Retrying cannot fix that. */
+      if (await alive()) { this.rejoining = false; drop(); authFail(); return; }
+      /* Still absent, and the page was already told a newer version exists --
+         so the overwhelmingly likely reason it went away is that version
+         landing. Say so with the same card the page shows for an upgrade it
+         started itself, animated bar and all. The reader's complaint that
+         started this was that an upgrade begun from the app or the terminal
+         showed them nothing at all while the page sat dead.
+         Guarded on the notice rather than shown for every drop: a shade over
+         the whole window is the wrong answer to a two-second blip, and only a
+         pending version makes an absence explainable.
+         Guarded on there being no card up yet for a second reason, and this one
+         is about an upgrade this page started itself: that card belongs to
+         watchUpgrade, which is still writing into it and still owes the reader
+         the two answers only it has -- what failed, and the command to run by
+         hand. Minting one here would take that card out of the document
+         (upShade clears them before building) while the watcher went on
+         addressing the detached node, so the reader would lose the message on
+         exactly the paths that had one. Every page-initiated upgrade reaches
+         here: serve exits about a second after `system.upgrade` replies, and
+         the close drives the socket into this rejoin. */
+      if (!shade && !document.querySelector('.upshade')
+          && typeof upKind !== 'undefined' && upKind === 'ver') {
+        shade = upShade();
+        shade.say(T('gui.upg.working'));
+      }
+      wait = Math.min(Math.round(wait * 1.6), REJOIN_MAX_WAIT_MS);
+      setTimeout(tick, wait);
+    };
+    setTimeout(tick, wait);
   },
   call(method, params) {
     if (!this.open) return Promise.reject({ code: -1, message: 'not connected' });
