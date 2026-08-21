@@ -567,6 +567,60 @@ describe('createChatStream — direct-chat routing', () => {
     expect(direct.target).toEqual({ agent: 'Raven-Code', handle: 'refactor-auth' })
     expect('target' in main).toBe(false)
   })
+
+  describe('a direct turn ending', () => {
+    // `message.complete` also arms the chip-strip refresh, a real 250ms timer.
+    // Left armed it makes the next `scheduleInstanceRefresh` a no-op, which is
+    // silent and lands on whichever test schedules next.
+    afterEach(() => {
+      resetInstanceRefresh()
+    })
+
+    it('reads the record back, so the steps it just ran appear', async () => {
+      // The steps were a live snapshot until now and the reply streamed in beside
+      // them. Without this read the view keeps both: the only other read is on
+      // entering, and it declines to replace a transcript that holds anything --
+      // which a turn that just ran always does. The turn was invisible until the
+      // TUI restarted.
+      const { fake } = await attached()
+      const target = { agent: 'A', handle: 'one' }
+      const reads: Record<string, unknown>[] = []
+
+      bindInstanceRefresh(
+        async (method, params) => {
+          if (method === 'subagents.instance.history') {
+            reads.push(params ?? {})
+            return {
+              turns: [
+                { call_id: 'log-0', role: 'user', content: 'ask', at_ms: 1 },
+                { call_id: 'log-1', role: 'assistant', content: 'settled answer', at_ms: 2 }
+              ]
+            } as never
+          }
+          return null
+        },
+        () => 's1'
+      )
+
+      fake.__pushEvent({ type: 'token.delta', payload: { target, text: 'partial' } })
+      fake.__pushEvent({ type: 'message.complete', payload: { target, turn_id: 't1', usage: {} } })
+      await vi.waitFor(() => expect(reads).toHaveLength(1))
+
+      expect(reads[0]).toMatchObject({ agent: 'A', handle: 'one', session_key: 's1' })
+      await vi.waitFor(() =>
+        expect(getDirectTranscript(directKey('A', 'one')).map(m => m.text)).toEqual(['ask', 'settled answer'])
+      )
+    })
+
+    it('does not read when nothing bound an rpc handle', async () => {
+      const { fake } = await attached()
+      const target = { agent: 'A', handle: 'one' }
+
+      fake.__pushEvent({ type: 'message.complete', payload: { target, turn_id: 't1', usage: {} } })
+
+      expect(getDirectTranscript(directKey('A', 'one'))).toEqual([])
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -611,6 +665,22 @@ describe('createChatStream — instance refresh', () => {
     fake.__pushEvent({
       type: 'tool.start',
       payload: { arguments: {}, name: 'spawn', tool_call_id: 'c1' }
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(asked).toEqual(['subagents.instances'])
+  })
+
+  it('refreshes when a spawn is delivered', async () => {
+    // A row left reading `running` keeps its chip pulsing and its conversation
+    // view polling for a turn that ended -- the registry moved, and nothing
+    // else told the strip.
+    vi.useFakeTimers()
+    const { asked, fake } = await withRefresh()
+
+    fake.__pushEvent({
+      type: 'subagent.delivered',
+      payload: { label: 'Coder', status: 'ok' }
     })
     await vi.advanceTimersByTimeAsync(300)
 

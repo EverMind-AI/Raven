@@ -426,7 +426,16 @@ export function ChatViewport({
 	// Owns the chat area's direct-chat mode. Declared before `useMessages` so its
 	// event handler can be wired in below: a direct turn's events arrive on the
 	// session's stream like any other, tagged with the instance they belong to.
-	const directChat = useDirectChat(sessionId);
+	// The instance-status map is this page's, and a spawn or a DAG node is
+	// reported only there -- a direct turn's own events never mention it. The
+	// hook turns this into one boolean, so a fresh callback per status change
+	// costs nothing downstream.
+	const isInstanceWorking = useCallback(
+		(target: { agent: string; handle: string }) =>
+			['pending', 'running'].includes(subagentInstances[target.handle]?.status ?? ''),
+		[subagentInstances],
+	);
+	const directChat = useDirectChat(sessionId, isInstanceWorking);
 	// Extracted as a stable callback: the panel memo below would otherwise have
 	// to depend on `directChat`, a fresh object each render, and rebuild every
 	// panel on every keystroke.

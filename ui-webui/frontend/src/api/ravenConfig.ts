@@ -82,6 +82,29 @@ export interface RavenSubagentTest {
 	elapsedMs: number;
 }
 
+/**
+ * One turn of an instance's conversation, in the shape a resumed session uses.
+ *
+ * The step fields are optional because the lane that ran the turn decides
+ * whether there is one: the cli transport has no per-step visibility at all.
+ */
+export interface RavenInstanceTurn {
+	role: 'user' | 'assistant' | 'tool';
+	content: string;
+	/** The thought that preceded this assistant turn, where the transport reports one. */
+	reasoning_content?: string;
+	/** What it called on the way. `arguments` is the raw JSON string. */
+	tool_calls?: { id: string; name: string; arguments: string }[];
+	/** On a `role: "tool"` turn, the call it answers. */
+	tool_call_id?: string;
+	/**
+	 * Set on a row from a turn still running, which no record holds yet. Such
+	 * rows are a snapshot: the next read replaces them, and the record replaces
+	 * them once the turn lands.
+	 */
+	live?: boolean;
+}
+
 export interface RavenSubagentInstance {
 	kind: 'cli' | 'dag-node';
 	sessionKey: string;
@@ -340,12 +363,18 @@ export const ravenConfigApi = {
 			session_key: sessionKey,
 		}),
 
-	/** One instance's past direct turns; the only memory of them that survives a reload. */
+	/**
+	 * One instance's whole conversation; the only memory of it that survives a
+	 * reload. Turns come in the same shape a resumed session does, so a turn
+	 * carries what the run *did* -- its thought, its tool calls and their
+	 * results -- and not only the two ends of the exchange.
+	 */
 	instanceHistory: (sessionId: string, agent: string, handle: string) =>
-		client.get<{ turns: { role: 'user' | 'assistant'; content: string }[] }>(
-			'/raven/subagents/instances/history',
-			{ session_id: sessionId, agent, handle },
-		),
+		client.get<{ turns: RavenInstanceTurn[] }>('/raven/subagents/instances/history', {
+			session_id: sessionId,
+			agent,
+			handle,
+		}),
 
 	/**
 	 * Send one prompt to an instance. Resolves when the turn is *accepted*, not

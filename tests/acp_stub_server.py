@@ -136,6 +136,14 @@ def handle_prompt(request_id, params) -> None:
             ok(rid, {"stopReason": "end_turn"})
         _PENDING.clear()
         return
+    if MODE == "stray_session":
+        # An update for a session nobody is listening to. Real adapters produce
+        # these as late frames after a turn settles; emitting one mid-turn is the
+        # only way to make the case reproducible.
+        update("no-such-session", {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "??"}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if MODE == "asks":
         send(
             {
@@ -201,11 +209,42 @@ def handle_prompt(request_id, params) -> None:
         ok(request_id, {"stopReason": "end_turn"})
         return
     update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking"}})
+    # The shape measured on claude-agent-acp and opencode alike: the opening
+    # frame announces the call with an empty rawInput, the arguments follow on a
+    # later update, and the result arrives wrapped as ToolCallContent rather
+    # than as a bare content block. `kind` rides on both, as it does on the wire
+    # -- it is what names the tool, and a stub that omitted it would only ever
+    # exercise the unclassified fallback.
     update(
         session_id,
-        {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read_file src/a.py", "status": "pending"},
+        {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t1",
+            "title": "read_file src/a.py",
+            "kind": "read",
+            "status": "pending",
+            "rawInput": {},
+        },
     )
-    update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "kind": "read",
+            "status": "in_progress",
+            "rawInput": {"path": "src/a.py"},
+        },
+    )
+    update(
+        session_id,
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "the file says hello"}}],
+        },
+    )
     update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
     update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 42})
     ok(request_id, {"stopReason": "end_turn"})

@@ -408,6 +408,9 @@ async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
     Provider-shaped on purpose: one assistant message per tool call wearing the
     thought that preceded it, then a role=tool result matched by call id --
     the exact shape session.resume stores, so one renderer draws both.
+
+    The call is named in raven's own vocabulary rather than by the adapter's
+    title, which is what lets that one renderer choose a verb for it.
     """
     from raven.agent.subagent import activity
 
@@ -419,9 +422,11 @@ async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
     call = next(m for m in did.transcript if m.get("tool_calls"))
     assert call["role"] == "assistant"
     assert call["reasoning_content"] == "thinking"
-    assert call["tool_calls"][0]["function"]["name"] == "read_file src/a.py"
+    assert call["tool_calls"][0]["function"]["name"] == "read_file"
+    assert json.loads(call["tool_calls"][0]["function"]["arguments"]) == {"path": "src/a.py"}
     result = next(m for m in did.transcript if m.get("role") == "tool")
     assert result["tool_call_id"] == "t1"
+    assert result["content"] == "the file says hello"
 
 
 async def test_the_collector_serves_a_timestamped_partial_while_in_flight() -> None:
@@ -927,27 +932,140 @@ async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, t
     assert {e["name"] for e in span["events"]} >= {"acp.tool_call", "acp.usage_update"}
 
 
-async def test_the_full_transcript_is_stored_out_of_line(trace_dir, tmp_path: Path) -> None:
-    """The frames go to an artifact, not an attribute.
+async def test_the_call_names_its_own_stretch_of_the_wire_journal(trace_dir, tmp_path: Path) -> None:
+    """The span points at the frames rather than copying them.
 
-    It is the audit record: unbounded, and deliberately not subject to
-    ``max_output_chars`` -- that cap protects the model's context, and none of
-    this enters the model's context.
+    The journal is written as the frames cross the wire, so persisting a second
+    per-call copy would double the audit trail and give two places for it to
+    disagree. What the call owes instead is the range it occupied: its own
+    ``[start, end)``, plus where the connection's handshake ends, since that
+    belongs to the connection and not to any one call.
+
+    Deliberately not subject to ``max_output_chars`` -- that cap protects the
+    model's context, and none of this enters it.
     """
     backend = build_third_party_backend(stub_config("a", max_output_chars=1))
     assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "p"
 
-    span = next(s for s in _spans_written(trace_dir) if s.get("name") == "subagent.external")
-    attrs = span["attributes"]
-    stored = json.loads(Path(attrs["subagent.external.transcript.artifact_path"]).read_text(encoding="utf-8"))
-    kinds = [f["params"]["update"]["sessionUpdate"] for f in stored["frames"]]
+    attrs = next(s for s in _spans_written(trace_dir) if s.get("name") == "subagent.external")["attributes"]
+    path = Path(attrs["subagent.external.frames.path"])
+    start = attrs["subagent.external.frames.start"]
+    end = attrs["subagent.external.frames.end"]
+    handshake_end = attrs["subagent.external.frames.handshake_end"]
+    assert path.is_file()
+    assert 0 < handshake_end <= start < end <= path.stat().st_size
+    assert attrs["subagent.external.frames.session_id"] == attrs["subagent.external.session_id"]
+
+    # The range is a byte range into the file, so it has to slice cleanly.
+    lines = [json.loads(line) for line in path.read_bytes()[start:end].decode().splitlines() if line.strip()]
+    sent = [r["frame"]["method"] for r in lines if r.get("dir") == "out" and "method" in r.get("frame", {})]
+    assert sent == ["session/new", "session/prompt"]
+    kinds = [
+        r["frame"]["params"]["update"]["sessionUpdate"]
+        for r in lines
+        if r.get("dir") == "in" and r.get("frame", {}).get("method") == "session/update"
+    ]
     assert kinds == [
         "agent_thought_chunk",
         "tool_call",
         "tool_call_update",
+        "tool_call_update",
         "agent_message_chunk",
         "usage_update",
     ]
+
+
+def _journal_records(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _journal_for(agent: str) -> Path:
+    from raven.agent.acp.journal import journal_root
+
+    files = sorted(journal_root().rglob(f"{agent}-*.jsonl"))
+    assert files, f"no journal was opened for {agent!r}"
+    return files[-1]
+
+
+async def test_the_handshake_opens_the_journal_before_any_call(tmp_path: Path) -> None:
+    """``initialize`` belongs to the connection, so it is the head of the file.
+
+    A per-call record could never hold it: one process serves every session of
+    an agent, and the call that happened to start the connection is not the one
+    the handshake is about.
+    """
+    backend = build_third_party_backend(stub_config("a"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    records = _journal_records(_journal_for("a"))
+    assert records[0]["dir"] == "out"
+    assert records[0]["frame"]["method"] == "initialize"
+    assert "session" not in records[0], "a connection-level frame belongs to no session"
+    assert records[1]["dir"] == "in"
+    assert records[1]["frame"]["result"]["protocolVersion"] == 1
+
+
+async def test_an_agent_request_and_ravens_answer_are_both_journalled(tmp_path: Path) -> None:
+    """The one exchange nothing else records.
+
+    ``session/request_permission`` is answered automatically and unattended, so
+    before the journal there was no record anywhere of what raven approved on a
+    sub-agent's behalf -- only a debug log line. Both halves are journalled, and
+    the answer is attributed to the session that asked even though a response
+    frame carries only the id it answers.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="permission"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    records = _journal_records(_journal_for("a"))
+    ask = next(
+        r for r in records if r.get("dir") == "in" and r.get("frame", {}).get("method") == "session/request_permission"
+    )
+    answer = next(r for r in records if r.get("dir") == "out" and r.get("frame", {}).get("id") == ask["frame"]["id"])
+    assert answer["frame"]["result"]["outcome"] == {"outcome": "selected", "optionId": "always"}
+    assert ask["session"] == answer["session"], "the answer must carry the session that asked"
+
+
+async def test_an_unrouted_notification_is_journalled_rather_than_dropped(tmp_path: Path) -> None:
+    """A frame no session is listening for still crossed the wire.
+
+    The router drops it with a debug line, which is the right call for the
+    transcript and leaves nothing behind. The journal records inbound frames
+    before routing, so a late or stray update is still evidence.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="stray_session"))
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    records = _journal_records(_journal_for("a"))
+    assert any(r.get("session") == "no-such-session" for r in records), "the stray update went unrecorded"
+
+
+async def test_stderr_is_journalled_beside_the_frames(tmp_path: Path) -> None:
+    """An adapter can report a fatal condition only on stderr.
+
+    Measured: a provider ``HTTP 401`` still answered ``stopReason: end_turn``.
+    The tail is carried in the raised error, but the record kept none of it.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with pytest.raises(AcpEmptyTurnError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    records = _journal_records(_journal_for("a"))
+    assert any(r.get("dir") == "err" and "401" in r.get("text", "") for r in records)
+
+
+async def test_a_failed_turn_still_records_where_its_frames_are(tmp_path: Path) -> None:
+    """The failing call is the one whose wire log is worth finding."""
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with activity.collecting() as did:
+        with pytest.raises(AcpEmptyTurnError):
+            await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert Path(did.frames["path"]).is_file()
+    assert did.frames["start"] < did.frames["end"]
+    assert did.as_meta()["acp_frames"] == did.frames
 
 
 async def test_a_failed_turn_marks_the_span_and_still_stores_the_transcript(trace_dir, tmp_path: Path) -> None:
@@ -1526,3 +1644,438 @@ async def test_a_turn_that_would_not_stop_drops_its_session_binding(tmp_path: Pa
         client_mod._CANCEL_SETTLE_S = monkeyed
 
     assert await registry.lookup("web:s1", "stub", "h1", kind="acp") is None
+
+
+# ---- what a tool call actually leaves in the transcript ---------------------
+#
+# Every frame quoted below was captured from a live adapter, because the shapes
+# the collector was written against turned out to be the ones no adapter sends:
+# claude-agent-acp 0.66.0, codex-acp 1.1.14 and opencode-ai 1.18.16 all left the
+# transcript with empty tool arguments and an empty tool result.
+
+
+async def test_the_collector_reads_a_tool_result_through_the_acp_content_wrapper() -> None:
+    """A tool's output sits one level deeper than a message's.
+
+    ``agent_message_chunk`` carries a bare content block, but a tool call's
+    content is a list of ``ToolCallContent`` -- ``{"type": "content", "content":
+    <block>}`` -- and reading it as a block yields nothing. Measured on both
+    claude-agent-acp and opencode: every tool result in the record was an empty
+    string, which reads as a tool that returned nothing rather than a reader
+    that could not see it.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read", "status": "pending"})
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "ZORKMID-4417"}}],
+        }
+    )
+
+    result = next(m for m in col.messages() if m.get("role") == "tool")
+    assert result["content"] == "ZORKMID-4417"
+
+
+async def test_the_collector_backfills_tool_input_arriving_after_the_call() -> None:
+    """The opening ``tool_call`` announces the call; the input follows it.
+
+    Measured on claude-agent-acp and opencode alike: the first frame carries
+    ``rawInput: {}`` and the real arguments arrive on a later
+    ``tool_call_update``. Reading only the opening frame recorded every call in
+    the transcript as ``arguments: "{}"`` -- a call with no arguments is
+    indistinguishable from one whose arguments were never read.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read", "rawInput": {}})
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "in_progress",
+            "rawInput": {"filePath": "/w/note.txt"},
+        }
+    )
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+
+    call = next(m for m in col.messages() if m.get("tool_calls"))
+    assert json.loads(call["tool_calls"][0]["function"]["arguments"]) == {"filePath": "/w/note.txt"}
+
+
+async def test_the_collector_falls_back_to_raw_output_when_a_tool_reports_no_content() -> None:
+    """``content`` is optional, and codex-acp does not send it at all.
+
+    Its results arrive only as ``rawOutput``, so without this the whole codex
+    lane records every tool result as empty. Serialised rather than skipped when
+    it is not a string: the shape differs per adapter and per tool, and a reader
+    is better served by the adapter's own JSON than by nothing.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "exec-1", "title": "Read file '/w/note.txt'"})
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "exec-1",
+            "status": "completed",
+            "rawOutput": {"formatted_output": "ZORKMID-4417\n", "exit_code": 0},
+        }
+    )
+
+    result = next(m for m in col.messages() if m.get("role") == "tool")
+    assert "ZORKMID-4417" in result["content"]
+
+
+async def test_the_collector_prefers_content_over_raw_output() -> None:
+    """``rawOutput`` is the fallback, not the source.
+
+    claude-agent-acp sends both, and its ``rawOutput`` is the tool's untreated
+    output (line-numbered file text) where ``content`` is what the adapter chose
+    to show. Preferring the raw form would swap a rendered result for a noisier
+    one on every adapter that sends both.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read File"})
+    await feed(
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "completed",
+            "rawOutput": "1\tZORKMID-4417\n2\t",
+            "content": [{"type": "content", "content": {"type": "text", "text": "```\n1\tZORKMID-4417\n```"}}],
+        }
+    )
+
+    result = next(m for m in col.messages() if m.get("role") == "tool")
+    assert result["content"] == "```\n1\tZORKMID-4417\n```"
+
+
+async def test_a_revised_tool_input_replaces_the_one_already_recorded() -> None:
+    """A later ``rawInput`` is a revision, not a duplicate.
+
+    ACP defines a ``tool_call_update`` as replacing the fields it carries, so
+    the newest input is the one the tool actually ran with. The empty
+    ``rawInput`` every measured adapter sends on the opening frame is the one
+    exception: it is not a revision to no arguments, so it cannot erase a real
+    input recorded before it.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read", "rawInput": {"path": "a.py"}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "rawInput": {"path": "b.py"}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "rawInput": {}})
+
+    call = next(m for m in col.messages() if m.get("tool_calls"))
+    assert json.loads(call["tool_calls"][0]["function"]["arguments"]) == {"path": "b.py"}
+
+
+async def test_the_dispatch_binds_the_session_to_its_instance(tmp_path: Path) -> None:
+    """The one thing ACP cannot carry, written where both sides are known.
+
+    ``AcpAgentBackend.run`` is the only place holding raven's identity and the
+    agent's session id at the same time: the client that writes the journal sees
+    a connection and a session, and has never heard of an instance.
+    """
+    backend = build_third_party_backend(stub_config("a"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_key="web:abc", instance="h1")
+
+    bind = next(r for r in _journal_records(_journal_for("a")) if r.get("_type") == "acp_call")
+    assert bind["agent"] == "a"
+    assert bind["instance"] == "h1"
+    assert bind["task_id"] == "t1"
+    assert bind["session_key"] == "web:abc"
+    assert bind["resumed"] is False
+    assert bind["session"], "the ACP session id is the join key the frames carry"
+
+
+async def test_a_call_without_an_instance_binds_its_task_id(tmp_path: Path) -> None:
+    """``handle = instance or task_id``, so a call that named no instance is
+    still addressable in the journal rather than anonymous."""
+    backend = build_third_party_backend(stub_config("a"))
+    await backend.run("ping", task_id="t7", workspace=tmp_path, executor=None)
+
+    bind = next(r for r in _journal_records(_journal_for("a")) if r.get("_type") == "acp_call")
+    assert bind["instance"] == "t7"
+
+
+async def test_the_instance_gets_a_transcript_in_the_session_log_format(tmp_path: Path) -> None:
+    """An instance's conversation reads like a raven session, because it is one.
+
+    Same grammar as ``sessions/<group>/<chat_id>.jsonl`` -- a ``_type:
+    "metadata"`` header and untagged message rows -- so anything that can read a
+    conversation can read a sub-agent instance's.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.instance_log import transcript_path
+    from raven.agent.subagent_history import SpawnRecord
+
+    session_dir = tmp_path / "session"
+    backend = build_third_party_backend(stub_config("a"))
+    record = SpawnRecord.open(
+        session_dir, task_id="t1", task="ping", meta={"agent": "a", "handle": "h1", "session_key": "web:abc"}
+    )
+    with activity.collecting() as did:
+        reply = await backend.run(
+            "ping", task_id="t1", workspace=tmp_path, executor=None, session_key="web:abc", instance="h1"
+        )
+    record.finish(status="completed", output=reply, activity=did)
+
+    rows = [json.loads(x) for x in transcript_path(session_dir, "a", "h1").read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["_type"] == "metadata"
+    assert rows[0]["metadata"] == {
+        "session_key": "web:abc",
+        "agent": "a",
+        "handle": "h1",
+        "opened_by": "spawn",
+    }
+    assert rows[1] == {"role": "user", "content": "ping", "timestamp": rows[1]["timestamp"]}
+    assert any(r.get("tool_calls") for r in rows[2:]), "the steps the transport could see"
+    assert rows[-1]["role"] == "assistant" and rows[-1]["content"] == reply
+    assert all("_type" not in r for r in rows[1:]), "a message row is untagged, as the session log writes it"
+
+
+async def test_two_calls_of_one_instance_land_in_one_file(tmp_path: Path) -> None:
+    """The whole point of an instance log: a handle dispatched twice is one
+    conversation, not two records to stitch together."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.instance_log import transcript_path
+    from raven.agent.subagent_history import SpawnRecord
+
+    session_dir = tmp_path / "session"
+    backend = build_third_party_backend(stub_config("a"))
+    for i in (1, 2):
+        record = SpawnRecord.open(
+            session_dir,
+            task_id=f"t{i}",
+            task=f"ping {i}",
+            meta={"agent": "a", "handle": "h1", "session_key": "web:abc"},
+        )
+        with activity.collecting() as did:
+            reply = await backend.run(
+                f"ping {i}", task_id=f"t{i}", workspace=tmp_path, executor=None, session_key="web:abc", instance="h1"
+            )
+        record.finish(status="completed", output=reply, activity=did)
+
+    rows = [json.loads(x) for x in transcript_path(session_dir, "a", "h1").read_text(encoding="utf-8").splitlines()]
+    assert sum(1 for r in rows if r.get("_type") == "metadata") == 1, "one header, written once"
+    assert [r["content"] for r in rows if r.get("role") == "user"] == ["ping 1", "ping 2"]
+
+
+async def test_a_lane_with_no_frames_still_joins_the_instance_conversation(tmp_path: Path) -> None:
+    """The cli transport sees no wire, so it contributes what it has -- the
+    prompt and the answer -- and the instance's conversation is the union of
+    every lane that addressed it, whatever each could see."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.instance_log import transcript_path
+    from raven.agent.subagent_history import SpawnRecord
+
+    session_dir = tmp_path / "session"
+    backend = build_third_party_backend(_cli_stub_config())
+    record = SpawnRecord.open(
+        session_dir, task_id="t1", task="ping", meta={"agent": "cli", "handle": "h1", "session_key": "web:abc"}
+    )
+    with activity.collecting() as did:
+        reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    record.finish(status="completed", output=reply, activity=did)
+
+    assert did.frames == {}
+    rows = [json.loads(x) for x in transcript_path(session_dir, "cli", "h1").read_text(encoding="utf-8").splitlines()]
+    assert [r.get("role") for r in rows[1:]] == ["user", "assistant"]
+
+
+async def test_a_cancelled_turn_still_records_where_its_frames_are(tmp_path: Path) -> None:
+    """A turn cut short is the one whose wire log matters most.
+
+    The cancellation path returns no result, so nothing downstream would publish
+    the range -- and a timed-out call's record would point at nothing while the
+    connection journal held the whole exchange. Measured against a real adapter:
+    an ``opencode`` dispatch that ran past its budget left a record with no
+    frames at all before this.
+    """
+    from raven.agent.acp import client as client_mod
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="cancel_deaf"))
+    streamed = asyncio.Event()
+
+    async def _on_delta(_text: str) -> None:
+        streamed.set()
+
+    settle = client_mod._CANCEL_SETTLE_S
+    client_mod._CANCEL_SETTLE_S = 0.3
+    try:
+        with activity.collecting() as did:
+            task = asyncio.create_task(
+                backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, on_delta=_on_delta)
+            )
+            await asyncio.wait_for(streamed.wait(), 30)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    finally:
+        client_mod._CANCEL_SETTLE_S = settle
+
+    assert did.frames, "a cancelled turn must still say where its frames are"
+    assert Path(did.frames["path"]).is_file()
+    assert did.frames["start"] < did.frames["end"]
+
+
+async def test_narration_lands_on_the_step_it_preceded(tmp_path: Path) -> None:
+    """A turn that talks as it works reads as a conversation, not a blob.
+
+    Measured on codex-acp: a turn states a plan, then a progress note before
+    each of three calls, then reports. Every burst used to be joined into the
+    single closing message, so the transcript showed no prose at all and the
+    answer opened with a restated plan followed by two notes about work the
+    reader could already see was done.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    with activity.collecting() as did:
+        out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    # Unchanged: the caller receiving the run's answer wants all of it.
+    assert out == "let me look.\n\nit is a repo."
+
+    call = next(m for m in did.transcript if m.get("tool_calls"))
+    assert call["content"] == "let me look.", "the preamble belongs to the step it announced"
+    assert did.closing == "it is a repo.", "and only what followed the last step is the reply"
+
+
+async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Path) -> None:
+    """The closing row and the narration rows must not hold the same prose.
+
+    End to end, because the split spans three places -- the collector decides
+    it, the activity record carries it, and the log writer prefers it over the
+    run's full output.
+    """
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.instance_log import transcript_path
+    from raven.agent.subagent_history import SpawnRecord
+
+    session_dir = tmp_path / "session"
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    record = SpawnRecord.open(
+        session_dir, task_id="t1", task="ping", meta={"agent": "a", "handle": "h1", "session_key": "web:abc"}
+    )
+    with activity.collecting() as did:
+        reply = await backend.run(
+            "ping", task_id="t1", workspace=tmp_path, executor=None, session_key="web:abc", instance="h1"
+        )
+    record.finish(status="completed", output=reply, activity=did)
+
+    rows = [json.loads(x) for x in transcript_path(session_dir, "a", "h1").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1] == {"role": "assistant", "content": "it is a repo.", "timestamp": rows[-1]["timestamp"]}
+    assert sum(1 for r in rows if "let me look." in str(r.get("content"))) == 1
+
+
+async def test_a_turn_that_ends_on_a_step_writes_no_answer_row(tmp_path: Path) -> None:
+    """Saying nothing after the last call is a real outcome, not a missing one.
+
+    So the closing is empty rather than absent, and an empty closing must not
+    fall back to the full output -- that is what would put the prose in twice.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "on it."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "kind": "execute", "title": "ls"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+
+    assert col.text == "on it."
+    assert col.closing_text == ""
+    call = next(m for m in col.messages() if m.get("tool_calls"))
+    assert call["content"] == "on it."
+
+
+async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
+    """The live view and the settled record must agree on where prose sits.
+
+    In flight the tail is appended as a message; if that tail were the whole
+    answer it would repeat the narration already sitting on the steps above it.
+    """
+    from raven.agent.subagent.backends.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "looking."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "kind": "execute", "title": "ls"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "found it."}})
+
+    live = col.messages(in_flight=True)
+    assert live[0]["content"] == "looking."
+    assert live[-1] == {"role": "assistant", "content": "found it.", "timestamp": live[-1]["timestamp"]}
+
+
+async def test_the_partial_notice_reaches_the_closing_row(tmp_path: Path) -> None:
+    """The one line saying the reply is incomplete must be in the record too.
+
+    It is appended by raven after the agent has stopped, so it is not in any
+    burst the collector saw -- without this the instance log's last row is the
+    partial answer with nothing marking it as partial.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="cancelled"))
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert did.closing is not None
+    assert "stopped before finishing" in did.closing
+
+
+async def test_tool_results_arrive_without_their_transport_wrapping(tmp_path: Path) -> None:
+    """What the renderer shows is the output, not the envelope it came in.
+
+    The stub sends the measured ``ToolCallContent`` wrapper; a codex-shaped
+    ``rawOutput`` object and a claude-shaped markdown fence are covered by
+    ``test_acp_dialects.py`` against the frames each adapter really sends.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a"))
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    result = next(m for m in did.transcript if m.get("role") == "tool")
+    assert result["content"] == "the file says hello"
+    assert not result["content"].startswith("[failed]")

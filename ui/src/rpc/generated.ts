@@ -689,15 +689,31 @@ export interface InstanceRow {
   updatedAtMs?: number;
 }
 /**
- * One side of one direct-chat turn, read back from its record directory.
+ * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
  */
 export interface DirectTurn {
   call_id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   content: string;
   at_ms: number;
   prompt_path?: string;
   out_path?: string;
+  /**
+   * The thought that preceded this turn, where the transport reports one.
+   */
+  reasoning_content?: string;
+  /**
+   * What this turn called on the way, matched to a later role='tool' row by id.
+   */
+  tool_calls?: TranscriptToolCall[];
+  /**
+   * On a role='tool' row, the call it answers.
+   */
+  tool_call_id?: string;
+  /**
+   * Set on a row from a turn still running, which no record holds yet. Such rows are a snapshot: the next read replaces them, and the record replaces them once the turn lands.
+   */
+  live?: boolean;
 }
 export interface UsageSnapshot {
   prompt_tokens: number;

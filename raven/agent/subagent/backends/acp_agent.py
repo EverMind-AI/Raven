@@ -12,6 +12,11 @@ Two consequences worth stating, because they are what the transport buys:
   recorded on this backend's own tracing span and in the run's own activity
   record (:mod:`raven.agent.subagent.activity`) rather than returned, so neither
   ``spawn`` nor ``run_subagent_dag`` has to change to carry it.
+- Those notifications are the run as a reader wants it, not everything that
+  crossed the wire. The whole exchange -- the agent's own requests and what raven
+  answered, raven's outbound frames, notifications no session was listening for,
+  stderr -- is written by :mod:`raven.agent.acp.journal` for the life of the
+  connection, and each call records the byte range it occupied there.
 - Resuming is the agent's own ``session/load``, not a second command template, so
   whether an agent *can* resume is read from its handshake instead of inferred
   from a config field a human filled in.
@@ -20,7 +25,6 @@ Two consequences worth stating, because they are what the transport buys:
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -33,13 +37,14 @@ from raven.agent.acp.capabilities import CapabilitySnapshot
 from raven.agent.acp.pool import get_pool
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
 from raven.agent.subagent import activity
+from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.agent.subagent.backends.base import bounded_delta
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_events,
+    record_frames,
     record_outcome,
     record_session,
-    record_transcript,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 
@@ -72,23 +77,6 @@ class AcpEmptyTurnError(RuntimeError):
     """
 
 
-def _texts(content: Any) -> list[str]:
-    """Every text string in an ACP content value, whatever shape it arrived in.
-
-    Accepts a block, a list of blocks, or a bare string, because the exact
-    envelope for each update kind was not measured against a live server and a
-    wrong assumption here would silently drop the agent's answer.
-    """
-    if isinstance(content, str):
-        return [content]
-    if isinstance(content, dict):
-        text = content.get("text")
-        return [text] if isinstance(text, str) else []
-    if isinstance(content, list):
-        return [t for item in content for t in _texts(item)]
-    return []
-
-
 _RESULT_TEXT_CAP = 2000
 
 
@@ -116,8 +104,15 @@ class _TurnCollector:
     ``on_delta`` as well so a live view and the stored reply agree.
     """
 
-    def __init__(self, on_delta: Callable[[str], Awaitable[None]] | None = None) -> None:
+    def __init__(
+        self,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+        dialect: AcpDialect | None = None,
+    ) -> None:
         self._on_delta = on_delta
+        # The spec by default, so a collector built without one (every test that
+        # only cares about answer text) still reads tool calls correctly.
+        self._dialect = dialect or AcpDialect()
         self._tool_ran = False
         # The run this collector belongs to, captured here rather than read at
         # publish time. `__call__` is awaited from the connection's read loop,
@@ -127,9 +122,7 @@ class _TurnCollector:
         self._run = activity.current()
         self.answer: list[str] = []
         self.thoughts: list[str] = []
-        self.raw: list[dict[str, Any]] = []
         self.kinds: list[str] = []
-        self.tool_calls: list[str] = []
         self.usage: dict[str, Any] = {}
         self.events: list[dict[str, Any]] = []
         self.answer_at: str | None = None
@@ -139,7 +132,6 @@ class _TurnCollector:
         return datetime.now().isoformat()
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
-        self.raw.append({"method": method, "params": params})
         update = params.get("update")
         if not isinstance(update, dict):
             return
@@ -149,17 +141,27 @@ class _TurnCollector:
         if kind in _ANSWER_UPDATES:
             if not self.answer:
                 self.answer_at = self._now()
-            texts = _texts(update.get("content"))
+            texts = content_texts(update.get("content"))
+            said = "".join(texts)
             if texts and self._tool_ran and self.answer:
                 texts.insert(0, _MESSAGE_BREAK)
             if texts:
                 self._tool_ran = False
             self.answer.extend(texts)
+            if said:
+                # Merged with the previous burst only when nothing came between:
+                # a `call` event in between is exactly what makes this a new
+                # burst, and the boundary is what puts each one on the step it
+                # was said before instead of at the end with the rest.
+                if self.events and self.events[-1].get("t") == "say":
+                    self.events[-1]["text"] += said
+                else:
+                    self.events.append({"t": "say", "text": said, "at": self._now()})
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
         elif kind in _THOUGHT_UPDATES:
-            chunks = _texts(update.get("content"))
+            chunks = content_texts(update.get("content"))
             self.thoughts.extend(chunks)
             for c in chunks:
                 if self.events and self.events[-1].get("t") == "thought":
@@ -173,27 +175,26 @@ class _TurnCollector:
             # fact for both -- an answer chunk after either starts a new message.
             self._tool_ran = True
             if kind == "tool_call":
-                title = update.get("title") or update.get("kind") or update.get("toolCallId")
-                if isinstance(title, str):
-                    self.tool_calls.append(title)
-                    self.events.append(
-                        {
-                            "t": "call",
-                            "id": str(update.get("toolCallId") or f"call-{len(self.tool_calls)}"),
-                            "name": title,
-                            "input": update.get("rawInput") if isinstance(update.get("rawInput"), dict) else None,
-                            "at": self._now(),
-                        }
-                    )
+                call = self._dialect.call(update)
+                self.events.append(
+                    {
+                        "t": "call",
+                        "id": call.id or f"call-{len(self.calls) + 1}",
+                        "call": call,
+                        "at": self._now(),
+                    }
+                )
             else:
+                self._revise_call(update)
                 status = update.get("status")
                 if status in ("completed", "failed"):
+                    outcome = self._dialect.result(update)
                     self.events.append(
                         {
                             "t": "result",
                             "id": str(update.get("toolCallId") or ""),
-                            "status": status,
-                            "text": "".join(_texts(update.get("content")))[:_RESULT_TEXT_CAP],
+                            "ok": outcome.ok,
+                            "text": outcome.text[:_RESULT_TEXT_CAP],
                             "at": self._now(),
                         }
                     )
@@ -205,9 +206,81 @@ class _TurnCollector:
         if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, "tool_call", "tool_call_update"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
 
+    def _revise_call(self, update: dict[str, Any]) -> None:
+        """Re-read a call's arguments from a later frame.
+
+        The opening ``tool_call`` announces the call before the arguments are
+        known: measured on claude-agent-acp and opencode, it carries
+        ``rawInput: {}`` and the real input follows on a ``tool_call_update``.
+        Until that lands, the only thing a reader has is the title -- which is
+        why the fallback to it is resolved at render time (``ToolCall.subject``)
+        rather than stored here.
+
+        The newest input wins, because that is what a ``tool_call_update``
+        means: the fields it carries replace the call's current ones, so an
+        adapter that revises an argument has revised what the tool actually ran
+        with. The whole call is re-parsed rather than only its input, since the
+        same frame also carries the ``kind`` and ``_meta`` a dialect names the
+        tool from.
+        """
+        if not self._dialect.revises_call(update):
+            return
+        call_id = str(update.get("toolCallId") or "")
+        for event in reversed(self.events):
+            if event.get("t") == "call" and event.get("id") == call_id:
+                revised = self._dialect.call(update)
+                previous: ToolCall = event["call"]
+                event["call"] = ToolCall(
+                    id=previous.id,
+                    name=revised.name,
+                    argument=revised.argument or previous.argument,
+                    # An update need not repeat the title, and losing it would
+                    # leave a no-argument call with nothing to show at all.
+                    title=revised.title or previous.title,
+                    raw_input=revised.raw_input or previous.raw_input,
+                )
+                return
+
+    @property
+    def calls(self) -> list[ToolCall]:
+        return [ev["call"] for ev in self.events if ev["t"] == "call"]
+
+    @property
+    def tool_calls(self) -> list[str]:
+        """One label per call, read at the end rather than when each was announced.
+
+        The opening ``tool_call`` frame does not yet carry the arguments, so a
+        label built there names the call by its title and can never be corrected
+        -- which put "read_file read_file src/a.py" on the span, the title
+        pasted under a verb derived from it.
+        """
+        return [call.label for call in self.calls]
+
     @property
     def text(self) -> str:
         return "".join(self.answer).strip()
+
+    @property
+    def closing_text(self) -> str:
+        """What the agent said after its last tool call -- the reply proper.
+
+        Measured on codex-acp, a turn narrates as it goes: a plan, then a
+        progress note before each of three calls, then the report. ``text``
+        joins all of it, which is right for the caller that receives the run's
+        answer, and wrong for a transcript -- the three progress notes belong on
+        the steps they preceded, and repeating them inside the final message is
+        what made a direct chat read as one blob of restated plan.
+
+        Empty when the turn ended on a tool call and said nothing after it, which
+        is a real outcome and not the same as "not reported".
+        """
+        said: list[str] = []
+        for ev in reversed(self.events):
+            if ev["t"] == "call":
+                break
+            if ev["t"] == "say":
+                said.append(ev["text"])
+        return "".join(reversed(said)).strip()
 
     def counts(self) -> dict[str, int]:
         tally: dict[str, int] = {}
@@ -233,23 +306,24 @@ class _TurnCollector:
         msgs: list[dict[str, Any]] = []
         pending: list[str] = []
         pending_at: str | None = None
+        narration: list[str] = []
         for ev in self.events:
-            if ev["t"] == "thought":
+            if ev["t"] == "say":
+                narration.append(ev["text"])
+            elif ev["t"] == "thought":
                 if not pending:
                     pending_at = ev.get("at")
                 pending.append(ev["text"])
             elif ev["t"] == "call":
+                call: ToolCall = ev["call"]
                 entry: dict[str, Any] = {
                     "role": "assistant",
-                    "content": "",
+                    "content": "".join(narration).strip(),
                     "tool_calls": [
                         {
                             "id": ev["id"],
                             "type": "function",
-                            "function": {
-                                "name": ev["name"],
-                                "arguments": json.dumps(ev["input"], ensure_ascii=False) if ev["input"] else "{}",
-                            },
+                            "function": {"name": call.name, "arguments": call.arguments_json()},
                         }
                     ],
                 }
@@ -259,12 +333,13 @@ class _TurnCollector:
                     entry["reasoning_content"] = "".join(pending)
                     pending = []
                     pending_at = None
+                narration = []
                 msgs.append(entry)
             elif ev["t"] == "result":
                 result: dict[str, Any] = {
                     "role": "tool",
                     "tool_call_id": ev["id"],
-                    "content": ev["text"] if ev["status"] == "completed" else f"[failed] {ev['text']}".strip(),
+                    "content": ev["text"] if ev["ok"] else f"[failed] {ev['text']}".strip(),
                 }
                 if at := ev.get("at"):
                     result["timestamp"] = at
@@ -274,8 +349,8 @@ class _TurnCollector:
             if pending_at:
                 trailing["timestamp"] = pending_at
             msgs.append(trailing)
-        if in_flight and self.text:
-            streaming: dict[str, Any] = {"role": "assistant", "content": self.text}
+        if in_flight and (streamed := self.closing_text):
+            streaming: dict[str, Any] = {"role": "assistant", "content": streamed}
             if self.answer_at:
                 streaming["timestamp"] = self.answer_at
             msgs.append(streaming)
@@ -361,15 +436,36 @@ class AcpAgentBackend:
                 ready_timeout_s=budget,
             )
             client = connection.client
+            # Marked after acquire, so a call's range covers its own traffic and
+            # not the handshake of a connection it merely inherited. The pool
+            # records where that handshake ends, and it is carried alongside so a
+            # reader of one call can still find it.
+            journal = client.journal
+            frames_start = journal.offset if journal is not None else None
 
             session_id, resumed = await self._open_session(client, cwd=cwd, skey=skey, handle=handle, budget=budget)
+            if journal is not None:
+                # Inside the marked range on purpose, so the per-call copy of the
+                # frames carries the line that says whose call they are.
+                journal.bind(
+                    {
+                        "session": session_id,
+                        "agent": self.name,
+                        "instance": handle,
+                        "task_id": task_id,
+                        "session_key": skey,
+                        "resumed": resumed,
+                    }
+                )
             record_session(span, session_id=session_id, resumed=resumed)
 
             # Snapshotted before the prompt so the error below names what this
             # turn ran into rather than what the connection has ever refused.
             refused_before = client.refusal_count
             sink = bounded_delta(on_delta, self.max_output_chars)
-            collector = _TurnCollector(sink)
+            # From the live handshake, not the stored snapshot: this is the
+            # process actually answering, and a snapshot can be stale.
+            collector = _TurnCollector(sink, dialect_for(connection.initialize))
             # Held across the whole turn, not just the send: see
             # `_Connection.session_lock` for why two prompts cannot share one
             # session id.
@@ -394,13 +490,21 @@ class AcpAgentBackend:
                     # stateless agent would leak it.
                     if client.take_unsettled_cancel(session_id) and self.is_stateful:
                         await self._registry.unbind(skey, self.name, handle)
+                    # The frames of a turn that was cut short are the ones worth
+                    # having, and this path returns no result to hang them off:
+                    # published here or the record of a timed-out call points at
+                    # nothing, while the journal holds the whole exchange.
+                    cancelled = self._frames(journal, connection, session_id, frames_start)
+                    activity.note_frames(cancelled)
+                    record_frames(span, cancelled)
                     raise
                 finally:
                     connection.router.detach(session_id, collector)
 
             stop_reason = (result or {}).get("stopReason") if isinstance(result, dict) else None
             text = collector.text
-            self._record(span, collector, stop_reason=stop_reason, started=started, session_id=session_id)
+            frames = self._frames(journal, connection, session_id, frames_start)
+            self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)
 
             if not text:
                 tail = client.stderr_tail(1500)
@@ -468,6 +572,7 @@ class AcpAgentBackend:
         span.error(f"turn ended early (stopReason={stop_reason})")
         logger.warning("acp agent {!r}: turn ended with stopReason={!r}; reply is partial", self.name, stop_reason)
         notice = f"\n\n[raven] {self.name} stopped before finishing (stopReason={stop_reason}); reply is partial."
+        activity.append_closing(notice)
         if sink is not None:
             await sink(notice)
         return text[: max(0, self.max_output_chars - len(notice))] + notice
@@ -507,6 +612,24 @@ class AcpAgentBackend:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
         return session_id, False
 
+    @staticmethod
+    def _frames(journal: Any, connection: Any, session_id: str, start: int | None) -> dict[str, Any]:
+        """Where this call's frames sit in the connection's journal.
+
+        Empty when no journal is being kept, so a disabled journal leaves the
+        record saying nothing about frames rather than pointing at a file that
+        does not exist.
+        """
+        if journal is None or start is None:
+            return {}
+        return {
+            "path": str(journal.path),
+            "session_id": session_id,
+            "start": start,
+            "end": journal.offset,
+            "handshake_end": getattr(connection, "handshake_bytes", 0),
+        }
+
     def _record(
         self,
         span: Any,
@@ -514,7 +637,7 @@ class AcpAgentBackend:
         *,
         stop_reason: Any,
         started: float,
-        session_id: str,
+        frames: dict[str, Any],
     ) -> None:
         counts = collector.counts()
         record_events(span, transport="acp", kinds=counts)
@@ -538,8 +661,12 @@ class AcpAgentBackend:
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)
         activity.note_transcript(collector.messages())
-        if collector.raw:
-            record_transcript(span, {"agent": self.name, "sessionId": session_id, "frames": collector.raw})
+        # After the transcript, and only here: the live republish inside the
+        # collector carries the streaming tail as a message, and this is the
+        # settled split -- narration on the steps, the reply on its own.
+        activity.note_closing(collector.closing_text)
+        activity.note_frames(frames)
+        record_frames(span, frames)
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]

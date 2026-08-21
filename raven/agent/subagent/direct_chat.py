@@ -28,7 +28,7 @@ from typing import Any, NamedTuple
 
 from loguru import logger
 
-from raven.agent.subagent_history import make_call_id
+from raven.agent.subagent_history import add_turn_to_instance_log, make_call_id
 from raven.utils.helpers import safe_path_segment
 
 _DIRECT_DIRNAME = "direct"
@@ -79,11 +79,24 @@ class DirectChatRecord:
     down the turn it describes.
     """
 
-    def __init__(self, directory: Path, *, agent: str, handle: str, started_at_ms: int) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        agent: str,
+        handle: str,
+        started_at_ms: int,
+        session_dir: Path | None = None,
+        task: str | None = None,
+    ) -> None:
         self.dir = directory
         self.agent = agent
         self.handle = handle
         self.started_at_ms = started_at_ms
+        # Kept for the instance log: a direct turn is one turn of the same
+        # conversation a spawn call started, and it lands in the same file.
+        self.session_dir = session_dir
+        self.task = task
 
     @classmethod
     def open(
@@ -101,6 +114,8 @@ class DirectChatRecord:
             agent=agent,
             handle=handle,
             started_at_ms=started,
+            session_dir=Path(session_dir),
+            task=task,
         )
         try:
             record.dir.mkdir(parents=True, exist_ok=True)
@@ -118,7 +133,7 @@ class DirectChatRecord:
             logger.warning("Direct chat [{}] history could not be opened at {}: {}", task_id, record.dir, exc)
         return record
 
-    def finish(self, *, status: str, output: str | None = None, error: str | None = None) -> None:
+    def finish(self, *, status: str, output: str | None = None, error: str | None = None, activity: Any = None) -> None:
         try:
             if not self.dir.is_dir():
                 return
@@ -128,9 +143,26 @@ class DirectChatRecord:
                 (self.dir / "error.md").write_text(error, encoding="utf-8")
             meta = self._read_meta()
             meta.update(status=status, ended_at_ms=int(time.time() * 1000))
+            if activity is not None:
+                meta.update(getattr(activity, "as_meta", dict)() or {})
+                transcript = getattr(activity, "transcript", None)
+                if isinstance(transcript, list) and transcript:
+                    (self.dir / "transcript.jsonl").write_text(
+                        "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in transcript),
+                        encoding="utf-8",
+                    )
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Direct chat history at {} could not be finished: {}", self.dir, exc)
+        add_turn_to_instance_log(
+            self.session_dir,
+            meta={**self._read_meta(), "agent": self.agent, "handle": self.handle},
+            prompt=self.task,
+            output=output,
+            error=error,
+            activity=activity,
+            kind="direct",
+        )
 
     def meta(self) -> DirectTurnMeta:
         """This turn as the handoff describes it, read back from disk."""

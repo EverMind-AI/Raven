@@ -169,6 +169,13 @@ export interface Msg {
   toolTokens?: number
   tools?: string[]
   episodes?: Episode[]
+  /**
+   * The identity of the turn this message was folded from, where it was folded
+   * from one. Stable while that turn is still running and the runtime keeps
+   * handing over a fresh object for it, which is what a fold has to be keyed on
+   * to outlive the row under it.
+   */
+  foldId?: string
   todos?: TodoItem[]
   todoIncomplete?: boolean
   todoCollapsedByDefault?: boolean

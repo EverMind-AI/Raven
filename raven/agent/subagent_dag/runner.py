@@ -303,6 +303,7 @@ async def run_dag(
                         progress_publisher=progress_publisher,
                         state_for=state_for,
                         session_key=session_key,
+                        subagents_root=subagents_root,
                     )
                     for nids in groups.values()
                 ),
@@ -463,6 +464,7 @@ async def _run_group(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
+    subagents_root: str | None = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
@@ -486,6 +488,7 @@ async def _run_group(
             state_for=state_for,
             progress_publisher=progress_publisher,
             session_key=session_key,
+            subagents_root=subagents_root,
         )
 
 
@@ -497,15 +500,53 @@ async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any) -> 
     must not fail the node -- the account of a run is worth less than the run.
     """
     messages = getattr(did, "transcript", None)
-    if not isinstance(messages, list) or not messages:
+    if isinstance(messages, list) and messages:
+        try:
+            await store.write_text(
+                store.transcript_path(node_id),
+                "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages),
+            )
+        except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
+            logger.warning("DAG node {} transcript could not be written: {}", node_id, exc)
+
+
+async def _add_node_to_instance_log(
+    subagents_root: str | None,
+    node: DagNodeSpec,
+    did: Any,
+    session_key: str | None,
+    error: str | None = None,
+) -> None:
+    """Add this node's turn to the instance's own conversation.
+
+    A node is one turn of an instance that a ``spawn`` call or a direct chat may
+    also have talked to, so it belongs in the same file as those. Addressed from
+    ``subagents_root`` -- ``<session_dir>/subagents``, which the caller already
+    resolved -- rather than derived from the run directory, whose depth differs
+    between the real layout and a store pointed somewhere else.
+    """
+    if not subagents_root:
         return
+    handle = getattr(node, "instance", None) or node.id
     try:
-        await store.write_text(
-            store.transcript_path(node_id),
-            "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in messages),
+        from raven.agent.subagent_history import add_turn_to_instance_log
+
+        add_turn_to_instance_log(
+            Path(subagents_root).parent,
+            meta={"agent": node.subagent, "handle": handle, "session_key": session_key or ""},
+            # Read off the activity rather than from the caller's `prompt`, which
+            # is unbound when rendering it raised. A turn with no question of its
+            # own is not merely missing a row: `foldDirectTurns` starts a message
+            # at a `user` row, so the next turn's steps and answer merge into this
+            # one -- and the live read does emit the question, so it appeared
+            # while the node ran and vanished when it landed.
+            prompt=getattr(did, "prompt", None),
+            error=error,
+            activity=did,
+            kind="dag",
         )
     except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
-        logger.warning("DAG node {} transcript could not be written: {}", node_id, exc)
+        logger.warning("DAG node {} could not be added to its instance log: {}", node.id, exc)
 
 
 async def _run_node(
@@ -529,6 +570,7 @@ async def _run_node(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
+    subagents_root: str | None = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
@@ -591,7 +633,15 @@ async def _run_node(
                 state_kwargs = (
                     {"history": node_state.load(), "on_messages": node_state.save} if node_state is not None else {}
                 )
-                with activity.collecting(live_key=node_live_key(store.run_id, node.id)) as did:
+                # Indexed by instance too, on the same terms and with the same
+                # handle rule as `_add_node_to_instance_log`, so the conversation
+                # view reaches a node's steps while it runs rather than only after
+                # it lands.
+                with activity.collecting(
+                    live_key=node_live_key(store.run_id, node.id),
+                    instance=(session_key or "", node.subagent, node.instance or node.id),
+                    prompt=prompt,
+                ) as did:
                     try:
                         result = await agent_backend.run(
                             prompt,
@@ -612,6 +662,7 @@ async def _run_node(
             status[node.id] = "failed"
             errors[node.id] = str(exc)
         await _write_node_transcript(store, node.id, did)
+        await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id))
         ended_at_ms = _now_ms()
         node_ended_at[node.id] = ended_at_ms
         await _emit(

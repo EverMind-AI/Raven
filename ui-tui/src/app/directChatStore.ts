@@ -166,6 +166,62 @@ export const clearRunning = (target: DirectTargetRef | null) => clearRunningKey(
 export const isRunning = (state: DirectChatState, target: DirectTargetRef | null) =>
   state.running.includes(viewKeyOf(target))
 
+// The one line a direct view shows before its first read lands. Muted, because
+// it is a status and not something anybody said.
+const READING = 'reading this instance\u2019s conversation\u2026'
+
+/**
+ * Which rows the chat view shows: the main conversation, or one instance's.
+ *
+ * A direct view is never zero rows. An instance is read on entering, over rpc,
+ * so there is a round trip during which its transcript is empty -- and a render
+ * with nothing in it has nothing to paint over the rows that were on screen a
+ * moment ago, so the *main* conversation stayed visible until the read landed
+ * and then vanished. One line is what makes the swap paint, and saying what is
+ * happening beats a blank.
+ */
+export const visibleRows = (state: DirectChatState, main: Msg[]): Msg[] => {
+  const active = state.active
+
+  if (active === null) {
+    return main
+  }
+
+  const rows = state.transcripts.get(directKey(active.agent, active.handle)) ?? []
+
+  return rows.length > 0 ? rows : [{ kind: 'slash', role: 'system', text: READING }]
+}
+
+/** Statuses the registry uses for a turn that has not finished. */
+const IN_FLIGHT = new Set(['pending', 'running'])
+
+/**
+ * Whether the instance on screen has a turn in flight, from either signal.
+ *
+ * Two signals because neither sees both cases. `running` is turns dispatched
+ * from here, known the instant they start and before any strip refresh. The
+ * strip row is turns dispatched somewhere else -- a `spawn` the main agent made,
+ * a DAG node -- which nothing tells this store about: the wire tags an instance
+ * on the four events of a *direct* turn only, so `markRunning` is never reached
+ * for the other two lanes. Reading only `running` is what left a spawned turn
+ * showing nothing while it worked.
+ */
+export const isViewWorking = (state: DirectChatState): boolean => {
+  const active = state.active
+
+  if (active === null) {
+    return false
+  }
+
+  if (isRunning(state, active)) {
+    return true
+  }
+
+  const row = state.instances.find(r => r.agent === active.agent && r.handle === active.handle)
+
+  return row !== undefined && IN_FLIGHT.has(row.status ?? '')
+}
+
 /**
  * Why sending is paused in the view now on screen, or null when it is live.
  *

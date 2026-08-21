@@ -24,13 +24,16 @@ with no turn to cancel.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.direct_chat import direct_root
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root, spawn_root
+from raven.rpc.methods.session import _wire_tool_calls
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -101,9 +104,16 @@ async def instances_history(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> dict[str, Any]:
-    """One instance's direct chat, flattened to alternating user/assistant turns.
+    """One instance's whole conversation, in the transcript wire shape.
 
-    Three sources, merged and ordered by when each exchange started:
+    Preferred source is the instance's own log
+    (:mod:`raven.agent.subagent.instance_log`): it is written turn by turn, in
+    order, across every lane that addressed the instance, and it holds *what the
+    run did on the way* -- the thought, the tool call, the tool's answer -- which
+    is the half of a turn the older reading could never show.
+
+    The fallback stitches the three record directories together and yields a
+    prompt and a final output per call:
 
     * ``direct/<agent>/<handle>/`` -- turns typed here;
     * ``spawn/<call_id>/`` -- what the main agent already asked this instance;
@@ -111,10 +121,13 @@ async def instances_history(
 
     All three, because an instance is nearly always *spawned* before anyone
     switches into it, and a view that showed only the direct turns would open
-    empty on the exchange the user is looking at it for. Read from the record
-    directories rather than from ``messages.json``: the records exist for every
-    kind, while the state file is absent for a ``cli`` instance and carries tool
-    turns the user never typed.
+    empty on the exchange the user is looking at it for. It stays because a
+    conversation that ran before the instance log existed has no log to read, and
+    a two-message view of it beats an empty one.
+
+    Both paths yield ``DirectTurn`` rows, so a client that only reads ``role`` and
+    ``content`` is unaffected by the richer source; the step fields ride along
+    for one that draws them.
 
     An instance with no records at all is not an error -- an unaddressed handle
     is simply empty.
@@ -126,13 +139,143 @@ async def instances_history(
     agent = str(params.get("agent") or "")
     handle = str(params.get("handle") or "")
 
-    exchanges: list[tuple[int, list[dict[str, Any]]]] = [
-        *_direct_exchanges(direct_root(session_dir, agent, handle)),
-        *_spawn_exchanges(spawn_root(session_dir), agent, handle),
-        *_dag_exchanges(dag_root(session_dir), agent, handle),
-    ]
-    exchanges.sort(key=lambda pair: pair[0])
-    return {"turns": [turn for _at, turns in exchanges for turn in turns]}
+    logged = _instance_log_messages(session_dir, agent, handle)
+    if logged:
+        turns = _log_turns(logged)
+    else:
+        exchanges: list[tuple[int, list[dict[str, Any]]]] = [
+            *_direct_exchanges(direct_root(session_dir, agent, handle)),
+            *_spawn_exchanges(spawn_root(session_dir), agent, handle),
+            *_dag_exchanges(dag_root(session_dir), agent, handle),
+        ]
+        exchanges.sort(key=lambda pair: pair[0])
+        turns = [turn for _at, turns in exchanges for turn in turns]
+
+    # Whatever this instance is doing right now, which no file holds yet: the
+    # log is written when the turn lands, so until then the only account of the
+    # steps is the activity this process is collecting. Appended rather than
+    # merged -- an in-flight turn is by definition the last one.
+    live = run_activity.live_instance(str(params.get("session_key") or ""), agent, handle)
+    if live is not None:
+        # The record directories hold the running turn's prompt file from the
+        # moment it opens, so the fallback reading above yields it as a settled
+        # row -- and the live rows carry it too. Left in, the view showed the
+        # question twice. Dropped here rather than at the source because this is
+        # the only place that knows a turn is still running. Exactly one row: a
+        # turn is one turn, and an *earlier* prompt with no reply is a run that
+        # crashed -- still worth showing, and not this one.
+        if turns and turns[-1].get("role") == "user":
+            turns.pop()
+        turns.extend(_live_turns(live, len(turns)))
+    return {"turns": turns}
+
+
+def _live_turns(activity: Any, offset: int) -> list[dict[str, Any]]:
+    """The turn running now, as ``DirectTurn``s marked ``live``.
+
+    The collector republishes its whole transcript on every update from the
+    agent, so this is a snapshot of the turn so far rather than a delta -- which
+    is what lets a reader poll it without keeping state.
+
+    The whole turn: its prompt, its steps, and the answer text so far. All three,
+    because for two of the three lanes this read is the *only* thing that carries
+    any of it -- the wire tags an instance on the four events of a direct turn,
+    so a ``spawn`` or a DAG node reaches the conversation view through nothing
+    else. An earlier version withheld the answer text on the grounds that
+    ``token.delta`` already delivers it; that holds for a direct turn and for
+    neither of the others, and it left a spawned turn showing its tool calls and
+    never a word the agent said.
+
+    Marked because the client has to tell the two apart: a settled row is part of
+    the record and stays put, while these are replaced wholesale by the next
+    snapshot and by the record itself once the turn lands.
+    """
+    rows = [m for m in list(getattr(activity, "transcript", None) or []) if isinstance(m, dict)]
+    prompt = getattr(activity, "prompt", None)
+    if isinstance(prompt, str) and prompt:
+        rows.insert(0, {"role": "user", "content": prompt})
+    turns = _log_turns(rows)
+    for index, turn in enumerate(turns):
+        turn["call_id"] = f"live-{offset + index}"
+        turn["live"] = True
+    return turns
+
+
+def _log_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Instance-log rows as ``DirectTurn``s, steps included.
+
+    ``content`` stays the text key rather than becoming ``session.resume``'s
+    ``text``: this method has its own model and two clients already read
+    ``content``, so aligning the name would break both to gain nothing a reader
+    can see. What is new is what rides along -- the thought, the calls, and the
+    id a ``tool`` row answers -- which is the half of a turn the stitched
+    reading never had.
+
+    ``call_id`` and ``at_ms`` are what the record-directory reading addressed a
+    turn by. A log row has neither, so the timestamp it was written with stands
+    in for the clock and the row's index for the id: both are required fields,
+    and a reader sorting or keying on them still gets something monotonic.
+    """
+    out: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        role = row.get("role")
+        if role not in ("user", "assistant", "tool"):
+            continue
+        content = row.get("content")
+        turn: dict[str, Any] = {
+            "call_id": f"log-{index}",
+            "role": role,
+            "content": content if isinstance(content, str) else "",
+            "at_ms": _ms_of(row.get("timestamp")),
+        }
+        if isinstance(row.get("reasoning_content"), str) and row["reasoning_content"].strip():
+            turn["reasoning_content"] = row["reasoning_content"]
+        if isinstance(row.get("tool_call_id"), str):
+            turn["tool_call_id"] = row["tool_call_id"]
+        calls = _wire_tool_calls(row.get("tool_calls"))
+        if calls:
+            turn["tool_calls"] = calls
+        out.append(turn)
+    return out
+
+
+def _ms_of(timestamp: Any) -> int:
+    """A log row's wall clock as epoch ms, or 0 when it has none."""
+    if not isinstance(timestamp, str):
+        return 0
+    try:
+        return int(datetime.fromisoformat(timestamp).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _instance_log_messages(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:
+    """The instance log's message rows, header skipped.
+
+    The header is the one tagged record in the file; everything else is a message,
+    which is what makes the file the same grammar as a session log. A line that
+    will not parse is skipped rather than fatal, for the reason
+    ``_map_to_wire`` skips a malformed stored message: one bad line must not
+    empty a conversation.
+    """
+    from raven.agent.subagent.instance_log import transcript_path
+
+    path = transcript_path(session_dir, agent, handle)
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open(encoding="utf-8") as handle_file:
+            for line in handle_file:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and "_type" not in row and row.get("role"):
+                    rows.append(row)
+    except OSError:
+        return []
+    return rows
 
 
 def _exchange(call_id: str, prompt: Path, out: Path, started: int, ended: int) -> tuple[int, list[dict[str, Any]]]:

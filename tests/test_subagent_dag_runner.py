@@ -2317,6 +2317,66 @@ async def test_a_node_in_flight_is_findable_in_the_live_index() -> None:
     assert exec_.seen_live and exec_.seen_live[0] is not None
 
 
+async def test_a_node_in_flight_is_findable_by_instance_too() -> None:
+    """A node is a turn of an instance a spawn or a direct chat may also address,
+    so the conversation view has to reach it -- and that view holds
+    ``(session_key, agent, handle)``, never the run id in the node's live key."""
+
+    class _ByInstance(_FakeExec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[object] = []
+
+        async def run(self, task: str, **kw) -> str:
+            from raven.agent.subagent import activity
+
+            self.seen.append(activity.live_instance("web:sess1", "x", "refactor-auth"))
+            return await super().run(task, **kw)
+
+    spec = parse_dag_spec(
+        {"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi", "instance": "refactor-auth"}]}
+    )
+    exec_ = _ByInstance()
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": exec_}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        session_key="web:sess1",
+    )
+
+    assert exec_.seen and exec_.seen[0] is not None
+
+
+async def test_a_node_with_no_instance_is_indexed_under_its_node_id() -> None:
+    """The same handle rule the instance log uses, so both name one conversation."""
+
+    class _ByNodeId(_FakeExec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list[object] = []
+
+        async def run(self, task: str, **kw) -> str:
+            from raven.agent.subagent import activity
+
+            self.seen.append(activity.live_instance("web:sess1", "x", "a"))
+            return await super().run(task, **kw)
+
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi"}]})
+    exec_ = _ByNodeId()
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": exec_}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        session_key="web:sess1",
+    )
+
+    assert exec_.seen and exec_.seen[0] is not None
+
+
 async def test_the_live_index_does_not_outlive_the_node() -> None:
     from raven.agent.subagent import activity
     from raven.agent.subagent_dag._store import node_live_key
@@ -2715,3 +2775,63 @@ async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run
             workdir="/w",
             run_root="/hist/mas_dag",
         )
+
+
+async def test_a_node_writes_its_question_into_the_instance_log(tmp_path: Path) -> None:
+    """The turn's own prompt, without which the next turn merges into it.
+
+    ``foldDirectTurns`` starts a message at a ``user`` row, so a turn with no
+    question of its own is not merely missing a row -- the turn after it has its
+    steps and its answer drawn as a continuation of this one. The live read does
+    emit the question from the activity, so it appeared while the node ran and
+    then vanished when the node landed and this log became the source.
+    """
+    from raven.agent.subagent.instance_log import transcript_path
+
+    session_dir = tmp_path / "s"
+    spec = parse_dag_spec(
+        {"nodes": [{"id": "a", "subagent": "x", "prompt_template": "count the todos", "instance": "h1"}]}
+    )
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root=str(session_dir / "subagents" / "mas_dag"),
+        session_key="web:s1",
+        subagents_root=str(session_dir / "subagents"),
+    )
+
+    rows = [
+        json.loads(line)
+        for line in transcript_path(session_dir, "x", "h1").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert [r["content"] for r in rows if r.get("role") == "user"] == ["count the todos"]
+
+
+async def test_a_failed_node_writes_the_failure_into_the_instance_log(tmp_path: Path) -> None:
+    """``append_turn`` promises a failed turn is appended as the error it ended
+    with, and the runner holds that error the whole time."""
+    from raven.agent.subagent.instance_log import transcript_path
+
+    class _Exploding(_FakeExec):
+        async def run(self, task: str, **kw) -> str:
+            raise RuntimeError("the node blew up")
+
+    session_dir = tmp_path / "s"
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "go", "instance": "h1"}]})
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": _Exploding()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root=str(session_dir / "subagents" / "mas_dag"),
+        session_key="web:s1",
+        subagents_root=str(session_dir / "subagents"),
+    )
+
+    body = transcript_path(session_dir, "x", "h1").read_text(encoding="utf-8")
+
+    assert "the node blew up" in body

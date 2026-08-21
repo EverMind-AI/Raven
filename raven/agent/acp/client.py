@@ -24,6 +24,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.acp import protocol
+from raven.agent.acp.journal import FrameJournal
 from raven.agent.acp.protocol import (
     AcpConnectionError,
     AcpProtocolError,
@@ -110,6 +111,7 @@ class AcpClient:
         pgid: int,
         on_request: RequestHandler | None = None,
         on_notification: NotificationHandler | None = None,
+        journal: FrameJournal | None = None,
     ) -> None:
         self.name = name
         self._proc = proc
@@ -120,6 +122,14 @@ class AcpClient:
         self._pgid = pgid
         self._on_request = on_request
         self._on_notification = on_notification
+        # Every frame both ways, on disk, for the life of this connection. Held
+        # here rather than in the pool because the frames are only visible from
+        # inside the send path and the read loop.
+        self._journal = journal
+        # Which session each outbound request belongs to, so the response -- which
+        # carries an id and nothing else -- can be attributed in the journal.
+        # Read by the read loop before the awaiting task clears the entry.
+        self._request_sessions: dict[int, str | None] = {}
         # Agent-initiated requests raven had no answer for. Kept because the
         # refusal is invisible from the caller's side: the agent asks, gets
         # "method not found", and whatever it does next usually arrives as a
@@ -147,6 +157,7 @@ class AcpClient:
         env: dict[str, str] | None = None,
         on_request: RequestHandler | None = None,
         on_notification: NotificationHandler | None = None,
+        journal: FrameJournal | None = None,
     ) -> "AcpClient":
         """Start the agent's ACP server and begin reading it.
 
@@ -191,6 +202,7 @@ class AcpClient:
             pgid=proc.pid,
             on_request=on_request,
             on_notification=on_notification,
+            journal=journal,
         )
         client._start_loops()
         logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
@@ -239,6 +251,9 @@ class AcpClient:
         if self._proc.returncode is None:
             await self._proc.wait()
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
+        # Last, so the frames the teardown itself produced are in the file.
+        if self._journal is not None:
+            self._journal.close()
 
     async def __aenter__(self) -> "AcpClient":
         return self
@@ -271,6 +286,26 @@ class AcpClient:
         fresh = max(0, self._refused_seen - max(0, count))
         recent = list(self._refused)[-fresh:] if fresh else []
         return [m for sid, m in recent if session_id is None or sid in (None, session_id)]
+
+    @property
+    def journal(self) -> FrameJournal | None:
+        """This connection's wire log, if one is being kept."""
+        return self._journal
+
+    def _frame_session(self, frame: dict[str, Any]) -> str | None:
+        """Which session a frame belongs to, where the wire says.
+
+        A request or notification names it in ``params``; a response carries an
+        id and nothing else, so it is attributed through the request it answers.
+        Connection-level frames -- ``initialize`` and its answer -- belong to no
+        session and are recorded without one.
+        """
+        params = frame.get("params")
+        if isinstance(params, dict) and isinstance(params.get("sessionId"), str):
+            return params["sessionId"]
+        if "method" not in frame and isinstance(frame.get("id"), int):
+            return self._request_sessions.get(frame["id"])
+        return None
 
     def stderr_tail(self, max_chars: int = 2000) -> str:
         """The most recent stderr, newest last, clamped.
@@ -330,6 +365,7 @@ class AcpClient:
         request_id = self._next_id
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
+        self._request_sessions[request_id] = (params or {}).get("sessionId") if isinstance(params, dict) else None
         try:
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
@@ -343,6 +379,7 @@ class AcpClient:
             raise
         finally:
             self._pending.pop(request_id, None)
+            self._request_sessions.pop(request_id, None)
 
     async def _cancel_turn(self, session_id: str, future: asyncio.Future) -> None:
         """Tell the agent to stop this turn, and give it a bounded chance to.
@@ -379,7 +416,18 @@ class AcpClient:
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         await self._send(protocol.notification(method, params))
 
-    async def _send(self, frame: dict[str, Any]) -> None:
+    async def _send(self, frame: dict[str, Any], *, session: str | None = None) -> None:
+        """Write one frame, recording it first.
+
+        Recorded before the write rather than after: a frame that fails to reach
+        a dead process is still what raven tried to say, and the failure is the
+        thing an operator reading the journal is looking for.
+
+        ``session`` names the session for a frame whose own shape cannot -- the
+        response to an agent-initiated request carries only the id it answers.
+        """
+        if self._journal is not None:
+            self._journal.note("out", frame=frame, session=session or self._frame_session(frame))
         stdin = self._proc.stdin
         if stdin is None or stdin.is_closing():
             raise AcpConnectionError(f"acp agent {self.name!r}: stdin is closed")
@@ -409,9 +457,18 @@ class AcpClient:
                     # A stray non-JSON line is diagnostics leaking onto stdout,
                     # not a fatal condition: openclaw is documented to interleave
                     # plugin chatter, and killing the connection over it would
-                    # turn a cosmetic problem into an outage.
+                    # turn a cosmetic problem into an outage. Journalled all the
+                    # same -- it is what the agent said, and a reader asking why
+                    # a turn went wrong should not have to guess that something
+                    # unparseable came through.
+                    if self._journal is not None:
+                        self._journal.note("in", text=line)
                     logger.debug("acp agent {!r}: ignoring unparseable stdout line ({})", self.name, exc)
                     continue
+                # Before dispatch, so a notification the router has no sink for
+                # is recorded rather than dropped with only a debug line.
+                if self._journal is not None:
+                    self._journal.note("in", frame=frame, session=self._frame_session(frame))
                 await self._dispatch(frame)
         except asyncio.CancelledError:
             raise
@@ -450,7 +507,10 @@ class AcpClient:
                 raw = await stderr.readline()
                 if not raw:
                     break
-                self._stderr.append(raw.decode("utf-8", "replace").rstrip()[:_STDERR_LINE_CAP])
+                text = raw.decode("utf-8", "replace").rstrip()[:_STDERR_LINE_CAP]
+                self._stderr.append(text)
+                if self._journal is not None:
+                    self._journal.note("err", text=text)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - diagnostics must never break the connection
@@ -481,22 +541,29 @@ class AcpClient:
         an explicit ``method not found`` rather than silence.
         """
         session_id = params.get("sessionId")
+        asked_by = session_id if isinstance(session_id, str) else None
         if self._on_request is None:
-            self._note_refusal(method, session_id if isinstance(session_id, str) else None)
-            await self._send_quietly(protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, method))
+            self._note_refusal(method, asked_by)
+            await self._send_quietly(
+                protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, method), session=asked_by
+            )
             return
         try:
             result = await self._on_request(method, params)
         except Exception as exc:  # noqa: BLE001 - the agent gets an error, raven keeps the connection
             logger.opt(exception=True).warning("acp agent {!r}: handler for {} failed: {}", self.name, method, exc)
-            self._note_refusal(method, session_id if isinstance(session_id, str) else None)
-            await self._send_quietly(protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, str(exc)))
+            self._note_refusal(method, asked_by)
+            await self._send_quietly(
+                protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, str(exc)), session=asked_by
+            )
             return
         if result is UNHANDLED:
-            self._note_refusal(method, session_id if isinstance(session_id, str) else None)
-            await self._send_quietly(protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, method))
+            self._note_refusal(method, asked_by)
+            await self._send_quietly(
+                protocol.error_response(request_id, protocol.METHOD_NOT_FOUND, method), session=asked_by
+            )
             return
-        await self._send_quietly(protocol.result_response(request_id, result))
+        await self._send_quietly(protocol.result_response(request_id, result), session=asked_by)
 
     def _note_refusal(self, method: str, session_id: str | None = None) -> None:
         """Record one refusal. Deduped in the log only, never in the record."""
@@ -506,10 +573,10 @@ class AcpClient:
             self._refused_logged.add(method)
             logger.info("acp agent {!r}: no answer for {}, told it method not found", self.name, method)
 
-    async def _send_quietly(self, frame: dict[str, Any]) -> None:
+    async def _send_quietly(self, frame: dict[str, Any], *, session: str | None = None) -> None:
         """Send from inside the read loop, where a write failure is not the caller's."""
         try:
-            await self._send(frame)
+            await self._send(frame, session=session)
         except AcpConnectionError as exc:
             logger.debug("acp agent {!r}: could not answer request: {}", self.name, exc)
 

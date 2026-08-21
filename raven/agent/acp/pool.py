@@ -25,6 +25,7 @@ from loguru import logger
 
 from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient, end_drain
+from raven.agent.acp.journal import open_journal
 from raven.agent.acp.permissions import auto_approver
 
 # Budget for the one `initialize` a new connection owes, when the caller does
@@ -105,9 +106,16 @@ class _Connection:
         router: _SessionRouter,
         launch: str = "",
         initialize: Any = None,
+        handshake_bytes: int = 0,
     ) -> None:
         self.client = client
         self.router = router
+        self.handshake_bytes = handshake_bytes
+        """Where the ``initialize`` exchange ends in the journal.
+
+        A call records the range it occupied, which starts after this; naming
+        the boundary is what lets a reader of one call still see the handshake
+        that established the connection it ran on."""
         # What this process was launched from, so a later dispatch can tell
         # whether the connection it is about to reuse still matches its config.
         self.launch_key = launch
@@ -196,6 +204,10 @@ class AcpConnectionPool:
                 await existing.client.close()
 
             router = _SessionRouter(name)
+            # Opened before launch so the handshake is the head of the file: the
+            # `initialize` exchange belongs to the connection, not to whichever
+            # call happened to be the one that started it.
+            journal = open_journal(name)
             client = await AcpClient.launch(
                 name=name,
                 command=command,
@@ -208,6 +220,7 @@ class AcpConnectionPool:
                 # cancel turns.
                 on_request=on_request if on_request is not None else auto_approver(name),
                 on_notification=router.dispatch,
+                journal=journal,
             )
             # The handshake belongs to establishing the connection, not to the
             # first caller: ACP has no usable state before `initialize`, and an
@@ -231,7 +244,11 @@ class AcpConnectionPool:
                 # shutdown cannot find it either.
                 await client.close()
                 raise
-            connection = _Connection(client, router, key, initialize)
+            # After the handshake, so a call's own range starts where its own
+            # work does and a reader can still find the handshake at [0, here).
+            connection = _Connection(
+                client, router, key, initialize, handshake_bytes=journal.offset if journal is not None else 0
+            )
             self._connections[name] = connection
             return connection
 

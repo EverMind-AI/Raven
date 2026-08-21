@@ -805,6 +805,86 @@ Distinct from what raven still refuses: `fs/read_text_file` and its siblings are
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
 
+**Frame Journal** (`raven/agent/acp/journal.py`):
+Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
+the run transcript, which holds the `session/update` notifications routed to one session -
+the reading of a delegated run, and not everything that crossed the wire. Four classes of
+traffic exist only here: the agent's own requests and what raven answered (so an Unattended
+Approval is recorded rather than only logged), raven's outbound frames, a notification no
+session was listening for, and stderr. Per connection rather than per call because an ACP
+session is - one process serves every session of one agent, and the `initialize` handshake
+belongs to no single call. Since ACP has nowhere to carry raven's own identity, the
+dispatcher writes an `acp_call` record naming the agent, instance, task and conversation the
+session it just opened belongs to; without it the file could only be read by joining its
+session ids against spans or every `meta.json` on the host, and a stateless agent registers
+no instance row for that join to land on. Bounded by a stated ceiling per connection and a
+retention window, and reaching the ceiling is written into the file rather than left to look
+like a connection that went quiet. Mode `0600`, because the frames carry the whole prompt
+and every tool result.
+_Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
+or `transcript.jsonl`, not this.
+
+**Instance Log** (`raven/agent/subagent/instance_log.py`):
+One sub-agent instance's own conversation, for the whole conversation that owns it, at
+`<session_dir>/subagents/instances/<agent>/<handle>.jsonl`. A call record answers "what was
+this one dispatch"; an instance outlives it - a stateful agent resumed under one handle
+spans many calls, and those calls arrive through three lanes (`spawn`, a DAG node, a Direct
+Chat) that each write a different directory shape, so an instance's conversation was only
+readable by stitching all three together in the right order, which nothing did. Written in
+the *same format as the session log* at `sessions/<group>/<chat_id>.jsonl` - a
+`_type: "metadata"` header, then untagged message rows - so anything that reads a raven
+conversation reads this, and a Direct Chat draws a turn's thought and tool calls with the
+renderer it already has. The wire frames behind those turns are deliberately not copied
+here: the Frame Journal already holds them in full, a per-instance copy was measured to
+carry no record the journal did not (47 against 47, for 78x the transcript's bytes), and a
+call's record still names the journal and the byte range it occupied.
+_Avoid_: reading it as the wire log - that is the Frame Journal.
+
+**ACP Dialect** (`raven/agent/subagent/acp_dialects/`):
+How one ACP adapter's tool-call frames are read into raven's own vocabulary: a raven tool
+name (`exec`, `read_file`, ...), the subject to show beside it, and output with the
+transport's wrapping removed. Needed because an adapter reports a call twice over -
+machine-readably in the spec's `kind` and `locations`, and for a human in `title` - and only
+the first is comparable across adapters, since the same `kind: "execute"` arrives titled
+`Terminal` from claude-agent-acp and titled with the whole shell pipeline from codex-acp.
+Naming the tool is what lets a Direct Chat draw a delegated turn with the transcript's own
+renderer, which reads a tool name to choose a verb. Selected from `agentInfo.name` in the
+connection's own `initialize` result rather than from config, so a renamed agent and two
+entries pointing at one adapter both resolve. An adapter with no file of its own gets the
+spec-only base class, which reads nothing the protocol does not require - so an unmeasured
+adapter works without one. Result unwrapping is the genuinely per-adapter part:
+claude-agent-acp sends its output twice, plain in `rawOutput` and markdown-fenced in
+`content`, while codex-acp sends no `content` at all and reports a failed command only
+through `exit_code` inside `rawOutput`.
+_Avoid_: reading `title` as the tool name - it is a label, and for one adapter it is the
+entire command.
+
+**Closing Message** (`raven/agent/subagent/backends/acp_agent.py`, `activity.py`):
+What a delegated run said *after its last tool call*, as distinct from its whole reply. An
+ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
+before each of three calls, then the report - and the run's returned answer joins all of it,
+which is right for the caller receiving it and wrong for a transcript, where each note
+belongs on the step it preceded. So the Instance Log carries narration on the calling rows
+and closes with this. `""` (the turn ended on a step and said nothing after) is deliberately
+different from `None` (this lane cannot tell the two apart), which falls back to the whole
+output.
+_Avoid_: calling it the answer - the answer is what the run returns, and for a narrating
+agent the two differ.
+
+**Live rows** (`raven/rpc/methods/instances.py`, `raven/agent/subagent/activity.py`):
+The rows `subagents.instance.history` returns for a turn that is *still running*, marked
+`live: true` on the wire. They come from the activity the runtime is collecting, not from any
+file: the Instance Log is written when the turn lands, so until then the steps exist nowhere
+else. They carry the *whole* turn - its prompt, its steps and the answer text so far - so a client
+rebuilds the in-flight turn from one read, which it must: a `spawn` or a DAG node is a turn of
+this instance that the client never sent and so has no row of its own to anchor on, and for
+those two lanes this read is the only thing that carries any of it (the wire tags an instance
+on the four events of a *direct* turn and nothing else). Addressed by
+`(session_key, agent, handle)` through a second live index, because the first one is keyed by
+the record's directory - a task id no reader of a *conversation* ever sees.
+_Avoid_: reading the absence of live rows as "the turn ended" - a transport with no per-step
+visibility reports none for the whole of every turn.
+
 **Stop Reason** (`raven/agent/subagent/backends/acp_agent.py`):
 What an ACP agent reports at the end of a turn. Only `end_turn` means it finished; every
 other value (`cancelled`, `max_tokens`, `refusal`, ...) leaves a reply that reads complete

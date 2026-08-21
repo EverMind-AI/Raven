@@ -27,6 +27,7 @@ from raven.tracing import trace
 SPAN_NAME = "subagent.external"
 _PREFIX = "subagent.external"
 TRANSCRIPT_KEY = f"{_PREFIX}.transcript"
+FRAMES_KEY = f"{_PREFIX}.frames"
 
 
 @contextmanager
@@ -103,16 +104,35 @@ def record_events(span: Any, *, transport: str, kinds: dict[str, int]) -> None:
 
 
 def record_transcript(span: Any, payload: dict[str, Any]) -> None:
-    """Persist the run's raw material out of line."""
+    """Persist the run's raw material out of line.
+
+    The cli lane's only way to keep what it saw: it reconstructs a run from
+    whatever the command printed, so the payload *is* the evidence. The acp lane
+    uses :func:`record_frames` instead, because its evidence is already a file.
+    """
     span.artifact(TRANSCRIPT_KEY, payload)
 
 
+def record_frames(span: Any, frames: dict[str, Any] | None) -> None:
+    """Point at the run's own stretch of its connection's wire journal.
+
+    Attributes rather than an artifact: the frames are already a file, written as
+    they crossed the wire, so copying the same bytes into a second per-call file
+    would double the audit trail's size and give two places for it to disagree.
+    """
+    if not frames:
+        return
+    span.set(**{f"{FRAMES_KEY}.{key}": value for key, value in frames.items()})
+
+
 __all__ = [
+    "FRAMES_KEY",
     "SPAN_NAME",
     "TRANSCRIPT_KEY",
     "external_agent_span",
     "record_events",
     "record_outcome",
+    "record_frames",
     "record_session",
     "record_transcript",
 ]

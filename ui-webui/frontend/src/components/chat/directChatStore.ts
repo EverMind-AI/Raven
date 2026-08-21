@@ -19,8 +19,14 @@ export interface DirectTargetRef {
 }
 
 export interface DirectMsg {
-	role: 'user' | 'assistant' | 'system';
+	role: 'user' | 'assistant' | 'system' | 'tool';
 	text: string;
+	/** The thought that preceded this turn, folded by the renderer. */
+	reasoning?: string;
+	/** What this turn called on the way; `input` is the raw JSON string. */
+	toolCalls?: { id: string; name: string; input: string }[];
+	/** On a `tool` turn, the call it answers. */
+	toolCallId?: string;
 }
 
 /** The main agent's own view, which is not an instance. */
@@ -78,10 +84,14 @@ export function appendDelta(
 ): DirectChatState {
 	const prev = state.transcripts[key] ?? [];
 	const last = prev[prev.length - 1];
-	const next =
-		last && last.role === role
-			? [...prev.slice(0, -1), { role, text: last.text + text }]
-			: [...prev, { role, text }];
+	// Never merge into a turn that carries structured parts: a delta only has
+	// text, so folding it in would rebuild the message without its tool calls
+	// and silently drop them from a loaded history.
+	const mergeable =
+		last && last.role === role && !last.toolCalls && !last.toolCallId && !last.reasoning;
+	const next = mergeable
+		? [...prev.slice(0, -1), { role, text: last.text + text }]
+		: [...prev, { role, text }];
 	return { ...state, transcripts: { ...state.transcripts, [key]: next } };
 }
 
@@ -92,6 +102,37 @@ export function setTranscript(
 	msgs: DirectMsg[],
 ): DirectChatState {
 	return { ...state, transcripts: { ...state.transcripts, [key]: msgs } };
+}
+
+/**
+ * Replace the running turn with the snapshot the read carries.
+ *
+ * The read carries the whole turn -- its prompt, its steps and the answer so far
+ * -- so there is nothing of it left for the client to hold on to and the rows
+ * are simply rebuilt. Deltas that land between two reads append to the trailing
+ * message, which is the same message the next read replaces, so the text stays
+ * smooth and self-correcting rather than being owned by one side.
+ *
+ * Rebuilt rather than spliced onto the tail: a spawn or a DAG node is a turn of
+ * this instance that the client never sent, so there is no row of its own to
+ * anchor on. Anchoring on the last thing the user said put such a turn's steps
+ * where the *previous* turn's answer was.
+ *
+ * With nothing to add it does nothing, rather than treating the absence as "the
+ * turn ended". A transport with no per-step visibility reports no live rows for
+ * the whole of every turn, so replacing the view here would delete the prompt
+ * and the reply it is streaming. Ending a turn is the settled read's job.
+ */
+export function applyLive(
+	state: DirectChatState,
+	key: string,
+	settled: DirectMsg[],
+	live: DirectMsg[],
+): DirectChatState {
+	if (live.length === 0) {
+		return state;
+	}
+	return setTranscript(state, key, [...settled, ...live]);
 }
 
 export function markRunning(state: DirectChatState, target: DirectTargetRef): DirectChatState {

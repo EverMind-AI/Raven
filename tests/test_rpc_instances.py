@@ -149,6 +149,7 @@ async def test_history_reads_the_record_directories_in_order(tmp_path: Path) -> 
     # from the recorded start. Force the ambiguity rather than hope for it.
     _stamp(first, 1000)
     _stamp(second, 2000)
+    _as_a_pre_log_conversation(session_dir)
 
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
@@ -161,6 +162,21 @@ async def test_history_reads_the_record_directories_in_order(tmp_path: Path) -> 
     assert [t["role"] for t in out["turns"]] == ["user", "assistant", "user", "assistant"]
     assert out["turns"][0]["prompt_path"].endswith("prompt.md")
     assert out["turns"][1]["out_path"].endswith("out.md")
+
+
+def _as_a_pre_log_conversation(session_dir: Path) -> None:
+    """Drop the instance log, leaving only the record directories.
+
+    That is what a conversation recorded before the instance log existed looks
+    like on disk, and it is the state the stitching path is still there for. The
+    tests below are about *its* contract -- ordering by the recorded start rather
+    than by directory name -- which the log path cannot be asked about: the log
+    is appended as turns finish, so its order is chronological by construction
+    and back-dating a meta.json cannot reorder it.
+    """
+    import shutil
+
+    shutil.rmtree(session_dir / "subagents" / "instances", ignore_errors=True)
 
 
 def _stamp(record: Any, started_at_ms: int) -> None:
@@ -184,6 +200,7 @@ async def test_history_orders_by_start_not_by_directory_name(tmp_path: Path) -> 
     _stamp(later, 2000)
     _stamp(earlier, 1000)
     assert later.dir.name < earlier.dir.name
+    _as_a_pre_log_conversation(session_dir)
 
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
@@ -348,6 +365,7 @@ async def test_history_orders_every_source_by_when_it_started(tmp_path: Path) ->
     )
     rec = _record(session_dir, "Coder", "notes", task_id="t3", task="typed", output="t-out")
     _stamp(rec, 3000)
+    _as_a_pre_log_conversation(session_dir)
 
     turns = await _history(session_dir, "Coder", "notes")
 
@@ -404,3 +422,377 @@ async def test_a_loop_that_cannot_answer_liveness_degrades_to_not_live(_isolated
 
     assert plain["instances"][0]["status"] == "interrupted"
     assert boom["instances"][0]["status"] == "interrupted"
+
+
+# ---------------------------------------------------------------------------
+# The instance log is the preferred source: a direct chat shows the whole turn
+# ---------------------------------------------------------------------------
+
+
+async def test_history_shows_what_the_run_did_not_only_what_it_answered(tmp_path: Path) -> None:
+    """The half of a turn the stitched reading could never show.
+
+    A prompt and a final output are what a record directory holds; the thought,
+    the tool call and the tool's answer are in the instance log, which is written
+    turn by turn. A direct chat that showed only the two ends of a turn was the
+    whole reason for reading this file instead.
+    """
+    from raven.agent.subagent.instance_log import append_turn
+
+    session_dir = tmp_path / "sessions" / "s1"
+    append_turn(
+        session_dir,
+        agent="Coder",
+        handle="notes",
+        session_key="web:abc",
+        kind="spawn",
+        prompt="read the file",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "the file is small, one read will do",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"path": "a.py"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ZORKMID-4417"},
+        ],
+        answer="ZORKMID-4417",
+    )
+
+    turns = await _history(session_dir, "Coder", "notes")
+
+    assert [t["role"] for t in turns] == ["user", "assistant", "tool", "assistant"]
+    assert turns[1]["reasoning_content"] == "the file is small, one read will do"
+    assert turns[1]["tool_calls"] == [{"id": "c1", "name": "read", "arguments": '{"path": "a.py"}'}]
+    assert turns[2]["tool_call_id"] == "c1"
+    assert turns[2]["content"] == "ZORKMID-4417"
+    assert turns[3]["content"] == "ZORKMID-4417"
+
+
+async def test_history_reads_every_lane_from_one_file(tmp_path: Path) -> None:
+    """One instance, three lanes, one ordered conversation -- with no stitching.
+
+    The log is appended by whichever lane ran the turn, so what used to need
+    three directory walks and a sort is now the file's own order.
+    """
+    from raven.agent.subagent.instance_log import append_turn
+
+    session_dir = tmp_path / "sessions" / "s1"
+    for lane, text in (("spawn", "spawned"), ("dag", "dagged"), ("direct", "typed")):
+        append_turn(
+            session_dir,
+            agent="Coder",
+            handle="notes",
+            session_key="web:abc",
+            kind=lane,
+            prompt=text,
+            answer=f"{text}-out",
+        )
+
+    turns = await _history(session_dir, "Coder", "notes")
+
+    assert [t["content"] for t in turns] == ["spawned", "spawned-out", "dagged", "dagged-out", "typed", "typed-out"]
+
+
+async def test_history_falls_back_when_an_instance_has_no_log(tmp_path: Path) -> None:
+    """A conversation from before the log existed still opens on its records."""
+    session_dir = tmp_path / "sessions" / "s1"
+    _spawn(session_dir, agent="Coder", handle="notes", task="asked", output="answered", at_ms=1000)
+    _as_a_pre_log_conversation(session_dir)
+
+    turns = await _history(session_dir, "Coder", "notes")
+
+    assert [t["content"] for t in turns] == ["asked", "answered"]
+    assert turns[0]["prompt_path"].endswith("prompt.md"), "the fallback keeps the fields it always carried"
+
+
+async def test_history_skips_the_logs_header_and_a_corrupt_line(tmp_path: Path) -> None:
+    """The header is the file's one tagged record, and one bad line must not
+    empty a conversation -- the same tolerance the session loader has."""
+    from raven.agent.subagent.instance_log import append_turn, transcript_path
+
+    session_dir = tmp_path / "sessions" / "s1"
+    append_turn(session_dir, agent="Coder", handle="notes", session_key="web:abc", prompt="asked", answer="answered")
+    path = transcript_path(session_dir, "Coder", "notes")
+    path.write_text(path.read_text(encoding="utf-8") + "{not json\n", encoding="utf-8")
+
+    turns = await _history(session_dir, "Coder", "notes")
+
+    assert [t["content"] for t in turns] == ["asked", "answered"]
+
+
+async def test_history_carries_the_steps_of_the_turn_running_now(tmp_path: Path) -> None:
+    """A turn in flight has no record, so its only account is the live activity.
+
+    This is what lets a direct chat show the work as it happens: the event
+    stream tags an instance on the reply text alone, so nothing else can bring
+    the steps to the view before the turn ends.
+    """
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")) as did:
+        activity.note_transcript(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "output"},
+            ]
+        )
+        assert did.transcript
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["role"] for t in out["turns"]] == ["assistant", "tool"]
+    assert all(t["live"] is True for t in out["turns"]), "the client has to tell a snapshot from the record"
+    assert out["turns"][0]["tool_calls"][0]["name"] == "exec"
+
+
+async def test_the_live_read_carries_the_answer_so_far(tmp_path: Path) -> None:
+    """For two of the three lanes this read is the only thing that carries it.
+
+    The wire tags an instance on the four events of a *direct* turn, so a spawn
+    or a DAG node reaches the conversation view through nothing else. Withholding
+    the text here -- on the grounds that ``token.delta`` delivers it -- left a
+    spawned turn showing its tool calls and never a word the agent said.
+    """
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "output"},
+                {"role": "assistant", "content": "half an answ"},
+            ]
+        )
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["role"] for t in out["turns"]] == ["assistant", "tool", "assistant"]
+    assert out["turns"][-1]["content"] == "half an answ"
+    assert all(t["live"] is True for t in out["turns"])
+
+
+async def test_a_trailing_thought_is_not_mistaken_for_the_streaming_reply(tmp_path: Path) -> None:
+    """Both are assistant rows with no tool call; only one carries text."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "still deciding"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["reasoning_content"] for t in out["turns"]] == ["still deciding"]
+
+
+async def test_live_steps_follow_the_turns_already_on_record(tmp_path: Path) -> None:
+    """An in-flight turn is the last one by definition, so it appends."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    _record(session_dir, "A", "h", task_id="t1", task="first", output="a1")
+    _as_a_pre_log_conversation(session_dir)
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "thinking"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t.get("live") for t in out["turns"]] == [None, None, True]
+    assert [t["content"] for t in out["turns"][:2]] == ["first", "a1"]
+
+
+async def test_a_conversation_with_nothing_in_flight_reads_the_record_only(tmp_path: Path) -> None:
+    """The live index is empty once the block closes, and the record stands alone."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    _record(session_dir, "A", "h", task_id="t1", task="first", output="a1")
+    _as_a_pre_log_conversation(session_dir)
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "thinking"}])
+
+    assert activity.live_instance("s1", "A", "h") is None
+    out = await instances_history(
+        {"session_key": "s1", "agent": "A", "handle": "h"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+
+    assert [t.get("live") for t in out["turns"]] == [None, None]
+
+
+async def test_one_instances_live_steps_never_reach_another(tmp_path: Path) -> None:
+    """The index is keyed by the whole address, not by the handle."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "mine"}])
+        other = await instances_history(
+            {"session_key": "s1", "agent": "B", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+        same_agent_other_handle = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h2"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert other["turns"] == []
+    assert same_agent_other_handle["turns"] == []
+
+
+async def test_the_live_read_carries_the_question_the_turn_was_asked(tmp_path: Path) -> None:
+    """A client rebuilds the whole in-flight turn from this read.
+
+    Without the prompt a spawn or a DAG node -- whose task the client never
+    typed and so has no row of its own for -- would show steps with no question
+    above them.
+    """
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h"), prompt="refactor the parser"):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "reading it"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [(t["role"], t["content"]) for t in out["turns"]] == [
+        ("user", "refactor the parser"),
+        ("assistant", ""),
+    ]
+    assert all(t["live"] is True for t in out["turns"])
+
+
+async def test_a_turn_that_reported_no_prompt_still_reads(tmp_path: Path) -> None:
+    """Absent is not empty: a lane that cannot say leaves the row out."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h")):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "reading it"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["role"] for t in out["turns"]] == ["assistant"]
+
+
+async def test_the_running_turns_prompt_is_not_reported_twice(tmp_path: Path) -> None:
+    """The record's prompt file exists from the moment the turn opens.
+
+    So the fallback reading yields it as a settled row while the live rows carry
+    it too, and the view showed the question twice -- reported from the TUI on a
+    spawned turn, whose handle had no instance log yet and therefore took that
+    fallback.
+    """
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    # A record that has opened and not finished: prompt on disk, no output.
+    _record(session_dir, "A", "h", task_id="t1", task="do the thing", output=None)
+    _as_a_pre_log_conversation(session_dir)
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h"), prompt="do the thing"):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "on it"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [(t["role"], t.get("live")) for t in out["turns"]] == [("user", True), ("assistant", True)]
+    assert sum(1 for t in out["turns"] if t["content"] == "do the thing") == 1
+
+
+async def test_a_finished_turn_keeps_its_prompt_on_record(tmp_path: Path) -> None:
+    """Paired with the case above: the drop is for the *running* turn only."""
+    session_dir = tmp_path / "sessions" / "s1"
+    _record(session_dir, "A", "h", task_id="t1", task="do the thing", output="did it")
+    _as_a_pre_log_conversation(session_dir)
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    out = await instances_history(
+        {"session_key": "s1", "agent": "A", "handle": "h"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+
+    assert [t["content"] for t in out["turns"]] == ["do the thing", "did it"]
+
+
+async def test_an_earlier_crashed_prompt_survives_a_new_turn(tmp_path: Path) -> None:
+    """Only the running turn's own prompt is dropped, not every unanswered one.
+
+    A prompt with no reply that is *not* the last one is a run that crashed. It
+    is still worth showing, and it is not the turn this read is correcting for.
+    """
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    crashed = _record(session_dir, "A", "h", task_id="t1", task="the one that died", output=None)
+    running = _record(session_dir, "A", "h", task_id="t2", task="the one running now", output=None)
+    _stamp(crashed, 1000)
+    _stamp(running, 2000)
+    _as_a_pre_log_conversation(session_dir)
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h"), prompt="the one running now"):
+        activity.note_transcript([{"role": "assistant", "content": "working"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [(t.get("live"), t["content"]) for t in out["turns"]] == [
+        (None, "the one that died"),
+        (True, "the one running now"),
+        (True, "working"),
+    ]

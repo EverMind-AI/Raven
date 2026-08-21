@@ -191,20 +191,48 @@ class InstanceRow(_Strict):
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
 
 
-class DirectTurn(_Strict):
-    """One side of one direct-chat turn, read back from its record directory.
+class TranscriptToolCall(_Strict):
+    id: str
+    name: str
+    arguments: str = Field(..., description="JSON-encoded arguments; re-serialized when stored as an object.")
 
-    A record holds a turn as a pair of files, so it flattens to two of these:
+
+class DirectTurn(_Strict):
+    """One row of one instance's conversation.
+
+    Preferred source is the instance's own log, which is written turn by turn and
+    holds what the run did on the way -- hence the step fields below and the
+    ``tool`` role. A conversation with no log falls back to its record
+    directories, where a turn is a pair of files and flattens to two of these:
     the prompt as ``user`` and the reply as ``assistant``. A turn still running,
     or one that failed, has no reply and yields only the first.
+
+    Every step field is optional because the lane that ran the turn decides
+    whether there is one: the cli transport has no per-step visibility at all,
+    and absent is not the same as none.
     """
 
     call_id: str
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "tool"]
     content: str
     at_ms: int
     prompt_path: str | None = None
     out_path: str | None = None
+    reasoning_content: str | None = Field(
+        default=None, description="The thought that preceded this turn, where the transport reports one."
+    )
+    tool_calls: list[TranscriptToolCall] = Field(
+        default_factory=list,
+        description="What this turn called on the way, matched to a later role='tool' row by id.",
+    )
+    tool_call_id: str | None = Field(default=None, description="On a role='tool' row, the call it answers.")
+    live: bool | None = Field(
+        default=None,
+        description=(
+            "Set on a row from a turn still running, which no record holds yet. Such rows are a "
+            "snapshot: the next read replaces them, and the record replaces them once the turn lands."
+        ),
+    )
 
 
 class UsageSnapshot(_Strict):
@@ -1859,12 +1887,6 @@ class TranscriptNotice(_Strict):
 
     kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
     detail: str | None = None
-
-
-class TranscriptToolCall(_Strict):
-    id: str
-    name: str
-    arguments: str = Field(..., description="JSON-encoded arguments; re-serialized when stored as an object.")
 
 
 class TranscriptMessage(_Strict):

@@ -1256,3 +1256,212 @@ def test_replay_follows_the_declaration_not_the_kind(tmp_path):
     # A built-in row is replayed whatever it declares: an in-process loop has no
     # session store of its own, so the message list raven keeps is its memory.
     assert manager._is_replayed("raven") is True
+
+
+@pytest.mark.asyncio
+async def test_direct_turns_join_the_instances_own_conversation(tmp_path, monkeypatch):
+    """A direct chat is part of the instance's conversation, not a lane apart.
+
+    The same handle can be dispatched by ``spawn``, run as a DAG node and then
+    talked to directly, and only the union is that instance's conversation. This
+    lane used not to collect its activity at all, so it contributed a prompt and
+    an answer where a spawned call beside it contributed every step.
+    """
+    from raven.agent.subagent.instance_log import transcript_path
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    await manager.chat(session_key="s1", agent="raven", handle="notes", text="first")
+    await manager.chat(session_key="s1", agent="raven", handle="notes", text="second")
+
+    path = transcript_path(manager._session_dir("s1"), "raven", "notes")
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert rows[0]["_type"] == "metadata"
+    assert rows[0]["metadata"]["opened_by"] == "direct"
+    assert [r["content"] for r in rows if r.get("role") == "user"] == ["first", "second"]
+    assert all(r.get("role") for r in rows[1:]), "message rows only; frames live in the sibling file"
+
+
+@pytest.mark.asyncio
+async def test_a_direct_turn_is_reachable_by_instance_while_it_runs(tmp_path, monkeypatch):
+    """The conversation view addresses a run by instance, so the lane indexes it.
+
+    ``activity._live`` is keyed by the record's own directory, which is a task id
+    no reader of an instance's conversation ever saw. Without the second index
+    the steps of the turn on screen were republished on every update from the
+    agent and reachable by nobody until the log landed at turn end.
+    """
+    from raven.agent.subagent import activity
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    seen: list[object] = []
+
+    original = manager.registry.backend("raven").run
+
+    async def watching(task, **kw):
+        seen.append(activity.live_instance("s1", "raven", "notes"))
+        return await original(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", watching)
+    await manager.chat(session_key="s1", agent="raven", handle="notes", text="hi")
+
+    assert seen and seen[0] is not None, "the direct lane must index its turn by instance"
+    assert activity.live_instance("s1", "raven", "notes") is None, "and drop it when the turn ends"
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_is_reachable_by_instance_while_it_runs(tmp_path, monkeypatch):
+    """A spawned call is a turn of the same instance a direct chat talks to, so
+    watching it in the conversation view is the same question and needs the same
+    index."""
+    from raven.agent.subagent import activity
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    seen: list[object] = []
+
+    original = manager.registry.backend("raven").run
+
+    async def watching(task, **kw):
+        seen.append(activity.live_instance("s1", "raven", "notes"))
+        return await original(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", watching)
+    # A spawn announces its result back to the main agent when it lands, which
+    # the direct-chat fixture has no submitter for. Stubbed rather than worked
+    # around, so the run reaches its own end and drops the index there.
+    manager.set_submit(lambda req: None)
+    await manager.spawn("hi", session_key="s1", agent="raven", instance="notes")
+    await asyncio.gather(*manager._running_tasks.values())
+
+    assert seen and seen[0] is not None, "the spawn lane must index its turn by instance"
+    assert activity.live_instance("s1", "raven", "notes") is None
+
+
+@pytest.mark.asyncio
+async def test_a_running_turns_steps_are_readable_over_rpc(tmp_path, monkeypatch):
+    """End to end, because this is the whole point and it spans four places.
+
+    The backend publishes each step into the activity, the lane indexes that
+    activity by instance, the handler finds it there and marks its rows, and the
+    client tells them from the record by that mark. A break anywhere leaves the
+    view showing a prompt and a reply with no account of the work between them,
+    which is the state this replaced.
+    """
+    from raven.rpc.methods.instances import instances_history
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    read: dict = {}
+
+    class _Loop:
+        subagents = manager
+        _direct_handoff = None
+        tools = None
+
+    steps = [
+        {
+            "role": "assistant",
+            "content": "let me look.",
+            "reasoning_content": "where is it",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "exec", "arguments": '{"command": "ls"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "a b"},
+    ]
+
+    async def stepping(task, **kw):
+        from raven.agent.subagent import activity
+
+        # The in-flight shape, closing with the answer so far, exactly as the acp
+        # collector republishes it on every update from the agent.
+        activity.note_transcript([*steps, {"role": "assistant", "content": "half an answ"}])
+        read.update(
+            await instances_history(
+                {"session_key": "s1", "agent": "raven", "handle": "notes"},
+                agent_loop_factory=lambda: _Loop(),
+            )
+        )
+        # And the settled shape at the end, which is what reaches the log: the
+        # reply is the record's closing row, not a transcript row as well.
+        activity.note_transcript(steps)
+        return "two entries."
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", stepping)
+    await manager.chat(session_key="s1", agent="raven", handle="notes", text="look around")
+
+    # The whole running turn: the question, the work, and the answer so far.
+    mid_turn = [t for t in read["turns"] if t.get("live")]
+    assert [t["role"] for t in mid_turn] == ["user", "assistant", "tool", "assistant"]
+    assert mid_turn[0]["content"] == "look around"
+    assert mid_turn[1]["reasoning_content"] == "where is it"
+    assert mid_turn[1]["content"] == "let me look."
+    assert mid_turn[1]["tool_calls"][0]["name"] == "exec"
+    assert mid_turn[2]["content"] == "a b"
+    assert mid_turn[3]["content"] == "half an answ", "the reply as it stands, for a lane nothing streams to"
+
+    # And once it lands, the same read is the record, with nothing marked live.
+    after = await instances_history(
+        {"session_key": "s1", "agent": "raven", "handle": "notes"},
+        agent_loop_factory=lambda: _Loop(),
+    )
+    assert [t.get("live") for t in after["turns"]] == [None] * len(after["turns"])
+    assert [t["role"] for t in after["turns"]] == ["user", "assistant", "tool", "assistant"]
+    assert after["turns"][-1]["content"] == "two entries."
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_turns_steps_are_readable_over_rpc(tmp_path, monkeypatch):
+    """The lane the user actually hit, and the one that was broken.
+
+    A spawn is dispatched by the main agent, so nothing about it reaches the
+    direct-chat view's own event stream -- the wire tags an instance on the four
+    events of a *direct* turn only. Watching it is therefore entirely this read,
+    prompt included: the view has no row of its own for a turn it never sent.
+    """
+    from raven.rpc.methods.instances import instances_history
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    manager.set_submit(lambda req: None)
+    read: dict = {}
+
+    class _Loop:
+        subagents = manager
+        _direct_handoff = None
+        tools = None
+
+    async def stepping(task, **kw):
+        from raven.agent.subagent import activity
+
+        activity.note_transcript(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "grep", "arguments": '{"pattern": "TODO"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "3 hits"},
+            ]
+        )
+        read.update(
+            await instances_history(
+                {"session_key": "s1", "agent": "raven", "handle": "notes"},
+                agent_loop_factory=lambda: _Loop(),
+            )
+        )
+        return "found three."
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", stepping)
+    await manager.spawn("find the TODOs", session_key="s1", agent="raven", instance="notes")
+    await asyncio.gather(*manager._running_tasks.values())
+
+    live = [t for t in read["turns"] if t.get("live")]
+    assert [t["role"] for t in live] == ["user", "assistant", "tool"]
+    assert live[0]["content"] == "find the TODOs", "the task, which the view never typed"
+    assert live[1]["tool_calls"][0]["name"] == "grep"
+    assert live[2]["content"] == "3 hits"

@@ -149,6 +149,21 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_acp_journal(tmp_path, monkeypatch):
+    """Keep ACP wire journals out of the real home.
+
+    Every pooled connection opens one (``raven/agent/acp/journal.py``), so any
+    test that launches a stub server would otherwise write the whole exchange --
+    the prompt, every tool result, every stderr line -- under the developer's
+    ``~/.raven/traces``, and leave it there after the run.
+    """
+    from raven.agent.acp import journal
+
+    monkeypatch.setattr(journal, "journal_root", lambda: tmp_path / "acp-frames")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_browser(monkeypatch):
     """Keep the browser opener off the desktop of whoever runs the suite.
 
