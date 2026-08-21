@@ -30,6 +30,7 @@ from typing import Literal
 import yaml
 from loguru import logger
 
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook.types import NAME_RE, PlaybookSpec
 
 #: Playbooks that ship with the package. Kept next to the code so the
@@ -38,6 +39,11 @@ from raven.playbook.types import NAME_RE, PlaybookSpec
 BUILTIN_ROOT = Path(__file__).parent / "builtin"
 
 PlaybookOrigin = Literal["builtin", "user"]
+
+_RETIRED_BUILTIN_AGENTS = frozenset({"research-raven", "code-raven", "data-raven", "content-raven"})
+"""Built-in rows the package used to seed, listed by name rather than matched by
+the ``-raven`` suffix: an external agent a user registers as ``myteam-raven`` is
+a real agent and must not be rewritten out from under them."""
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _BLOCK_RE = re.compile(r"```yaml\s+playbook-spec\n(.*?)\n```", re.DOTALL)
@@ -172,6 +178,14 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
     ``block_dump`` is ``exclude_none``, not ``exclude_defaults``, so ``False`` was
     written out in full.
 
+    A step naming one of the four retired built-in agents is repointed at
+    ``raven``. Those four were labels on one shared in-process loop -- same
+    provider, same model, same tools, same system prompt -- so this rewrite
+    changes a stored playbook's target name and nothing about what runs it. Left
+    alone the step would fail validation ("agent not in the registry") and take
+    the whole playbook out of the library, which is the invisible failure this
+    function exists to prevent.
+
     ``skills: []`` / ``mcps: []`` used to mean "everything" -- the executor folded
     an empty list to ``None`` -- and now mean "nothing at all". Left alone, such a
     file would load and then run every step with an empty skill menu, which is the
@@ -196,6 +210,10 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
         if "agent" in node and "subagent" not in node:
             node = {("subagent" if k == "agent" else k): v for k, v in node.items()}
             reasons.add("renaming 'agent' to 'subagent'")
+        target = node.get("subagent")
+        if isinstance(target, str) and target in _RETIRED_BUILTIN_AGENTS:
+            node = {**node, "subagent": GENERIC_AGENT}
+            reasons.add(f"repointing retired built-in agents at {GENERIC_AGENT!r}")
         if "confirm" in node:
             node = {k: v for k, v in node.items() if k != "confirm"}
             for field in ("skills", "mcps"):

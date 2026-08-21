@@ -302,14 +302,14 @@ function drawXa() {
    how a disabled agent reads as broken, or a missing binary reads as
    switched off. */
 const XA_FIXTURE = [
-  { name: 'research-raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
+  { name: 'Raven-Research', preset: null, kind: 'cli', configured: false, builtin: false, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: 'Deep retrieval and fact-checking: multi-source search, source-credibility judgment.' },
-  { name: 'code-raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
-    probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
+    description: 'A vendored build, discovered under subagents/ and registered as cli.' },
+  { name: 'Raven-PPT', preset: null, kind: 'cli', configured: false, builtin: false, enabled: false,
+    probe_status: 'unknown', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,
-    description: "Repository-level code work: locate where a change lands, implement with unit tests." },
+    description: 'A vendored build whose venv is not built yet, so it is listed and disabled.' },
   { name: 'raven', preset: null, kind: 'builtin', configured: false, builtin: true, enabled: true,
     probe_status: 'ready', probe_detail: '', has_api_key: false, test_running: false,
     last_test_ok: null, last_test_at_ms: null, last_test_detail: '', upgrade_to: null,

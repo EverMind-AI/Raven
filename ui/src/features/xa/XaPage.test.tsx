@@ -371,3 +371,174 @@ describe('xa island, built-in agents', () => {
     expect(document.querySelector('#dBody .danger')).toBeNull()
   })
 })
+
+/* The vendored builds: folders this install shipped, discovered on every start.
+   They arrive with `configured` false and `builtin` false, which put them in the
+   "connect one" section behind a Connect button they cannot honour -- they have
+   no preset to install from, and there is no row to write. */
+describe('xa island, vendored builds', () => {
+  const vend = (over: Partial<XaRow> = {}): XaRow =>
+    row({
+      name: 'Raven-Research',
+      preset: undefined,
+      kind: 'cli',
+      configured: false,
+      vendored: true,
+      description: 'A vendored build',
+      ...over,
+    })
+
+  it('gives them their own section, not the connectable one', async () => {
+    install([vend(), row(), row({ name: 'codex', configured: false })])
+    await mount()
+
+    expect(await screen.findByText('Raven-Research')).toBeTruthy()
+    expect(screen.getByText('gui.agent.vendored')).toBeTruthy()
+    expect(screen.getByText('gui.agent.vendored_h')).toBeTruthy()
+    /* `.card` is the connectable shape. One is expected (codex); a vendored row
+       drawn as a second would be the regression. */
+    expect(document.querySelectorAll('.card').length).toBe(1)
+    const counts = [...document.querySelectorAll('.csec .hd .n')].map((n) => n.textContent)
+    expect(counts).toEqual(['1', '1', '1'])
+  })
+
+  it('offers neither connect nor a switch', async () => {
+    /* Connect has no preset to connect from. The switch is the subtler one:
+       `subagents.toggle` creates an override row for a *built-in* name and
+       answers `subagent_not_found` for anything else, and a vendored row is
+       neither in config nor a built-in name -- so the button errored. Its
+       membership belongs to the folder, which is what the section hint says. */
+    install([vend()])
+    await mount()
+    await screen.findByText('Raven-Research')
+
+    const labels = [...document.querySelectorAll('.pcard button')].map((b) => b.textContent)
+    expect(labels).not.toContain('gui.agent.connect')
+    expect(labels).not.toContain('gui.agent.disable')
+    expect(labels).not.toContain('gui.agent.enable')
+    expect(labels).toContain('gui.agent.configure')
+  })
+
+  it('a built-in row keeps its switch', async () => {
+    /* The variant is per-section, not global: a built-in row's switch is real
+       and is the only way to take one off the roster. */
+    install([row({ name: 'raven', preset: undefined, kind: 'builtin', configured: false, builtin: true })])
+    await mount()
+    await screen.findByText('raven')
+
+    expect([...document.querySelectorAll('.pcard button')].map((b) => b.textContent)).toContain('gui.agent.disable')
+  })
+
+  it('an unbuilt one offers Install, a ready one does not', async () => {
+    /* The action the section exists to make reachable: the folder is on disk and
+       what it lacks is a few hundred MB of dependencies, which used to mean
+       leaving the page for a terminal. A ready row has nothing to install, so
+       offering the button there would be a button that does nothing. */
+    install([vend({ enabled: false, probe_status: 'missing', probe_detail: 'venv not built' }), vend({ name: 'Raven-PPT' })])
+    await mount()
+    await screen.findByText('Raven-Research')
+
+    const labelsOf = (name: string) => {
+      const el = [...document.querySelectorAll('.pcard')].find((c) => c.textContent?.includes(name))
+      return [...(el ? el.querySelectorAll('button') : [])].map((b) => b.textContent)
+    }
+    expect(labelsOf('Raven-Research')).toContain('gui.agent.install')
+    expect(labelsOf('Raven-PPT')).not.toContain('gui.agent.install')
+  })
+
+  it('the card offers no Install for a folder switched off in its own manifest', async () => {
+    /* Same gate as the sheet, and it needs its own test: a *ready* row and a
+       manifest-disabled row both fail `!row.enabled`, so the earlier pair agreed
+       with each other and a revert to that condition stayed green here. */
+    install([vend({ enabled: false, probe_status: 'ready', probe_detail: 'installed at /x' })])
+    await mount()
+    await screen.findByText('Raven-Research')
+
+    const labels = [...document.querySelectorAll('.pcard button')].map((b) => b.textContent)
+    expect(labels).not.toContain('gui.agent.install')
+  })
+
+  it('a build in flight disables the button and says so', async () => {
+    /* `subagents.build` returns the moment the build starts, so the row's own
+       flag is the only thing that knows it is still going. A second click would
+       start a second `uv sync` against the same directory. */
+    install([vend({ enabled: false, building: true })])
+    await mount()
+    await screen.findByText('Raven-Research')
+
+    const btn = [...document.querySelectorAll('.pcard button')].find((b) => b.textContent === 'gui.agent.installing')
+    expect(btn).toBeTruthy()
+    expect((btn as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('an unbuilt one is drawn with what it is missing, not dropped', async () => {
+    /* The whole reason it is listed at all: "present, not set up" is what the
+       reader needs to see, and dropping the row would say "not shipped". */
+    install([vend({ enabled: false, probe_status: 'missing', probe_detail: 'venv not built in Raven-X' })])
+    await mount()
+
+    expect(await screen.findByText('Raven-Research')).toBeTruthy()
+    expect(screen.getByText(/venv not built in Raven-X/)).toBeTruthy()
+  })
+
+  it('a row the user also wrote by hand keeps its configured card', async () => {
+    /* Their edit, their delete button. The server reports such a row as
+       configured rather than vendored, and this pins that the island does not
+       second-guess it by name. */
+    install([row({ name: 'Raven-Research', kind: 'cli', configured: true })])
+    await mount()
+    await screen.findByText('Raven-Research')
+
+    expect(document.querySelectorAll('.pcard').length).toBe(1)
+    expect(screen.queryByText('gui.agent.vendored')).toBeNull()
+  })
+})
+
+/* The sheet is a second surface with the same two questions, and it answered
+   both wrongly: a vendored row got a Connect button in its head and a Connect
+   button on its config form, and both call `subagents.add` with a preset name
+   the server does not know. The built-in rows had the same dead buttons since
+   before discovery existed. */
+describe('xa island, the detail sheet of a packaged row', () => {
+  const vend = (over: Partial<XaRow> = {}): XaRow =>
+    row({ name: 'Raven-Research', preset: undefined, kind: 'cli', configured: false, vendored: true, ...over })
+
+  const openSheet = async (r: XaRow) => {
+    install([r])
+    await mount()
+    const card = [...document.querySelectorAll('.pcard')].find((c) => c.textContent?.includes(r.name))
+    const cfg = [...(card ? card.querySelectorAll('button') : [])].find(
+      (b) => b.textContent === 'gui.agent.configure',
+    )
+    ;(cfg as HTMLButtonElement).click()
+    await screen.findByText('gui.agent.sec_config')
+  }
+
+  it('offers no connect anywhere on it', async () => {
+    await openSheet(vend({ enabled: true }))
+
+    const labels = [...document.querySelectorAll('button')].map((b) => b.textContent)
+    expect(labels).not.toContain('gui.agent.connect')
+    expect(screen.getByText('gui.agent.packaged_note')).toBeTruthy()
+  })
+
+  it('a built-in row gets the same treatment, which it needed already', async () => {
+    await openSheet(row({ name: 'raven', preset: undefined, kind: 'builtin', configured: false, builtin: true }))
+
+    expect([...document.querySelectorAll('button')].map((b) => b.textContent)).not.toContain('gui.agent.connect')
+  })
+
+  it('offers Install only for the state it fixes', async () => {
+    await openSheet(vend({ enabled: false, probe_status: 'missing', probe_detail: 'venv not built' }))
+    expect([...document.querySelectorAll('.dact button')].map((b) => b.textContent)).toContain('gui.agent.install')
+  })
+
+  it('offers no Install for a folder switched off in its own manifest', async () => {
+    /* `!row.enabled` alone put a minutes-long no-op behind the only button a
+       vendored row has. Its manifest said `"enabled": false`; nothing Install
+       does changes that. */
+    await openSheet(vend({ enabled: false, probe_status: 'ready', probe_detail: 'installed at /x' }))
+
+    expect([...document.querySelectorAll('.dact button')].map((b) => b.textContent)).not.toContain('gui.agent.install')
+  })
+})

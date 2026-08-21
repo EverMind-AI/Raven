@@ -94,7 +94,7 @@ flag (default `true`) is described above.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
-| `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own agents (`research-raven`, `code-raven`, …) are on that list too, so a graph needs no third-party agent configured. |
+| `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own in-process agent (`raven`) is on that list too, so a graph needs no third-party agent configured. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a node an earlier run in this conversation completed, which is already finished and so only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output. |

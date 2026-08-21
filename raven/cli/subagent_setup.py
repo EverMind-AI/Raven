@@ -1,23 +1,21 @@
 """Onboard's sub-agent step: register the agents that ship in this checkout.
 
-``subagents/`` holds one folder per third-party agent - its own raven checkout,
-a ``config.json`` pinning the LLM it is tuned for, a ``subagent.json`` manifest,
-and an ``install.py`` that turns that manifest into an entry in the host roster.
-``subagents/install.sh`` builds the checkouts' venvs at install time; this is
-where they enter the roster.
+``subagents/`` holds one folder per vendored agent - its own raven checkout, a
+``config.json`` pinning the LLM it is tuned for, a ``subagent.json`` manifest,
+and an ``install.py``.
 
-Registration lives here rather than in the installer because it needs a
-configured host raven, and the installer runs before one exists: on a first
-install ``~/.raven/config.json`` is written by this very wizard, minutes after
-the installer has finished.
+**Getting on the roster is no longer this step's job.**
+:mod:`raven.agent.subagent.vendored_agents` discovers the tree and materializes a
+row per folder on every table build, so an agent appears without being written
+anywhere and disappears when its folder is deleted. What is left here is the part
+that needs a human: building a folder's venv (minutes of downloads) and choosing
+whether it runs on its own key or inherits the host's. Until the venv is built the
+discovered row is listed and disabled, which is why this step offers to build it
+rather than only mentioning that it is unbuilt.
 
-Nothing has to be restarted afterwards, which is the other reason this belongs
-in the wizard: the startup gate runs it before ``_build_agent_loop`` reads
-``config.subagents.third_party``, so a first run registers and then serves the
-agents in one process.
-
-Only a source checkout has the tree at all - the wheel and the sdist ship
-``raven/`` alone - so a wheel install finds nothing and the step says so.
+The tree is not a checkout-only thing any more either: the beta wheel carries it,
+and it is installed out to the raven home on first use so the venvs survive an
+upgrade. An install genuinely without it finds nothing and the step says so.
 
 The choice offered per folder is not "working or not". An agent with no key of
 its own still runs: its launcher copies the host's provider block whenever the
@@ -37,13 +35,23 @@ than as the configuration mistake it is.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
 import typer
+
+from raven.agent.subagent.vendored_agents import (
+    api_key_var as _env_var,
+)
+from raven.agent.subagent.vendored_agents import (
+    checkout_of as _checkout_of,
+)
+from raven.agent.subagent.vendored_agents import (
+    host_can_lend_a_key,
+    subagents_root,
+    venv_ready,
+)
 
 
 class SubagentFolder(NamedTuple):
@@ -73,29 +81,11 @@ class SubagentFolder(NamedTuple):
 
         Registering an agent that cannot start puts a name in the roster the
         dispatching model will pick and then fail on, so this gates the offer.
-
-        Executability, not existence: ``subagents/install.sh`` classifies the
-        same folder with ``[ -x ]``, and two readers of one fact that disagree on
-        a present-but-unexecutable file would have the installer call a folder
-        unbuilt while this offered it.
+        Delegated to the agent layer, which decides the same fact for the rows it
+        discovers -- an installer that called a folder ready while the registry
+        refused to advertise it would be one question with two answers.
         """
-        if not self.checkout:
-            return False
-        launcher = self.checkout / ".venv" / "bin" / "raven"
-        return os.access(launcher, os.X_OK)
-
-
-def subagents_root() -> Optional[Path]:
-    """The ``subagents/`` tree of the checkout this raven runs from, if any.
-
-    An editable install leaves ``raven/__init__.py`` inside the clone, so the
-    tree is two levels up. A wheel install leaves it in site-packages, where
-    there is none - which is the whole gate, and needs no separate flag.
-    """
-    import raven
-
-    candidate = Path(raven.__file__).resolve().parent.parent / "subagents"
-    return candidate if candidate.is_dir() else None
+        return venv_ready(self.checkout)
 
 
 def host_openrouter_key() -> str:
@@ -123,31 +113,6 @@ def host_openrouter_key() -> str:
         return ""
 
 
-def host_can_lend_a_key() -> bool:
-    """Whether `inherit_llm` in the launchers would find anything to inherit.
-
-    Mirrors that function's own test rather than asking `providers.auth`, and
-    the difference is the whole point. The launchers are standard-library-only
-    scripts outside this package: they cannot import auth, and they accept
-    exactly one shape -- a literal `apiKey` on some provider section. A host
-    signed in through OAuth is configured by auth's rule and has nothing to lend
-    by the launcher's, because those credentials live in files under
-    `~/.raven/oauth/`. Asking auth here would offer an option that registers
-    cleanly and then dies at the first dispatch.
-
-    So this is not a second opinion on whether a provider is set up. It is the
-    question "will `inherit_llm` return non-empty", which only `inherit_llm`'s
-    own rule can answer.
-    """
-    from raven.cli.onboard_commands import _load_raw_config
-
-    try:
-        providers = (_load_raw_config().get("providers") or {}).values()
-    except Exception:
-        return False
-    return any(isinstance(p, dict) and p.get("apiKey") for p in providers)
-
-
 def host_model() -> str:
     """The model this raven answers with, for naming the inherit option."""
     from raven.cli.onboard_commands import _load_raw_config
@@ -156,26 +121,6 @@ def host_model() -> str:
         return str(((_load_raw_config().get("agents") or {}).get("defaults") or {}).get("model") or "")
     except Exception:
         return ""
-
-
-def _checkout_of(folder: Path) -> Optional[Path]:
-    """The folder's raven checkout: its one subdirectory that is a python project.
-
-    Discovered rather than named - the four folders spell it four ways already
-    (``Raven-main``, ``Raven-Oncall``, ``Raven-X``, ``Raven-PPT``) and a fifth is
-    free to spell it a fifth. ``subagents/install.sh`` finds it the same way, and
-    disagreeing with it would mean two answers to one question.
-    """
-    found = [project.parent for project in folder.glob("*/pyproject.toml")]
-    return found[0] if len(found) == 1 else None
-
-
-def _env_var(folder_name: str) -> str:
-    """``CODE_API_KEY`` for ``raven-code``: the folder name without its
-    ``raven-`` prefix, upper-cased. Mirrors ``prefix_of`` in
-    ``subagents/install.sh`` and the ``REQUIRED_SECRETS`` each launcher reads."""
-    stem = folder_name[len("raven-") :] if folder_name.startswith("raven-") else folder_name
-    return stem.upper().replace("-", "_") + "_API_KEY"
 
 
 def discover(root: Path) -> list[SubagentFolder]:
@@ -237,38 +182,92 @@ def write_key(folder: SubagentFolder, key: str) -> None:
     env_path.chmod(0o600)
 
 
-def register(folder: SubagentFolder, warnings: list[str]) -> bool:
-    """Write the roster entry by running the folder's own ``install.py``.
+def _offer_to_build(folder: SubagentFolder, root: Path, q: Any, warnings: list[str]) -> bool:
+    """Offer to build this folder's venv now. True once it is built.
 
-    Through the script rather than ``update_subagents`` directly: only it knows
-    how to resolve ``{SUBAGENT_DIR}`` against the folder's real location and how
-    to back the previous list up. This module owns the UX layer, not the
-    manifest's assembly rules.
+    Asked rather than done, and asked rather than only mentioned. Only mentioning
+    it -- which is what this used to do -- leaves the agent on the table and out
+    of the roster indefinitely, because the reader has to find a shell, find the
+    tree, and come back; most never do, and the four agents read as broken rather
+    than as unbuilt. Doing it silently is the other failure: ``uv sync`` on a raven
+    checkout is a minutes-long download, and a first-run wizard that stalls with
+    no explanation is worse than one that asks.
 
-    ``--raven-python`` is passed explicitly because the script's default is to
-    read the shebang of ``raven`` on PATH, and the interpreter running this is
-    already the one that has raven importable - no PATH lookup can be more
-    reliable than that.
+    Delegated to ``subagents/install.sh`` for the single folder rather than
+    calling ``uv sync`` here: that script knows which optional-dependency extra
+    each folder needs, and a second implementation of that mapping would build a
+    venv missing exactly the extra the agent's job depends on.
     """
-    proc = subprocess.run(
-        [sys.executable, "install.py", "--raven-python", sys.executable],
-        cwd=folder.path,
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.cli.onboard_commands import _QMARK, _t, console
+
+    installer = root / "install.sh"
+    if not installer.is_file():
+        console.print(
+            _t(
+                f"  [yellow]⚠[/yellow] Not built yet, and {installer} is missing - cannot build it here.",
+                f"  [yellow]⚠[/yellow] 尚未构建,而且找不到 {installer} - 无法在这里构建。",
+            )
+        )
+        return False
+
+    if not q.confirm(
+        _t(
+            "  Not built yet. Build it now? (a few minutes of downloads)",
+            "  尚未构建。现在构建吗?(需要几分钟下载依赖)",
+        ),
+        default=True,
+        qmark=_QMARK,
+        style=RAVEN_STYLE,
+    ).ask():
+        console.print(
+            _t(
+                f"  [dim]Skipped. Run {installer} later, then `raven onboard` again.[/dim]",
+                f"  [dim]已跳过。之后跑 {installer},再重新运行 `raven onboard`。[/dim]",
+            )
+        )
+        return False
+
+    console.print(_t("  Building...", "  正在构建..."))
+    proc = subprocess.run(  # noqa: S603 - argv is built here
+        ["bash", str(installer), folder.path.name],  # noqa: S607 - bash off PATH, as `register` does with the interpreter
+        cwd=root,
         capture_output=True,
         text=True,
     )
-    if proc.returncode == 0:
+    # Re-read the fact rather than trusting the exit status: the script builds and
+    # scaffolds several things per folder, and "it returned 0" is not the same
+    # claim as "this checkout now has a launcher raven can start".
+    if venv_ready(folder.checkout):
+        console.print(_t("  [green]Built.[/green]", "  [green]构建完成。[/green]"))
         return True
     detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-    warnings.append(f"{folder.name}: not registered ({detail[-1] if detail else 'install.py failed'})")
+    warnings.append(f"{folder.name}: build failed ({detail[-1] if detail else 'install.sh failed'})")
+    console.print(
+        _t(
+            f"  [yellow]⚠[/yellow] Build failed; run {installer} by hand to see why.",
+            f"  [yellow]⚠[/yellow] 构建失败;手动跑 {installer} 看原因。",
+        )
+    )
     return False
 
 
 def configure_subagents(*, non_interactive: bool = False, warnings: Optional[list[str]] = None) -> int:
-    """Ask about each discovered folder and register the ones taken up.
+    """Set up each discovered folder: build its venv, choose whose LLM it runs on.
 
-    Returns how many were registered this run. Non-interactive skips the whole
-    step: an unattended install should not put three agents in a roster nobody
-    asked for.
+    Returns how many are ready after this run. **Registration is not part of it
+    any more** -- ``vendored_agents`` materializes a row per folder on every table
+    build, so the folder being there is what puts it on the table. This step used
+    to end by running the folder's ``install.py`` to write a config row, and that
+    row is now worse than nothing: it bakes in the folder's absolute path, it
+    outranks the discovered row, and an upgrade that moves the tree turns it into
+    a launcher that no longer exists.
+
+    What is left is the part that needs a person. Both answers are things no
+    default can supply: minutes of downloads, and whose credit the agent spends.
+
+    Non-interactive skips the whole step, so an unattended install leaves four
+    folders discovered-and-disabled rather than four half-configured agents.
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE
@@ -306,16 +305,10 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
         )
 
     q = _require_questionary()
-    registered = 0
+    set_up = 0
     for folder in folders:
         console.print(f"\n[bold]{folder.name}[/bold] [dim]{folder.description[:100]}[/dim]")
-        if not folder.venv_ready:
-            console.print(
-                _t(
-                    f"  [yellow]⚠[/yellow] Not built yet - run {root}/install.sh, then `raven onboard` again.",
-                    f"  [yellow]⚠[/yellow] 尚未构建 - 先跑 {root}/install.sh,再重新运行 `raven onboard`。",
-                )
-            )
+        if not folder.venv_ready and not _offer_to_build(folder, root, q, warnings):
             continue
 
         # The recommended model goes first: it is what the folder was tuned for,
@@ -368,18 +361,17 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
                 )
             elif not _take_key(folder, q):
                 continue
-        if register(folder, warnings):
-            registered += 1
-            console.print(f"  [green]✓[/green] {_t('registered', '已注册')}")
+        set_up += 1
+        console.print(f"  [green]✓[/green] {_t('ready', '已就绪')}")
 
-    if registered:
+    if set_up:
         console.print(
             _t(
-                f"\n  {registered} sub-agent(s) registered.",
-                f"\n  已注册 {registered} 个子代理。",
+                f"\n  {set_up} sub-agent(s) ready.",
+                f"\n  {set_up} 个子代理已就绪。",
             )
         )
-    return registered
+    return set_up
 
 
 def _take_key(folder: SubagentFolder, q: Any) -> bool:

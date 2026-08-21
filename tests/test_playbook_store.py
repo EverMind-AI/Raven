@@ -315,3 +315,76 @@ def test_an_empty_skills_list_written_today_is_left_alone(tmp_path: Path) -> Non
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
 
     assert store.load("current-book").nodes[0].skills == []
+
+
+def test_a_step_naming_a_retired_builtin_agent_is_repointed_at_raven(tmp_path: Path) -> None:
+    """Every playbook written before this release names one of four labels.
+
+    ``research-raven`` / ``code-raven`` / ``data-raven`` / ``content-raven`` were
+    rows on the agent table whose only content was a description: same provider,
+    same model, same tools, same system prompt as ``raven``, and the sub-agent was
+    never told which name it ran under. Removing them makes those steps fail
+    validation ("agent not in the registry"), and the failure is silent -- the
+    runtime logs a warning and the playbook drops out of the library, so a user's
+    saved procedure just stops existing. The rewrite changes the target name and
+    nothing about what runs it.
+    """
+    (tmp_path / "old-book").mkdir()
+    (tmp_path / "old-book" / "playbook.md").write_text(
+        "---\n"
+        "name: old-book\n"
+        "description: names the labels\n"
+        "---\n\n"
+        "Body.\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\n"
+        "mode: dag\n"
+        "triggers:\n"
+        "  keywords: [old run]\n"
+        "nodes:\n"
+        "- id: scan\n"
+        "  agent: research-raven\n"
+        "  promptTemplate: p\n"
+        "- id: brief\n"
+        "  subagent: content-raven\n"
+        "  promptTemplate: q\n"
+        "  dependsOn: [scan]\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
+
+    spec = store.load("old-book")
+
+    assert [node.subagent for node in spec.nodes] == ["raven", "raven"]
+
+
+def test_an_external_agent_whose_name_ends_in_raven_is_left_alone(tmp_path: Path) -> None:
+    """The rewrite is by name, not by suffix.
+
+    A user is free to register their own agent as ``myteam-raven``; it is a real
+    agent on the table, and repointing its steps at the in-process loop would
+    silently run someone else's work somewhere else.
+    """
+    (tmp_path / "mine").mkdir()
+    (tmp_path / "mine" / "playbook.md").write_text(
+        "---\n"
+        "name: mine\n"
+        "description: my own agent\n"
+        "---\n\n"
+        "Body.\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\n"
+        "mode: dag\n"
+        "triggers:\n"
+        "  keywords: [mine]\n"
+        "nodes:\n"
+        "- id: n1\n"
+        "  agent: myteam-raven\n"
+        "  promptTemplate: p\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_no_builtin")
+
+    assert store.load("mine").nodes[0].subagent == "myteam-raven"

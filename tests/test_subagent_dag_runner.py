@@ -967,7 +967,7 @@ class TestSubagentRoster:
         default install orchestrate a graph at all."""
         desc = SubAgentDagTool(workspace=tmp_path, agents=[]).description
         assert "(none configured)" not in desc
-        assert "research-raven" in desc
+        assert "raven" in desc
 
 
 class TestSubagentEnum:
@@ -1000,7 +1000,7 @@ class TestSubagentEnum:
         tool.set_agents([])
         names = self._subagent_field(tool)["enum"]
         assert "Coder" not in names
-        assert "research-raven" in names
+        assert "raven" in names
 
     def test_schema_is_rebuilt_and_never_mutates_the_module_constant(self, tmp_path: Path) -> None:
         """The constant is shared by every instance; annotating it in place

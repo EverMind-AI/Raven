@@ -39,6 +39,20 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_vendored_subagents(monkeypatch):
+    """Pin agent-table discovery off, so the suite sees the same table everywhere.
+
+    ``AgentRegistry.apply`` discovers rows from the ``subagents/`` tree, and the
+    suite runs inside a checkout that has one. Left alone, every table assertion
+    would depend on machine state a test never set: four extra rows, each enabled
+    or not according to whether that developer had built the folder's venv and
+    supplied its key. A test that wants the discovered rows patches
+    ``subagents_root`` itself to a tree it built.
+    """
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.subagents_root", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
     prior test.

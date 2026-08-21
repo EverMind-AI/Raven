@@ -108,9 +108,9 @@ def test_a_builtin_name_cannot_be_claimed_by_another_transport(tmp_path: Path) -
     """
     p = _cfg(tmp_path)
     with pytest.raises(ValueError, match="built-in"):
-        set_agents([{"name": "research-raven", "kind": "cli", "command": "x {prompt}"}], config_path=p)
+        set_agents([{"name": "raven", "kind": "cli", "command": "x {prompt}"}], config_path=p)
     assert not p.exists()
 
     # Overriding it as a built-in row is the supported edit.
-    set_agents([{"name": "research-raven", "kind": "builtin", "skills": ["local/web-search"]}], config_path=p)
+    set_agents([{"name": "raven", "kind": "builtin", "skills": ["local/web-search"]}], config_path=p)
     assert get_agents(config_path=p)[0]["skills"] == ["local/web-search"]

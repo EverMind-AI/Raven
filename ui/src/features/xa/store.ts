@@ -95,6 +95,44 @@ export async function run(op: XaOp | 'probe', row?: XaRow, args?: XaActArgs): Pr
   if (renamed && state.sheet === row?.name) landed.sheet = renamed
   set(landed)
   if (state.sheet && !rows.some((x) => x.name === state.sheet)) closeSheet()
+  watchBuilds(rows)
+}
+
+/* A build is the one action whose call returns before the work does -- it is a
+   few hundred MB of downloads, so `subagents.build` hands back as soon as it is
+   under way. Nothing pushes when it finishes, so the row would sit on
+   "Installing..." until the reader happened to reload. Re-listing while any row
+   carries `building` is what turns it back into "ready" on its own.
+
+   Deliberately dumb about lifetime: one timer at a time, re-armed from the
+   result it just read, and never armed when nothing is building. It stops
+   because the flag stops, not because anything remembers to cancel it. */
+let buildTimer: ReturnType<typeof setTimeout> | null = null
+const BUILD_POLL_MS = 4000
+
+function watchBuilds(rows: XaRow[]): void {
+  if (buildTimer !== null) return
+  if (!rows.some((r) => r.building)) return
+  buildTimer = setTimeout(() => {
+    buildTimer = null
+    /* Unprobed while a build is in flight -- a probe per poll would re-measure
+       every other entry for nothing. Probed once on the poll that finds the last
+       build gone, because a cli row's status is what the card renders: without it
+       a folder that just finished building reads "unverified", which is not what
+       the reader watched happen. */
+    void source()
+      .load(false)
+      .then(async (next) => {
+        const done = !next.some((r) => r.building)
+        const rows = done ? await source().load(true) : next
+        set({ rows, epoch: state.epoch + 1 })
+        watchBuilds(rows)
+      })
+      .catch(() => {
+        /* A failed poll is not worth a toast: the build is still running and the
+           next action or reload will show where it got to. */
+      })
+  }, BUILD_POLL_MS)
 }
 
 /* ── the shared detail drawer ────────────────────────────────────── */
