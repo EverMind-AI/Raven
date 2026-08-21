@@ -120,7 +120,10 @@ openSession = async function (s) {
        selected until the reader clicks a session themselves. */
     drawList();
     const u = (r.info && r.info.usage) || {};
-    setCtx(u.context_used, u.context_max, u.context_estimated);
+    /* context_estimated rides along in this payload and is not passed on: the
+       ring has nowhere to say an estimate, so the writer takes two numbers.
+       See shell/ctxchip.ts. */
+    setCtx(u.context_used, u.context_max);
     if (r.messages && r.messages.length) {
       renderHistory(r.messages);
       /* Rebuild what the panel can from the replay. Stored messages keep the
