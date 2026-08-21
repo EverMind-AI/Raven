@@ -247,7 +247,7 @@ async def test_read_skill_refuses_low_safety_hub_bodies():
 # ---------------------------------------------------------------- nudge
 
 
-def test_loop_break_nudge_mentions_find_skill_only_when_registered():
+def test_loop_break_nudge_mentions_find_skill_only_when_offered():
     plain = loop_break_nudge("exec", 3)
     assert "find_skill" not in plain
     hinted = loop_break_nudge("exec", 3, suggest_find_skill=True)

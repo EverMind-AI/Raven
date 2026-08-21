@@ -155,10 +155,16 @@ class ToolSearchController:
         """
         cap = limit or self.search_result_limit
         ranked = self._index.search(query, len(self._registry.tool_names) or cap)
+        # Asked once for the whole scan, not once per candidate: the source
+        # behind it is a file read, and the loop below walks the entire ranked
+        # catalog. One answer for the scan is also the more correct one -- a set
+        # re-read mid-loop could offer a tool and withhold its neighbour from
+        # the same list.
+        withheld = self._registry.withheld_names()
         hits = []
         for name in ranked:
             tool = self._registry.get(name)
-            if tool is None or not self._registry.offers(tool):
+            if tool is None or not self._registry.offers(tool, withheld):
                 continue
             hits.append(
                 {

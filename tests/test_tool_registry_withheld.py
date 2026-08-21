@@ -122,13 +122,24 @@ class TestBothSurfacesAgree:
 
         reg = _registry("exec", "grep")
         reg.set_withheld_source(lambda: frozenset(withheld))
-        return reg, ToolSearchController(reg, always_visible=set())
+        ctrl = ToolSearchController(reg, always_visible=set())
+        ctrl.refresh()
+        return reg, ctrl
 
     def test_tool_search_does_not_list_what_the_schema_withheld(self) -> None:
         reg, ctrl = self._controller({"exec"})
 
         assert "exec" not in _offered(reg)
         assert [h["name"] for h in ctrl.search("exec")] == []
+
+    def test_and_does_list_it_when_the_switch_is_off(self) -> None:
+        """The assertion above was passing on an empty index rather than on a
+        withheld tool: ``ToolSearchController`` starts with nothing indexed, so
+        ``search`` answered ``[]`` for every query and the check could not fail.
+        This is the pairing case that makes it mean something."""
+        _reg, ctrl = self._controller(set())
+
+        assert [h["name"] for h in ctrl.search("exec")] == ["exec"]
 
     def test_tool_call_refuses_to_reach_it(self) -> None:
         """The one that matters most: search only lists, `tool_call` invokes."""
@@ -203,6 +214,98 @@ class TestTheDoorExecuteOpens:
         switches.clear()
 
         assert self._run(reg, "exec") == "ran"
+
+
+class TestAskingByNameRatherThanByRegistration:
+    """`get(name) is not None` meant "may the model use this" everywhere it was
+    written, and that was true while the off switch unregistered. It is not true
+    now, and the difference escapes the registry wherever the answer becomes
+    prompt text -- the tool-failure nudge tells the model to call `find_skill`,
+    and `execute` then refuses it as absent. One wasted call on a turn that is
+    already failing, but it is model-visible text advertising a tool the operator
+    switched off, which is the invariant the switch exists for."""
+
+    def test_a_withheld_name_is_not_offered(self) -> None:
+        reg = _registry("find_skill")
+        reg.set_withheld_source(lambda: frozenset({"find_skill"}))
+
+        assert reg.offers_by_name("find_skill") is False
+
+    def test_but_is_still_registered(self) -> None:
+        """The pair that makes the distinction necessary rather than cosmetic."""
+        reg = _registry("find_skill")
+        reg.set_withheld_source(lambda: frozenset({"find_skill"}))
+
+        assert reg.get("find_skill") is not None
+
+    def test_an_offered_name_is_offered(self) -> None:
+        reg = _registry("find_skill")
+        reg.set_withheld_source(lambda: frozenset())
+
+        assert reg.offers_by_name("find_skill") is True
+
+    def test_an_absent_name_is_not_offered(self) -> None:
+        """Answers the caller's question in one call, so a caller does not have to
+        keep the `is not None` check it was replacing."""
+        reg = _registry("grep")
+
+        assert reg.offers_by_name("find_skill") is False
+
+    def test_the_channel_half_counts_too(self) -> None:
+        reg = ToolRegistry()
+        reg.register(_Stub("find_skill"))
+        reg._tools["find_skill"].channels = ["cli"]  # type: ignore[attr-defined]
+        reg.set_channel("web")
+
+        assert reg.offers_by_name("find_skill") is False
+
+
+class TestOneAnswerPerScan:
+    """A search walks the whole ranked catalog, so asking the source per candidate
+    both pays the read N times and lets one list disagree with itself -- a tool
+    offered and its neighbour withheld because the file moved between them. The
+    schema assembly already asked once; the search surface now does too."""
+
+    def _flipping_source(self, calls: list[int]):
+        """Withholds nothing on odd calls and everything on even ones, so a
+        per-candidate reader produces a mixed list and a per-scan reader cannot."""
+
+        def source() -> frozenset[str]:
+            calls.append(1)
+            return frozenset() if len(calls) % 2 else frozenset({"exec", "grep"})
+
+        return source
+
+    def _controller(self, reg: ToolRegistry):
+        """``refresh()`` is not optional here: the index starts empty, so a
+        controller that skips it makes ``search`` return ``[]`` for everything and
+        every assertion below pass without exercising a thing."""
+        from raven.agent.tools.tool_search import ToolSearchController
+
+        ctrl = ToolSearchController(reg, always_visible=set())
+        ctrl.refresh()
+        return ctrl
+
+    def test_a_scan_cannot_disagree_with_itself(self) -> None:
+        calls: list[int] = []
+        reg = _registry("exec", "grep")
+        reg.set_withheld_source(self._flipping_source(calls))
+        ctrl = self._controller(reg)
+
+        names = [h["name"] for h in ctrl.search("exec grep")]
+
+        assert names in ([], ["exec", "grep"]), f"mixed list from one scan: {names}"
+
+    def test_the_source_is_asked_once_for_the_whole_scan(self) -> None:
+        calls: list[int] = []
+        reg = _registry("exec", "grep")
+        reg.set_withheld_source(self._flipping_source(calls))
+        ctrl = self._controller(reg)
+
+        before = len(calls)
+        ctrl.search("exec grep")
+
+        assert len(calls) - before == 1, f"asked {len(calls) - before} times"
 
 
 class TestNothingInstalledIsNotEverythingWithheld:

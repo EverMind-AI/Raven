@@ -126,6 +126,106 @@ async def test_repeated_tool_failure_nudges_bounded(workspace):
     assert max(provider.loop_marker_counts) == AgentLoop._LOOP_BREAK_MAX
 
 
+class _NudgeTextProvider(_AlwaysFailsSameToolProvider):
+    """Keeps the nudge text itself, not just a count of markers."""
+
+    def __init__(self):
+        super().__init__()
+        self.tool_results: list[str] = []
+
+    async def chat(self, messages, **kwargs):
+        self.tool_results += [
+            str(m.get("content", ""))
+            for m in messages
+            if m.get("role") == "tool" and "[loop]" in str(m.get("content", ""))
+        ]
+        return await super().chat(messages, **kwargs)
+
+
+def _find_skill_stub():
+    from raven.agent.tools.base import Tool
+
+    class _FindSkill(Tool):
+        @property
+        def name(self) -> str:
+            return "find_skill"
+
+        @property
+        def description(self) -> str:
+            return "stub"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs) -> str:
+            return "ran"
+
+    return _FindSkill()
+
+
+async def _nudges_with_find_skill_switched(workspace, off: bool) -> list[str]:
+    """Drive a real failing streak and hand back the nudges it produced.
+
+    Switched off through the config file rather than through the registry's
+    source directly, so the path under test is the one the settings page uses.
+    """
+    import json
+    from pathlib import Path
+
+    from raven.config.loader import get_config_path
+
+    cfg = get_config_path()
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({"tools": {"disabledTools": ["find_skill"] if off else []}}), encoding="utf-8")
+
+    provider = _NudgeTextProvider()
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=6,
+        restrict_to_workspace=True,
+    )
+    agent.tools.register(_find_skill_stub())
+    assert isinstance(cfg, Path)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="go",
+        ),
+        session_key="s1",
+    )
+    return provider.tool_results
+
+
+@pytest.mark.asyncio
+async def test_the_nudge_does_not_name_a_switched_off_find_skill(workspace):
+    """The nudge is model-visible text, so a registration check advertised a tool
+    the operator had switched off -- and `execute` then refuses it as absent.
+
+    Registration was a fair proxy for availability until the off switch stopped
+    unregistering; a withheld tool stays in the registry, which is what makes the
+    switch reversible.
+    """
+    nudges = await _nudges_with_find_skill_switched(workspace, off=True)
+
+    assert nudges, "no nudge fired, so the assertion below would pass vacuously"
+    assert not any("find_skill" in n for n in nudges)
+
+
+@pytest.mark.asyncio
+async def test_and_does_name_it_when_it_is_on(workspace):
+    """The pairing case, so the assertion above cannot pass by never mentioning
+    the tool at all."""
+    nudges = await _nudges_with_find_skill_switched(workspace, off=False)
+
+    assert nudges
+    assert any("find_skill" in n for n in nudges)
+
+
 class _AlwaysTruncatedWriteProvider(LLMProvider):
     """Every turn is cut off inside the same `write_file` call."""
 

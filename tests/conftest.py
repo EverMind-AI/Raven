@@ -115,6 +115,12 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # home would let one test read the config another one wrote.
     home = tmp_path_factory.mktemp("default_home")
     monkeypatch.setenv("HOME", str(home))
+    # Unset rather than set: ``RAVEN_HOME`` outranks everything above, so a
+    # developer who exports it hands their own directory to every test that
+    # isolates the home some other way. Deleting it is the one move that closes
+    # that without overriding anybody -- a test that wants the variable sets it
+    # itself, which lands after this.
+    monkeypatch.delenv("RAVEN_HOME", raising=False)
     monkeypatch.setattr(loader, "_current_config_path", None)
     yield
 
