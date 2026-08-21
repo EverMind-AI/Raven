@@ -97,6 +97,7 @@ import { join } from 'node:path'
 
 const EXPECTED = 13
 const EXPECTED_HELD = 9
+const EXPECTED_VERBS = 60
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
 const read = (dir) =>
@@ -274,6 +275,54 @@ const strands = (files, layerTop) => {
 /* One file, for the fixtures and for reading a snippet as its own layer. */
 const one = (txt) => strands([['<fixture>', txt]], top(txt))
 
+/* The third direction, and the only one that runs the other way. Both counts
+   above measure the LIVE layer writing something the demo layer owns. This one
+   measures a migrated island asking the legacy layer a question: every member of
+   `interface Shell` is one answer an island cannot get from its own source, and
+   `demo/155-bridge.js` publishes every one of them.
+
+   So the islands do not stand on their own -- they stand on this many answers
+   from the layer the migration exists to retire, and until now nothing watched
+   the number, which is how it grew quietly.
+
+   NOT an argument for deleting verbs: some are permanent seams by design (`T` has
+   to come from wherever the catalogue lives). It is the same argument the two
+   counts above make -- the number belongs in the diff of the change that moves
+   it, in both directions.
+
+   Members, not callables, and the difference is five: `look` and `ntf` are
+   namespaces carrying two and three methods. Counting members keeps the unit the
+   same as the thing a reviewer sees added to the interface, and makes the number
+   a floor on the questions being asked rather than the exact count -- the same
+   compromise, and for the same reason, as the per-file ownership above. */
+const bridgeTs = readFileSync(join(src, 'shell', 'bridge.ts'), 'utf8')
+
+function shellVerbs(txt) {
+  /* Comments out first, so a `{` or a member-shaped sentence inside one cannot
+     move the depth or be counted. Both comment forms appear in this interface. */
+  const clean = txt.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  const open = clean.indexOf('export interface Shell {')
+  if (open < 0) return null
+  const body = clean.slice(clean.indexOf('{', open) + 1)
+  const out = []
+  let depth = 0
+  for (const line of body.split('\n')) {
+    /* Depth is read BEFORE the line is counted: a member sits at depth 0 of the
+       body, and a signature carrying an inline object type opens and closes its
+       braces on the same line, so its own nesting never hides the next member. */
+    if (depth === 0) {
+      const m = line.match(new RegExp(`^\\s+(${NAME})\\??\\s*[(:]`))
+      if (m) out.push(m[1])
+    }
+    for (const ch of line) {
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
+    }
+    if (depth < 0) break // the interface's own closing brace
+  }
+  return out.sort()
+}
+
 /* One fixture per hole this file used to have, checked on every run. A gate that
    silently under-reports is worse than no gate, and the way that happened was a
    parsing hole invisible from the number alone -- so the holes are pinned here
@@ -380,20 +429,58 @@ for (const [text, want] of [
   if (String(got) !== String(want)) fail(text, want, got)
 }
 
+/* shellVerbs(): the members of one interface in a .ts file, which is a different
+   parsing problem from everything above -- comments carry braces, and a
+   signature can open and close an object type on its own line. The last case is
+   the one that would silently halve the number: a member after one of those. */
+for (const [text, want] of [
+  ['export interface Shell {\n  a(): void\n  b?(x: string): void\n}', ['a', 'b']],
+  ['export interface Shell {\n  look?: { get(): L; set(p: P): void }\n  z(): void\n}', ['look', 'z']],
+  // A comment holding a brace and a line that reads like a member.
+  ['export interface Shell {\n  /* not a member: { x(): void */\n  a(): void\n}', ['a']],
+  ['export interface Shell {\n  // b(): void\n  a(): void\n}', ['a']],
+  // An inline object type in a signature must not swallow what follows it.
+  ['export interface Shell {\n  a?(o?: { k?: string; n?: number }): void\n  b(): void\n}', ['a', 'b']],
+  /* A nested member spread over lines, which is what the depth tracking is for.
+     Every member in the interface today opens and closes its braces on one line,
+     so nothing else here exercises it -- and a mutation run confirmed that:
+     removing the depth test broke no other fixture and moved no number. Reformat
+     `look` across lines and, without it, `get` and `set` would each be counted
+     as a verb of their own. */
+  ['export interface Shell {\n  look?: {\n    get(): L\n    set(p: P): void\n  }\n  z(): void\n}',
+    ['look', 'z']],
+]) {
+  const got = shellVerbs(text)
+  if (String(got) !== String(want.slice().sort())) fail(text, want.slice().sort(), got)
+}
+/* No interface, no number: reported as a failure rather than as zero. */
+if (shellVerbs('export interface Other {\n  a(): void\n}') !== null) {
+  fail('an absent Shell interface', ['null'], 'not null')
+}
+
 const demoTop = top(demo)
 const names = strands(liveParts, top(live))
 const implicit = names.filter((n) => !demoTop.has(n))
 const held = containers(liveParts, top(live), demoTop)
+const verbs = shellVerbs(bridgeTs)
+if (verbs === null) {
+  console.error('count-shared-globals: `export interface Shell {` not found in shell/bridge.ts.'
+    + ' The verb count cannot be taken, so it is not being taken -- fix the reader rather than'
+    + ' letting a gate report zero.')
+  process.exit(1)
+}
 
 if (process.argv.includes('--list')) {
   for (const n of names) console.log(implicit.includes(n) ? `${n}  (declared nowhere)` : n)
   for (const n of held) console.log(`${n}  (container, mutated in place)`)
+  for (const n of verbs) console.log(`${n}  (shell verb)`)
 }
 console.log(`live writes to bindings it does not own: ${names.length} (expected ${EXPECTED})`)
 if (implicit.length) {
   console.log(`  of those, declared nowhere -- an implicit window write: ${implicit.join(', ')}`)
 }
 console.log(`demo containers the live layer fills in place: ${held.length} (expected ${EXPECTED_HELD})`)
+console.log(`shell verbs the islands ask the legacy layer for: ${verbs.length} (expected ${EXPECTED_VERBS})`)
 
 /* Both numbers, one rule, and the message says which way it moved. Equality in
    both directions for the reason the header gives: an unrecorded win is room for
@@ -415,5 +502,7 @@ const bad = [
     'New code must go through the DataSource seam, not a shared global.'),
   gate('the containers held in common', held.length, EXPECTED_HELD,
     'A live list belongs on a DS source, not in one of the demo\'s fixture arrays.'),
+  gate('the shell verb count', verbs.length, EXPECTED_VERBS,
+    'An island should read what it needs from its DS source, not ask the legacy shell.'),
 ].some(Boolean)
 if (bad) process.exit(1)
