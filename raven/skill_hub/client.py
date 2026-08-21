@@ -24,13 +24,22 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus, urlencode
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
+_MAX_QUERY_STRING_BYTES = 2048
+"""Hard cap on the whole query string of a catalog search.
+
+The hub is fronted by a load balancer that answers ``403 Forbidden`` -- not
+``414`` -- once the query string passes this many bytes, and ``q`` carries a
+retrieval query that can be as long as a user's whole message. Measured against
+the deployed hub: 2048 bytes are served, 2049 are refused. Without the cap a
+long query does not search on a prefix, it loses discovery outright.
+"""
 # Defensive limits for untrusted zip extraction.
 _MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
 _MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
@@ -78,6 +87,30 @@ _ALLOWED_SUFFIXES = {
 
 class SkillHubError(RuntimeError):
     """Hub returned a non-ok envelope or a malformed/unsafe payload."""
+
+
+def _fit_encoded(text: str, budget: int) -> str:
+    """The longest prefix of ``text`` whose URL encoding fits ``budget`` bytes.
+
+    Measured in encoded width rather than characters because the two diverge by
+    up to 9x: a CJK character is three UTF-8 bytes and each becomes a three-byte
+    ``%XX`` escape, so a character cap sized for ASCII still overruns, and one
+    sized for CJK discards most of an ASCII query that would have fit. Cutting
+    per character also keeps the result valid UTF-8, which slicing the encoded
+    form would not.
+    """
+    if budget <= 0:
+        return ""
+    if len(quote_plus(text)) <= budget:
+        return text
+    kept: list[str] = []
+    used = 0
+    for ch in text:
+        used += len(quote_plus(ch))
+        if used > budget:
+            break
+        kept.append(ch)
+    return "".join(kept)
 
 
 class SkillHubClient:
@@ -132,12 +165,23 @@ class SkillHubClient:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}
-        if q:
-            params["q"] = q
         if category:
             params["category"] = category
         if sort:
             params["sort"] = sort
+        # ``q`` last so the budget it gets is what the other params leave over.
+        if q:
+            budget = _MAX_QUERY_STRING_BYTES - len(urlencode(params)) - len("&q=")
+            fitted = _fit_encoded(q, budget)
+            if fitted != q:
+                logger.debug(
+                    "hub search query trimmed to fit the %d-byte query-string cap (%d of %d characters kept)",
+                    _MAX_QUERY_STRING_BYTES,
+                    len(fitted),
+                    len(q),
+                )
+            if fitted:
+                params["q"] = fitted
         r = await self._client.get(
             f"{self._base}/openapi/v1/skills",
             params=params,
