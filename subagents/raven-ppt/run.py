@@ -87,9 +87,18 @@ def env_value(name: str) -> str | None:
 # has to run under a bare python3 that may not have the runtime installed at all.
 HOST_CONFIG = Path(os.environ.get("RAVEN_HOME", "").strip() or Path.home() / ".raven") / "config.json"
 
-# Named as in the other three launchers so the four can be compared by grep. The
-# LLM key is the only secret this folder takes, and the only one whose absence is
-# fatal: there is nothing here to degrade to.
+# Where each optional secret belongs in the config the agent loads. Named and
+# pathed as in the other three launchers so the four can be compared by grep.
+# The LLM key is not among them: it is written to every provider block rather
+# than to one path, and its own branch below carries the model and base that the
+# same key pays for.
+SECRET_SLOTS = {
+    "PPT_SERPER_API_KEY": ("tools", "web", "search", "apiKey"),
+    "PPT_JINA_API_KEY": ("tools", "web", "jinaApiKey"),
+}
+
+# The one secret whose absence is fatal: no pictures makes a poorer deck, no
+# model makes no deck at all.
 REQUIRED_SECRETS = ("PPT_API_KEY",)
 
 
@@ -99,6 +108,21 @@ def host_config() -> dict:
         return json.loads(HOST_CONFIG.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+
+
+def dig(data: dict, path: tuple) -> str:
+    for part in path:
+        if not isinstance(data, dict):
+            return ""
+        data = data.get(part)
+    return data if isinstance(data, str) else ""
+
+
+def put(data: dict, path: tuple, value: str) -> None:
+    node = data
+    for part in path[:-1]:
+        node = node.setdefault(part, {})
+    node[path[-1]] = value
 
 
 def recommended_llm() -> str:
@@ -213,7 +237,7 @@ def stage(job: str, materials: list[str]) -> tuple[Path, Path, Path, list[tuple[
 
 
 def render_config(source: Path) -> Path:
-    """`config.json` plus the secret, written where the runtime may read it.
+    """`config.json` plus its secrets, written where the runtime may read it.
 
     Raven derives its data directory from the config file's own parent, so this
     lands under the state root: rendering it beside `config.json` would put
@@ -227,6 +251,29 @@ def render_config(source: Path) -> Path:
     with nothing pointing at the missing credential.
     """
     config = json.loads(source.read_text(encoding="utf-8"))
+    host = host_config()
+
+    # Each optional key falls back on its own, and the host's is better than
+    # none: with no Serper key `ppt_outline` keeps handing back gather errands
+    # that `web_search` can only refuse, and the deck ships without its pictures.
+    sources = []
+    for name, path in SECRET_SLOTS.items():
+        own = env_value(name)
+        if value := own or dig(host, path):
+            put(config, path, value)
+            sources.append(f"{name}={'own' if own else 'host'}")
+    if sources:
+        log(f"[run] web: {', '.join(sources)}")
+    else:
+        # Not "web_search will refuse": the runtime resolves both keys from the
+        # bare environment as a last resort, and the child is handed this
+        # process's environment wholesale, so a host that exports
+        # SERPER_API_KEY and stores nothing searches fine on this branch.
+        log(
+            "[run] web: no key in .env or the host config; the runtime still reads "
+            "SERPER_API_KEY / JINA_API_KEY from the environment"
+        )
+
     llm_key = REQUIRED_SECRETS[0]
     if api_key := env_value(llm_key):
         for provider in config.get("providers", {}).values():
@@ -248,7 +295,7 @@ def render_config(source: Path) -> Path:
         defaults = config.get("agents", {}).get("defaults", {})
         log(f"[run] llm: own key (provider={defaults.get('provider')} model={defaults.get('model')})")
     else:
-        taken = inherit_llm(config, host_config())
+        taken = inherit_llm(config, host)
         if not taken:
             raise SystemExit(
                 f"error: {llm_key} is not set and {HOST_CONFIG} has no provider key to inherit from; "
@@ -262,8 +309,15 @@ def render_config(source: Path) -> Path:
         )
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     rendered = STATE_ROOT / ".config.rendered.json"
-    rendered.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    rendered.chmod(0o600)
+    fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # The mode argument applies only on create, and this launcher never removes
+    # the file, so a second run reopens whatever the first one left. `O_TRUNC`
+    # has already emptied it here, which makes this the one moment the mode can
+    # be fixed with no key on disk -- the window that writing first and calling
+    # `chmod` second left open with every key already in the file.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(config, stream, indent=2)
     return rendered
 
 

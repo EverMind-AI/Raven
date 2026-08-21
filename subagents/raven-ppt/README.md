@@ -242,6 +242,28 @@ config file by the time the CLI loads it. `run.py` merges `.env` into
 `.config.rendered.json` under the state root, mode 600 - deliberately outside
 this folder, so the file that carries the key is not in a published tree.
 
+**Search and page reading are inherited, not configured here.** Two optional
+keys reach `web_search` and page fetching: a Serper key at
+`tools.web.search.apiKey` and a Jina Reader key at `tools.web.jinaApiKey`. Both
+are left blank in `.env`, so the launcher reads the host raven's own values at
+launch, and rotating either one there covers all four folders. Setting
+`PPT_SERPER_API_KEY` or `PPT_JINA_API_KEY` overrides that for this folder alone.
+The empty `tools.web` block in `config.json` is only the slot they land in - the
+`maxResults` in it is the stock default, not a deviation like the ones in the
+table above.
+
+Neither key is required and neither is fatal, but a missing Serper key is not
+free: `ppt_prepare` and `ppt_outline` hand back gather errands whose stated
+method is `web_search(kind="images")`, and with no key that is the one tool that
+can only refuse. The deck still builds; it builds without pictures.
+
+"Missing" means all three places, not two. The runtime reads a bare
+`SERPER_API_KEY` / `JINA_API_KEY` from its environment when the config carries
+none, and the launcher hands the child its own environment, so a host that
+exports either one searches and reads without anything reaching `tools.web`.
+The launcher's `[run] web:` line reports only what it resolved itself and says
+so - it cannot see that third source, and must not claim the tool will refuse.
+
 ## File permissions
 
 Checked on 2026-08-20, because dropping the container removed the one boundary

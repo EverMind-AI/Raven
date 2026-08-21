@@ -33,6 +33,11 @@
       "maxPreviewCount": 12,
       "timeoutSeconds": 240
     },
+    "web": {
+      "search": {
+        "maxResults": 5
+      }
+    },
     "disabledTools": [
       "image_generate",
       "text_to_speech",

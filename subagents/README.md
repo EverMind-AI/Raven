@@ -137,8 +137,11 @@ cd subagents/<folder> && cp .env.example .env && chmod 600 .env
 ```
 
 `<PREFIX>_API_KEY` is required - the run exits 1 without it. The Serper and Jina
-keys are optional, and an *exhausted* Jina key is worse than none at all (402 vs
-200). `<PREFIX>_STATE_ROOT` moves everything the agent persists; it defaults to
+keys are optional and *inherited when blank*: the launcher reads the host raven's
+own `tools.web.search.apiKey` and `tools.web.jinaApiKey`, so rotating either one
+there covers every folder, and a value here overrides it for that folder alone.
+An *exhausted* Jina key is worse than none at all (402 vs 200).
+`<PREFIX>_STATE_ROOT` moves everything the agent persists; it defaults to
 `~/.raven/workspace/subagent_sessions/<folder>` and never lands in this tree.
 
 **3. Register the entry.** Setup does this for you; by hand it is the same
