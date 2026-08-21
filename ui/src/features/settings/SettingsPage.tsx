@@ -387,7 +387,7 @@ function LookPage(): JSX.Element {
             ['en', t('gui.set.language_en')],
           ]}
           val={look.lang}
-          onPick={(v) => sh.setLang?.(v)}
+          onPick={(v) => store.source().setLang(v)}
         />
       </Scard>
       <Scard title={t('gui.set.theme')}>

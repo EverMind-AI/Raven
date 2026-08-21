@@ -51,6 +51,9 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
       return data
     },
     model: () => data.model,
+    /* On the source now, not the shell: what a language flip means differs
+       between the modes, so the source answers the pick. */
+    setLang: (lang) => { calls.push(['setLang', lang]) },
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
@@ -184,6 +187,23 @@ describe('settings island', () => {
     expect(switches[0]!.getAttribute('aria-checked')).toBe('true')
     expect(switches[1]!.getAttribute('aria-checked')).toBe('false')
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.channel')
+  })
+
+  /* The language pick was a shell verb and is a source verb now, because what a
+     flip MEANS differs between the modes: live persists config.language, which
+     also drives the TUI and the language the agent replies in, while the offline
+     page repaints and has nowhere to persist to. Nothing pinned the wiring
+     before this. */
+  it('asks the source to change the language, from the appearance page', async () => {
+    const { calls } = install()
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.look').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.set.language_en').click()
+    })
+    expect(calls).toEqual([['setLang', 'en']])
   })
 
   it('writes a switch flip through the source and redraws from the answer', async () => {

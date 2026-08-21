@@ -140,7 +140,6 @@ export interface Shell {
   sessionCount?(): number
   checkUpdate?(btn: HTMLElement): void
   openUrl?(url: string): void
-  setLang?(lang: string): void
   look?: { get(): LookState; set(patch: Partial<LookState>): void }
   ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
   renderToolset?(host: HTMLElement): void

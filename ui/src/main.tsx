@@ -108,7 +108,7 @@ window.closeImage = lightbox.close
 window.openModelPicker = modelPicker.open
 /* The permission chip's three names. drawPerm has three callers, all in layers
    this migration has not reached: the boot sequence (demo/160), and the language
-   flip on each side (demo/130's setLangShim, live/120's redrawAll). togglePerm
+   flip on each side (demo/130's langPickDemo, live/120's redrawAll). togglePerm
    and closePermPop are the chip's click and the document's click-away. */
 window.drawPerm = perm.draw
 window.togglePerm = perm.toggle

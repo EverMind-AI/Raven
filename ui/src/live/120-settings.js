@@ -122,6 +122,10 @@ DS.settings = {
   /* The composer's picker popover, offered to the island's default-model
      button so both places pick a model the same way. */
   pickModel: (anchor, after) => openModelPicker(anchor, after),
+  /* Declared here rather than beside langPickLive so the whole contract reads
+     in one place. Not awaited: the pick repaints synchronously and the persist
+     speaks for itself if it fails. */
+  setLang: (v) => { langPickLive(v, { persist: true }); },
 };
 
 openSettings = async function () {
@@ -134,20 +138,26 @@ openSettings = async function () {
 /* -- language ---------------------------------------------------------
    One key, both front ends: config.language also drives the TUI (which
    polls it) and the language the agent replies in. */
-applyLang = async function (next, { persist } = {}) {
+/* Named, and a local rather than a binding the demo layer declares for this
+   layer to fill: the pick reaches it through DS.settings.setLang below.
+   langSet moves the language and the catalogue together; what is added here is
+   the persist and the redraw of everything drawn from JavaScript. */
+async function langPickLive(next, { persist } = {}) {
   if (next === LANG) return;
   const prev = LANG;
-  LANG = next;
-  applyI18n();
+  langSet(next);
   redrawAll();
   if (!persist) return;
   try {
     await rpc.call('config.set', { key: 'language', value: next });
   } catch (e) {
-    LANG = prev; applyI18n(); redrawAll();
+    /* Put it back rather than leaving the page in a language the gateway does
+       not agree with -- the same key drives the TUI and the agent's replies. */
+    langSet(prev);
+    redrawAll();
     toast(`切换语言失败：${(e.data && e.data.detail) || e.message || e}`);
   }
-};
+}
 
 /* Everything the catalogue reaches that is drawn rather than written in
    the markup. Cheap enough to run wholesale on a language flip. */
@@ -192,7 +202,7 @@ async function loadLang() {
   try {
     const r = await rpc.call('config.get', { keys: ['language'] });
     const v = r && r.config && r.config.language;
-    if (v === 'en' || v === 'zh') { LANG = v; applyI18n(); redrawAll(); }
+    if (v === 'en' || v === 'zh') { langSet(v); redrawAll(); }
   } catch { /* stay on the built-in default */ }
 }
 

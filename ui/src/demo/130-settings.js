@@ -113,11 +113,14 @@ function lookSet(patch) {
   applyLook();
   lookSave();
 }
-/* The island's language pick: live mode persists through applyLang, the
-   standalone demo flips the catalogue and repaints what it draws itself. */
-function setLangShim(v) {
-  if (applyLang) { applyLang(v, { persist: true }); return; }
-  LANG = v; applyI18n(); drawList(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
+/* The fixture half of the island's language pick: flip the catalogue and
+   repaint what this layer draws itself. Nothing is persisted, because a page
+   with no gateway behind it has nowhere to persist to -- which is the honest
+   offline answer rather than a silent no-op. Live mode installs its own, and
+   this one is never consulted there. */
+function langPickDemo(v) {
+  langSet(v);
+  drawList(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
 }
 
 /* ---- notifications ---------------------------------------------------
@@ -195,4 +198,5 @@ DS.settings ??= {
   usage: async () => null,
   provider: async () => { throw { notLive: true }; },
   model: () => model,
+  setLang: (v) => langPickDemo(v),
 };
