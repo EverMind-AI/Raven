@@ -67,6 +67,7 @@ class SkillsSegmentBuilder:
         gate_pool_size: int = 10,
         hub_client: "SkillHubClient | None" = None,
         get_tool_definitions: "Any | None" = None,
+        list_subagents: "Any | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         auto_install: str = "auto",
@@ -82,6 +83,7 @@ class SkillsSegmentBuilder:
         self._pool_size = gate_pool_size if gate is not None else skill_top_k
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
+        self._list_subagents = list_subagents
         self._policy = SkillPolicy.create(
             min_safety=min_safety,
             blocklist=blocklist,
@@ -152,7 +154,12 @@ class SkillsSegmentBuilder:
         # ── ④ LLM gate ───────────────────────────────────────────────
         if self._gate is not None and candidates:
             tools = self._collect_tool_names()
-            gated = await self._gate.filter(query, candidates, tools)
+            gated = await self._gate.filter(
+                query,
+                candidates,
+                tools,
+                available_subagents=self._collect_subagent_roster(),
+            )
         else:
             gated = candidates[: self._skill_top_k]
 
@@ -368,10 +375,36 @@ class SkillsSegmentBuilder:
         return names is not None and "deliver_files" in names
 
     def _collect_tool_names(self) -> list[str] | None:
-        """Tool names for the gate's hard-constraint block.
+        """Tool names for the gate's tool hard-constraint block.
 
         ``None`` (no callable wired, or the lookup raised) means the gate runs
         without the tool-constraint hint — still works, just less aggressive
         at culling env-mismatched skills.
         """
         return render.collect_tool_names(self._get_tool_definitions)
+
+    def _collect_subagent_roster(self) -> str | None:
+        """The dispatchable specialists, rendered for the gate's overlap check.
+
+        The generic agent is dropped rather than listed. It advertises the whole
+        tool set and the whole skill catalogue, so an overlap check that saw it
+        would have grounds to call every candidate covered and empty the
+        ``# Skills`` segment for good. Keyed on the reserved name, not on
+        reading capability out of a description.
+
+        ``None`` (no callable wired, the lookup raised, or nothing but the
+        generic agent) means the gate runs without the block, same convention
+        as the tool names: a wiring gap degrades to injecting too much rather
+        than to silently injecting nothing.
+        """
+        if self._list_subagents is None:
+            return None
+        from raven.agent.subagent.backends import format_agent_listing
+        from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+
+        try:
+            metas = self._list_subagents() or []
+        except Exception:
+            return None
+        specialists = [m for m in metas if getattr(m, "name", "") != GENERIC_AGENT]
+        return format_agent_listing(specialists) or None

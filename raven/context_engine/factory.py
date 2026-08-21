@@ -48,6 +48,7 @@ from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.providers.base import LLMProvider
 
 if TYPE_CHECKING:
+    from raven.agent.subagent.backends import AgentMeta
     from raven.config.raven import (
         ContextConfig,
         MemoryConfig,
@@ -72,6 +73,7 @@ def build_context_engine(
     model: str,
     context_window_tokens: int,
     get_tool_definitions: Callable[[], list[dict]],
+    list_subagents: "Callable[[], list[AgentMeta]] | None" = None,
     get_tool_notices: Callable[[], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
@@ -142,6 +144,7 @@ def build_context_engine(
                 ),
                 hub_client=skill_hub_client,
                 get_tool_definitions=get_tool_definitions,
+                list_subagents=list_subagents,
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
                 auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),

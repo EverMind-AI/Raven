@@ -212,6 +212,29 @@ def test_memory_consolidate_extractor(trace_dir):
     assert a["memory.message_count"] == 3
 
 
+def test_skill_gate_extractor_records_the_subagent_roster(trace_dir):
+    """The roster is a gate input like the tool list: a trace that omits it
+    cannot say whether a candidate was dropped for overlapping a sub-agent."""
+    from raven.tracing import semconv
+
+    with trace.span("skill.gate") as s:
+        semconv.skill_gate(
+            s,
+            {
+                "task": "t",
+                "candidates": [],
+                "available_tools": ["exec"],
+                "available_subagents": "Scribe [stateless] (writes decks)",
+            },
+            [],
+            None,
+        )
+    a = _spans_written(trace_dir)[0]["attributes"]
+    with open(a["skill.gate.input.artifact_path"], encoding="utf-8") as fh:
+        payload = json.load(fh)
+    assert payload["available_subagents"] == "Scribe [stateless] (writes decks)"
+
+
 def test_subagent_children_nest(trace_dir):
     from raven.tracing import semconv
 

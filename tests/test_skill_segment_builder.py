@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from raven.agent.subagent.backends import AgentMeta
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.context_engine.base import AssemblyContext, TokenBudget
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
 from raven.memory_engine.skill_forge import (
@@ -326,7 +328,7 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
     captured: list[list[str] | None] = []
 
     class _CaptureGate(LLMGateFilter):  # type: ignore[misc]
-        async def filter(self, task, candidates, available_tools=None):  # type: ignore[override]
+        async def filter(self, task, candidates, available_tools=None, available_subagents=None):  # type: ignore[override]
             captured.append(available_tools)
             return []
 
@@ -347,6 +349,80 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
     )
     await builder.build(_ctx("task"))
     assert captured == [["read_file", "exec", "flat_form"]]
+
+
+# ----------------------------------------------------------------------
+# Subagent-roster collection
+# ----------------------------------------------------------------------
+
+
+def _roster_capture() -> "tuple[list[str | None], type[LLMGateFilter]]":
+    captured: list[str | None] = []
+
+    class _CaptureGate(LLMGateFilter):  # type: ignore[misc]
+        async def filter(self, task, candidates, available_tools=None, available_subagents=None):  # type: ignore[override]
+            captured.append(available_subagents)
+            return []
+
+    return captured, _CaptureGate
+
+
+async def _roster_seen_by_gate(list_subagents: Any) -> str | None:
+    captured, capture_gate = _roster_capture()
+    builder = SkillsSegmentBuilder(
+        SkillForgeRouter([_StubSource("local", [_hit("local/a", "a")])]),
+        gate=capture_gate(_StubProvider(json.dumps({"plan": "", "skills": []}))),
+        list_subagents=list_subagents,
+    )
+    await builder.build(_ctx("task"))
+    assert len(captured) == 1
+    return captured[0]
+
+
+async def test_gate_sees_the_specialist_subagents() -> None:
+    roster = await _roster_seen_by_gate(
+        lambda: [
+            AgentMeta("Raven-Research", "reads live web pages and cites them", False, False, True),
+            AgentMeta("Raven-PPT", "turns a source document into a deck", False, True),
+        ]
+    )
+    assert roster is not None
+    assert "Raven-Research" in roster
+    assert "reads live web pages and cites them" in roster
+    assert "Raven-PPT" in roster
+
+
+async def test_generic_agent_stays_out_of_the_gate_roster() -> None:
+    """It advertises no capability bias, so an overlap check that saw it would
+    read every skill as covered and empty the segment for good."""
+    roster = await _roster_seen_by_gate(
+        lambda: [
+            AgentMeta(GENERIC_AGENT, "the whole tool set and the whole skill catalogue", True, True, True),
+            AgentMeta("Raven-Research", "reads live web pages and cites them", False, False, True),
+        ]
+    )
+    assert roster is not None
+    assert "the whole tool set and the whole skill catalogue" not in roster
+    assert "Raven-Research" in roster
+
+
+async def test_no_roster_when_only_the_generic_agent_is_enabled() -> None:
+    roster = await _roster_seen_by_gate(lambda: [AgentMeta(GENERIC_AGENT, "no capability bias", True, True, True)])
+    assert roster is None
+
+
+async def test_no_roster_without_subagent_awareness() -> None:
+    assert await _roster_seen_by_gate(None) is None
+
+
+async def test_no_roster_when_the_lookup_raises() -> None:
+    """A wiring gap must degrade to "do not gate on overlap" rather than to a
+    failed turn: the roster is a hint, and the segment is still valid without it."""
+
+    def _boom() -> list[AgentMeta]:
+        raise RuntimeError("no manager yet")
+
+    assert await _roster_seen_by_gate(_boom) is None
 
 
 # ----------------------------------------------------------------------

@@ -84,12 +84,25 @@ class SpawnTool(Tool):
         agents = self._agents()
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
+            from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 
             listing = format_agent_listing(agents)
             base += (
                 " Pick the agent for the job with `subagent` -- there is no default, so choose "
                 f"deliberately from: {listing}."
             )
+            # Sits with the roster rather than after the DAG pointer below: it is a
+            # rule about which name to pass here, so a model that has stopped
+            # reading by the time it reaches the DAG advice has still read it.
+            # Withheld when the table holds nothing but the generic row, which
+            # would make it name a specialist the model cannot pick.
+            if any(a.name != GENERIC_AGENT for a in agents):
+                base += (
+                    " Prefer delegation over doing it yourself: when a single specialist on this "
+                    "roster covers the whole task, spawn that one instead of carrying the work out "
+                    f"with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
+                    "capability bias, so reach for it only when no specialist covers the work."
+                )
             # The one moment a wrong choice is visible: the model is reading this
             # tool while the work is really a graph.
             base += (

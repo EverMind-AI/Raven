@@ -597,6 +597,11 @@ class AgentLoop:
             model=self.model,
             context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
+            # Read through a lambda, not bound here: ``self.subagents`` is built
+            # further down this constructor, and the agent table it exposes is
+            # rebuilt on a hot config apply, so anything captured now would be
+            # either missing or stale by the time a turn asks for it.
+            list_subagents=lambda: self.subagents.list_agents(),
             get_tool_notices=self._mcp_tool_notices,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's

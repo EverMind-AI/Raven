@@ -145,6 +145,57 @@ async def test_tools_block_absent_when_tools_none() -> None:
     assert "# Agent Tools" not in prompt
 
 
+async def test_subagent_block_present_when_roster_given() -> None:
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    gate = LLMGateFilter(provider)
+    await gate.filter(
+        "task",
+        [_hit("local/a", "a")],
+        available_subagents="Raven-Research [stateless] (reads live web pages and cites them)",
+    )
+    prompt = provider.calls[0]["messages"][0]["content"]
+    assert "# Delegable Sub-Agents" in prompt
+    assert "Raven-Research" in prompt
+    assert "already covered by" in prompt
+
+
+async def test_subagent_block_absent_when_no_roster() -> None:
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    await LLMGateFilter(provider).filter("task", [_hit("local/a", "a")])
+    prompt = provider.calls[0]["messages"][0]["content"]
+    assert "# Delegable Sub-Agents" not in prompt
+    assert "already covered by" not in prompt
+
+
+async def test_plan_step_offers_delegation_as_an_alternative_to_running_the_tools() -> None:
+    """The overlap check in step 2 cannot undo a plan step 1 already committed
+    to. Asked only which tools to call, the gate plans the work inline and the
+    candidate is then genuinely relevant to that plan -- so delegation has to be
+    on the table while the plan is still forming. One sub-agent or several: a
+    task split across a graph is delegated just as much as a single spawn."""
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    await LLMGateFilter(provider).filter(
+        "task",
+        [_hit("local/a", "a")],
+        available_subagents="Raven-Research [stateless] (reads live web pages and cites them)",
+    )
+    prompt = provider.calls[0]["messages"][0]["content"]
+    plan_step = prompt.split("1. **Plan**:")[1].split("2. **Filter**:")[0]
+    assert "one or several of the sub-agents above" in plan_step
+    # The roster sentence must not read as a one-agent-only offer either.
+    assert "split it across several of them as a graph" in prompt
+
+
+async def test_plan_step_is_unchanged_when_no_roster_is_supplied() -> None:
+    """With nothing to delegate to, "the sub-agents above" names nothing, so the
+    clause is withheld rather than left dangling."""
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    await LLMGateFilter(provider).filter("task", [_hit("local/a", "a")])
+    prompt = provider.calls[0]["messages"][0]["content"]
+    assert "1. **Plan**: briefly think about what the task requires and which sequence" in prompt
+    assert "sub-agents above should carry it" not in prompt
+
+
 async def test_filter_passes_explicit_model_to_provider() -> None:
     provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
     gate = LLMGateFilter(provider, model="gpt-4o")
