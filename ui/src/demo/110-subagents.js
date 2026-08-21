@@ -2,20 +2,15 @@
    Every agent this conversation handed work to. The renderer is the
    subagents island (ui/src/features/subagents/), reached through the
    workspace island's dispatch; the list, the running clocks and the detail
-   headers all live there now. What remains here is the fixture source, the
-   seam the live transcript bridge assigns into, and the workspace panel
-   wiring that always lived in this part (tool-event hooks, panel chrome). */
+   headers all live there now. What remains here is the fixture source and the
+   workspace panel wiring that always lived in this part (tool-event hooks,
+   panel chrome). */
 
 /* The fixture source. A conversation replayed with no server behind it has
-   no delegated runs and the demo never invents any -- which is also why the
-   watch that keeps the list fresh lives in the live source and not here. */
+   no delegated runs and the demo never invents any -- which is why the members
+   this source leaves out are the ones a run would have needed: the watch that
+   keeps the list fresh, the per-run record, and the painter that draws one. */
 DS.agents ??= { list: async () => [] };
-
-/* Assigned by the live layer, where the transcript renderer lives: draws a
-   run's record into a detail stage with the transcript's own widgets. The
-   island reaches it through the shell's agentStagePaint verb; left null, the
-   verb is never called, because the fixture source carries no records. */
-let agentPaint = null;
 
 /* Opening a url for real needs the host: overridden in live.js, and honest
    about being a demo here rather than pretending. Opening a path is no longer

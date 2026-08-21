@@ -45,6 +45,15 @@ export interface AgentsSource {
   /* The live heartbeat: the source calls back every couple of seconds and
      the island decides whether anything on screen needs asking about. */
   watch?(fn: () => void): void
+  /* Draws one run's record into a detail stage -- a spawn's AgentCtx or a
+     node's DagNodeCtx. Optional for the same reason `context` is: with no
+     record to hand out there is nothing to paint. The island never calls this
+     directly; it reaches the painter through the shell's agentStagePaint verb,
+     whose signature this mirrors, `unknown` included -- the renderer on the
+     far side takes the legacy shape, and a narrower type here would be a
+     claim about a value that crosses an untyped layer to get there. */
+  stagePaint?(box: HTMLElement, ctx: unknown,
+              opts?: { key?: string; empty?: string; reset?: boolean }): void
 }
 
 export type OpenItem =
