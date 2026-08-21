@@ -53,7 +53,7 @@ def test_group_registered_on_app() -> None:
 
 
 def test_subcommand_help() -> None:
-    for cmd in ("save", "report", "replay", "verdict", "pin", "unpin", "list"):
+    for cmd in ("save", "report", "replay", "minimize", "verdict", "pin", "unpin", "list"):
         r = runner.invoke(trajectory_app, [cmd, "--help"])
         assert r.exit_code == 0, cmd
 
@@ -522,3 +522,69 @@ def test_replay_warn_reports_divergence_but_completes(state, tmp_path) -> None:
     assert r.exit_code == 0, r.output
     assert "divergence(s)" in r.stdout
     assert "Replay ran to the end" in r.stdout
+
+
+# ── minimize ──────────────────────────────────────────────────────────
+
+_MINIMIZE_INPUT = {
+    "model": "m",
+    "messages": [{"role": "system", "content": "machine specific"}, {"role": "user", "content": "go"}],
+    "tools": [],
+    "temperature": 0.1,
+}
+
+
+def test_minimize_bundle_path_writes_cassette(state, tmp_path) -> None:
+    bundle = _replay_bundle(tmp_path, recorded_input=_MINIMIZE_INPUT)
+    out = tmp_path / "cassette"
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle), "--out", str(out)])
+
+    assert r.exit_code == 0, r.output
+    assert "Cassette written" in r.stdout
+    assert "size:" in r.stdout and "->" in r.stdout
+    assert (out / "manifest.json").is_file()
+    assert (out / "redaction.json").is_file()
+    llm_in = json.loads((out / "artifacts" / "in.json").read_text(encoding="utf-8"))
+    assert set(llm_in) == {"model", "messages", "tools"}
+
+
+def test_minimize_by_id_defaults_out_under_state(state) -> None:
+    _replay_bundle(state / "bundles", recorded_input=_MINIMIZE_INPUT)
+
+    r = runner.invoke(trajectory_app, ["minimize", "att-r"])
+
+    assert r.exit_code == 0, r.output
+    assert (state / "cassettes" / "att-r" / "manifest.json").is_file()
+
+
+def test_minimize_unknown_target_exits_1(state) -> None:
+    r = runner.invoke(trajectory_app, ["minimize", "no-such-id"])
+    assert r.exit_code == 1
+    assert "no bundle found" in r.stdout
+
+
+def test_minimize_rejects_escaping_attempt_id_in_default_out(state, tmp_path) -> None:
+    """A crafted manifest attempt id must not name a default output path
+    outside the cassettes directory."""
+    bundle = _replay_bundle(tmp_path, recorded_input=_MINIMIZE_INPUT)
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    manifest["attempt_id"] = "../escape"
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle)])
+
+    assert r.exit_code == 1
+    assert "cannot be used as a cassette directory name" in r.stdout
+    assert not (state / "escape").exists()
+
+
+def test_minimize_rejects_unreplayable_bundle(state, tmp_path) -> None:
+    """A bundle whose model call lacks the recorded request cannot guard a
+    regression; minimize refuses instead of producing a weaker cassette."""
+    bundle = _replay_bundle(tmp_path)
+
+    r = runner.invoke(trajectory_app, ["minimize", str(bundle), "--out", str(tmp_path / "c")])
+
+    assert r.exit_code == 1
+    assert "not fully replayable" in r.stdout

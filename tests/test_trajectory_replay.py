@@ -209,17 +209,22 @@ async def test_compare_reports_the_first_mismatching_field() -> None:
         "messages": [{"role": "user", "content": "go"}],
         "tools": [{"type": "function", "function": {"name": "t1"}}],
     }
-    field, detail = compare_llm_request(recorded, [{"role": "user", "content": "go"}], [], "other-model")
-    assert field == "model" and "other-model" in detail
+    mismatch = compare_llm_request(recorded, [{"role": "user", "content": "go"}], [], "other-model")
+    assert mismatch.field == "model" and "other-model" in mismatch.detail
+    assert (mismatch.expected, mismatch.actual) == ("stub", "other-model")
 
-    field, detail = compare_llm_request(recorded, [], [], "stub")
-    assert field == "messages.length"
+    mismatch = compare_llm_request(recorded, [], [], "stub")
+    assert mismatch.field == "messages.length"
+    assert (mismatch.expected, mismatch.actual) == (1, 0)
 
-    field, detail = compare_llm_request(recorded, [{"role": "user", "content": "STOP"}], [], "stub")
-    assert field == "messages[0]" and "STOP" in detail
+    mismatch = compare_llm_request(recorded, [{"role": "user", "content": "STOP"}], [], "stub")
+    assert mismatch.field == "messages[0]" and "STOP" in mismatch.detail
+    assert mismatch.expected == {"role": "user", "content": "go"}
+    assert mismatch.actual == {"role": "user", "content": "STOP"}
 
-    field, detail = compare_llm_request(recorded, [{"role": "user", "content": "go"}], [], "stub")
-    assert field == "tools" and "t1" in detail
+    mismatch = compare_llm_request(recorded, [{"role": "user", "content": "go"}], [], "stub")
+    assert mismatch.field == "tools" and "t1" in mismatch.detail
+    assert (mismatch.expected, mismatch.actual) == (["t1"], [])
 
 
 # ── ReplayProvider ─────────────────────────────────────────────────────
@@ -282,9 +287,17 @@ async def test_provider_strict_halts_on_divergence() -> None:
     assert div.kind == "llm" and div.index == 0 and div.fatal
     assert div.field == "messages[0]"
     assert "recorded" in div.detail and "different" in div.detail
+    # Structured expected/actual carry the raw values for regression checks.
+    assert div.expected == {"role": "user", "content": "recorded"}
+    assert div.actual == {"role": "user", "content": "different"}
+    # The live request is captured verbatim even though the call diverged.
+    assert state.llm_requests == [
+        {"model": "stub", "stream": False, "messages": [{"role": "user", "content": "different"}], "tools": []}
+    ]
     # Once halted, later calls are refused without consuming the recording.
     again = await provider.chat(messages=[])
     assert again.finish_reason == "error"
+    assert len(state.llm_requests) == 1, "calls refused after the halt are not captured"
 
 
 async def test_provider_warn_records_and_keeps_feeding() -> None:
@@ -425,6 +438,9 @@ async def test_tool_registry_divergence_strict_vs_warn(tmp_path) -> None:
     assert result == "recorded output"
     assert not warn.halted
     assert warn.divergences[0].field == "tool params"
+    assert warn.divergences[0].expected == {"a": 1}
+    assert warn.divergences[0].actual == {"a": 2}
+    assert warn.tool_requests == [{"name": "bomb", "params": {"a": 2}}]
 
 
 async def test_tool_registry_exhaustion_halts(tmp_path) -> None:
@@ -486,6 +502,10 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
     assert (report.llm_calls_replayed, report.llm_calls_recorded) == (2, 2)
     assert (report.tool_calls_replayed, report.tool_calls_recorded) == (1, 1)
     assert report.replies == ["done"]
+    # The report exposes every live request for regression assertions.
+    assert len(report.llm_requests) == 2
+    assert report.llm_requests[0]["messages"][-1]["content"].endswith("go")
+    assert report.tool_requests == [{"name": "exec", "params": {"command": f"touch {pwned}"}}]
     assert not pwned.exists(), "the recorded exec call must not run"
     assert not (traces / "logs" / "audit-spans.log").exists(), "a replay run must not emit spans"
     from raven.tracing import trace

@@ -1,0 +1,11 @@
+# Sample regression case (see raven/trajectory/regression.py).
+#
+# Shape 2 of a regression assertion: the divergence direction after a bug
+# fix. The recorded llm.input carries a user message written by (simulated)
+# buggy harness code, so the fixed harness must diverge at that exact call --
+# and the live request must show the fixed text, not the buggy one.
+mode: strict
+divergence: {kind: llm, index: 0, field: "messages[1]"}
+checks:
+  - {call: llm, index: 0, message: -1, op: not_contains, value: "[recorded-by-buggy-harness]"}
+  - {call: llm, index: 0, message: -1, op: contains, value: "tidy the workspace"}

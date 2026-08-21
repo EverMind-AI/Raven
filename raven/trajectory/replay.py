@@ -61,6 +61,12 @@ prompt assembly are unit-test territory, not replay territory.
 Tool calls are matched by order; the live call's tool name and arguments are
 compared against the recorded ``tool.input`` under the same normalization.
 
+For programmatic assertions (the trajectory regression suite), every live
+request the harness makes is also captured verbatim on the report
+(:attr:`ReplayReport.llm_requests` / :attr:`ReplayReport.tool_requests`), and
+each :class:`Divergence` carries the structured ``expected`` / ``actual``
+values of its mismatching field alongside the human-readable ``detail``.
+
 Session history
 ---------------
 
@@ -94,6 +100,7 @@ list`` and could be bundled or pinned). The replay's own observability is the
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -126,6 +133,16 @@ _UNTRUSTED_MARKER_LINE_RE = re.compile(r"^\[(?:BEGIN|END) UNTRUSTED [^\n]*$", re
 
 
 @dataclass(frozen=True)
+class Mismatch:
+    """One compared field where the live request departs from the recording."""
+
+    field: str
+    detail: str  # human-readable expected/actual excerpt
+    expected: Any = None  # the recorded value of the field
+    actual: Any = None  # the live value of the field
+
+
+@dataclass(frozen=True)
 class Divergence:
     """One point where the live harness departed from the recording."""
 
@@ -134,6 +151,8 @@ class Divergence:
     fatal: bool  # halted the replay (strict mismatch, exhaustion, missing data)
     field: str
     detail: str
+    expected: Any = None  # recorded value of the field (None for exhaustion/unconsumed)
+    actual: Any = None  # live value of the field
 
     def render(self) -> str:
         return f"{self.kind} call #{self.index + 1}: {self.field} — {self.detail}"
@@ -193,6 +212,10 @@ class ReplayState:
     tool_fed: int = 0
     divergences: list[Divergence] = field(default_factory=list)
     halted: bool = False
+    # Every live request the feeds received, verbatim — the raw material for
+    # regression assertions about what the harness actually did.
+    llm_requests: list[dict[str, Any]] = field(default_factory=list)
+    tool_requests: list[dict[str, Any]] = field(default_factory=list)
 
     def record(self, div: Divergence) -> None:
         self.divergences.append(div)
@@ -219,6 +242,10 @@ class ReplayReport:
     divergences: list[Divergence]
     halted: bool
     replies: list[str | None]
+    # Live requests in call order: each llm entry holds model/stream/messages
+    # plus the offered tool names; each tool entry holds name/params.
+    llm_requests: list[dict[str, Any]] = field(default_factory=list)
+    tool_requests: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -400,12 +427,12 @@ def compare_llm_request(
     messages: list[dict[str, Any]] | None,
     tools: list[dict[str, Any]] | None,
     model: str | None,
-) -> tuple[str, str] | None:
-    """First mismatch between a live request and the recorded ``llm.input``,
-    as ``(field, detail)``; ``None`` when they match under normalization."""
+) -> Mismatch | None:
+    """First mismatch between a live request and the recorded ``llm.input``;
+    ``None`` when they match under normalization."""
     recorded_model = recorded_input.get("model")
     if recorded_model and model and recorded_model != model:
-        return "model", f"expected {recorded_model!r}, got {model!r}"
+        return Mismatch("model", f"expected {recorded_model!r}, got {model!r}", recorded_model, model)
 
     # Cache breakpoints are placed per token strategy, not per conversation;
     # strip() also undoes the block-list rewrite a mark forces on string
@@ -415,18 +442,23 @@ def compare_llm_request(
     )
     live_msgs, live_tool_defs = prompt_cache.strip(list(messages or []), tools)
     if len(recorded_msgs) != len(live_msgs):
-        return "messages.length", f"expected {len(recorded_msgs)} message(s), got {len(live_msgs)}"
+        return Mismatch(
+            "messages.length",
+            f"expected {len(recorded_msgs)} message(s), got {len(live_msgs)}",
+            len(recorded_msgs),
+            len(live_msgs),
+        )
     for i, (rec, live) in enumerate(zip(recorded_msgs, live_msgs)):
         rec_c, live_c = _dump(_canonical_message(rec)), _dump(_canonical_message(live))
         if rec_c != live_c:
-            return f"messages[{i}]", _first_diff_excerpt(rec_c, live_c)
+            return Mismatch(f"messages[{i}]", _first_diff_excerpt(rec_c, live_c), rec, live)
 
     def names(items: list[dict[str, Any]] | None) -> list[Any]:
         return [((t or {}).get("function") or {}).get("name") for t in (items or [])]
 
     recorded_tools, live_tools = names(recorded_tool_defs), names(live_tool_defs)
     if recorded_tools != live_tools:
-        return "tools", f"expected {recorded_tools!r}, got {live_tools!r}"
+        return Mismatch("tools", f"expected {recorded_tools!r}, got {live_tools!r}", recorded_tools, live_tools)
     return None
 
 
@@ -474,6 +506,14 @@ class ReplayProvider(LLMProvider):
         state = self._state
         if state.halted:
             return _halted_response("replay already halted; no further calls are fed")
+        state.llm_requests.append(
+            {
+                "model": model,
+                "stream": stream,
+                "messages": copy.deepcopy(list(messages or [])),
+                "tools": [((t or {}).get("function") or {}).get("name") for t in (tools or [])],
+            }
+        )
         index = state.llm_cursor
         if index >= len(self._recording.llm_calls):
             div = Divergence(
@@ -499,15 +539,25 @@ class ReplayProvider(LLMProvider):
             state.record(div)
             return _halted_response(div.render())
 
-        mismatch: tuple[str, str] | None = None
+        mismatch: Mismatch | None = None
         if stream != rec.stream:
             recorded_as, requested_as = ("streaming", "non-streaming") if rec.stream else ("non-streaming", "streaming")
-            mismatch = ("stream mode", f"recorded as {recorded_as}, requested as {requested_as}")
+            mismatch = Mismatch(
+                "stream mode", f"recorded as {recorded_as}, requested as {requested_as}", recorded_as, requested_as
+            )
         elif rec.input is not None:
             mismatch = compare_llm_request(rec.input, messages, tools, model)
         if mismatch is not None:
             fatal = state.mode == "strict"
-            div = Divergence(kind="llm", index=index, fatal=fatal, field=mismatch[0], detail=mismatch[1])
+            div = Divergence(
+                kind="llm",
+                index=index,
+                fatal=fatal,
+                field=mismatch.field,
+                detail=mismatch.detail,
+                expected=mismatch.expected,
+                actual=mismatch.actual,
+            )
             state.record(div)
             if fatal:
                 return _halted_response(div.render())
@@ -627,6 +677,7 @@ class ReplayToolRegistry(ToolRegistry):
         state = self._state
         if state.halted:
             return "Error: replay halted; no further tool results are fed."
+        state.tool_requests.append({"name": name, "params": copy.deepcopy(params)})
         index = state.tool_cursor
         if index >= len(self._recording.tool_calls):
             div = Divergence(
@@ -641,16 +692,24 @@ class ReplayToolRegistry(ToolRegistry):
         state.tool_cursor += 1
         rec = self._recording.tool_calls[index]
 
-        mismatch: tuple[str, str] | None = None
+        mismatch: Mismatch | None = None
         if rec.name is not None and name != rec.name:
-            mismatch = ("tool name", f"expected {rec.name!r}, got {name!r}")
+            mismatch = Mismatch("tool name", f"expected {rec.name!r}, got {name!r}", rec.name, name)
         elif rec.params is not None:
             rec_p, live_p = _dump(_canonical(rec.params)), _dump(_canonical(params))
             if rec_p != live_p:
-                mismatch = ("tool params", _first_diff_excerpt(rec_p, live_p))
+                mismatch = Mismatch("tool params", _first_diff_excerpt(rec_p, live_p), rec.params, params)
         if mismatch is not None:
             fatal = state.mode == "strict"
-            div = Divergence(kind="tool", index=index, fatal=fatal, field=mismatch[0], detail=mismatch[1])
+            div = Divergence(
+                kind="tool",
+                index=index,
+                fatal=fatal,
+                field=mismatch.field,
+                detail=mismatch.detail,
+                expected=mismatch.expected,
+                actual=mismatch.actual,
+            )
             state.record(div)
             if fatal:
                 return f"Error: replay halted: {div.render()}"
@@ -686,8 +745,24 @@ def _parse_ts(value: Any) -> datetime | None:
     return ts.astimezone() if ts.tzinfo is None else ts
 
 
-def _pre_attempt_messages(recording: Recording) -> list[dict[str, Any]]:
-    """The session messages that predate the attempt, from ``session.jsonl``.
+def _session_records(session_path: Path) -> list[dict[str, Any]]:
+    """The message records of a ``session.jsonl`` file (metadata rows skipped)."""
+    records: list[dict[str, Any]] = []
+    for line in session_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("_type") != "metadata":
+            records.append(data)
+    return records
+
+
+def _history_cut(recording: Recording, records: list[dict[str, Any]]) -> int | None:
+    """The index of the attempt's own opening record; ``None`` = unlocatable.
 
     The cut is located by time first and confirmed by content, because
     neither signal is safe alone: the attempt's first input may repeat text
@@ -706,26 +781,9 @@ def _pre_attempt_messages(recording: Recording) -> list[dict[str, Any]]:
     3. Without a usable time anchor, only a *unique* content match is
        accepted — the attempt's own opening message is in the file whenever
        its text survived persistence verbatim, so a unique match is it.
-
-    Anything still ambiguous seeds nothing: missing history surfaces as a
-    visible divergence, whereas guessing can preload the attempt's own (or
-    later) messages and silently corrupt every request after the cut.
     """
-    session_path = recording.bundle_dir / "session.jsonl"
-    if not session_path.is_file() or not recording.turns:
-        return []
-    records: list[dict[str, Any]] = []
-    for line in session_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and data.get("_type") != "metadata":
-            records.append(data)
-
+    if not records or not recording.turns:
+        return None
     first_input = recording.turns[0].content
     matches = [i for i, m in enumerate(records) if m.get("role") == "user" and m.get("content") == first_input]
 
@@ -739,17 +797,33 @@ def _pre_attempt_messages(recording: Recording) -> list[dict[str, Any]]:
         if cut is not None:
             msg = records[cut]
             if msg.get("role") == "user" and msg.get("content") == first_input:
-                return records[:cut]
+                return cut
             if not matches:
-                return records[:cut]
+                return cut
         in_window = [i for i in matches if start <= stamps[i] and (end is None or stamps[i] <= end)]
         if in_window:
-            return records[: in_window[0]]
-        return []
+            return in_window[0]
+        return None
 
     if len(matches) == 1:
-        return records[: matches[0]]
-    return []
+        return matches[0]
+    return None
+
+
+def _pre_attempt_messages(recording: Recording) -> list[dict[str, Any]]:
+    """The session messages that predate the attempt, from ``session.jsonl``.
+
+    Everything before the cut :func:`_history_cut` locates; when the cut is
+    ambiguous this seeds nothing — missing history surfaces as a visible
+    divergence, whereas guessing can preload the attempt's own (or later)
+    messages and silently corrupt every request after the cut.
+    """
+    session_path = recording.bundle_dir / "session.jsonl"
+    if not session_path.is_file() or not recording.turns:
+        return []
+    records = _session_records(session_path)
+    cut = _history_cut(recording, records)
+    return records[:cut] if cut is not None else []
 
 
 async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
@@ -874,4 +948,6 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
         divergences=list(state.divergences),
         halted=state.halted,
         replies=replies,
+        llm_requests=list(state.llm_requests),
+        tool_requests=list(state.tool_requests),
     )

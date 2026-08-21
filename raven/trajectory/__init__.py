@@ -23,6 +23,12 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``replay``   — deterministic replay. Feeds a bundle's recorded model
   replies and tool results back through the live harness (mock replay: no
   real tool ever executes), with strict/warn divergence policies.
+- ``cassette`` — the minimizer. Shrinks a bundle to the exact surface replay
+  consumes and redacts the result: the committable Trajectory Cassette the
+  regression suite replays.
+- ``regression`` — the regression-case layer: ``expect.yaml`` expectations
+  (where the replay must diverge, what the live side must do there) evaluated
+  against a cassette replay, driving ``tests/trajectories/``.
 
 The address unit is the **attempt** (``attempt.id`` on every span): one task
 try, possibly spanning several turns. Without an explicitly opened attempt
@@ -34,6 +40,7 @@ attempt with zero ceremony.
 from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
+from raven.trajectory.cassette import CassetteReport, minimize_bundle
 from raven.trajectory.redact import (
     KnownSecret,
     RedactionReport,
@@ -42,8 +49,17 @@ from raven.trajectory.redact import (
     redact_bundle,
     scan_residuals,
 )
+from raven.trajectory.regression import (
+    Check,
+    DivergenceExpectation,
+    RegressionExpectation,
+    check_report,
+    load_expectation,
+    run_regression_case,
+)
 from raven.trajectory.replay import (
     Divergence,
+    Mismatch,
     Recording,
     ReplayProvider,
     ReplayReport,
@@ -73,11 +89,16 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "CassetteReport",
+    "Check",
     "Divergence",
+    "DivergenceExpectation",
     "KnownSecret",
     "LocalTarballUploader",
+    "Mismatch",
     "Recording",
     "RedactionReport",
+    "RegressionExpectation",
     "ReplayProvider",
     "ReplayReport",
     "ReplayState",
@@ -85,13 +106,16 @@ __all__ = [
     "ResidualFinding",
     "Uploader",
     "Verdict",
+    "check_report",
     "collect_bundle",
     "collect_known_secrets",
     "get_uploader",
     "is_pinned",
     "iter_spans",
     "latest_verdict",
+    "load_expectation",
     "load_recording",
+    "minimize_bundle",
     "pack_report",
     "pin",
     "pins",
@@ -99,6 +123,7 @@ __all__ = [
     "record_verdict",
     "redact_bundle",
     "resolve_attempt_id",
+    "run_regression_case",
     "run_replay",
     "scan_residuals",
     "span_log_paths",

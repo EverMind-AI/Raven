@@ -635,7 +635,28 @@ expected outcome once a bug is fixed, not an error. Detected per model call
 (model id, message roles/contents, tool-call names+arguments, offered tool names,
 under nonce/timestamp/cache-control normalization) and per tool call (name +
 arguments). Policy `strict` halts at the first divergence; `warn` reports and
-keeps feeding by order.
+keeps feeding by order. Each divergence carries the structured `expected`/`actual`
+values of its field, and the replay report captures every live request
+(`llm_requests`/`tool_requests`) for programmatic assertions.
+
+**Trajectory Cassette** (`raven/trajectory/cassette.py`):
+The committable form of a Trajectory Bundle, produced by `minimize_bundle` /
+`raven trajectory minimize`: same directory layout, but shrunk to the exact
+surface `load_recording` consumes (consumed spans/artifacts/fields only,
+system-prompt content replaced by a placeholder, the session record sliced to
+the pre-attempt history) and passed through Trajectory Redaction. Payloads are
+never truncated — a field is kept whole or dropped whole.
+_Avoid_: "minimized bundle" as a distinct term — a cassette *is* a bundle to
+the replay layer.
+
+**Trajectory Regression Case** (`raven/trajectory/regression.py`, `tests/trajectories/`):
+One directory pinning a fixed harness bug into CI: a Trajectory Cassette
+(`cassette/`) plus an expectation file (`expect.yaml`) declaring where the
+replay's first Replay Divergence must land and what the live side must do
+there (message contains/not-contains/equals, tool name/params checks).
+Discovered and run by `tests/test_trajectory_regressions.py`; asserting
+"divergence at the expected call, live value = fixed behavior" is the normal
+shape — zero divergence is the special case guarding faithful reproduction.
 
 ### Workspace & Onboarding
 

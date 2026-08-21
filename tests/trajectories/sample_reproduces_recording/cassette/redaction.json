@@ -1,0 +1,17 @@
+{
+  "redacted_at": "2026-08-21T02:45:45.539307+00:00",
+  "raven_version": "0.1.12",
+  "exact_replacements": {},
+  "pattern_replacements": {},
+  "residual_findings": [
+    {
+      "category": "high-entropy",
+      "sample": "relative to the search root, most***fied first. Noise directories (.gi",
+      "file": "artifacts/024543544105-trace-1a02235c198-17f742c1-cli-sample-reproduce-llm.input-57733acf4d.json",
+      "count": 2
+    }
+  ],
+  "skipped_binaries": [],
+  "config_secrets_loaded": true,
+  "binary_policy": "non-UTF-8 files are excluded from the redacted copy (cannot be verified clean)"
+}

@@ -13,6 +13,8 @@ wrappers over the trajectory layer:
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
+- ``minimize`` — shrink a bundle to a redacted Trajectory Cassette fit for
+  the regression suite (:func:`raven.trajectory.cassette.minimize_bundle`).
 - ``verdict`` — record a task-outcome label (source fixed to ``user``).
 - ``pin`` / ``unpin`` — grant / revoke the never-purge retention promise.
 - ``list``    — aggregate addressable attempts from the trace logs so users
@@ -46,6 +48,19 @@ trajectory_app = typer.Typer(
     help="Package, label, and protect agent trajectories.",
     no_args_is_help=True,
 )
+
+
+def _bundle_dir_or_exit(target: str) -> Path:
+    """The bundle directory ``target`` names — a path, or an id under the
+    default bundles directory; exits when neither holds a bundle."""
+    bundle_dir = Path(target)
+    if (bundle_dir / "manifest.json").is_file():
+        return bundle_dir
+    bundle_dir = tracing_config.state_dir() / "bundles" / target
+    if (bundle_dir / "manifest.json").is_file():
+        return bundle_dir
+    console.print(f"[red]no bundle found for {target!r}[/red] — run [cyan]raven trajectory save {target}[/cyan] first")
+    raise typer.Exit(code=1)
 
 
 def _resolve_or_exit(id_: str) -> str:
@@ -205,15 +220,7 @@ def trajectory_replay(
     """
     from raven.trajectory.replay import run_replay
 
-    bundle_dir = Path(target)
-    if not (bundle_dir / "manifest.json").is_file():
-        bundle_dir = tracing_config.state_dir() / "bundles" / target
-        if not (bundle_dir / "manifest.json").is_file():
-            console.print(
-                f"[red]no bundle found for {target!r}[/red] — run [cyan]raven trajectory save {target}[/cyan] first"
-            )
-            raise typer.Exit(code=1)
-
+    bundle_dir = _bundle_dir_or_exit(target)
     mode = "strict" if strict else "warn"
     try:
         report = asyncio.run(run_replay(bundle_dir, mode=mode))
@@ -238,6 +245,80 @@ def trajectory_replay(
         console.print("[red]Replay halted before the end of the recording.[/red]")
         raise typer.Exit(code=2)
     console.print("[green]✓[/green] Replay ran to the end of the recorded turns.")
+
+
+def _fmt_bytes(count: int) -> str:
+    value = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if value < 1024 or unit == "GiB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{int(value)} B"
+
+
+@trajectory_app.command("minimize")
+def trajectory_minimize(
+    target: str = typer.Argument(..., metavar="BUNDLE_OR_ID", help="Bundle directory, or an attempt/trace id"),
+    out: Path | None = typer.Option(
+        None, "--out", "-o", help="Cassette directory (default: <trace-state>/cassettes/<attempt-id>)"
+    ),
+    config: Path | None = typer.Option(
+        None,
+        "--config",
+        exists=True,
+        help="Config file the traced agent ran with; seeds redaction on top of the default config's secrets",
+    ),
+) -> None:
+    """Shrink a bundle into a redacted Trajectory Cassette — the committable
+    form a regression case replays (only what replay consumes is kept)."""
+    from raven.trajectory.cassette import minimize_bundle
+
+    bundle_dir = _bundle_dir_or_exit(target)
+    attempt_id = (
+        json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8")).get("attempt_id") or bundle_dir.name
+    )
+    out_dir = out
+    if out_dir is None:
+        # The manifest's attempt id is recorded data; refuse one that would
+        # name a default path outside the cassettes directory.
+        out_root = (tracing_config.state_dir() / "cassettes").resolve()
+        out_dir = (out_root / attempt_id).resolve()
+        if out_dir.parent != out_root:
+            console.print(f"[red]id {attempt_id!r} cannot be used as a cassette directory name[/red]")
+            raise typer.Exit(code=1)
+    try:
+        report = minimize_bundle(bundle_dir, out_dir, config_path=config)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓[/green] Cassette written to [cyan]{report.cassette_dir}[/cyan]")
+    console.print(f"  size: {_fmt_bytes(report.original_bytes)} -> {_fmt_bytes(report.cassette_bytes)}")
+    console.print(
+        f"  spans: {report.span_count}/{report.source_span_count} kept"
+        f"  artifacts: {report.artifact_count}"
+        f"  llm calls: {report.llm_calls}  tool calls: {report.tool_calls}  turns: {report.turns}"
+        f"  session: {report.session}"
+    )
+    redaction = report.redaction
+    if not redaction.config_loaded:
+        console.print(
+            "  [yellow]config could not be fully read — known-value redaction may be incomplete;"
+            " review the cassette with extra care before committing it[/yellow]"
+        )
+    console.print(
+        f"  redacted: {sum(redaction.exact.values())} known-value"
+        f" + {sum(redaction.patterns.values())} pattern replacement(s)"
+    )
+    if redaction.findings:
+        console.print(
+            f"  [yellow]residual scan flagged {len(redaction.findings)} suspicious token(s)"
+            f" — review redaction.json before committing the cassette[/yellow]"
+        )
+        for finding in redaction.findings[:5]:
+            console.print(f"    [dim]{escape(f'{finding.file}: {finding.sample}')}[/dim]")
+    else:
+        console.print("  [green]residual scan: clean[/green]")
 
 
 @trajectory_app.command("verdict")
