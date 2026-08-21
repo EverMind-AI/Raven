@@ -13,7 +13,17 @@
 import { Buffer } from 'buffer'
 
 import { PASTE_END, PASTE_START } from './termio/csi.js'
+import { DEC } from './termio/dec.js'
 import { createTokenizer, type Tokenizer } from './termio/tokenize.js'
+
+// Longest plain-byte run still read as typing while bracketed paste is
+// unconfirmed. Above it a run is far more likely to be a paste the terminal
+// could not mark, and staying whole keeps the paste path's placeholder
+// collapsing and dropped-path detection working.
+const MAX_TYPED_RUN = 32
+
+// eslint-disable-next-line no-control-regex
+const CONTROL_BYTE_RE = /[\x00-\x1f\x7f]/
 
 // eslint-disable-next-line no-control-regex
 const META_KEY_CODE_RE = /^(?:\x1b)([a-zA-Z0-9])$/
@@ -191,10 +201,14 @@ function splitNumericParams(params: string): number[] {
   return params.split(';').map(p => parseInt(p, 10))
 }
 
+/** Whether this terminal is known to implement bracketed paste (DEC 2004). */
+export type BracketedPasteState = 'confirmed' | 'unknown'
+
 export type KeyParseState = {
   mode: 'NORMAL' | 'IN_PASTE'
   incomplete: string
   pasteBuffer: string
+  bracketedPaste: BracketedPasteState
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -202,7 +216,53 @@ export type KeyParseState = {
 export const INITIAL_STATE: KeyParseState = {
   mode: 'NORMAL',
   incomplete: '',
-  pasteBuffer: ''
+  pasteBuffer: '',
+  bracketedPaste: 'unknown'
+}
+
+/**
+ * Bracketed paste is trustworthy only once the terminal reports mode 2004 as
+ * actually on. App enables it (EBP) during raw-mode setup, before this query
+ * goes out, so an answer of RESET means the enable did not take and no paste
+ * marker will ever arrive -- the case where trusting markers would be worst.
+ */
+function confirmsBracketedPaste(response: TerminalResponse): boolean {
+  return (
+    response.type === 'decrpm' &&
+    response.mode === DEC.BRACKETED_PASTE &&
+    (response.status === DECRPM_STATUS.SET || response.status === DECRPM_STATUS.PERMANENTLY_SET)
+  )
+}
+
+/**
+ * Typing and pasting are the same bytes on stdin, so merging a run into one
+ * nameless keypress mis-reads a coalesced burst (SSH / tmux / a blocked event
+ * loop) as a paste. With bracketed paste confirmed, every unmarked run is
+ * typing and splits unconditionally. Without it, only runs that could not be
+ * a paste line -- short and free of control bytes -- are safe to split.
+ */
+function splitsIntoKeystrokes(text: string, bracketedPaste: BracketedPasteState): boolean {
+  if (text.length < 2) {
+    return false
+  }
+
+  if (bracketedPaste === 'confirmed') {
+    return true
+  }
+
+  return text.length <= MAX_TYPED_RUN && !CONTROL_BYTE_RE.test(text)
+}
+
+function pushTextKeys(out: ParsedInput[], text: string, bracketedPaste: BracketedPasteState): void {
+  if (!splitsIntoKeystrokes(text, bracketedPaste)) {
+    out.push(parseKeypress(text))
+
+    return
+  }
+
+  for (const codePoint of text) {
+    out.push(parseKeypress(codePoint))
+  }
 }
 
 function inputToString(input: Buffer | string): string {
@@ -227,6 +287,7 @@ export function parseMultipleKeypresses(
   prevState: KeyParseState,
   input: Buffer | string | null = ''
 ): [ParsedInput[], KeyParseState] {
+  let bracketedPaste = prevState.bracketedPaste
   const isFlush = input === null
   const inputString = isFlush ? '' : inputToString(input)
 
@@ -260,6 +321,10 @@ export function parseMultipleKeypresses(
         const response = parseTerminalResponse(token.value)
 
         if (response) {
+          if (confirmsBracketedPaste(response)) {
+            bracketedPaste = 'confirmed'
+          }
+
           keys.push({ kind: 'response', sequence: token.value, response })
         } else {
           const mouse = parseMouseEvent(token.value)
@@ -275,7 +340,7 @@ export function parseMultipleKeypresses(
       if (inPaste) {
         pasteBuffer += token.value
       } else {
-        const mouseFragments = parseTextWithSgrMouseFragments(token.value)
+        const mouseFragments = parseTextWithSgrMouseFragments(token.value, bracketedPaste)
 
         if (mouseFragments) {
           keys.push(...mouseFragments)
@@ -288,7 +353,7 @@ export function parseMultipleKeypresses(
           const resynthesized = '\x1b' + token.value
           keys.push(parseKeypress(resynthesized))
         } else {
-          keys.push(parseKeypress(token.value))
+          pushTextKeys(keys, token.value, bracketedPaste)
         }
       }
     }
@@ -311,6 +376,7 @@ export function parseMultipleKeypresses(
     mode: inPaste ? 'IN_PASTE' : 'NORMAL',
     incomplete: tokenizer.buffer(),
     pasteBuffer,
+    bracketedPaste,
     _tokenizer: tokenizer
   }
 
@@ -649,7 +715,10 @@ function parseSgrMouseFragment(fragment: string): ParsedInput {
   return parseMouseEvent(sequence) ?? parseKeypress(sequence)
 }
 
-function parseTextWithSgrMouseFragments(text: string): ParsedInput[] | null {
+function parseTextWithSgrMouseFragments(
+  text: string,
+  bracketedPaste: BracketedPasteState
+): ParsedInput[] | null {
   SGR_MOUSE_FRAGMENT_RE.lastIndex = 0
 
   const matches = [...text.matchAll(SGR_MOUSE_FRAGMENT_RE)]
@@ -682,7 +751,7 @@ function parseTextWithSgrMouseFragments(text: string): ParsedInput[] | null {
     }
 
     if (first.index! > cursor) {
-      parsed.push(parseKeypress(text.slice(cursor, first.index!)))
+      pushTextKeys(parsed, text.slice(cursor, first.index!), bracketedPaste)
     }
 
     for (const match of run) {
@@ -698,7 +767,7 @@ function parseTextWithSgrMouseFragments(text: string): ParsedInput[] | null {
   }
 
   if (cursor < text.length) {
-    parsed.push(parseKeypress(text.slice(cursor)))
+    pushTextKeys(parsed, text.slice(cursor), bracketedPaste)
   }
 
   return parsed
