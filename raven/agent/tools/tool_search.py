@@ -158,7 +158,7 @@ class ToolSearchController:
         hits = []
         for name in ranked:
             tool = self._registry.get(name)
-            if tool is None or not self._registry.offers_on_this_channel(tool):
+            if tool is None or not self._registry.offers(tool):
                 continue
             hits.append(
                 {
@@ -198,7 +198,7 @@ class ToolSearchController:
         if name in META_TOOL_NAMES:
             return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
         tool = self._registry.get(name)
-        if tool is None or not self._registry.offers_on_this_channel(tool):
+        if tool is None or not self._registry.offers(tool):
             return _Target(None, absent_tool_error(name, tail=" -- tool_search lists what is currently loaded"))
         return _Target(tool, None)
 

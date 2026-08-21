@@ -150,18 +150,25 @@ def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_tui_agent_loop_receives_disabled_tools(patched_tui_loop_deps) -> None:
-    """``_build_agent_loop`` must forward ``disabled_tools=`` so
-    ``tools.disabled_tools`` is honored in the TUI at parity with the
-    ``agent`` / ``gateway`` entrypoints; else a tool blacklisted in config
-    stays registered in the primary interactive surface."""
+def test_tui_agent_loop_does_not_forward_disabled_tools(patched_tui_loop_deps) -> None:
+    """The inverse of what this asserted before, and for the reason it asserted it.
+
+    ``tools.disabled_tools`` used to be forwarded here so a blacklisted tool would
+    not stay registered in the primary interactive surface. The loop now reads the
+    file itself, once per assembled tool array, so the switch is honoured either
+    way -- and forwarding it turns the switch one-way: the settings page can take a
+    name back out of the file, but nothing can take it out of a set captured before
+    the process started, so a tool that was off at launch could never be turned
+    back on. The kwarg is left for callers with no config file at all
+    (``benchmarks/appworld/agent_cli.py``).
+
+    That the file's own list still takes effect is asserted where it now happens,
+    in ``test_agent_loop_disabled_tools.py``."""
     from raven.cli.tui_commands import _build_agent_loop
 
     _build_agent_loop()
 
-    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert "disabled_tools" in kwargs, "AgentLoop must receive disabled_tools kwarg"
-    assert kwargs["disabled_tools"] is patched_tui_loop_deps["config"].tools.disabled_tools
+    assert "disabled_tools" not in patched_tui_loop_deps["agent_loop_kwargs"]
 
 
 # ---------------------------------------------------------------------------

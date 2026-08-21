@@ -914,6 +914,62 @@ async def test_a_tree_with_no_installer_says_so_where_the_client_can_read_it(
     assert caught.value.data["name"] == "Raven-Probe"
 
 
+async def test_a_finished_build_refreshes_the_agent_table(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise the agent is installed and the model still cannot name it.
+
+    A build changes readiness, which lives on the filesystem, while the roster the
+    dispatching model reads is a snapshot taken the last time `apply` ran -- and a
+    build triggers no config write, so nothing re-ran it. The page showed the row
+    ready (it re-discovers per request) and the model's own list did not have the
+    name in it, which from the outside is indistinguishable from a failed install.
+    """
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    _installer(monkeypatch, builds=root / "raven-probe" / "Build")
+
+    applied: list[object] = []
+
+    class _Loop:
+        def apply_agents(self, configs: object) -> None:
+            applied.append(configs)
+
+    await subagents_build({"name": "Raven-Probe"}, agent_loop_factory=lambda: _Loop())
+    await _BUILDING["Raven-Probe"]
+
+    assert applied, "a finished build left the loop's table as it was"
+
+
+async def test_a_failed_build_does_not_refresh_the_table(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pairing case, so the assertion above cannot pass by refreshing always:
+    nothing became callable, and re-composing would claim something did."""
+    from raven.agent.subagent import vendored_agents as va
+    from raven.rpc.methods.subagents import _BUILDING, subagents_build
+
+    root = _vendored_tree(tmp_path, script="")
+    monkeypatch.setattr(va, "subagents_root", lambda: root)
+    monkeypatch.setattr(va, "host_can_lend_a_key", lambda: True)
+    _installer(monkeypatch, code=1, output="uv sync failed")
+
+    applied: list[object] = []
+
+    class _Loop:
+        def apply_agents(self, configs: object) -> None:
+            applied.append(configs)
+
+    await subagents_build({"name": "Raven-Probe"}, agent_loop_factory=lambda: _Loop())
+    await _BUILDING["Raven-Probe"]
+
+    assert applied == []
+
+
 async def test_building_a_name_no_folder_carries_is_refused(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
