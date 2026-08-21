@@ -187,6 +187,20 @@ include = [
 [tool.uv]
 constraint-dependencies = [
     "aiohttp>=3.13.4",
+    # everalgo-boundary 0.3.0 added a required third field to the
+    # DetectionResult NamedTuple; everalgo-agent-memory still constructs it with
+    # two, under a range (>=0.2.0,<2.0.0) wide enough to pick the break up. The
+    # result is a TypeError inside everos, surfacing as a 500 from /memory/add,
+    # so a sub-agent whose memory backend is everos fails every turn.
+    # This guards the resolutions that read this table: `uv lock --upgrade`, a
+    # re-lock after the lockfile is deleted, and in-repo `uv pip install` /
+    # `uv run --with`. It does NOT reach `uv tool install`, which ignores
+    # constraint-dependencies and takes ceilings only from `-c` -- install.sh
+    # passes one exported from the lock, so that path is covered separately.
+    # Not removable when everos next moves: agent-memory 0.4.0 still passes two
+    # fields and still declares >=0.2.0, so the ceiling stays correct and
+    # inactive. It goes when a release actually passes the third field.
+    "everalgo-boundary<0.3",
     "pip>=26.1.2",
     "pyjwt>=2.13.0",
     "python-engineio>=4.13.3",
@@ -348,6 +362,7 @@ output = "coverage.json"
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
+    "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",
