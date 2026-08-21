@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import * as composer from './features/composer/mount'
+import * as approve from './features/composer/approve'
 import * as sheets from './features/composer/sheets'
 import * as dag from './features/dag/graph'
 import * as dagNodes from './features/dag/nodes'
@@ -338,6 +339,11 @@ window.RavenIslands = {
     sheetDropClass: sheets.dropClass,
     sheetsSync: sheets.sync,
     sheetsForget: sheets.forget,
+    /* The rack's first tenant to move in here. Beside the rack rather than
+       a global of its own: the layers that raise one already reach for
+       these six names, and an approval is the seventh thing they do to the
+       same rack. */
+    approveSheet: approve.open,
   },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine
