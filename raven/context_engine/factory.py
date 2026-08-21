@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Callable
 from raven.agent.context import ContextBuilder
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.base import ContextEngine
+from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
@@ -107,12 +108,16 @@ def build_context_engine(
         skill_hub_client=skill_hub_client,
     )
 
-    rewriter, gate = _build_rewriter_and_gate(
-        provider=provider,
-        model=model,
-        skill_forge_config=skill_forge_config,
-        skill_forge_router_config=skill_forge_router_config,
-    )
+    discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
+    if discovery == "push":
+        rewriter, gate = _build_rewriter_and_gate(
+            provider=provider,
+            model=model,
+            skill_forge_config=skill_forge_config,
+            skill_forge_router_config=skill_forge_router_config,
+        )
+    else:
+        rewriter, gate = None, None
 
     builders = [
         IdentitySegmentBuilder(workspace),
@@ -124,23 +129,28 @@ def build_context_engine(
             memory_top_k=memory_config.memory_top_k,
         ),
         ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
-        SkillsSegmentBuilder(
-            router,
-            skill_top_k=skill_forge_router_config.top_k,
-            rewriter=rewriter,
-            gate=gate,
-            gate_pool_size=(
-                int(getattr(skill_forge_config, "llm_gate_pool_size", 10)) if skill_forge_config is not None else 10
-            ),
-            hub_client=skill_hub_client,
-            get_tool_definitions=get_tool_definitions,
-            min_safety=skill_forge_router_config.hub.min_safety,
-            blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-            auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
-            install_audit_path=(
-                workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
-            ),
-        ),
+    ]
+    if discovery == "push":
+        builders.append(
+            SkillsSegmentBuilder(
+                router,
+                skill_top_k=skill_forge_router_config.top_k,
+                rewriter=rewriter,
+                gate=gate,
+                gate_pool_size=(
+                    int(getattr(skill_forge_config, "llm_gate_pool_size", 10)) if skill_forge_config is not None else 10
+                ),
+                hub_client=skill_hub_client,
+                get_tool_definitions=get_tool_definitions,
+                min_safety=skill_forge_router_config.hub.min_safety,
+                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
+                install_audit_path=(
+                    workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
+                ),
+            )
+        )
+    builders.append(
         CuratorSegmentBuilder(
             workspace=workspace,
             config=config,
@@ -149,9 +159,29 @@ def build_context_engine(
             context_window_tokens=context_window_tokens,
             get_tool_definitions=get_tool_definitions,
             now_fn=now_fn,
-        ),
-    ]
-    return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices)
+        )
+    )
+    scent = None
+    if discovery != "push":
+        from raven.skill_hub.policy import SkillPolicy
+
+        # Pull mode has no SkillsSegmentBuilder, whose pool drop was the
+        # blocklist / min_safety backstop for the everos + hub sources —
+        # the menu enforces the same policy at advertising time.
+        scent = ScentMenu(
+            router,
+            policy=SkillPolicy.create(
+                min_safety=skill_forge_router_config.hub.min_safety,
+                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+            ),
+        )
+    engine = ContextAssembler(
+        builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices, scent=scent
+    )
+    # The find_skill tool searches through the same router the engine
+    # retrieves with, whichever discovery mode is active.
+    engine.skills_router = router
+    return engine
 
 
 def _build_router(

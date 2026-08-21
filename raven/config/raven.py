@@ -826,6 +826,20 @@ class SkillForgeConfig(_Base):
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
 
+    discovery: Literal["pull", "push"] = "pull"
+    """How retrieved skills reach the model.
+
+    ``"pull"`` (default): a per-turn scent menu (a few name+description
+    lines from the same three-source router) rides the user envelope, and
+    the model fetches bodies itself via ``find_skill`` / ``read_skill``.
+    No per-turn rewriter/gate LLM calls; the system prefix carries no
+    retrieved-skill bytes.
+
+    ``"push"``: the pre-existing pipeline (rewriter -> router -> gate ->
+    selected bodies rendered into the system prefix). Kept for
+    deployments whose main model under-uses tools.
+    """
+
     blocklist: list[str] = Field(default_factory=list)
     """Skill names refused everywhere (config key ``skillForge.blocklist``):
     dropped from the injection pool for every source and refused by

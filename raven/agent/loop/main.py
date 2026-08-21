@@ -1054,10 +1054,25 @@ class AgentLoop:
             None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
-            from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
+            from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
 
             self.tools.register(
-                ReadSkillTool(client=self._skill_hub_client, registry=skill_registry),
+                ReadSkillTool(
+                    client=self._skill_hub_client,
+                    registry=skill_registry,
+                    min_safety=self._skill_min_safety,
+                    blocklist=self._skill_blocklist,
+                ),
+            )
+            # Pull-mode discovery: search on the model's own terms through the
+            # same router the context engine retrieves with.
+            self.tools.register(
+                FindSkillTool(
+                    lambda: getattr(self.context_engine, "skills_router", None),
+                    hub_wired=self._skill_hub_client is not None,
+                    min_safety=self._skill_min_safety,
+                    blocklist=self._skill_blocklist,
+                ),
             )
             self.tools.register(
                 UseSkillTool(
@@ -3112,7 +3127,12 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak, loop_fail_key[1])
+                        + loop_break_nudge(
+                            loop_fail_key[0],
+                            loop_fail_streak,
+                            loop_fail_key[1],
+                            suggest_find_skill=self.tools.get("find_skill") is not None,
+                        )
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be

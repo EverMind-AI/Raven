@@ -101,7 +101,9 @@ def _loop(tmp_path) -> AgentLoop:
         workspace=tmp_path,
         model="fake/model",
         context_config=ContextConfig(),
-        skill_forge_config=SkillForgeConfig(),
+        # This test walks the push pipeline's holders (rewriter/gate); the
+        # pull default builds neither.
+        skill_forge_config=SkillForgeConfig(discovery="push"),
     )
 
 

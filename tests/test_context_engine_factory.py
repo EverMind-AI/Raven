@@ -102,7 +102,9 @@ def _build_engine(
             hub=HubSourceConfig(endpoint=hub_endpoint),
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
-        skill_forge_config=skill_forge_config,
+        # Most assertions in this file exercise the push pipeline's wiring;
+        # pull-mode wiring has its own tests below.
+        skill_forge_config=skill_forge_config or SkillForgeConfig(discovery="push"),
     )
     assert isinstance(engine, ContextAssembler)
     return engine
@@ -228,7 +230,7 @@ class TestRewriterGateModelWiring:
         engine = _build_engine(
             tmp_path,
             model="main-model",
-            skill_forge_config=SkillForgeConfig(rewrite_enabled=True, llm_gate_enabled=False),
+            skill_forge_config=SkillForgeConfig(discovery="push", rewrite_enabled=True, llm_gate_enabled=False),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
         assert skills._rewriter._model == "main-model"
@@ -237,7 +239,9 @@ class TestRewriterGateModelWiring:
         engine = _build_engine(
             tmp_path,
             model="main-model",
-            skill_forge_config=SkillForgeConfig(rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None),
+            skill_forge_config=SkillForgeConfig(
+                discovery="push", rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None
+            ),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
         assert skills._gate._model == "main-model"
@@ -247,6 +251,7 @@ class TestRewriterGateModelWiring:
             tmp_path,
             model="main-model",
             skill_forge_config=SkillForgeConfig(
+                discovery="push",
                 rewrite_enabled=False,
                 llm_gate_enabled=True,
                 llm_gate_model="gate-only-model",
@@ -378,3 +383,22 @@ class TestRefreshContextWindowCascade:
         assert curator.context_window_tokens == 8192
         assert curator.assembler.trimmer.context_window_tokens == 8192
         assert agent.memory_consolidator.context_window_tokens == 8192
+
+
+# ---------------------------------------------------------------------------
+# Pull discovery (the default): no skills segment, scent + router exposed
+# ---------------------------------------------------------------------------
+
+
+def test_pull_default_drops_the_skills_segment_and_wires_scent(tmp_path):
+    engine = _build_engine(tmp_path, skill_forge_config=SkillForgeConfig())
+    assert not any(isinstance(b, SkillsSegmentBuilder) for b in engine._builders)
+    assert engine._scent is not None
+    assert engine.skills_router is not None
+
+
+def test_push_config_restores_the_legacy_pipeline(tmp_path):
+    engine = _build_engine(tmp_path, skill_forge_config=SkillForgeConfig(discovery="push"))
+    assert any(isinstance(b, SkillsSegmentBuilder) for b in engine._builders)
+    assert engine._scent is None
+    assert engine.skills_router is not None

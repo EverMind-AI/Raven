@@ -544,6 +544,21 @@ versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
 
+**Skill Discovery** (`skillForge.discovery`, default `"pull"`):
+How retrieved skills reach the model. Under **pull**, a per-turn **Scent Menu**
+(`context_engine/scent.py`) rides the user envelope: on a *fat* turn (rule-judged —
+length, function-word residue, character-bigram novelty against the recent user
+window), one `SkillForgeRouter.select` renders a few `qualified_id: description`
+lines, and the model fetches bodies itself through `find_skill` (intent-bearing
+search over the same router) and `read_skill`; the system prefix carries no
+retrieved-skill bytes and no per-turn rewriter/gate LLM calls run. Under **push**,
+the pre-existing pipeline (rewriter, router, gate, selected bodies rendered into
+the system prefix) is restored unchanged.
+_Avoid_: conflating the Scent Menu with the `# Skills` segment — the menu is
+advisory tail-of-sequence data (wrapped untrusted), never a system segment; and
+conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
+(body fetch by id).
+
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
 `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
