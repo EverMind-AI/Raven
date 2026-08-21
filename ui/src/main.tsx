@@ -295,9 +295,10 @@ window.RavenIslands = {
 window.RavenIslands = {
   ...(window.RavenIslands || {}),
   /* The composer island: the dock at the bottom of the chat. The shims in
-     demo/090-composer.js call these by name, the parked-turn machinery
-     (live/060) carries the live clock's anchor through them, and live's send
-     takes the staged attachment paths off the tray the same way. */
+     demo/090-composer.js call these by name, and the parked-turn machinery
+     (live/060) carries the live clock's anchor through them. The tray is no
+     longer reachable from out here: live's send used to take the staged paths
+     off it, and the island folds them into the message itself now. */
   composer: {
     goPaint: composer.goPaint,
     drawQueue: composer.drawQueue,
@@ -306,8 +307,6 @@ window.RavenIslands = {
     dockLift: composer.dockLift,
     liveAnchor: composer.liveAnchor,
     setLiveAnchor: composer.setLiveAnchor,
-    attsPending: composer.attsPending,
-    takeAtts: composer.takeAtts,
   },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine

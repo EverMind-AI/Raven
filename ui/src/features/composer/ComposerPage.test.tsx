@@ -28,13 +28,19 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.send': '发送', 'gui.stop': '停止', 'gui.q.edit': '编辑', 'gui.q.remove': '删掉',
     'gui.att.uploading': '上传中', 'gui.att.remove': '移除 {name}', 'gui.att.fail': '{name} 上传失败',
     'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部',
+    'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
+    'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
   },
   en: {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
     'gui.att.uploading': 'uploading', 'gui.att.remove': 'remove {name}', 'gui.att.fail': '{name} failed',
     'gui.live.busy': 'running {t}', 'gui.pill.bottom': 'back to the bottom',
+    'gui.att.note': 'Files for you:', 'gui.att.pending': 'a file is still uploading',
+    'gui.att.pending_body': '{n} still going; send once they land.',
   },
 }
+
+const word = (key: string): string => (WORDS[lang] as Record<string, string>)[key] as string
 
 /* The dock's markup, as page.html carries it. The island writes into these
    containers, so the test gives it the real ones rather than a stand-in. */
@@ -74,8 +80,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     dur: (ms) => `${Math.round(ms / 1000)}s`,
-    send: (text) => { calls.sent.push(text) },
-    halt: () => { calls.halted += 1 },
     noteRow: (label, detail) => { calls.notes.push([label, detail]) },
     stick: () => calls.stick,
     setStick: (on) => { calls.stick = on },
@@ -92,6 +96,10 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     queue: () => [],
     meter: () => '',
     slash: [],
+    /* The two actions live on the source now, not the shell. Spread last so a
+       test can still override either one. */
+    send: (text) => { calls.sent.push(text) },
+    stop: () => { calls.halted += 1 },
     ...over,
   }
   window.RavenShell = fakeShell
@@ -429,6 +437,52 @@ describe('the attachment tray', () => {
     act(() => { paths = store.takeAtts() })
     expect(paths).toEqual(['uploads/a.txt'])
     expect(box.querySelectorAll('.att').length).toBe(0)
+  })
+
+  /* The island builds the message now, so both of these are its behaviour
+     rather than the page layer's. The first one is a bug fix: the page ran this
+     same check after fireSend had already emptied the textarea. */
+  it('keeps what you typed when a still-uploading file refuses the send', async () => {
+    const { calls } = wire({ upload: () => new Promise(() => {}) })
+    mountTray()
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    await act(async () => {
+      store.addFiles([new File(['x'], 'slow.bin', { type: '' })])
+      await flush()
+    })
+    ta.value = 'look at this'
+    act(() => { store.fireSend() })
+    expect(calls.sent).toEqual([])
+    expect(calls.notes.length).toBe(1)
+    expect(ta.value).toBe('look at this')
+  })
+
+  it('folds the staged paths into the message it hands the source', async () => {
+    const { calls } = wire({ upload: async () => ({ path: 'uploads/a.txt', size: 4 }) })
+    mountTray()
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    await act(async () => {
+      store.addFiles([new File(['x'], 'a.txt', { type: 'text/plain' })])
+      await flush()
+    })
+    ta.value = 'have a look'
+    act(() => { store.fireSend() })
+    expect(calls.sent.length).toBe(1)
+    /* Two blank lines between the message and the note, one path per dash row --
+       byte for byte what the page layer used to build, because the reader's own
+       bubble renders its chips from this text. */
+    expect(calls.sent[0]).toBe(`have a look\n\n${word('gui.att.note')}\n- uploads/a.txt`)
+  })
+
+  it('leads with the note when a file is handed over with nothing typed', async () => {
+    const { calls } = wire({ upload: async () => ({ path: 'uploads/b.txt', size: 4 }) })
+    mountTray()
+    await act(async () => {
+      store.addFiles([new File(['x'], 'b.txt', { type: 'text/plain' })])
+      await flush()
+    })
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(`\n\n${word('gui.att.note')}\n- uploads/b.txt`)
   })
 
   it('says so instead of opening a picker the demo canvas has no backend for', () => {

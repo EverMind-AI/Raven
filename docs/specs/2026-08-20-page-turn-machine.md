@@ -1,6 +1,9 @@
 # The page's turn machine
 
-Status: accepted. Steps 1 and 2 are done (this commit is step 2); 3 to 6 open.
+Status: accepted. Steps 1 to 3 are done; 4 to 6 open. This line is the only
+place a reader can learn that -- the prose below is plan-tense on purpose, and
+the inventory's file:line references are pinned to a commit rather than kept
+current, so nothing else here reports progress.
 Scope: `ui/` only. No wire-protocol change, no server change.
 Follows: `2026-08-19-page-datasource-seam.md`
 
@@ -290,14 +293,14 @@ more types.
 
 ## Order, and what each step is worth
 
-| step | group | strands retired | notes |
-|---|---|---|---|
-| 1 | A (minus `use`) | `kids`, `lastRun`, `raw` | deletions only; drops 2 park fields, gate checks it |
-| 2 | A (`use`, `tl`) | `use`, `tl` | deletions again; `use` becomes demo-layer-only |
-| 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins |
-| 4 | D (queue) | `q` | composer store owns the queue; **park via accessor** |
-| 5 | B | `cur` | widest diff; alone in its MR |
-| 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** |
+| step | group | strands retired | notes | state |
+|---|---|---|---|---|
+| 1 | A (minus `use`) | `kids`, `lastRun`, `raw` | deletions only; drops 2 park fields, gate checks it | done |
+| 2 | A (`use`, `tl`) | `use`, `tl` | deletions again; `use` becomes demo-layer-only | done |
+| 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins | done |
+| 4 | D (queue) | `q` | composer store owns the queue; **park via accessor** | open |
+| 5 | B | `cur` | widest diff; alone in its MR | open |
+| 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** | open |
 
 The two bold notes are the ones no gate enforces -- see "the incentive this
 document has to argue against" above. Step 2 lost its bold note when the

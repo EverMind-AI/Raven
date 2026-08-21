@@ -77,13 +77,12 @@ export interface Shell {
   hunkFromEdit?(oldText: string, newText: string): unknown
   hunkFromWrite?(content: string): unknown
   hunkFromUnified?(lines: string | string[]): unknown
-  /* Composer island verbs. `send`/`halt` stay with the shell on purpose: they
-     mutate the turn globals (busy, q) and diverge between the demo
-     replay and the live rpc, so the dock asks for the action and the page
-     decides what it means. The rest are the draft store, the tail anchor and
-     the two catalogues the palette renders from. */
-  send?(text: string): void
-  halt?(): void
+  /* The draft store, the tail anchor and the two catalogues the palette renders
+     from. `send`/`halt` used to be here, and their leaving is the point of the
+     change that moved them: as shell verbs the page decided what sending meant
+     AND reached back into this island for the attachment tray. They are
+     DS.composer.send / .stop now, so the island builds the message and the
+     source decides what happens to it. */
   noteRow?(label: string, detail: string): void
   stick?(): boolean
   setStick?(on: boolean): void

@@ -49,4 +49,11 @@ export interface ComposerSource {
      backend for. Absent in live mode, which installs `upload` instead. */
   pickHint?: string
   upload?(req: UploadReq): Promise<UploadRes>
+  /* The two actions the go button is. Required, not optional like `upload`:
+     both modes install them, because a composer that cannot send is not a
+     composer. They were shell verbs until the page layer stopped owning the
+     turn -- and as shell verbs they had the wrong direction, since `send`
+     reached back INTO this island for the attachment tray. */
+  send(text: string): void
+  stop(): void
 }
