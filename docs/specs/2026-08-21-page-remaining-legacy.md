@@ -151,6 +151,89 @@ Recommendation: extend `ui/scripts/count-shared-globals.mjs`, or add a sibling
 script, to report the verb count with its own `EXPECTED`, so a verb added
 casually has to be argued for in the change that adds it.
 
+**Still open.** That script has since grown a second `EXPECTED`, but for Axis 3
+below, not for this. The verb count remains the number nobody is watching.
+
+## Axis 3: nine containers the live layer fills in place
+
+This document originally named two couplings. There is a third, and it is the
+one that decides when a fixture can actually be deleted.
+
+The ratchet counts **rebinding** a name, and says so: "`x.y =` are not rebinds
+and are not counted". But the live layer's main way of getting real data onto
+the page is not a rebind at all:
+
+```js
+// live/090-extensions.js
+TOOLS.length = 0;
+ext.tools.filter((t) => !t.mcp_server).forEach((t) => TOOLS.push(mkToolRow(t)));
+```
+
+`TOOLS` is declared in `demo/030-fixtures.js` as ten canned rows. The live layer
+empties it and refills it from the server. The same file's own header states the
+design plainly -- real lists are "written into the demo's data arrays IN PLACE, so
+every existing renderer keeps working" -- and installs property setters on the
+rows so that a toggle the demo renderer performs (`t.on = ...`) persists through
+`settings.set`. It is a deliberate mechanism, not an accident, and it works.
+
+Nine names, now measured by the same script under its own `EXPECTED`. Measured
+on `fa98528e`, not on this document's own baseline:
+
+| container | declared in | what the live layer does to it |
+|---|---|---|
+| `TOOLS`, `SKILLS`, `PLUGINS` | `demo/030-fixtures.js` | emptied at boot (`live/010`), refilled from `system.extensions` (`live/090`) |
+| `CRONS` | `demo/030-fixtures.js` | emptied at boot and **never refilled** -- live installs its own `DS.cron`, so the emptying exists only to stop the fixture rows leaking into a live page |
+| `PROVIDERS` | `demo/130-settings.js` | emptied and refilled from the config (`live/120`) |
+| `CFG` | `demo/040-state.js` | two fields written from the config (`live/120`) |
+| `SESS` | `demo/030-fixtures.js` | unshifted from four live files -- and also rebound outright (`SESS = rows`, `SESS = SESS.filter(...)`) |
+| `q` | `demo/040-state.js` | shifted and pushed by the turn machine |
+| `WS` | `demo/100-workspace.js` | its five fields overwritten in one go from a parked snapshot (`Object.assign(WS, pk.ws)`, `live/060`) and one of them incremented per turn (`WS.turn += 1`, `live/050`) |
+
+`SESS` and `q` are already Axis 1 strands -- rebound *and* mutated -- so the two
+numbers overlap by exactly two. The other seven are counted nowhere else.
+
+`WS` is the row that had to be pointed out, and it is worth saying how it hid.
+Its two write shapes are the two that put the container's name nowhere a
+left-hand side would be: `Object.assign` names it as an argument, and `+=` puts
+an operator where the `=` would go. The second is the sharper lesson, because the
+rebind count excludes `+=` deliberately and correctly -- `x.f += 1` rebinds
+nothing -- and this count has to include it for the same reason, read the other
+way round. The one demo container whose own header says "the shared state every
+layer mutates" was the one neither number held.
+
+`CRONS` is the row worth reading twice, because it shows the mechanism has two
+halves that come apart. Its domain is fully migrated: the cron island reads
+`DS.cron`, which the live layer installs wholesale over the fixture source. Its
+only remaining readers are that fixture source -- unreachable on a live page once
+`live/100` has replaced `DS.cron` -- and `cronFailing()` in
+`demo/030-fixtures.js`, which has no callers at all. So a container survives its
+renderers, and the last thing tying this one to the live layer is the line that
+blanks it.
+
+That line is **not** safe to simply delete, and the reason is worth writing down
+because it will recur on every container. `live/010`'s comment states an
+invariant: the demo shell has already seeded *and painted* by the time it runs,
+so the clearing happens in the same task, "so nothing mock survives to the first
+frame". Between `live/010` and `live/100` there is most of the live layer, and a
+repaint anywhere in that window still reads the fixture source. Retiring a
+container therefore means answering an ordering question, not just a reader
+question -- which is the argument for the live layer installing its sources
+before the first paint, already on the endgame list below.
+
+**Why this matters for the order of the remaining work.** An Axis 1 move retires
+a name; it does not retire the storage. A renderer can move into an island and
+read from a `DS` source while the fixture array it used to read stays exactly
+where it is, still being filled by the live layer for whoever else reads it. So
+"the demo layer is empty" is not implied by "Axis 1 is empty": the fixtures come
+out only when every reader of each container has a source to read instead, which
+is a per-container question, not a per-renderer one.
+
+It also revises the estimate for the settings toolset (batch 0 below). Moving
+`renderToolset` into the island needs the inventory itself to become a read on
+`DS.settings`, because the island cannot see `TOOLS` -- so that row is an Axis 3
+move as well as the Axis 2 reduction it is described as. It is still the
+cheapest row; it is not the one-line row the Axis 2 section makes it sound.
+
 ## The constraint that decides the order
 
 Almost everything the legacy concat scripts reach in the modern bundle is

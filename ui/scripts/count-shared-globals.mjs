@@ -47,10 +47,31 @@
 //      caught. See the note on writes() below.
 //   5. Ownership read over the concatenated layer, so one file's local silenced
 //      another file's write. See the note on per-file resolution below.
+//   6. A declarator list was split on every comma, so the parameters of a
+//      column-0 arrow became declarations: `const mk = (t, c, x) => ...` claimed
+//      `c` and `x`. In the LIVE layer that silences every write to such a name.
+//      Seventeen names were phantom this way and none had a write behind it yet,
+//      so unlike holes 1-5 this one had no escapee -- it was found by reading the
+//      declaration set, not by the number moving. See declarators() below.
 //
 // Hole 3 also means the count could be lowered by deleting a declaration and
 // changing nothing, so the fix for it is what makes the gate trustworthy rather
 // than merely stricter.
+//
+// WHAT IS NOT COUNTED ABOVE, and is counted separately below: the live layer
+// reaching INTO a container the demo layer declared instead of rebinding the
+// name -- `TOOLS.length = 0` and then `TOOLS.push(...)`. Note that the two
+// counts answer OPPOSITE questions about `+=`: a compound write is excluded from
+// the rebind count because it does not rebind, and included in the container
+// count because writing into a field is exactly the dependency there. `WS.turn
+// += 1` escaped both until review pointed it out. Not a rebind, so it is
+// none of the gate's original business, but the same demo<->live dependency: the
+// demo's fixture arrays are where the live layer keeps its data, which is why
+// they cannot be deleted with the renderers that read them. live/090's own
+// header says so outright ("written into the demo's data arrays IN PLACE, so
+// every existing renderer keeps working"). It went unmeasured for as long as it
+// did because both gates look at names, and this coupling does not go through
+// one.
 //
 // The live layer's OWN bindings are excluded: its top-level state, its function
 // locals, its parameters. That is what keeps an ordinary local reassignment
@@ -75,6 +96,7 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
 const EXPECTED = 13
+const EXPECTED_HELD = 9
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
 const read = (dir) =>
@@ -97,6 +119,32 @@ const live = liveParts.map(([, t]) => t).join('\n')
 const NAME = '[A-Za-z_$][\\w$]*'
 const first = (s) => (s.trim().match(new RegExp(`^(${NAME})`)) || [])[1]
 
+/* Split a declarator list on the commas that separate declarators, which are the
+   ones at bracket depth zero. A plain `split(',')` was hole 6: it cut inside a
+   parameter list, an array literal or an object literal on the right-hand side,
+   so `const mk = (t, c, x) => ...` registered `mk`, `c` and `x` as declarations.
+
+   That direction is the dangerous one. A phantom declaration in the LIVE layer's
+   top level silences every live write to that name -- the same escape as holes
+   1-5, reached through the ownership test rather than through the write test.
+   Seventeen names were phantom when this was found (`open`, `error`, `say`,
+   `steps`, `H`, `PAD` among them); none had a write behind it yet, so the count
+   did not move, which is exactly why it had to be found by reading rather than
+   by the number. */
+function declarators(list) {
+  const out = []
+  let depth = 0
+  let buf = ''
+  for (const ch of list) {
+    if ('([{'.includes(ch)) depth++
+    else if (')]}'.includes(ch)) depth--
+    if (ch === ',' && depth === 0) { out.push(buf); buf = ''; continue }
+    buf += ch
+  }
+  out.push(buf)
+  return out
+}
+
 /* Names a layer declares at its top level -- column 0, the live parts being
    fragments of one IIFE whose bodies all sit there. Visible to every other part,
    which is what makes it right to collect these layer-wide. */
@@ -104,7 +152,7 @@ function top(txt) {
   const s = new Set()
   const add = (n) => { if (n) s.add(n) }
   for (const m of txt.matchAll(new RegExp(`^(?:const|let|var)\\s+([^;\\n]*)`, 'gm'))) {
-    for (const part of m[1].split(',')) add(first(part))
+    for (const part of declarators(m[1])) add(first(part))
   }
   for (const m of txt.matchAll(new RegExp(`^(?:async\\s+)?function\\s+(${NAME})`, 'gm'))) add(m[1])
   return s
@@ -123,7 +171,7 @@ function inner(txt) {
   const s = new Set()
   const add = (n) => { if (n) s.add(n) }
   for (const m of txt.matchAll(new RegExp(`^[ \\t]+(?:const|let|var)\\s+([^;\\n]*)`, 'gm'))) {
-    for (const part of m[1].split(',')) add(first(part))
+    for (const part of declarators(m[1])) add(first(part))
   }
   for (const m of txt.matchAll(new RegExp(`(?:async\\s+)?function\\s*(${NAME})?\\s*\\(([^)]*)\\)`, 'g'))) {
     add(m[1])
@@ -155,6 +203,60 @@ const writes = (txt) => {
   const s = new Set()
   for (const m of txt.matchAll(new RegExp(`(?:^\\s*|[;{}]\\s*)(${NAME})\\s*=[^=>]`, 'gm'))) s.add(m[1])
   return s
+}
+
+/* Mutating a container rather than rebinding the name. The four shapes the live
+   layer actually uses on a demo array or object: emptying it, a mutating method,
+   a field, an index.
+
+   Read-only methods are deliberately absent. Live code READS demo globals
+   constantly -- `TOOLS.filter(...)`, `SESS.find(...)` -- and that is a coupling
+   too, but a far larger and differently-shaped one; folding it in here would
+   produce a number nobody can act on. This counts the writes. */
+const MUTATORS = ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse',
+  'fill', 'set', 'delete', 'clear', 'add']
+
+const mutates = (txt) => {
+  const s = new Set()
+  const shapes = [
+    new RegExp(`(${NAME})\\.(?:${MUTATORS.join('|')})\\(`, 'g'),
+    /* A field, which covers `.length = 0` as well -- `length` is a field name,
+       so a separate pattern for emptying an array matched nothing the field
+       pattern had not already matched. There was one here until a mutation run
+       showed removing it changed no number and broke no fixture. */
+    new RegExp(`(${NAME})\\.${NAME}\\s*=[^=>]`, 'g'),
+    new RegExp(`(${NAME})\\[[^\\]]+\\]\\s*=[^=>]`, 'g'),
+    /* Every field at once, with the container's name nowhere on a left-hand
+       side. `Object.assign(WS, pk.ws)` overwrites all five of WS's fields and
+       matched none of the shapes above. */
+    new RegExp(`Object\\.assign\\(\\s*(${NAME})`, 'g'),
+    /* A compound field write. `writes()` deliberately excludes `+=` because its
+       question is whether a NAME was rebound, and `x.f += 1` does not rebind
+       anything -- but that is the opposite of the question here, where writing
+       into a field is precisely the coupling. `WS.turn += 1` was invisible for
+       want of this. */
+    new RegExp(`(${NAME})\\.${NAME}\\s*(?:\\+\\+|--|[-+*/|&^]=)`, 'g'),
+  ]
+  for (const re of shapes) for (const m of txt.matchAll(re)) s.add(m[1])
+  return s
+}
+
+/* Containers the live layer mutates in place. The name must be one the DEMO
+   layer declares -- unlike the rebind count above, which also reports a write to
+   a name nothing declares. The asymmetry is not an oversight: an undeclared
+   rebind silently lands on `window` and keeps working, so it is a strand; an
+   undeclared `FOO.push(...)` throws, so it cannot be live code. Requiring the
+   demo declaration is also what keeps `window.x = 1` and `document.title = ...`
+   out, without a list of platform names to maintain. */
+const containers = (files, layerTop, demoNames) => {
+  const out = new Set()
+  for (const [, txt] of files) {
+    const mine = inner(txt)
+    for (const n of mutates(txt)) {
+      if (demoNames.has(n) && !layerTop.has(n) && !mine.has(n)) out.add(n)
+    }
+  }
+  return [...out].sort()
 }
 
 /* What a layer writes but does not own, given what its whole top level declares.
@@ -236,24 +338,82 @@ for (const [text, want] of [
   if (String(got) !== String(want)) fail(text, want, got)
 }
 
+/* declarators(): hole 6. The first case is the shape that caused it, and the
+   next two are the other right-hand sides a comma appears in -- an array and an
+   object literal -- because a fix that only knew about parentheses would still
+   split those. The last is what the function exists for in the first place, and
+   has to keep working. */
+for (const [text, want] of [
+  ['const mk = (t, c, x) => x;', ['mk']],
+  ['const pair = [a, b];', ['pair']],
+  ['const o = { one: 1, two: 2 };', ['o']],
+  ['let a = 1, b = 2, c = 3;', ['a', 'b', 'c']],
+]) {
+  const got = [...top(text)].sort()
+  if (String(got) !== String(want.slice().sort())) fail(text, want.slice().sort(), got)
+}
+
+/* containers(): the four mutating shapes are counted, reads are not, and the
+   name has to be one the demo declares -- which is what keeps the platform's
+   own objects out without naming them. The `window` case is the one that would
+   flood the number if the ownership test were the looser "does not own" the
+   rebind count uses. */
+for (const [text, want] of [
+  ['LIST.push(1);', ['LIST']],
+  // Still counted, now through the field shape rather than one of its own.
+  ['LIST.length = 0;', ['LIST']],
+  ['MAP.set(k, v);', ['MAP']],
+  ['CFG.field = 1;', ['CFG']],
+  ['SEEN[k] = 1;', ['SEEN']],
+  ['Object.assign(CFG, next);', ['CFG']],
+  ['CFG.turn += 1;', ['CFG']],
+  ['CFG.turn++;', ['CFG']],
+  // Copying OUT of a container is a read; the target is what gets written.
+  ['const snap = Object.assign({}, CFG);', []],
+  // Reads: a coupling, but not this one, and folding them in makes the number unusable.
+  ['const n = LIST.filter((x) => x).length;\nLIST.find((x) => x);', []],
+  // Not declared by the demo layer, so not a demo container.
+  ['window.thing = 1;\ndocument.title = "x";', []],
+]) {
+  const demoNames = new Set(['LIST', 'MAP', 'CFG', 'SEEN'])
+  const got = containers([['<fixture>', text]], top(text), demoNames)
+  if (String(got) !== String(want)) fail(text, want, got)
+}
+
 const demoTop = top(demo)
 const names = strands(liveParts, top(live))
 const implicit = names.filter((n) => !demoTop.has(n))
+const held = containers(liveParts, top(live), demoTop)
 
 if (process.argv.includes('--list')) {
   for (const n of names) console.log(implicit.includes(n) ? `${n}  (declared nowhere)` : n)
+  for (const n of held) console.log(`${n}  (container, mutated in place)`)
 }
 console.log(`live writes to bindings it does not own: ${names.length} (expected ${EXPECTED})`)
 if (implicit.length) {
   console.log(`  of those, declared nowhere -- an implicit window write: ${implicit.join(', ')}`)
 }
-if (names.length > EXPECTED) {
-  console.error(`count-shared-globals: the coupling GREW to ${names.length}. New code must go`
-    + ' through the DataSource seam, not a shared global. Run with --list to see which.')
-  process.exit(1)
+console.log(`demo containers the live layer fills in place: ${held.length} (expected ${EXPECTED_HELD})`)
+
+/* Both numbers, one rule, and the message says which way it moved. Equality in
+   both directions for the reason the header gives: an unrecorded win is room for
+   the next regression to hide in. */
+const gate = (what, got, want, hint) => {
+  if (got === want) return false
+  if (got > want) {
+    console.error(`count-shared-globals: ${what} GREW to ${got}. ${hint}`
+      + ' Run with --list to see which.')
+  } else {
+    console.error(`count-shared-globals: ${what} is down to ${got}. Set its EXPECTED to that`
+      + ' in this same change -- an unrecorded win is room for the next regression to hide in.')
+  }
+  return true
 }
-if (names.length < EXPECTED) {
-  console.error(`count-shared-globals: the coupling is down to ${names.length}. Set EXPECTED to`
-    + ' that in this same change -- an unrecorded win is room for the next regression to hide in.')
-  process.exit(1)
-}
+
+const bad = [
+  gate('the coupling', names.length, EXPECTED,
+    'New code must go through the DataSource seam, not a shared global.'),
+  gate('the containers held in common', held.length, EXPECTED_HELD,
+    'A live list belongs on a DS source, not in one of the demo\'s fixture arrays.'),
+].some(Boolean)
+if (bad) process.exit(1)
