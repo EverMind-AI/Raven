@@ -98,6 +98,11 @@ descriptions — `name [stateful, local-files, live-progress] (description)`. Th
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
 the `subagent` parameter constrains the same set. All three capabilities render positive *or*
 negative, because "no tag" and "the roster does not say" are indistinguishable otherwise.
+Also spliced into the skill gate's prompt under push discovery, where it is the account of
+what can be delegated and so decides which candidate skills are dropped as already covered;
+that copy omits the generic `builtin` row, which claims no capability bias and would read as
+covering everything. Pull discovery builds no skills segment, so it has no gate and drops
+nothing on these grounds.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 
 **Subagent working directory** (`workspace=` on every backend's `run`):

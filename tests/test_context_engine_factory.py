@@ -28,6 +28,7 @@ from raven.config.raven import (
     SkillForgeConfig,
     SkillForgeRouterConfig,
 )
+from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
 from raven.context_engine.factory import build_context_engine
 from raven.context_engine.segments import MemorySegmentBuilder, SkillsSegmentBuilder
@@ -266,7 +267,7 @@ class TestRewriterGateModelWiring:
 # ---------------------------------------------------------------------------
 
 
-def _make_loop(tmp_path: Path, *, backend=None) -> AgentLoop:
+def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=None) -> AgentLoop:
     return AgentLoop(
         provider=_StubProvider(),
         workspace=tmp_path,
@@ -277,7 +278,49 @@ def _make_loop(tmp_path: Path, *, backend=None) -> AgentLoop:
         context_config=ContextConfig(),
         memory_config=MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(),
+        skill_forge_config=skill_forge_config,
+        agents=agents,
     )
+
+
+class TestSubagentRosterReachesTheGate:
+    """The join the segment-builder stubs cannot make: a real agent table, read
+    through the real builder. The roster is collected lazily because the loop
+    builds its context engine before its ``SubagentManager`` exists, so a
+    snapshot taken at wiring time would be empty every run.
+
+    Push discovery, explicitly: pull is the default and builds no skills
+    segment at all, so there is no gate there to hand a roster to."""
+
+    @staticmethod
+    def _push(tmp_path: Path, agents) -> AgentLoop:
+        return _make_loop(tmp_path, agents=agents, skill_forge_config=SkillForgeConfig(discovery="push"))
+
+    def test_a_configured_specialist_reaches_the_gate(self, tmp_path: Path) -> None:
+        agents = SubagentsConfig(
+            agents=[
+                {
+                    "name": "Scribe",
+                    "kind": "cli",
+                    "command": "echo hi",
+                    "description": "turns a source document into a deck",
+                }
+            ]
+        ).agents
+        agent = self._push(tmp_path, agents)
+        skills = next(b for b in agent.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
+        roster = skills._collect_subagent_roster()
+        assert roster is not None
+        assert "Scribe" in roster
+        assert "turns a source document into a deck" in roster
+
+    def test_the_generic_agent_is_not_offered_as_an_overlap(self, tmp_path: Path) -> None:
+        agents = SubagentsConfig(agents=[{"name": "Scribe", "kind": "cli", "command": "echo hi"}]).agents
+        agent = self._push(tmp_path, agents)
+        skills = next(b for b in agent.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
+        roster = skills._collect_subagent_roster() or ""
+        assert "Scribe" in roster
+        assert "no capability bias" not in roster
 
 
 class TestAgentLoopEngineDetection:

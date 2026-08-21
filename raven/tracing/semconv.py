@@ -430,6 +430,7 @@ def skill_gate(span, bound: dict[str, Any], result: Any, exc: BaseException | No
             "task": bound.get("task"),
             "candidates": [_hit_ref(h) for h in candidates],
             "available_tools": bound.get("available_tools"),
+            "available_subagents": bound.get("available_subagents"),
         },
     )
     span.artifact("skill.gate.output", {"selected": [_hit_ref(h) for h in selected]})

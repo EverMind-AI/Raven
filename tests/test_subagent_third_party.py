@@ -29,6 +29,7 @@ from raven.agent.subagent.backends import (
     third_party_agent_meta,
 )
 from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
 from raven.agent.tools.spawn import SpawnTool
@@ -724,6 +725,42 @@ def test_spawn_tool_points_at_the_dag_even_with_no_configured_agent(tmp_path: Pa
     unconditional -- the built-in rows are always on the table -- so the advice is
     always about a tool the model can actually call."""
     assert "run_subagent_dag" in SpawnTool(manager=_mgr(tmp_path, [])).description
+
+
+def test_spawn_tool_prefers_a_specialist_over_doing_the_work_itself(tmp_path: Path) -> None:
+    """The roster alone does not say when to reach for it, and the observed
+    failure is the agent researching or building inline while a specialist that
+    does exactly that job sits unused on the table."""
+    cli = ThirdPartyCliSubagentConfig(
+        name="Scribe",
+        command="scribe {prompt}",
+        description="turns a source document into a deck",
+    )
+    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).description
+    assert "Prefer delegation over doing it yourself" in desc
+    assert "your own tools" in desc
+    # The generic row is on the roster too, and counting it as a specialist
+    # would satisfy the rule without ever dispatching to one.
+    assert f"`{GENERIC_AGENT}` is not a specialist" in desc
+
+
+def test_spawn_tool_omits_the_delegation_preference_when_no_specialist_exists(tmp_path: Path) -> None:
+    """With nothing configured the table still holds the generic row, so the
+    sentence would name a specialist the model cannot pick."""
+    desc = SpawnTool(manager=_mgr(tmp_path, [])).description
+    assert GENERIC_AGENT in desc
+    assert "Prefer delegation" not in desc
+    assert "is not a specialist" not in desc
+
+
+def test_spawn_tool_states_the_preference_between_the_roster_and_the_dag_pointer(tmp_path: Path) -> None:
+    """Order is the whole point: a rule about which agent to name has to sit
+    with the roster it applies to, and ahead of the pointer that sends the
+    model to a different tool."""
+    cli = ThirdPartyCliSubagentConfig(name="Scribe", command="scribe {prompt}", description="builds decks")
+    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).description
+    assert desc.index("choose deliberately from") < desc.index("Prefer delegation")
+    assert desc.index("Prefer delegation") < desc.index("run_subagent_dag")
 
 
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
