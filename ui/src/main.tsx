@@ -61,7 +61,6 @@ declare global {
     toggleFind?: typeof find.toggle
     drawBanner?: typeof banner.draw
     setMemFault?: typeof banner.setFault
-    openImage?: typeof lightbox.open
     closeImage?: typeof lightbox.close
     openModelPicker?: typeof modelPicker.open
     drawPerm?: typeof perm.draw
@@ -98,11 +97,14 @@ window.drawFoot = foot.draw
 /* The banner and the lightbox keep their legacy names because their callers
    are spread across layers this migration has not reached: drawBanner from the
    turn machine and four page layers, setMemFault from the live memory.health
-   event, and openImage/closeImage from the chrome's Escape chain. Same shape as
-   drawFoot -- the name is the door, the module behind it moved. */
+   event, and closeImage from the chrome's Escape chain -- one line that finds
+   the overlay by class and closes it. Same shape as drawFoot: the name is the
+   door, the module behind it moved.
+   Only closeImage. The chain never opens one, and both islands that do
+   (the composer's tray, the transcript's attachment chips) import lightbox.open
+   directly, which is what shell/lightbox.ts's header says they should. */
 window.drawBanner = banner.draw
 window.setMemFault = banner.setFault
-window.openImage = lightbox.open
 window.closeImage = lightbox.close
 /* The model picker's opener. Two callers, both still legacy: the composer's
    model chip, and the settings source's pickModel door (which the settings
@@ -216,11 +218,13 @@ window.RavenIslands = {
     /* And the adapter that turns a `dag.run_started` payload into nodes, so the
        sheet and the card agree on what one is. */
     fromStarted: dagNodes.fromStarted,
+    /* The box, and only the box. The spacing constants used to be here too, from
+       when the layout ran in the live layer; it moved into graph.ts, so the only
+       reader left for GAP_X, GAP_Y and PAD is graph.ts itself and its tests,
+       which import them. This bag grows one line per helper an island actually
+       needs -- never ahead of need, and not behind one either. */
     W: dag.W,
     H: dag.H,
-    GAP_X: dag.GAP_X,
-    GAP_Y: dag.GAP_Y,
-    PAD: dag.PAD,
   },
   /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
      rides the same bag because the bag is simply what the legacy shell reaches

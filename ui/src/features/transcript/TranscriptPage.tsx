@@ -430,7 +430,7 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
    nodes come from (features/dag/nodes.ts) and in nothing that is drawn. */
 
 function DagGraph({ lane, c, selId }: { lane: Lane; c: CallData; selId: string | null }): ReactElement {
-  const { W, H, GAP_X: _gx, GAP_Y: _gy, PAD: _pad } = dag.CARD
+  const { W, H } = dag.CARD
   const nodes = c.nodes
   const { at, width, height } = dag.layout(nodes, dag.CARD)
   const done = new Set(nodes.filter((n) => n.status === 'completed').map((n) => n.id))
