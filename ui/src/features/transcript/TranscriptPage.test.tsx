@@ -2,6 +2,7 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { CARD as dagCARD } from '../dag/graph'
 import * as mount from './mount'
 import * as store from './store'
 
@@ -217,8 +218,12 @@ describe('transcript island, the delegation verbs', () => {
     return row.nextElementSibling as HTMLElement
   }
 
-  const chipStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.nds .nd')].map((n) => n.dataset.st!)
+  const nodeStates = (card: HTMLElement): string[] =>
+    [...card.querySelectorAll<HTMLElement>('.gnd')].map((n) => n.dataset.st!)
+
+  const pickNode = (card: HTMLElement, i: number): void => {
+    card.querySelectorAll('.gnd')[i]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  }
 
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
@@ -229,29 +234,32 @@ describe('transcript island, the delegation verbs', () => {
   })
 
   /* A restored card recovers its node states through dagRows. The falsifiable
-     half is the contrast: with a reader the chips take the reported states,
+     half is the contrast: with a reader the nodes take the reported states,
      without one they stay as seeded. */
   it('hydrates a restored dag card from dagRows', async () => {
     wire({ dagRows: () => Promise.resolve([{ node: 'alpha', status: 'completed' }, { node: 'beta', status: 'failed' }]) })
     const card = dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(chipStates(card)).toEqual(['completed', 'failed'])
+    expect(nodeStates(card)).toEqual(['completed', 'failed'])
   })
 
-  it('leaves the chips as seeded when no reader is installed', async () => {
+  it('leaves the nodes as seeded when no reader is installed', async () => {
     wire()
     const card = dagCard()
     await act(async () => { await Promise.resolve() })
-    expect(chipStates(card)).toEqual(['pending', 'pending'])
-    /* Still marked live: the run id was recovered, only its states were not. */
-    expect(card.querySelector('.nds')!.getAttribute('data-live')).toBe('1')
+    expect(nodeStates(card)).toEqual(['pending', 'pending'])
   })
 
+  /* The node panel's own control, not the node: clicking a node selects it, so
+     that the run's transcript is a separate intention from reading the request. */
   it('opens a node through the source, with the run id it recovered', () => {
     const opened: Array<[string, string]> = []
     wire({ openDagNode: (runId, nodeId) => opened.push([runId, nodeId]) })
     const card = dagCard()
-    act(() => { card.querySelector<HTMLElement>('.nds .nd')!.click() })
+    /* Dispatched rather than `.click()`: a node box is an SVG <g>, and
+       SVGElement has no click() in jsdom. */
+    act(() => { pickNode(card, 0) })
+    act(() => { card.querySelector<HTMLElement>('.npanel .go')!.click() })
     expect(opened).toEqual([['run-7', 'alpha']])
   })
 
@@ -522,43 +530,155 @@ describe('transcript island, delegated calls', () => {
     expect(rows.join(' | ')).not.toContain('gui.deleg.self')
   })
 
-  it('builds a playbook load a chip per node from the run that started', () => {
-    /* A dag call the model makes carries `nodes`, so the chips come from the
-       arguments. The load of a `mode: dag` playbook carries `{name, params}`
-       and the graph exists only once the engine assembled it -- which is the
-       run-started payload. Without reading it the card took the run id and then
-       dropped every node update, because setChip only updates chips that are
-       already there. */
+  /* Open the dag card, wherever the step put it: a sealed step of one call folds
+     behind a summary row and an unsealed one does not, and this is about the card
+     rather than about the fold. Found through its own detail block, whose row is
+     the toggle in front of it. */
+  const openDagCard = (): HTMLElement => {
+    const sum = $('.wk > .wrow.sum') as HTMLElement | null
+    if (sum) act(() => { sum.click() })
+    const dtl = $('.dtl.dagc') as HTMLElement
+    act(() => { (dtl.previousElementSibling as HTMLElement).click() })
+    return dtl
+  }
+
+  it('draws a playbook load the same graph, from the run that started', () => {
+    /* A dag call the model makes carries `nodes`, so the graph comes from the
+       arguments. The load of a `mode: dag` playbook carries `{name, params}` and
+       the graph exists only once the engine assembled it -- which is the
+       run-started payload. Same card either way: which source the nodes came from
+       is not something the reader should be able to see. */
     act(() => {
       const st = mount.step()
       st.tool('load_playbook', { name: 'topic-briefing', params: { topic: 'crows' } })
       mount.dagFeed('dag.run_started', {
         run_id: 'r1',
         nodes: [
-          { id: 'tb-scan', subagent: 'research-raven' },
-          { id: 'tb-brief', subagent: 'content-raven' },
+          { id: 'tb-scan', subagent: 'scout', depends_on: [] },
+          { id: 'tb-brief', subagent: 'writer', depends_on: ['tb-scan'] },
         ],
       })
       mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'tb-scan', status: 'completed' })
     })
-    const chips = $$('.nds .nd')
-    expect(chips).toHaveLength(2)
-    expect(chips.map((c) => c.textContent).join(' ')).toContain('tb-scan')
+    const card = openDagCard()
+    const nodes = [...card.querySelectorAll<HTMLElement>('.gnd')]
+    expect(nodes).toHaveLength(2)
+    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'pending'])
+    /* The dependency the event carried is drawn as an edge, which is the whole
+       difference between a graph and a list. */
+    expect(card.querySelectorAll('.edge')).toHaveLength(1)
     /* The label the load produced survives: overwriting it in the dag branch
        left the row unable to say which playbook was loaded. */
     expect($('.wk')?.textContent).toContain('topic-briefing')
   })
 
-  it('rebuilds a playbook load chips from disk when it saw no events', async () => {
-    /* The restore path, which is what the receipt's `DAG <run>:` lead exists
-       for: a card replayed from history sees no `run_started` at all, so the
-       nodes can only come from `dag.get`. Its rows went through the same
-       update-only `setChip`, so a load card -- whose arguments never carried a
-       graph -- kept the run id and showed no strip. */
+  it('draws the graph at the card dims rather than the sheet ones', () => {
+    /* The card sits in a 744px reading column and the sheet has the chat's whole
+       width; drawing at the sheet's geometry would run the graph past the card's
+       edge, and nothing about the picture would look wrong enough to notice. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+    })
+    const card = openDagCard()
+    const svg = card.querySelector('.canvas svg') as SVGElement
+    expect(svg.getAttribute('width')).toBe(String(dagCARD.PAD * 2 + dagCARD.GAP_X + dagCARD.W))
+  })
+
+  it('marks the node whose detail is open, including the failure it opened unasked', () => {
+    /* A failure is the one thing worth opening unasked -- the same rule the
+       step's own fold follows. Derived rather than stored, because the node states
+       arrive after the card was built; so the graph has to be told which node the
+       panel is showing rather than reading the stored selection, which is empty. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r2', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'brief', status: 'failed' })
+    })
+    const card = openDagCard()
+    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
+    const marked = [...card.querySelectorAll<HTMLElement>('.gnd')].filter((g) => g.dataset.sel === '1')
+    expect(marked).toHaveLength(1)
+    expect(marked[0]!.querySelector('.id')!.textContent).toBe('brief')
+  })
+
+  it('keeps the failure reason on a run the nodes cannot explain', () => {
+    /* `run_subagent_dag` can raise mid-run (a backend write failing, say) after
+       some nodes have already completed. `okOf` calls a dag result bad only when
+       its first word is error-shaped, so a bad state IS that case -- a run whose
+       nodes merely failed returns a summary and reads as ok. Withholding the
+       receipt whenever the graph had produced a tally therefore left exactly this
+       card showing a node count and nothing about why it stopped. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r4', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r4', node: 'scan', status: 'completed' })
+      h.done(false, 'Error running DAG r4: backend write failed: disk full', 40)
+      st.seal()
+    })
+    const state = [...openDagCard().querySelectorAll('.dgr > .v')][1] as HTMLElement
+    expect(state.textContent).toContain('disk full')
+    /* The tally stays beside it: "1 done" is not the same fact as the cause, and
+       it is the only word on what did get through before the run stopped. */
+    expect(state.textContent).toContain('gui.deleg.dag_done')
+  })
+
+  it('closes the panel it opened unasked, and leaves it closed', () => {
+    /* The unasked open is stored rather than derived. Derived, `null` meant both
+       "nobody picked one" and "the reader closed it": the first click on the
+       failed node was a no-op and the second reopened it, so the panel could
+       never be shut -- on the one run where a reader most wants the graph back
+       unobstructed. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r5', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'brief', status: 'failed' })
+    })
+    const card = openDagCard()
+    const at = (i: number): Element => card.querySelectorAll('.gnd')[i] as Element
+    expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
+
+    act(() => { at(1).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(card.querySelector('.npanel')).toBeNull()
+
+    /* And a later failure does not reopen what the reader shut -- the unasked
+       open happens once, like the step's own fold. */
+    act(() => { mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'scan', status: 'failed' }) })
+    expect(card.querySelector('.npanel')).toBeNull()
+
+    /* Still a working toggle, so the reader can bring it back. */
+    act(() => { at(0).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(card.querySelector('.npanel .nm')!.textContent).toBe('scan')
+  })
+
+  it('gives a playbook load the same node detail a model-made call gets', async () => {
+    /* The point of the read: a playbook's arguments never carried the graph, so
+       without `dag.get` its card can show who ran and in what order and nothing
+       about what any step was asked -- while the identical card for a model-made
+       call shows all of it from its own arguments. */
     wire({
       dagRows: async () => [
-        { node: 'tb-scan', status: 'completed', subagent: 'research-raven' },
-        { node: 'tb-brief', status: 'running', subagent: 'content-raven' },
+        { node: 'tb-scan', status: 'completed', subagent: 'scout', depends_on: [] },
+        {
+          node: 'tb-brief',
+          status: 'running',
+          subagent: 'writer',
+          depends_on: ['tb-scan'],
+          prompt_template: 'write up {{ tb-scan.output }} in the house voice',
+          inputs: { voice: { file: 'docs/voice.md' } },
+        },
       ],
     })
     await act(async () => {
@@ -567,11 +687,18 @@ describe('transcript island, delegated calls', () => {
         .done(true, "DAG r9: started 'topic-briefing' (2 steps); results will be delivered when the run completes.", 5)
       st.seal()
     })
-    await act(async () => { await Promise.resolve() })
-
-    const chips = $$('.nds .nd')
-    expect(chips).toHaveLength(2)
-    expect(chips.map((c) => c.getAttribute('data-st'))).toEqual(['completed', 'running'])
+    const card = openDagCard()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const nodes = [...card.querySelectorAll<HTMLElement>('.gnd')]
+    expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'running'])
+    act(() => { nodes[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    const panel = card.querySelector('.npanel') as HTMLElement
+    expect(panel.querySelector('.dep')!.textContent).toBe('tb-scan')
+    expect(panel.querySelector('.ins')!.textContent).toContain('docs/voice.md')
+    expect(panel.querySelector('.tpl')!.textContent).toContain('in the house voice')
+    /* The placeholder is marked up rather than left as text: it is the part that
+       says where this step's material comes from. */
+    expect(panel.querySelector('.tpl .ph')!.textContent).toBe('{{ tb-scan.output }}')
   })
 })
 

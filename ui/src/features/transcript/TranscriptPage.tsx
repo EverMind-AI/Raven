@@ -1,11 +1,13 @@
 import { Fragment, memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
+import * as dag from '../dag/graph'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
 import { openPath as wsOpenPath } from '../workspace/store'
 import * as store from './store'
 
+import type { DagNode } from '../dag/types'
 import type {
   AnswerData, AskData, CallData, DeliveredData, FoldData, Lane, NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
@@ -302,6 +304,7 @@ const shortOr = (p: string): string => {
 const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
   useSeg(lane, c)
   const rowRef = useRef<HTMLDivElement | null>(null)
+  if (c.kind === 'dag') return <DagCard lane={lane} seg={seg} c={c} />
   if (c.kind !== 'plain') return <DelegRow lane={lane} seg={seg} c={c} />
   const withDtl = c.done && hasDtl(c)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
@@ -366,23 +369,6 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
   const cost = c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
   const a = c.args as { agent?: string; instance?: string; task?: string }
   const who = store.spawnAgentOf(a) ? store.spawnAgentOf(a) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
-  let extra = ''
-  if (c.kind === 'dag' && c.done && c.ok) {
-    const n = { ok: 0, bad: 0, skip: 0 }
-    c.chips.forEach((ch) => {
-      const d = store.DOT_OF[ch.st]
-      if (d === 'ok') n.ok += 1
-      else if (d === 'bad') n.bad += 1
-      else if (d === 'skip') n.skip += 1
-    })
-    const bits: string[] = []
-    if (n.ok || n.bad || n.skip) {
-      bits.push(t('gui.deleg.dag_done', { ok: String(n.ok) }))
-      if (n.bad) bits.push(t('gui.deleg.dag_bad', { n: String(n.bad) }))
-      if (n.skip) bits.push(t('gui.deleg.dag_skip', { n: String(n.skip) }))
-    }
-    extra = bits.join(' · ')
-  }
   const openTask = (): void => {
     if (c.kind === 'spawn') store.openSpawn(store.spawnAgentOf(a), c.label || '')
   }
@@ -399,15 +385,10 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
       <div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>
     ))
   }
-  if (c.kind === 'spawn') {
-    kv('task', t('gui.deleg.d_task'), c.label || String(a.task || '').slice(0, 160), true)
-    kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
-  } else {
-    kv('scale', t('gui.deleg.d_scale'), c.label || t('gui.deleg.dag_title'))
-  }
+  kv('task', t('gui.deleg.d_task'), c.label || String(a.task || '').slice(0, 160), true)
+  kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
   kv('state', t('gui.deleg.d_state'),
-    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})}
-      {...(extra ? { extra } : {})} />)
+    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})} />)
   kv('cost', t('gui.deleg.d_cost'), cost)
   return (
     <>
@@ -424,27 +405,264 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
       <div className="dtl dlg" hidden={!c.open}>
         <div className="bd">
           <div className="dgr">{grid}</div>
-          {c.kind === 'dag' && c.chips.length ? (
-            <div className="nds" {...(c.chipsLive ? { 'data-live': '1' } : {})}>
-              {c.chips.map((n) => {
-                const dotCls = store.DOT_OF[n.st] || ''
-                return (
-                  <button key={n.id} className={'nd' + (dotCls ? ' act' : '')} data-st={n.st || 'pending'}
-                    title={n.subagent ? `${n.id} · ${n.subagent}` : n.id}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      if (c.runId) store.openDagNode(c.runId, n.id)
-                    }}>
-                    <span className={'dot' + (dotCls ? ' ' + dotCls : '')} />
-                    <span className="tx">
-                      <span className="id">{n.id}</span>
-                      {n.subagent ? <span className="ag">{n.subagent + (n.instance ? ' @' + n.instance : '')}</span> : null}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : null}
+        </div>
+      </div>
+    </>
+  )
+})
+
+/* ── the dag card ───────────────────────────────────────────────────────────
+   A `run_subagent_dag` call is a row like every other one; what is behind its
+   caret is the request it made. That request has a shape -- which steps, in what
+   order, each on which agent, each handed what -- and the card used to show four
+   fields of it in a flat strip of chips, which is the structure thrown away and
+   the arguments' remaining half never read at all.
+
+   Three layers, and the split between the second and third is the point: the
+   graph says what the orchestration *is*, the node panel says what one step was
+   *asked*, and the run's own transcript -- one explicit click away, in the panel
+   that already renders delegated work -- says what actually *happened*. Putting
+   the third inside the card would be a second renderer for the same thing.
+
+   Identical for a `load_playbook` call in dag mode. The graph is assembled by the
+   engine there rather than written by the model, so it arrives from the event and
+   `dag.get` instead of from the arguments -- which is a difference in where the
+   nodes come from (features/dag/nodes.ts) and in nothing that is drawn. */
+
+function DagGraph({ lane, c, selId }: { lane: Lane; c: CallData; selId: string | null }): ReactElement {
+  const { W, H, GAP_X: _gx, GAP_Y: _gy, PAD: _pad } = dag.CARD
+  const nodes = c.nodes
+  const { at, width, height } = dag.layout(nodes, dag.CARD)
+  const done = new Set(nodes.filter((n) => n.status === 'completed').map((n) => n.id))
+  /* A handle earns its place in the box only when it is shared, which is when it
+     means "these steps continue one session". A handle held by one node is minted
+     per node and reads as a mangled copy of the id above it. */
+  const held = new Map<string, number>()
+  nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1) })
+  const edges: ReactNode[] = []
+  nodes.forEach((n) => {
+    n.depends_on.forEach((pid) => {
+      const a = at.get(pid)
+      const b = at.get(n.id)
+      if (!a || !b) return
+      const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 5, y2 = b.y + H / 2, mid = (x1 + x2) / 2
+      const cls = done.has(pid) ? ' flowed' : ''
+      edges.push(<path key={`e${pid}-${n.id}`} className={'edge' + cls}
+        d={`M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`} />)
+      /* The head is its own path: a marker-end inherits the line's stroke width
+         and ends up heavier than the line it caps. */
+      edges.push(<path key={`t${pid}-${n.id}`} className={'tip' + cls}
+        d={`M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`} />)
+    })
+  })
+  return (
+    <div className="canvas">
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        {edges}
+        {nodes.map((n) => {
+          const p = at.get(n.id)
+          if (!p) return null
+          const pick = (): void => store.pickDagNode(lane, c, n.id)
+          const mark = dag.MARKS[n.status]
+          const handle = n.instance && (held.get(n.instance) || 0) > 1 ? ' @' + n.instance : ''
+          return (
+            <g key={n.id} className="gnd" transform={`translate(${p.x} ${p.y})`} role="button" tabIndex={0}
+              data-st={n.status || 'pending'} {...(selId === n.id ? { 'data-sel': '1' } : {})}
+              onClick={(e) => { e.stopPropagation(); pick() }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); pick() }
+              }}>
+              <rect width={W} height={H} rx={9} />
+              {n.status === 'running'
+                ? <g className="bars" transform={`translate(${16 - 5} ${H / 2 - 5})`}>
+                    <rect x={0} y={2} width={2.4} height={6} rx={1.2} />
+                    <rect x={4} y={0} width={2.4} height={10} rx={1.2} />
+                    <rect x={8} y={2} width={2.4} height={6} rx={1.2} />
+                  </g>
+                : <path className={'mk ' + (mark ? mark.cls : 'wait')}
+                    transform={`translate(16 ${H / 2})`}
+                    d={mark ? mark.d : 'M-3.6 0a3.6 3.6 0 1 0 7.2 0a3.6 3.6 0 1 0 -7.2 0'} />}
+              <text className="id" x={29} y={17}>{n.id}</text>
+              <text className="ag" x={29} y={28}>{n.subagent + handle}</text>
+              {/* On the second line, not beside the id as the wide sheet has it:
+                  at card scale that layout has to reserve the clock's column on
+                  the id's own line, and a node id then clips at nine characters. */}
+              <text className="tm" x={W - 9} y={28} textAnchor="end">
+                {n.status === 'running' ? '' : dag.took(n, Date.now())}
+              </text>
+              <title>{n.id + ' \u00b7 ' + n.subagent + (n.instance ? ' @' + n.instance : '')}</title>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+/* One of a node's inputs, and where it came from. The three sources read
+   differently on purpose: a literal is the words themselves, the other two name
+   something to go and read. */
+function InputRow({ k, v }: { k: string; v: unknown }): ReactElement {
+  const obj = v && typeof v === 'object' ? (v as Record<string, unknown>) : null
+  const file = obj && typeof obj.file === 'string' ? obj.file : null
+  const node = obj && typeof obj.node === 'string' ? obj.node : null
+  const kind = node ? 'node' : file ? 'file' : 'literal'
+  return (
+    <>
+      <span className="key">{k}</span>
+      <span className="src" data-k={kind}>{t('gui.dag.src_' + kind)}</span>
+      <span className="val">{node || file || (typeof v === 'string' ? `"${v}"` : JSON.stringify(v))}</span>
+    </>
+  )
+}
+
+/* When the template needs a "show all of it". Length OR a line break: the clamp
+   itself is four lines of CSS, and a template written across several short lines
+   is clipped long before 150 characters -- while a single line of latin text that
+   long is still two lines and needs no control. */
+const TPL_CLAMP = 150
+const tplIsLong = (tpl: string): boolean => tpl.length > TPL_CLAMP || tpl.includes('\n')
+
+function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): ReactElement {
+  const rows: ReactNode[] = []
+  const kv = (key: string, label: string, v: ReactNode): void => {
+    rows.push(<div key={key + 'k'} className="k">{label}</div>)
+    rows.push(<div key={key + 'v'} className="v">{v}</div>)
+  }
+  const shared = n.instance && c.nodes.filter((x) => x.instance === n.instance).length > 1
+  kv('agent', t('gui.deleg.d_agent'), (
+    <>
+      {n.subagent + (n.instance ? ' @' + n.instance : '')}
+      {n.instance ? <span className="hold">{t(shared ? 'gui.dag.held_shared' : 'gui.dag.held_own')}</span> : null}
+    </>
+  ))
+  kv('deps', t('gui.dag.deps'), n.depends_on.length ? (
+    <>
+      {n.depends_on.map((pid: string) => (
+        <button key={pid} type="button" className="dep"
+          onClick={(e) => { e.stopPropagation(); store.pickDagNode(lane, c, pid) }}>{pid}</button>
+      ))}
+    </>
+  ) : <span className="none">{t('gui.dag.deps_none')}</span>)
+  const keys = Object.keys(n.inputs || {})
+  kv('inputs', t('gui.dag.inputs'), keys.length ? (
+    <div className="ins">
+      {keys.map((k) => <InputRow key={k} k={k} v={(n.inputs as Record<string, unknown>)[k]} />)}
+    </div>
+  ) : <span className="none">{t('gui.dag.inputs_none')}</span>)
+  if (n.prompt_template) {
+    const long = tplIsLong(n.prompt_template)
+    kv('tpl', t('gui.dag.tpl'), (
+      <>
+        <pre className={'tpl' + (long && !c.selFull ? ' clip' : '')}>
+          {/* The placeholders are the part a reader is looking for: they are what
+              ties this step to the ones before it. */}
+          {n.prompt_template.split(/(\{\{[^}]*\}\})/).map((part: string, i: number) => (
+            /^\{\{/.test(part) ? <span key={i} className="ph">{part}</span> : <Fragment key={i}>{part}</Fragment>
+          ))}
+        </pre>
+        {long ? (
+          <button type="button" className="more"
+            onClick={(e) => { e.stopPropagation(); store.toggleDagFull(lane, c) }}>
+            {t(c.selFull ? 'gui.dag.tpl_less' : 'gui.dag.tpl_more')}
+          </button>
+        ) : null}
+      </>
+    ))
+  }
+  const st = String(n.status)
+  return (
+    <div className="npanel">
+      <div className="nhd">
+        <span className="nm">{n.id}</span>
+        <span className="st">{t('gui.dag.st_' + st, undefined, st)}{n.started_at ? ' · ' + dag.took(n, Date.now()) : ''}</span>
+        {c.runId ? (
+          <button type="button" className="go"
+            onClick={(e) => { e.stopPropagation(); store.openDagNode(c.runId as string, n.id) }}>
+            {t('gui.dag.open_run')}
+          </button>
+        ) : null}
+      </div>
+      <div className="rows">{rows}</div>
+    </div>
+  )
+}
+
+const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
+  useSeg(lane, c)
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const elapsed = useTick(!c.done, c.t0)
+  const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
+  const state = c.done ? (c.ok ? 'ok' : 'bad') : 'run'
+  const cost = c.done ? (c.ms ? store.durText(c.ms) : '') : (elapsed >= 1000 ? store.durText(elapsed) : '…')
+  const nodes = c.nodes
+  const tally = { ok: 0, bad: 0, skip: 0, run: 0 }
+  nodes.forEach((n) => {
+    const d = store.DOT_OF[n.status]
+    if (d === 'ok') tally.ok += 1
+    else if (d === 'bad') tally.bad += 1
+    else if (d === 'skip') tally.skip += 1
+    else if (d === 'run') tally.run += 1
+  })
+  const bits: string[] = []
+  if (c.done && (tally.ok || tally.bad || tally.skip)) {
+    bits.push(t('gui.deleg.dag_done', { ok: String(tally.ok) }))
+    if (tally.bad) bits.push(t('gui.deleg.dag_bad', { n: String(tally.bad) }))
+    if (tally.skip) bits.push(t('gui.deleg.dag_skip', { n: String(tally.skip) }))
+  }
+  const extra = bits.join(' · ')
+  /* The graph is the picture; a single node is not one, and one box on its own
+     reads worse than the line above it. */
+  const drawn = nodes.length > 1
+  /* One source for what the panel shows. The unasked open on a failure is done by
+     the store, when the failure arrives -- derived here instead, it made `null`
+     mean both "nobody picked one" and "the reader closed it", so the panel it
+     opened swallowed the click meant to close it and reopened on the next. */
+  const selId = c.sel
+  const sel = selId ? nodes.find((n) => n.id === selId) : undefined
+  const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
+  const grid: ReactNode[] = []
+  const kv = (key: string, label: string, v: ReactNode): void => {
+    grid.push(<div key={key + 'k'} className="k">{label}</div>)
+    grid.push(<div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>)
+  }
+  /* The row says how much work and what shape it is; the agents are one line
+     down, because the count of them is almost always one and appending them made
+     the row too long to read at a glance. A playbook load keeps its name in
+     front: which playbook ran is the first thing about that call. */
+  const shape = nodes.length ? dag.shape(nodes) : ''
+  const rowLabel = [c.label, shape].filter(Boolean).join(' · ') || t('gui.deleg.dag_title')
+  kv('scale', t('gui.deleg.d_scale'),
+    [shape, ...(agents.length ? [agents.join(' · ')] : [])].filter(Boolean).join(' · ')
+    || c.label || t('gui.deleg.dag_title'))
+  /* The receipt whenever the call failed, and the tally beside it. They are not
+     two renderings of one fact: `okOf` calls a dag result bad only when its first
+     word is error-shaped, which is the graph-level failure
+     (`Error running DAG <id>: ...`) and never a node failure -- a run whose nodes
+     failed returns a summary and reads as ok. So a bad state is exactly the case
+     the nodes cannot explain, and withholding the receipt there left the card
+     showing a node count and no cause. */
+  kv('state', t('gui.deleg.d_state'),
+    <DelegState state={state} {...(state === 'bad' ? { err: store.firstErrLine(c.res) } : {})}
+      {...(extra ? { extra } : {})} />)
+  kv('cost', t('gui.deleg.d_cost'), cost)
+  return (
+    <>
+      <div ref={rowRef} className={'wrow' + (c.done ? '' : ' run') + ' tog' + (c.done && !c.ok ? ' bad' : '') + (c.open ? ' open' : '')}
+        tabIndex={0} onClick={flip} onKeyDown={onKeyToggle(flip)}>
+        <Ico d={c.done && !c.ok ? ACT_ICO.bad as string : actIco(c.name)} cls="ic" />
+        <span className="vb">
+          {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
+          {c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
+        </span>
+        <span className="ar">{rowLabel}</span>
+        <Chev />
+      </div>
+      <div className="dtl dlg dagc" hidden={!c.open}>
+        <div className="bd">
+          <div className="dgr">{grid}</div>
+          {drawn ? <DagGraph lane={lane} c={c} selId={selId} /> : null}
+          {sel ? <DagNodePanel lane={lane} c={c} n={sel} /> : null}
         </div>
       </div>
     </>

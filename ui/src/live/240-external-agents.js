@@ -184,11 +184,12 @@ function svgEl(tag, attrs, cls) {
    is doing the work. */
 function dagMark(status, cx, cy) {
   if (status === 'running') return workGlyphSvg(cx - 5, cy + 4);
-  if (status === 'completed') return svgEl('path', { d: `M${cx - 5} ${cy}l3.6 3.8 6.4 -7.6` }, 'mk ok');
-  if (status === 'failed') return svgEl('path', { d: `M${cx - 4} ${cy - 4}l8 8M${cx + 4} ${cy - 4}l-8 8` }, 'mk bad');
-  if (status === 'skipped' || status === 'interrupted') {
-    return svgEl('path', { d: `M${cx - 4.5} ${cy}h9` }, 'mk skip');
-  }
+  /* The paths come from the bundle (features/dag/graph.ts) so the sheet and the
+     transcript's own card draw one alphabet: they were two copies of these four
+     shapes, free to drift into two vocabularies for one set of facts. Centre
+     relative, hence the translate. */
+  const mark = RavenIslands.dag.MARKS[status];
+  if (mark) return svgEl('path', { d: mark.d, transform: `translate(${cx} ${cy})` }, 'mk ' + mark.cls);
   return svgEl('circle', { cx, cy, r: 3.6 }, 'mk wait');
 }
 
@@ -458,16 +459,13 @@ DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId }
 /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from
    history shows what actually happened rather than a row of pending dots. */
-/* Node, status, and who ran it. The agent and handle come along because a card
-   restored from history has no `run_started` event to build its chips from, and
-   for a playbook load the call's own arguments never carried the graph -- so
-   this read is the only place the nodes can come from. `dag.get` already returns
-   both per file; dropping them here is what left that card with a run id and an
-   empty strip. */
+/* The rows as the server sends them, unreduced. They used to be mapped down to
+   four fields here, which is why a card restored from history could never show a
+   dependency, a prompt template or an input -- a field this mapper did not name
+   was a field the card could not have. The shape the card wants is decided by the
+   adapter that reads it (ui/src/features/dag/nodes.ts), not by this seam. */
 DS.transcript.dagRows = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
-  .then((r) => ((r && r.run && r.run.files) || []).map((f) => ({
-    node: f.node, status: f.status, subagent: f.subagent || null, instance: f.instance || null,
-  })));
+  .then((r) => (r && r.run && r.run.files) || []);
 
 /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a

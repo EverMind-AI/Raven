@@ -314,7 +314,14 @@ def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
     rdir = f"/hist/mas_dag/{run_id}"
     graph = {
         "nodes": [
-            {"id": "a", "subagent": "x", "prompt_template": "do {{ inputs.k }}", "depends_on": [], "instance": None},
+            {
+                "id": "a",
+                "subagent": "x",
+                "prompt_template": "do {{ inputs.k }}",
+                "depends_on": [],
+                "instance": None,
+                "inputs": {"k": "LITERAL", "spec": {"file": "/w/spec.md"}},
+            },
             {"id": "b", "subagent": "y", "prompt_template": "use {{ a.output }}", "depends_on": ["a"], "instance": "h"},
         ]
     }
@@ -360,6 +367,10 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     a, b = run["files"]
     assert (a["node"], a["status"], a["started_at"], a["ended_at"]) == ("a", "completed", 1000, 3000)
     assert a["prompt_template"] == "do {{ inputs.k }}"
+    # The other half of the template: without it every `{{ inputs.k }}` in the
+    # line above is a key with no visible source.
+    assert a["inputs"] == {"k": "LITERAL", "spec": {"file": "/w/spec.md"}}
+    assert b["inputs"] is None
     assert (b["node"], b["status"], b["error"], b["instance"]) == ("b", "failed", "boom", "h")
     assert b["depends_on"] == ["a"]
 
@@ -376,6 +387,9 @@ async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
     assert [f["node"] for f in run["files"]] == ["a", "b"]
     assert {f["status"] for f in run["files"]} == {"pending"}
     assert run["files"][1]["prompt_template"] == "use {{ a.output }}"
+    # Structure includes what each node was handed: it lives in graph.json, which
+    # is written before the first node runs, so an in-flight run has it too.
+    assert run["files"][0]["inputs"] == {"k": "LITERAL", "spec": {"file": "/w/spec.md"}}
 
 
 async def test_read_run_without_a_run_dir_raises() -> None:

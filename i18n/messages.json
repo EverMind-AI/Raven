@@ -1639,6 +1639,14 @@
       "en": "{n} nodes in {d} layers",
       "zh": "{n} 个节点 · {d} 层"
     },
+    "gui.dag.deps": {
+      "en": "Waits for",
+      "zh": "依赖"
+    },
+    "gui.dag.deps_none": {
+      "en": "nothing -- starts with the graph",
+      "zh": "无 — 第一层，随图一起起跑"
+    },
     "gui.dag.done": {
       "en": "{n}/{t} done",
       "zh": "完成 {n}/{t}"
@@ -1651,9 +1659,29 @@
       "en": "Collapse the graph",
       "zh": "收起编排图"
     },
+    "gui.dag.held_own": {
+      "en": "  assigned, can be continued",
+      "zh": "  自动分配，可继续"
+    },
+    "gui.dag.held_shared": {
+      "en": "  nodes sharing it run in order, on one session",
+      "zh": "  同 handle 的节点串行复用一个会话"
+    },
+    "gui.dag.inputs": {
+      "en": "Handed",
+      "zh": "入参"
+    },
+    "gui.dag.inputs_none": {
+      "en": "nothing",
+      "zh": "无"
+    },
     "gui.dag.node_empty": {
       "en": "This node has not written anything yet.",
       "zh": "这个节点还没有产出。"
+    },
+    "gui.dag.open_run": {
+      "en": "Open the run \u2197",
+      "zh": "打开运行记录 ↗"
     },
     "gui.dag.parallel": {
       "en": "up to {n} at once",
@@ -1667,9 +1695,57 @@
       "en": "{n} skipped",
       "zh": "跳过 {n}"
     },
+    "gui.dag.src_file": {
+      "en": "file",
+      "zh": "file"
+    },
+    "gui.dag.src_literal": {
+      "en": "text",
+      "zh": "字面量"
+    },
+    "gui.dag.src_node": {
+      "en": "node",
+      "zh": "node"
+    },
+    "gui.dag.st_completed": {
+      "en": "done",
+      "zh": "已完成"
+    },
+    "gui.dag.st_failed": {
+      "en": "failed",
+      "zh": "失败"
+    },
+    "gui.dag.st_interrupted": {
+      "en": "interrupted",
+      "zh": "被中断"
+    },
+    "gui.dag.st_pending": {
+      "en": "waiting",
+      "zh": "等待中"
+    },
+    "gui.dag.st_running": {
+      "en": "running",
+      "zh": "正在运行"
+    },
+    "gui.dag.st_skipped": {
+      "en": "skipped",
+      "zh": "已跳过"
+    },
     "gui.dag.title": {
       "en": "Orchestration",
       "zh": "编排"
+    },
+    "gui.dag.tpl": {
+      "en": "Asked",
+      "zh": "提示词"
+    },
+    "gui.dag.tpl_less": {
+      "en": "Show less",
+      "zh": "收起"
+    },
+    "gui.dag.tpl_more": {
+      "en": "Show all of it",
+      "zh": "展开全文"
     },
     "gui.dag.truncated": {
       "en": "Output truncated; the file on disk is complete.",

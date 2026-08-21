@@ -30,6 +30,11 @@ function replay(run, instant) {
       open_[e.id].meta = { n: e.n, a: e.a, st };
       wsOnTool(e.n, e.a, instant);
     }, e.d);
+    /* A dag run's own events, which is how the card offline gets the same node
+       states it gets live -- the graph comes from the call's arguments, but
+       whether a node ran comes only from here. Without them a finished run drew
+       four pending boxes under a result line saying it had completed. */
+    else if (e.t === 'dag') fire(() => { dagFlowFeed(e.k, e.p); }, e.d);
     else if (e.t === 't-') fire(() => {
       const h = open_[e.id];
       if (!h) return;

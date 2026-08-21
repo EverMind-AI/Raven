@@ -186,6 +186,32 @@ const ANSWER_GTM = `## GTM Agent 赛道速览
 - **数据仍是护城河**：Clay 的优势不在模型，在数据源编排。
 - **定价从按座位转向按结果**：11x 已按「生成的会议数」计费。`;
 
+/* The graph the research conversation orchestrates: three reads in parallel,
+   fanning into one comparison. Written the way the model writes it -- ids,
+   dependencies, a prompt template per node and the inputs it names -- because
+   that is what the transcript's dag card renders. Every placeholder here resolves
+   against a node or an input that exists; a fixture whose template referred to
+   nothing would draw a card the real tool would have rejected. */
+const DAG_RUN = '20260821T004119Z-4c1d8ea2';
+
+const DAG_GTM = {
+  nodes: [
+    { id: 'read_clay', subagent: 'Raven-X', depends_on: [],
+      prompt_template: '\u7ec6\u8bfb {{ inputs.page }}\uff0c\u6309\u300c\u5b9a\u4f4d / \u6838\u5fc3\u80fd\u529b / \u5b9a\u4ef7 / \u96c6\u6210\u300d\u56db\u6817\u51fa\u7ed3\u6784\u5316\u6458\u8981\uff0c\u6bcf\u6817\u4e24\u4e09\u53e5\uff0c\u5e26\u539f\u6587\u51fa\u5904\u3002',
+      inputs: { page: { file: 'research/clay.com.md' } } },
+    { id: 'read_11x', subagent: 'Raven-X', depends_on: [],
+      prompt_template: '\u7ec6\u8bfb {{ inputs.page }}\uff0c\u6309\u540c\u4e00\u56db\u6817\u51fa\u7ed3\u6784\u5316\u6458\u8981\uff0c\u53e3\u5f84\u8ddf {{ inputs.rubric }} \u5bf9\u9f50\u3002',
+      inputs: { page: { file: 'research/11x.ai.md' }, rubric: 'read_clay' } },
+    { id: 'read_unify', subagent: 'Raven-X', depends_on: [],
+      prompt_template: '\u7ec6\u8bfb {{ inputs.page }}\uff0c\u6309\u540c\u4e00\u56db\u6817\u51fa\u7ed3\u6784\u5316\u6458\u8981\u3002',
+      inputs: { page: { file: 'research/unifygtm.com.md' } } },
+    { id: 'compare', subagent: 'raven', depends_on: ['read_clay', 'read_11x', 'read_unify'],
+      prompt_template: '\u628a {{ read_clay.output }}\u3001{{ read_11x.output }}\u3001{{ read_unify.output }} \u5408\u6210\u4e00\u5f20\u5bf9\u6bd4\u8868\uff0c\u56db\u6817\u5bf9\u9f50\u3002\u53e3\u5f84\u4e0d\u4e00\u81f4\u7684\u5730\u65b9\u5355\u72ec\u5217\u4e00\u884c\u8bf4\u660e\uff0c\u4e0d\u8981\u62b9\u5e73\u3002\u8bed\u6c14\u53c2\u8003 {{ inputs.voice }}\u3002',
+      inputs: { voice: { file: 'docs/style/report.md' }, audience: '\u8981\u505a\u9009\u578b\u51b3\u7b56\u7684\u589e\u957f\u8d1f\u8d23\u4eba' } },
+  ],
+  background: true,
+};
+
 const RUNS = {
   gtm: {
     key: 'gtm', title: 'GTM agent 市场调研',
@@ -234,6 +260,26 @@ const RUNS = {
       { t:'t-', d:1400, id:3, ok:true, r:'{"status":200,"extractor":"jina-reader","length":5000}', ms:1400 },
       { t:'t+', d:140, id:4, n:'web_fetch', a:'https://www.11x.ai' },
       { t:'t-', d:1100, id:4, ok:true, r:'{"status":200,"extractor":"jina-reader","length":4820}', ms:1100 },
+      { t:'ep', d:400 },
+      { t:'think', d:900, s:7, x:'三家各自的细节不是一个人读得完的量。拆成三路并行读，各出一份结构化摘要，再汇到一个节点里对表——这就是一张 dag。' },
+      { t:'say', d:700, x:'我把三家分头交给 subagent 细读，最后汇成一张对比表。' },
+      /* The one dag call on this canvas, and its `a` is the argument object
+         rather than a label string: the card is built from the arguments, so a
+         label would draw three boxes and no edges -- the shape this card exists
+         to stop showing. */
+      { t:'t+', d:300, id:5, n:'run_subagent_dag', a: DAG_GTM },
+      { t:'dag', d:120, k:'dag.run_started', p:{ run_id: DAG_RUN,
+        nodes: DAG_GTM.nodes.map((n) => ({ id: n.id, subagent: n.subagent, depends_on: n.depends_on })) } },
+      { t:'dag', d:200, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'running', started_at: 1000 } },
+      { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'running', started_at: 1000 } },
+      { t:'dag', d:40,  k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'running', started_at: 1000 } },
+      { t:'dag', d:700, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_clay', status:'completed', ended_at: 5200 } },
+      { t:'dag', d:260, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_unify', status:'completed', ended_at: 6100 } },
+      { t:'dag', d:180, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'read_11x', status:'completed', ended_at: 6900 } },
+      { t:'dag', d:120, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'running', started_at: 6900 } },
+      { t:'dag', d:900, k:'dag.node_updated', p:{ run_id: DAG_RUN, node:'compare', status:'completed', ended_at: 10400 } },
+      { t:'t-', d:200, id:5, ok:true, ms:2600,
+        r:`DAG ${DAG_RUN}: 4 个节点全部完成` },
       { t:'ep', d:400 },
       { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
       { t:'answer', d:500, x: ANSWER_GTM + `

@@ -6717,7 +6717,12 @@
           "prompt_file": { "type": "string" },
           "output_file": { "type": "string" },
           "error": { "type": "string" },
-          "prompt_template": { "type": "string" }
+          "prompt_template": { "type": "string" },
+          "inputs": {
+            "description": "What this node was handed, per key: a literal string, {file: path}, or {node: id}. The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from.",
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          }
         }
       },
       "DagRunSnapshot": {
