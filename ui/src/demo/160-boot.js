@@ -257,14 +257,31 @@ function showOnboard(be) {
   });
 }
 
-/* Demo: the splash lifts on load; ?onboard=1 previews the first-run flow on
-   canned data (a design pass without wiping ~/.raven). Live mode owns both
-   moments itself (window.__liveBoot) -- it holds the splash until real data
-   has landed and asks setup.status whether onboarding is due. */
+/* Demo boot: two independent moments, and only one of them backs off for live
+   mode. Ordered rather than nested, because the preview needs the splash lifted
+   and the splash is the half that defers.
+
+   `?onboard=demo` previews the first-run flow on canned data -- it answers from
+   demoOnbBackend, so it writes nothing. What was missing was that preview on a
+   LIVE page: live/010-boot-guard.js sets __liveBoot whenever the page is served
+   over http without ?stub=1, and the old branch backed off on it, so the only
+   way to reach a canned first-run screen was file:// or ?stub=1, both of which
+   blank the live data as well. Against a real serve there was no way to look at
+   that flow without letting it write.
+
+   `?onboard=1` still means what it always meant: force the real flow, through
+   live/200-boot.js, against the real RPCs. That one writes.
+
+   The splash defers to live, which holds it until real data lands. It must NOT
+   be skipped when the preview opens, though: #onb is z-index 110 and #splash is
+   120 (page.css says so where it stacks them), and on the offline canvas --
+   file:// or ?stub=1, which is what build.py's docstring points a design pass at
+   -- no live layer runs, so this is the only call that ever lifts it. Returning
+   early here left the splash over the overlay for the whole session. */
 addEventListener('load', () => {
+  if (/[?&]onboard=demo/.test(location.search)) showOnboard(demoOnbBackend());
   if (window.__liveBoot) return;
   hideSplash(250);
-  if (/[?&]onboard=1/.test(location.search)) showOnboard(demoOnbBackend());
 });
 
 function demoOnbBackend() {
