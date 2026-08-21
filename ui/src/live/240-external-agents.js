@@ -143,7 +143,7 @@ const dagFor = (key) => DAGS.get(key || sheetSession()) || null;
    (ui/src/features/dag/graph.ts), where they are reachable from a test. Aliased
    rather than called through the long name at each site: this file reads the
    same as it did, and the names are the ones the renderer below already used. */
-const { W: DAG_W, H: DAG_H, GAP_X: DAG_GAP_X, GAP_Y: DAG_GAP_Y, PAD: DAG_PAD } = RavenIslands.dag;
+const { W: DAG_W, H: DAG_H } = RavenIslands.dag;
 const dagLayout = (nodes) => RavenIslands.dag.layout(nodes);
 const dagGist = (d) => RavenIslands.dag.gist(d);
 const dagSummary = (d) => RavenIslands.dag.summary(d);
