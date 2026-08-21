@@ -69,7 +69,6 @@ if (typeof APP_VERSION !== 'undefined') window.RavenShell.appVersion = () => APP
 if (typeof SESS !== 'undefined') window.RavenShell.sessionCount = () => SESS.length;
 if (typeof checkUpdate !== 'undefined') window.RavenShell.checkUpdate = (btn) => checkUpdate(btn);
 if (typeof wsOpenUrl !== 'undefined') window.RavenShell.openUrl = (u) => wsOpenUrl(u);
-if (typeof setLangShim === 'function') window.RavenShell.setLang = (v) => setLangShim(v);
 if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
 if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };
 if (typeof renderToolset === 'function') window.RavenShell.renderToolset = (host) => renderToolset(host);

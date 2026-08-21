@@ -75,4 +75,10 @@ export interface SettingsSource {
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   model(): string
   pickModel?(anchor: HTMLElement, after: () => void): void
+  /* The language pick. On the source rather than the shell because what a flip
+     MEANS differs between the modes -- live persists it through config.language,
+     which also drives the TUI and the language the agent replies in, while the
+     offline page repaints and has nowhere to persist to. Required, since a
+     settings page that cannot answer the pick would draw a dead control. */
+  setLang(lang: string): void
 }

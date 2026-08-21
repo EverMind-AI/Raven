@@ -18,15 +18,17 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;'
    both front ends. LANG mirrors config.language. */
 const I18N = /*__I18N__*/{ "slash": {}, "ui": {} };
 let LANG = 'en';
+/* The only writer of LANG, and the reason it has one: the current language and
+   the catalogue rendered over the static markup have to move together, and
+   three separate places used to assign the first and remember the second. The
+   live layer calls this rather than assigning; what it adds on top is the
+   persist and the redraw of everything drawn from JavaScript. */
+function langSet(v) { LANG = v; applyI18n(); }
 /* The GATEWAY host's OS family -- host-side actions (reveal in Finder) happen
    there, not in this browser. The UA is only the prior for the usual localhost
    case; system.hello corrects it. */
 let HOST_PLATFORM = /Mac/.test(navigator.platform) ? 'mac'
   : /Win/.test(navigator.platform) ? 'windows' : 'linux';
-/* Assigned by live.js, which owns the RPC write. Null in the offline demo,
-   where flipping the language is a local repaint and nothing more. */
-let applyLang = null;
-
 const fillVars = (s, vars) =>
   vars ? String(s).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : String(s);
 
