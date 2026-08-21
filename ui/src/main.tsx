@@ -33,6 +33,7 @@ import { SettingsApp } from './features/settings/SettingsPage'
 import * as settings from './features/settings/store'
 import * as banner from './shell/banner'
 import * as chips from './shell/chips'
+import * as ctxchip from './shell/ctxchip'
 import * as find from './shell/find'
 import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
@@ -68,6 +69,8 @@ declare global {
     closePermPop?: typeof perm.close
     paneLoad?: typeof panes.load
     drawFoot?: typeof foot.draw
+    drawCtx?: typeof ctxchip.draw
+    setCtx?: typeof ctxchip.set
   }
 }
 
@@ -113,6 +116,12 @@ window.openModelPicker = modelPicker.open
 window.drawPerm = perm.draw
 window.togglePerm = perm.toggle
 window.closePermPop = perm.close
+/* The context ring's two names. Both have callers on both sides: setCtx from
+   each layer's turn bookkeeping (demo's replay, live's message.complete), and
+   drawCtx from the boot sequence and each side's language flip -- the ring's
+   tooltip is a translated string, so a flip has to redraw it. */
+window.drawCtx = ctxchip.draw
+window.setCtx = ctxchip.set
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine

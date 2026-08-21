@@ -365,40 +365,6 @@ DS.xa ??= {
    nag from there; their state is spoken inside the page, where the fix is. */
 function drawCapsBadge() {}
 
-/* ---- context meter ------------------------------------------------
-   Filled from the turn's own usage (message.complete carries context_used /
-   context_max); hidden until a real window is known, since a ring drawn from a
-   guessed denominator is worse than no ring. */
-const CTX = { used: 0, max: 0, est: false };
-const RING = 47.75;
-
-function drawCtx() {
-  const chip = $('#ctxChip');
-  if (!chip) return;
-  chip.hidden = !CTX.max;
-  if (!CTX.max) return;
-  const pct = Math.min(100, Math.max(0, Math.round((100 * CTX.used) / CTX.max)));
-  chip.classList.toggle('warm', pct >= 70 && pct < 90);
-  chip.classList.toggle('hot', pct >= 90);
-  const fg = chip.querySelector('.fg');
-  if (fg) fg.setAttribute('stroke-dashoffset', String(RING * (1 - pct / 100)));
-  /* A resumed session's fill is counted from the stored transcript rather than
-     reported by the provider, so it says so: a tilde is cheaper than a number
-     that quietly pretends to be measured. */
-  const tip = T('gui.ctx.tip', {
-    used: fmtTokens(CTX.used),
-    max: fmtTokens(CTX.max),
-    pct: String(pct),
-  });
-  chip.dataset.tip = tip;
-  chip.setAttribute('aria-label', tip);
-}
-
-const fmtTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
-
-function setCtx(used, max, estimated) {
-  if (typeof max === 'number' && max > 0) CTX.max = max;
-  if (typeof used === 'number' && used >= 0) CTX.used = used;
-  CTX.est = !!estimated;
-  drawCtx();
-}
+/* The context ring is the ctxchip writer (ui/src/shell/ctxchip.ts), which owns
+   the two numbers as well as the drawing; drawCtx and setCtx are its published
+   names, assigned in main.tsx. */
