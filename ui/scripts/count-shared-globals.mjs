@@ -290,11 +290,12 @@ const one = (txt) => strands([['<fixture>', txt]], top(txt))
    counts above make -- the number belongs in the diff of the change that moves
    it, in both directions.
 
-   Members, not callables, and the difference is five: `look` and `ntf` are
-   namespaces carrying two and three methods. Counting members keeps the unit the
-   same as the thing a reviewer sees added to the interface, and makes the number
-   a floor on the questions being asked rather than the exact count -- the same
-   compromise, and for the same reason, as the per-file ownership above. */
+   Members, not callables: 60 members are 63 callables, because two of those
+   slots (`look` and `ntf`) are namespaces holding five methods between them.
+   Counting members keeps the unit the same as the thing a reviewer sees added to
+   the interface, and makes the number a floor on the questions being asked
+   rather than the exact count -- the same compromise, and for the same reason,
+   as the per-file ownership above. */
 const bridgeTs = readFileSync(join(src, 'shell', 'bridge.ts'), 'utf8')
 
 function shellVerbs(txt) {
@@ -308,15 +309,23 @@ function shellVerbs(txt) {
   let depth = 0
   for (const line of body.split('\n')) {
     /* Depth is read BEFORE the line is counted: a member sits at depth 0 of the
-       body, and a signature carrying an inline object type opens and closes its
-       braces on the same line, so its own nesting never hides the next member. */
+       body, and a signature that opens and closes its brackets on one line --
+       which is every member today -- never hides the next one.
+       Parens count as well as braces, and that is not symmetry for its own
+       sake. A member whose PARAMETER LIST is wrapped across lines would
+       otherwise put each parameter at depth 0 and have it counted as a verb:
+       `agentStagePaint?(` is 114 characters against a printWidth of 120, so
+       nothing wraps it today. Wrap it by hand and, without this, the count reads
+       63: that member takes three parameters, and each of the three lands at
+       depth 0 and matches the member shape -- `box`, `ctx` and `opts`, measured.
+       CI would then blame a reformat for adding three verbs. */
     if (depth === 0) {
       const m = line.match(new RegExp(`^\\s+(${NAME})\\??\\s*[(:]`))
       if (m) out.push(m[1])
     }
     for (const ch of line) {
-      if (ch === '{') depth++
-      else if (ch === '}') depth--
+      if (ch === '{' || ch === '(') depth++
+      else if (ch === '}' || ch === ')') depth--
     }
     if (depth < 0) break // the interface's own closing brace
   }
@@ -441,6 +450,10 @@ for (const [text, want] of [
   ['export interface Shell {\n  // b(): void\n  a(): void\n}', ['a']],
   // An inline object type in a signature must not swallow what follows it.
   ['export interface Shell {\n  a?(o?: { k?: string; n?: number }): void\n  b(): void\n}', ['a', 'b']],
+  /* A wrapped PARAMETER LIST, which is the paren half of the same problem: each
+     parameter would otherwise sit at depth 0 and be counted as a verb. */
+  ['export interface Shell {\n  a?(\n    box: HTMLElement,\n    ctx: unknown,\n  ): void\n  z(): void\n}',
+    ['a', 'z']],
   /* A nested member spread over lines, which is what the depth tracking is for.
      Every member in the interface today opens and closes its braces on one line,
      so nothing else here exercises it -- and a mutation run confirmed that:

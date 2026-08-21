@@ -164,7 +164,7 @@ namespaces carrying two and three methods, so sixty members are sixty-three
 callables.
 
 The number moved between this document's baseline and that gate landing: 61 here,
-**60** measured on `c65549c5`. `!159` took `setLang` out when the language pick
+**60** measured on `ec99bf85`. `!159` took `setLang` out when the language pick
 became `DS.settings`'s, which is what an Axis 2 reduction looks like when it
 happens as a side effect of an Axis 1 move rather than on purpose.
 
