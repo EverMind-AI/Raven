@@ -2,9 +2,9 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 
 import { shell, t } from '../../shell/bridge'
 import {
-  FT, FT_SHOW_MAX, FTW_KEY, RENDERED, copyToClip, fileURL, ftAbs, ftJoin, ftKindOf,
-  ftLoad, ftLoadVisible, ftMatches, ftOpenTo, ftQuery, ftReveal, hostPlatform,
-  isErr, mdHtml, relToRoot, relToWorkspace,
+  FT, FT_SHOW_MAX, FTW_KEY, RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
+  ftAbs, ftJoin, ftKindOf, ftLoad, ftLoadVisible, ftMatches, ftOpenTo, ftQuery, ftReveal,
+  hostPlatform, isErr, mdHtml, openInApp, relToRoot, relToWorkspace, setAppFor,
 } from './store'
 import * as store from './store'
 
@@ -221,6 +221,74 @@ function ChgDiff({ c }: { c: WsChange }): JSX.Element {
 }
 
 /* ── the file view ─────────────────────────────────────────────────── */
+
+/* Applications whose names the host knows, as a starting list rather than a
+   registry: `open -a` and a bare Linux launcher both want a name, and a name
+   this list does not have has nowhere to be typed yet -- that belongs with the
+   settings row, and is not in this change. Windows has no portable way to name
+   an application, so it gets the host default only, which is what fs.open
+   sends there. */
+const OPEN_WITH: Record<string, string[]> = {
+  mac: ['Cursor', 'Visual Studio Code', 'Xcode', 'Keynote', 'Numbers', 'Pages', 'Preview', 'TextEdit'],
+  linux: ['cursor', 'code', 'libreoffice', 'gedit'],
+  windows: [],
+}
+
+/* A file the page cannot render. It says so, and offers the two things that
+   can still be done with it: hand it to an application, or show it in the file
+   manager. Both of those run where the GATEWAY runs, so the first is withheld
+   unless that host is this desktop -- a remote serve would start a program on
+   somebody else's screen. Reveal was already here and keeps its own behaviour. */
+function BinNote({ f }: { f: WsFile }): JSX.Element {
+  const chosen = appFor(f.path)
+  const canApp = canOpenInApp()
+  const hand = (app: string | null): void => {
+    void openInApp(f.path, app).then(
+      () => {},
+      (e: unknown) => shell().toast(((e as Error) && (e as Error).message) || String(e)),
+    )
+  }
+  const pick = (e: ReactPointerEvent<HTMLButtonElement>): void => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const names = OPEN_WITH[hostPlatform()] || []
+    const items: Array<MenuItem | '-'> = names.map((name) => ({
+      label: name === chosen ? `${name} \u00b7 ${t('gui.ws.open_with_now')}` : name,
+      /* Remember the choice for this kind, then act on it -- the reader picked
+         an application for pptx, not for this one file. */
+      fn: () => { setAppFor(f.path, name); hand(name) },
+    }))
+    if (names.length) items.push('-')
+    items.push({
+      label: t('gui.ws.open_with_default'),
+      fn: () => { setAppFor(f.path, null); hand(null) },
+    })
+    shell().menuAt(r.left, r.bottom + 6, items)
+  }
+  return (
+    <div className="binote">
+      <div className="h">{t('gui.ws.file_binary')}</div>
+      <div className="w">{f.path}</div>
+      {canApp ? (
+        <div className="acts">
+          <button className="mini ghost" onClick={() => hand(chosen)}>
+            {chosen
+              ? t('gui.ws.open_with_app', { a: chosen })
+              : t('gui.ws.open_with_host', { k: extOf(f.path).toUpperCase() })}
+          </button>
+          <button className="mini ghost" onPointerUp={pick}>{t('gui.ws.open_with_pick')}</button>
+        </div>
+      ) : null}
+      <button
+        className="mini ghost"
+        onClick={() => {
+          if (navigator.clipboard) void navigator.clipboard.writeText(f.path)
+        }}
+      >
+        {t('gui.ws.copy_path_do')}
+      </button>
+    </div>
+  )
+}
 
 function FileView({ ws }: { ws: WsShared }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -624,20 +692,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
        opaque either way -- allow-same-origin is never granted. */
     body = <iframe sandbox={f.kind === 'pdf' ? 'allow-scripts' : ''} referrerPolicy="no-referrer" src={fileURL(f.path)} />
   } else if (f.kind === 'bin') {
-    body = (
-      <div className="binote">
-        <div className="h">{t('gui.ws.file_binary')}</div>
-        <div className="w">{f.path}</div>
-        <button
-          className="mini ghost"
-          onClick={() => {
-            if (navigator.clipboard) void navigator.clipboard.writeText(f.path)
-          }}
-        >
-          {t('gui.ws.copy_path_do')}
-        </button>
-      </div>
-    )
+    body = <BinNote f={f} />
   } else if (f.text == null) {
     body = <div className="vspin">{t('gui.ws.file_loading')}</div>
   } else if (f.kind === 'md' && !asSource) {

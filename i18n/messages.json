@@ -4723,6 +4723,26 @@
       "en": "Copy path",
       "zh": "复制路径"
     },
+    "gui.ws.open_with_app": {
+      "en": "Open in {a}",
+      "zh": "用 {a} 打开"
+    },
+    "gui.ws.open_with_host": {
+      "en": "Open this {k} in its app",
+      "zh": "用系统默认程序打开这个 {k}"
+    },
+    "gui.ws.open_with_pick": {
+      "en": "Open with...",
+      "zh": "换个应用打开…"
+    },
+    "gui.ws.open_with_default": {
+      "en": "Host default",
+      "zh": "系统默认"
+    },
+    "gui.ws.open_with_now": {
+      "en": "current",
+      "zh": "当前"
+    },
     "gui.ws.copy_url": {
       "en": "Copy link",
       "zh": "复制链接"

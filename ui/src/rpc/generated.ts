@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 130 methods, 72 component schemas.
+// 131 methods, 72 component schemas.
 
 /* eslint-disable */
 /**
@@ -2226,6 +2226,24 @@ export interface FsRevealParams {
 export interface FsRevealResult {
   ok: true;
 }
+export interface FsOpenParams {
+  /**
+   * Absolute, or relative to the session's working directory.
+   */
+  path: string;
+  /**
+   * Which installed application to hand the file to. Absent means the host's own default. A NAME, not a path or a command line: the server rejects anything with a separator, a shell character or a leading dash, and never runs it through a shell.
+   */
+  app?: string;
+  session?: string;
+}
+export interface FsOpenResult {
+  ok: true;
+  /**
+   * The application asked for, echoed back; absent when the host default was used.
+   */
+  app?: string;
+}
 export interface MemoryStatsParams {}
 /**
  * ``ok`` is false when a kind could not be counted; the counts stay zero
@@ -2891,6 +2909,7 @@ export interface RpcMethods {
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
+  'fs.open': { params: FsOpenParams; result: FsOpenResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
   'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
@@ -2964,6 +2983,7 @@ export const RPC_METHODS = [
   "dag.node",
   "ext.list",
   "fs.list",
+  "fs.open",
   "fs.read",
   "fs.reveal",
   "fs.upload",

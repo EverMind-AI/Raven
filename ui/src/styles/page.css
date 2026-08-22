@@ -2363,6 +2363,8 @@ textarea:focus, textarea:focus-visible,
 .fview .binote { padding: 20px 16px; display: grid; gap: 8px; justify-items: start; }
 .fview .binote .h { font-size: 13px; }
 .fview .binote .w { font-size: 12px; color: var(--muted); line-height: 1.6; }
+/* The note's grid stacks its rows; the two open actions belong on one line. */
+.fview .binote .acts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
 

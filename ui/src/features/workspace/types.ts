@@ -74,5 +74,12 @@ export interface WorkspaceSource {
   canBrowse?: boolean
   list?(dir: string): Promise<{ root?: string; entries: FtEntry[] }>
   reveal?(path: string): Promise<unknown>
+  /* Hand the file to an application on the gateway's host. `app` is an
+     application NAME the reader chose, or absent for the host default. */
+  openIn?(path: string, app?: string): Promise<unknown>
+  /* Whether that host is the reader's own desktop. Absent means unknown, which
+     is treated as not local: offering to launch a program on somebody else's
+     machine is worse than not offering. */
+  hostIsLocal?(): boolean
   openPath?(p: string): void
 }

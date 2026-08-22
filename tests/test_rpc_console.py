@@ -736,6 +736,186 @@ async def test_fs_reveal_refuses_what_the_viewer_refuses(tmp_path: Path, monkeyp
 
 
 # ---------------------------------------------------------------------------
+# fs.open -- the same fence, then the host's application
+# ---------------------------------------------------------------------------
+
+
+async def test_fs_open_hands_the_file_to_the_named_application(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    target = launch / "deck.pptx"
+    target.write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    r = await console_module.fs_open({"path": "deck.pptx", "app": "Keynote"}, agent_loop_factory=_loop_factory(loop))
+
+    assert r == {"ok": True, "app": "Keynote"}
+    # The name is ONE argv element beside the resolved path, never concatenated.
+    assert spawned == [["open", "-a", "Keynote", str(target.resolve())]]
+
+
+async def test_fs_open_without_an_application_uses_the_host_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    target = launch / "sheet.xlsx"
+    target.write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    r = await console_module.fs_open({"path": "sheet.xlsx"}, agent_loop_factory=_loop_factory(loop))
+
+    # No `app` key at all rather than a null one: the reader picked nothing.
+    assert r == {"ok": True}
+    assert spawned == [["open", str(target.resolve())]]
+
+
+@pytest.mark.parametrize(
+    "app",
+    [
+        "/bin/sh",
+        "../../usr/bin/python3",
+        # These three start with a letter, so only the separator rule can stop
+        # them -- without it the "name" would name an arbitrary binary.
+        "usr/bin/sh",
+        "Keynote/../../bin/sh",
+        "C:\\Windows\\System32\\cmd.exe",
+        "-a",
+        "Keynote; rm -rf /",
+        "Keynote && curl evil",
+        "Keynote$(whoami)",
+        "Key\nnote",
+        "",
+        " ",
+        "K" * 65,
+    ],
+)
+async def test_fs_open_refuses_anything_that_is_not_an_application_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, app: str
+) -> None:
+    """The application is a NAME. It becomes an argv element next to a resolved
+    path and never reaches a shell, but a separator would name an arbitrary
+    binary and a leading dash would smuggle a flag into ``open`` -- and a name
+    shaped like a command is one worth refusing whatever cannot come of it."""
+    from raven.rpc.errors import ConfigValidationError
+
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    (launch / "deck.pptx").write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    if app.strip():
+        with pytest.raises(ConfigValidationError):
+            await console_module.fs_open({"path": "deck.pptx", "app": app}, agent_loop_factory=_loop_factory(loop))
+        assert spawned == []
+    else:
+        # Blank is not a refusal, it is "no choice made" -- the host default.
+        await console_module.fs_open({"path": "deck.pptx", "app": app}, agent_loop_factory=_loop_factory(loop))
+        assert spawned == [["open", str((launch / "deck.pptx").resolve())]]
+
+
+async def test_fs_open_accepts_the_names_real_applications_have(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    (launch / "a.py").write_text("x = 1")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    for app in ["Visual Studio Code", "Sublime Text 4", "IntelliJ IDEA CE", "Cursor", "Xcode.app"]:
+        await console_module.fs_open({"path": "a.py", "app": app}, agent_loop_factory=_loop_factory(loop))
+    assert [x[2] for x in spawned] == [
+        "Visual Studio Code",
+        "Sublime Text 4",
+        "IntelliJ IDEA CE",
+        "Cursor",
+        "Xcode.app",
+    ]
+
+
+async def test_fs_open_refuses_what_the_viewer_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One fence for all three verbs. A path the page may not render must not be
+    handed to an application either, or the open button becomes the read the
+    viewer denied -- with a program of the caller's choosing attached."""
+    from raven.rpc.errors import ConfigValidationError
+
+    home = tmp_path / "raven-home"
+    home.mkdir()
+    secret = home / "serve.json"
+    secret.write_text("{}")
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+
+    loop = _WorkdirLoop({}, tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_open({"path": str(secret)}, agent_loop_factory=_loop_factory(loop))
+    assert spawned == []
+
+
+async def test_fs_open_on_linux_runs_the_application_and_falls_back_to_xdg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    target = launch / "notes.odt"
+    target.write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "linux")
+
+    loop = _WorkdirLoop({}, launch)
+    await console_module.fs_open({"path": "notes.odt", "app": "code"}, agent_loop_factory=_loop_factory(loop))
+    await console_module.fs_open({"path": "notes.odt"}, agent_loop_factory=_loop_factory(loop))
+
+    assert spawned == [["code", str(target.resolve())], ["xdg-open", str(target.resolve())]]
+
+
+async def test_fs_open_reports_a_launcher_that_is_not_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing launcher is a message, not a traceback: Popen raises OSError
+    and the page has to be able to say why nothing happened."""
+    from raven.rpc.errors import ConfigValidationError
+
+    launch = tmp_path / "proj"
+    launch.mkdir()
+    (launch / "deck.pptx").write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+
+    def boom(argv, **kw):
+        raise OSError("no such file")
+
+    monkeypatch.setattr("subprocess.Popen", boom)
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, launch)
+    with pytest.raises(ConfigValidationError, match="open failed"):
+        await console_module.fs_open({"path": "deck.pptx"}, agent_loop_factory=_loop_factory(loop))
+
+
+# ---------------------------------------------------------------------------
 # channels.status carries the field specs; channels.configure writes them
 # ---------------------------------------------------------------------------
 
