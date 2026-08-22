@@ -409,8 +409,10 @@ async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
     thought that preceded it, then a role=tool result matched by call id --
     the exact shape session.resume stores, so one renderer draws both.
 
-    The call is named in raven's own vocabulary rather than by the adapter's
-    title, which is what lets that one renderer choose a verb for it.
+    The call is named by the transport, not by the adapter's title and not in
+    raven's vocabulary: the record has to say what the agent actually ran, and
+    the read boundary is what turns that name into the one a renderer keys a
+    verb off.
     """
     from raven.agent.subagent import activity
 
@@ -422,7 +424,7 @@ async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
     call = next(m for m in did.transcript if m.get("tool_calls"))
     assert call["role"] == "assistant"
     assert call["reasoning_content"] == "thinking"
-    assert call["tool_calls"][0]["function"]["name"] == "read_file"
+    assert call["tool_calls"][0]["function"]["name"] == "read", "the record keeps the transport's own name"
     assert json.loads(call["tool_calls"][0]["function"]["arguments"]) == {"path": "src/a.py"}
     result = next(m for m in did.transcript if m.get("role") == "tool")
     assert result["tool_call_id"] == "t1"
@@ -924,7 +926,7 @@ async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, t
     assert attrs["subagent.external.agent"] == "a"
     assert attrs["subagent.external.transport"] == "acp"
     assert attrs["subagent.external.stop_reason"] == "end_turn"
-    assert attrs["subagent.external.tool_calls"] == ["read_file src/a.py"]
+    assert attrs["subagent.external.tool_calls"] == ["read src/a.py"]
     assert attrs["subagent.external.usage"] == {"size": 1000, "used": 42}
     assert attrs["subagent.external.update_counts"]["agent_message_chunk"] == 1
     # Every update kind seen becomes an event, so a timeline is readable without

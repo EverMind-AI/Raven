@@ -10,10 +10,12 @@ Two things this adapter does that the spec does not describe:
   for a client that renders markdown; a transcript row is not one, and the
   literal ```` ```console ```` was appearing in the rendered output.
 
-``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0). The rest
-of the table is Claude Code's published tool set, and any name not in it falls
-through to the base dialect's ``kind`` mapping -- so a renamed or added tool
-degrades to the spec answer instead of being mislabelled.
+``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0), and any
+other name is reported exactly as sent rather than checked against a list: the
+record keeps the transport's own vocabulary, so a tool this adapter adds or
+renames upstream is recorded for what it is without an entry anywhere. Mapping
+those names into raven's own happens at the read boundary
+(:mod:`raven.agent.subagent.tool_vocabulary`).
 """
 
 from __future__ import annotations
@@ -22,21 +24,6 @@ import re
 from typing import Any
 
 from raven.agent.subagent.acp_dialects.base import AcpDialect, ToolResult, _dict, content_texts
-
-_TOOL_NAMES = {
-    "Bash": "exec",
-    "BashOutput": "exec",
-    "Read": "read_file",
-    "Write": "write_file",
-    "Edit": "edit_file",
-    "NotebookEdit": "edit_file",
-    "Glob": "find",
-    "Grep": "grep",
-    "LS": "list_dir",
-    "WebFetch": "web_fetch",
-    "WebSearch": "web_search",
-    "Task": "spawn",
-}
 
 # A fence the adapter added, not one the tool's own output contained: it wraps
 # the whole payload, so an inner fence (a result that really is markdown) never
@@ -54,8 +41,8 @@ class ClaudeCodeDialect(AcpDialect):
 
     def tool_name(self, update: dict[str, Any]) -> str:
         named = _dict(_dict(update.get("_meta")).get("claudeCode")).get("toolName")
-        if isinstance(named, str) and named in _TOOL_NAMES:
-            return _TOOL_NAMES[named]
+        if isinstance(named, str) and named:
+            return named
         return super().tool_name(update)
 
     def result(self, update: dict[str, Any]) -> ToolResult:

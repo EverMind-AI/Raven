@@ -5,14 +5,16 @@ An ACP adapter reports a tool call twice over: once machine-readably, in
 ``title``. Only the first is comparable across adapters -- measured, the same
 ``kind: "execute"`` arrives titled ``"Terminal"`` from claude-agent-acp and
 titled with the entire shell command from codex-acp -- so the ``kind`` is what
-this maps and the title is kept only as the fallback for a call that carries no
-argument at all.
+this reports and the title is kept only as the fallback for a call that carries
+no argument at all.
 
-What it maps *to* is a raven tool name (``exec``, ``read_file``, ...). That is
-the whole point of the layer: a direct chat is rendered by the same code that
-renders raven's own turns, and that code reads a tool name to choose a verb and
-an argument to show beside it. Handing it an adapter's title put a 100-character
-pipeline where a verb belongs.
+What it reports is the transport's own name for the call, at the finest grain
+the transport gives. Naming it in raven's vocabulary is the read boundary's job
+(:mod:`raven.agent.subagent.tool_vocabulary`): presentation is recoverable from
+provenance and provenance is not recoverable from presentation, so a record that
+renamed the call could never be read back for what the agent actually ran.
+Handing a renderer the adapter's *title* instead is the one thing that is not on
+the table -- it put a 100-character pipeline where a verb belongs.
 
 Adapters that answer differently from the spec subclass this; see
 :mod:`raven.agent.subagent.acp_dialects.claude_code` and
@@ -26,45 +28,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-# ACP's ToolKind -> the raven tool whose rendering fits it. The three with no
-# raven equivalent (`delete`, `move`, `switch_mode`) keep a descriptive
-# snake_case name: the renderer humanises an unknown name into a verb ("move
-# file"), so naming the action honestly reads better than forcing it onto a
-# raven tool that does something else.
-_KIND_TO_TOOL = {
-    "read": "read_file",
-    "edit": "edit_file",
-    "delete": "delete_file",
-    "move": "move_file",
-    "search": "grep",
-    "execute": "exec",
-    "think": "think",
-    "fetch": "web_fetch",
-    "switch_mode": "switch_mode",
-}
-
-# The parameter each raven tool takes its subject in, so a normalised call's
-# arguments read like that tool's own -- `exec` takes `command`, `read_file`
-# takes `path`. The renderer looks the subject up by this name; a call whose
-# tool is not listed falls back to the first string in its arguments.
-ARGUMENT_KEY = {
-    "exec": "command",
-    "read_file": "path",
-    "write_file": "path",
-    "edit_file": "path",
-    "list_dir": "path",
-    "delete_file": "path",
-    "move_file": "path",
-    "grep": "pattern",
-    "find": "pattern",
-    "web_fetch": "url",
-    "web_search": "query",
-}
-
-# Keys an adapter's rawInput is known to carry the subject under, in the order
-# they are preferred. Checked before the generic "first string value" sweep so a
-# call carrying both a command and a cwd reports the command.
-_SUBJECT_KEYS = ("command", "path", "file_path", "abs_path", "filePath", "pattern", "query", "url", "prompt")
+from raven.agent.subagent.tool_vocabulary import SUBJECT_KEYS
 
 _FALLBACK_TOOL = "tool_call"
 
@@ -74,7 +38,7 @@ _LABEL_CHARS = 120
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One tool call, in raven's vocabulary.
+    """One tool call, in the transport's own vocabulary.
 
     ``title`` is kept alongside rather than folded into ``argument`` because the
     two are not interchangeable: an adapter that titles a call ``"Terminal"``
@@ -117,33 +81,20 @@ class ToolCall:
         return f"{self.name} {clipped}"
 
     def arguments_json(self) -> str:
-        """The call's arguments, with the subject under raven's own key first.
+        """The call's arguments, in the adapter's own spelling.
 
-        Insertion order is load-bearing: a reader that does not know this tool
-        takes the first string value it finds, so the subject has to be it.
+        Renaming the subject onto raven's key moved to the read boundary along
+        with the tool name: the two shared one lookup, so they had to move
+        together or a row would be named one way and keyed the other.
 
-        A tool with a key of its own gets the subject renamed onto it, and the
-        adapter's own spelling of the same value is then dropped rather than
-        repeated (``{"path": x}``, not ``{"path": x, "filePath": x}``). A tool
-        with no such key keeps the adapter's field names untouched -- inventing
-        a generic one beside them would name the subject twice and say nothing
-        the reader did not already have.
+        A subject that reached the frame outside ``rawInput`` -- the spec's
+        ``locations``, or the adapter's title -- has no field of its own to be
+        stored under, so it keeps the literal key ``argument``, which
+        ``SUBJECT_KEYS`` carries for the read boundary to lift back off.
         """
-        key = ARGUMENT_KEY.get(self.name)
-        merged: dict[str, Any] = {}
-        if self.subject and key is not None:
-            merged[key] = self.subject
-
-        for name, value in self.raw_input.items():
-            if name in merged or value in (None, "", {}, []):
-                continue
-            if key is not None and value == self.subject:
-                continue
-            merged[name] = value
-
+        merged = {k: v for k, v in self.raw_input.items() if v not in (None, "", {}, [])}
         if not merged and self.subject:
             merged["argument"] = self.subject
-
         return json.dumps(merged, ensure_ascii=False, default=str)
 
 
@@ -196,10 +147,15 @@ class AcpDialect:
     """Substring of ``agentInfo.name`` that selects this dialect."""
 
     def tool_name(self, update: dict[str, Any]) -> str:
+        """The transport's own name for the call, at the finest grain it gives.
+
+        The spec's ``kind`` verbatim: mapping it into raven's vocabulary is the
+        read boundary's job (:mod:`raven.agent.subagent.tool_vocabulary`),
+        because a record that renamed it could never be read back for what the
+        agent actually ran.
+        """
         kind = update.get("kind")
-        if isinstance(kind, str) and kind in _KIND_TO_TOOL:
-            return _KIND_TO_TOOL[kind]
-        return _FALLBACK_TOOL
+        return kind if isinstance(kind, str) and kind else _FALLBACK_TOOL
 
     def argument(self, update: dict[str, Any]) -> str:
         """The call's subject: what a reader needs beside the verb.
@@ -210,7 +166,7 @@ class AcpDialect:
         exists nowhere else on the frame.
         """
         raw = _dict(update.get("rawInput"))
-        for key in _SUBJECT_KEYS:
+        for key in SUBJECT_KEYS:
             value = raw.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -261,4 +217,4 @@ class AcpDialect:
         return bool(_dict(update.get("rawInput"))) or bool(_first_location(update))
 
 
-__all__ = ["ARGUMENT_KEY", "AcpDialect", "ToolCall", "ToolResult", "content_texts"]
+__all__ = ["AcpDialect", "ToolCall", "ToolResult", "content_texts"]

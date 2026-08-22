@@ -470,10 +470,50 @@ async def test_history_shows_what_the_run_did_not_only_what_it_answered(tmp_path
 
     assert [t["role"] for t in turns] == ["user", "assistant", "tool", "assistant"]
     assert turns[1]["reasoning_content"] == "the file is small, one read will do"
-    assert turns[1]["tool_calls"] == [{"id": "c1", "name": "read", "arguments": '{"path": "a.py"}'}]
+    assert turns[1]["tool_calls"] == [{"id": "c1", "name": "read_file", "arguments": '{"path": "a.py"}'}]
     assert turns[2]["tool_call_id"] == "c1"
     assert turns[2]["content"] == "ZORKMID-4417"
     assert turns[3]["content"] == "ZORKMID-4417"
+
+
+async def test_instance_history_names_a_stored_call_in_ravens_vocabulary(tmp_path: Path) -> None:
+    """The record keeps the transport's name; the wire keeps raven's.
+
+    This is what lets three front ends -- the TUI verb table, webui's
+    per-name renderer dispatch, and the served page -- go unchanged while the
+    file underneath gains provenance.
+    """
+    from raven.agent.subagent.instance_log import append_turn
+
+    session_dir = tmp_path / "sessions" / "s1"
+    append_turn(
+        session_dir,
+        agent="Coder",
+        handle="h1",
+        session_key="web:abc",
+        prompt="go",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "a.py"},
+        ],
+        answer="done",
+    )
+
+    turns = await _history(session_dir, "Coder", "h1")
+
+    call = next(t for t in turns if t.get("tool_calls"))
+    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
 
 
 async def test_history_reads_every_lane_from_one_file(tmp_path: Path) -> None:

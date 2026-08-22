@@ -80,6 +80,20 @@ All notable changes to Raven are documented here.
   fed. A folder whose venv is not built is not offered: a name in the roster that fails
   the moment the model picks it is worse than an absent one.
 
+- A delegated run's record now keeps the tool name the transport itself used, and the
+  mapping into Raven's own names (`exec`, `read_file`, ...) happens when those rows go to
+  a client rather than when they are written. A record that stored `exec` could never be
+  read back for whether the agent ran a shell command or wrote a todo list, and the record
+  is what a later reader has. Every front end keeps the one vocabulary its verb table is
+  keyed by, so nothing a user sees changes, with two deliberate exceptions: a
+  claude-agent-acp `Grep` carrying both a pattern and a path scope used to arrive with the
+  pattern destroyed and now arrives whole, and a claude tool outside the twelve the old
+  table listed -- `TodoWrite`, `ExitPlanMode`, `MultiEdit`, `SlashCommand`, every `mcp__*`
+  tool -- used to be reported as `tool_call` or as `exec` and now arrives under its own
+  name. The second cannot be mapped back, because the coarse `kind` it was derived from is
+  not stored; a todo-list write labelled `exec` was wrong, and an unlisted name is rendered
+  from the name itself.
+
 ### Breaking Changes
 
 - `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the

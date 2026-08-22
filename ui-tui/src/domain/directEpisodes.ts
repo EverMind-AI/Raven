@@ -13,9 +13,10 @@
 // renderer to keep in step.
 //
 // The runtime hands over calls already named in Raven's own vocabulary (`exec`,
-// `read_file`, ...) -- see `raven/agent/subagent/acp_dialects/` for the per-agent
-// parsing that gets them there -- so the verb table in `episodeSummary.ts`
-// applies unchanged.
+// `read_file`, ...) -- see `raven/agent/subagent/tool_vocabulary.py`, which maps
+// them on the way out; the record underneath keeps the transport's own name --
+// so the verb table in `episodeSummary.ts` applies unchanged. A name it has no
+// entry for arrives as sent, and `ruleFor` humanises it.
 
 import type { DirectTurn } from '../rpc/generated.js'
 import type { Episode, EpisodeTool, Msg } from '../types.js'
