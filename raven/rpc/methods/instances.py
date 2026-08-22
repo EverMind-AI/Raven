@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.direct_chat import direct_root
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
+from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root, spawn_root
 from raven.rpc.methods.session import _wire_tool_calls
@@ -271,6 +272,7 @@ def _log_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     out: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
+        row = normalize_row(row)
         role = row.get("role")
         if role not in ("user", "assistant", "tool"):
             continue

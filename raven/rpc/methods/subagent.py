@@ -43,6 +43,7 @@ from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.agent.subagent_dag.live import live_run_ids
 from raven.agent.subagent_history import dag_root, spawn_root
 from raven.config.loader import load_config
@@ -409,7 +410,7 @@ async def subagent_context(
                 except json.JSONDecodeError:
                     continue
                 if isinstance(entry, dict) and entry.get("role"):
-                    stored.append(entry)
+                    stored.append(normalize_row(entry))
                     transcribed = True
     except OSError:
         pass
@@ -418,7 +419,9 @@ async def subagent_context(
     # entry-by-entry because the collector republishes on every update from the
     # agent, and a list mutated mid-iteration is a crash in a read-only path.
     if not transcribed and (live := run_activity.live(directory.name)) is not None:
-        stored.extend(entry for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role"))
+        stored.extend(
+            normalize_row(entry) for entry in list(live.transcript) if isinstance(entry, dict) and entry.get("role")
+        )
     if answer is not None:
         answer_msg: dict[str, Any] = {"role": "assistant", "content": answer}
         if (ended := _iso(meta.get("ended_at_ms"))) is not None:

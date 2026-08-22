@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
+from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._reader import DagReadError
 from raven.agent.subagent_dag._resume import read_run_reconciled
@@ -124,7 +125,7 @@ def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
         # collector republishes it on every update from the agent.
         live = run_activity.live(node_live_key(run_id, node_id))
         turns = [m for m in list(live.transcript) if isinstance(m, dict) and m.get("role")] if live else []
-    stored.extend(turns)
+    stored.extend(normalize_row(turn) for turn in turns)
     if node.get("output"):
         stored.append({"role": "assistant", "content": node["output"]})
     elif node.get("error"):

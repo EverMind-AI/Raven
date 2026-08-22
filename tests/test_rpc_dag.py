@@ -429,6 +429,30 @@ async def test_dag_node_draws_what_the_node_did_between_the_two_messages() -> No
     model.model_validate(answer)
 
 
+async def test_a_dag_nodes_stored_call_reaches_the_panel_in_ravens_vocabulary() -> None:
+    """One renderer draws a node and a spawned call, and its verb table is keyed
+    by raven's names -- so a node whose rows kept the transport's would draw the
+    same tool under a different verb from the panel next to it."""
+    tool = _TranscribedDagTool(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "Bash", "arguments": '{"command": "ls"}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "a.py"},
+        ]
+    )
+
+    answer = await dag_node({"run_id": RUN_ID, "node": "node-a"}, agent_loop_factory=_factory(tool))
+
+    call = next(m for m in answer["node"]["messages"] if m.get("tool_calls"))
+    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
+
+
 async def test_a_node_in_flight_is_served_from_the_activity_being_collected() -> None:
     """Nothing of a node reaches disk until it ends, so a panel watching one had
     only its prompt to show -- for the whole run."""

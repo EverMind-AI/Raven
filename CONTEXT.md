@@ -873,14 +873,18 @@ call's record still names the journal and the byte range it occupied.
 _Avoid_: reading it as the wire log - that is the Frame Journal.
 
 **ACP Dialect** (`raven/agent/subagent/acp_dialects/`):
-How one ACP adapter's tool-call frames are read into raven's own vocabulary: a raven tool
-name (`exec`, `read_file`, ...), the subject to show beside it, and output with the
-transport's wrapping removed. Needed because an adapter reports a call twice over -
+How one ACP adapter's tool-call frames are read into a record: the adapter's own name for the
+tool at the finest grain the transport gives - `_meta.claudeCode.toolName` where the adapter
+sends one, the spec's `kind` otherwise - the subject to show beside it, and output with the
+transport's wrapping removed. The name is stored as sent, not translated; mapping it into
+raven's own vocabulary is the Tool Vocabulary's job, on the way to a client. Needed because
+an adapter reports a call twice over -
 machine-readably in the spec's `kind` and `locations`, and for a human in `title` - and only
 the first is comparable across adapters, since the same `kind: "execute"` arrives titled
 `Terminal` from claude-agent-acp and titled with the whole shell pipeline from codex-acp.
-Naming the tool is what lets a Direct Chat draw a delegated turn with the transcript's own
-renderer, which reads a tool name to choose a verb. Selected from `agentInfo.name` in the
+Naming the tool honestly is what lets a Direct Chat draw a delegated turn with the
+transcript's own renderer, which reads a tool name to choose a verb, and lets a later reader
+still tell which tool actually ran. Selected from `agentInfo.name` in the
 connection's own `initialize` result rather than from config, so a renamed agent and two
 entries pointing at one adapter both resolve. An adapter with no file of its own gets the
 spec-only base class, which reads nothing the protocol does not require - so an unmeasured
@@ -890,6 +894,21 @@ claude-agent-acp sends its output twice, plain in `rawOutput` and markdown-fence
 through `exit_code` inside `rawOutput`.
 _Avoid_: reading `title` as the tool name - it is a label, and for one adapter it is the
 entire command.
+
+**Tool Vocabulary** (`raven/agent/subagent/tool_vocabulary.py`):
+Raven's own tool names (`exec`, `read_file`, ...), and the mapping into them applied when a
+delegated run's rows go on the wire. A record carries the transport's name because
+presentation is recoverable from provenance and provenance is not recoverable from
+presentation, and the record is what a memory extractor reads; the wire carries raven's
+because every renderer's verb table is keyed by it, and the main session log stores the
+host's own calls under those same names. The same pass re-keys a call's subject onto that
+tool's own argument name, trying the tool's key first, then the keys adapters are known to
+use, then any string the payload carries. Applied at the three reads that serve a delegated
+transcript - an instance's history, a dag node's messages, a sub-agent's context - and
+deliberately not inside `_map_to_wire`, which also serves the session log whose calls are
+already raven-named. A name with no entry is passed through, which is how an openai step
+type and a claude tool the table never listed both reach a client under their own name.
+_Avoid_: applying it at write time - that is what this replaced.
 
 **Closing Message** (`raven/agent/subagent/backends/acp_agent.py`, `activity.py`):
 What a delegated run said *after its last tool call*, as distinct from its whole reply. An

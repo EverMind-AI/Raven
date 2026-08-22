@@ -1,9 +1,11 @@
-"""Reading each ACP adapter's tool calls into raven's own vocabulary.
+"""Reading each ACP adapter's tool calls in the transport's own vocabulary.
 
 Every payload here is a frame copied from a live journal (claude-agent-acp
 0.66.0, codex-acp 1.1.14), trimmed only of fields none of this reads. What the
-tests assert is the thing the renderer needs: a raven tool name, the subject to
-show beside it, and output with no transport wrapping left on it.
+tests assert is what the record needs: the transport's own tool name, the
+subject to show beside it, and output with no transport wrapping left on it.
+Naming that call in raven's vocabulary belongs to the read boundary, and to
+``test_subagent_tool_vocabulary.py``.
 """
 
 from __future__ import annotations
@@ -42,10 +44,10 @@ def test_the_spec_kind_names_the_tool_not_the_title() -> None:
     """
     spec = AcpDialect()
 
-    assert spec.tool_name({"kind": "execute", "title": "Terminal"}) == "exec"
-    assert spec.tool_name({"kind": "read", "title": "Read file '/tmp/a'"}) == "read_file"
-    assert spec.tool_name({"kind": "search"}) == "grep"
-    assert spec.tool_name({"kind": "fetch"}) == "web_fetch"
+    assert spec.tool_name({"kind": "execute", "title": "Terminal"}) == "execute"
+    assert spec.tool_name({"kind": "read", "title": "Read file '/tmp/a'"}) == "read"
+    assert spec.tool_name({"kind": "search"}) == "search"
+    assert spec.tool_name({"kind": "fetch"}) == "fetch"
     # No kind at all: unclassified rather than guessed from the title.
     assert spec.tool_name({"title": "Terminal"}) == "tool_call"
 
@@ -54,7 +56,9 @@ def test_the_subject_falls_back_to_locations_when_there_is_no_input() -> None:
     """codex-acp's ``read`` carries the path nowhere else.
 
     Its opening frame has no ``rawInput`` key whatsoever; ``locations`` is the
-    spec's own answer and the only place the path exists.
+    spec's own answer and the only place the path exists. A subject found there
+    has no field of the adapter's to be stored under, so it keeps the literal
+    key ``argument``.
     """
     update = {
         "sessionUpdate": "tool_call",
@@ -66,9 +70,9 @@ def test_the_subject_falls_back_to_locations_when_there_is_no_input() -> None:
     }
     call = CodexDialect().call(update)
 
-    assert call.name == "read_file"
+    assert call.name == "read"
     assert call.subject == "/repo/bridge/tsconfig.json"
-    assert json.loads(call.arguments_json()) == {"path": "/repo/bridge/tsconfig.json"}
+    assert json.loads(call.arguments_json()) == {"argument": "/repo/bridge/tsconfig.json"}
 
 
 def test_a_call_with_no_argument_anywhere_still_shows_its_title() -> None:
@@ -114,7 +118,7 @@ def test_the_title_never_outlives_a_real_argument() -> None:
     }
     assert dialect.revises_call(revising) is True
     revised = dialect.call(revising)
-    assert revised.name == "exec"
+    assert revised.name == "Bash"
     assert revised.subject == "find . -name '*.json'"
 
 
@@ -129,10 +133,11 @@ def test_claude_names_the_tool_it_actually_ran() -> None:
     """``kind`` cannot tell Glob from Grep; ``_meta.claudeCode.toolName`` can."""
     dialect = ClaudeCodeDialect()
 
-    assert dialect.tool_name({"_meta": {"claudeCode": {"toolName": "Glob"}}, "kind": "search"}) == "find"
-    assert dialect.tool_name({"_meta": {"claudeCode": {"toolName": "Grep"}}, "kind": "search"}) == "grep"
-    # A name this table has never seen degrades to the spec answer.
-    assert dialect.tool_name({"_meta": {"claudeCode": {"toolName": "SomethingNew"}}, "kind": "execute"}) == "exec"
+    assert dialect.tool_name({"_meta": {"claudeCode": {"toolName": "Glob"}}, "kind": "search"}) == "Glob"
+    assert dialect.tool_name({"_meta": {"claudeCode": {"toolName": "Grep"}}, "kind": "search"}) == "Grep"
+    # No table to fall out of: a name nobody has measured is reported as sent.
+    named = {"_meta": {"claudeCode": {"toolName": "SomethingNew"}}, "kind": "execute"}
+    assert dialect.tool_name(named) == "SomethingNew"
 
 
 def test_claude_results_lose_the_fence_the_adapter_added() -> None:
@@ -234,16 +239,16 @@ def test_codex_prefers_the_command_over_the_titles_truncation_of_it() -> None:
     }
     call = CodexDialect().call(update)
 
-    assert call.name == "exec"
+    assert call.name == "execute"
     assert call.subject == command
     assert json.loads(call.arguments_json()) == {"command": command, "cwd": "/repo/ui-tui"}
 
 
-def test_the_subject_is_renamed_onto_ravens_key_and_not_repeated() -> None:
-    """``{"path": x}``, never ``{"path": x, "filePath": x}``."""
+def test_the_arguments_keep_every_field_the_adapter_sent() -> None:
+    """The subject is not re-keyed here any more, and nothing beside it is lost."""
     call = AcpDialect().call({"kind": "read", "rawInput": {"filePath": "/w/note.txt", "limit": 20}})
 
-    assert json.loads(call.arguments_json()) == {"path": "/w/note.txt", "limit": 20}
+    assert json.loads(call.arguments_json()) == {"filePath": "/w/note.txt", "limit": 20}
 
 
 def test_an_unclassified_call_keeps_the_adapters_own_field_names() -> None:
@@ -255,14 +260,38 @@ def test_an_unclassified_call_keeps_the_adapters_own_field_names() -> None:
 
 
 def test_a_call_labels_itself_with_the_verb_and_the_target() -> None:
-    """Either half alone loses it: eighteen bare ``exec``, or a command as a title."""
+    """Either half alone loses it: eighteen bare ``execute``, or a command as a title."""
     dialect = AcpDialect()
 
-    assert dialect.call({"kind": "read", "rawInput": {"path": "src/a.py"}}).label == "read_file src/a.py"
+    assert dialect.call({"kind": "read", "rawInput": {"path": "src/a.py"}}).label == "read src/a.py"
     assert dialect.call({"kind": "think", "title": ""}).label == "think"
     assert dialect.call({"title": ""}).label == "tool_call"
 
     long_pipeline = "find . -type f " + "-o -name '*.py' " * 20
     label = dialect.call({"kind": "execute", "rawInput": {"command": long_pipeline}}).label
     assert len(label) <= 120
-    assert label.startswith("exec find . -type f")
+    assert label.startswith("execute find . -type f")
+
+
+def test_the_base_dialect_reports_the_specs_own_kind() -> None:
+    """codex-acp sends no tool name of its own, so ``kind`` is the finest the
+    transport offers. Stored verbatim; the read boundary maps it."""
+    assert AcpDialect().tool_name({"kind": "execute"}) == "execute"
+    assert AcpDialect().tool_name({"kind": "read"}) == "read"
+
+
+def test_a_kindless_update_is_the_no_name_case() -> None:
+    assert AcpDialect().tool_name({}) == "tool_call"
+
+
+def test_the_claude_dialect_reports_claudes_own_tool_name() -> None:
+    update = {"kind": "search", "_meta": {"claudeCode": {"toolName": "Glob"}}}
+
+    assert ClaudeCodeDialect().tool_name(update) == "Glob"
+
+
+def test_arguments_keep_the_adapters_own_spelling() -> None:
+    """No key is renamed at write time any more."""
+    call = AcpDialect().call({"toolCallId": "t1", "kind": "read", "rawInput": {"filePath": "src/a.py"}})
+
+    assert json.loads(call.arguments_json()) == {"filePath": "src/a.py"}

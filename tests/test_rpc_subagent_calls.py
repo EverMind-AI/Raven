@@ -366,6 +366,44 @@ async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace
     del mgr
 
 
+async def test_the_context_read_names_a_stored_call_in_ravens_vocabulary(workspace: Path) -> None:
+    """The record keeps the transport's name so an extractor can see which
+    agent ran what; the wire keeps raven's because every renderer's verb table
+    is keyed by it."""
+
+    class _TransportNamedBackend:
+        async def run(self, task: str, **_kw: Any) -> str:
+            from raven.agent.subagent import activity
+
+            activity.note_transcript(
+                [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "t1",
+                                "type": "function",
+                                "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "t1", "content": "a.py"},
+                ]
+            )
+            return "done"
+
+    mgr = await _spawn(workspace, backend=_TransportNamedBackend())
+    row = (await subagent_list({"session_id": SESSION}))["items"][0]
+
+    ctx = await subagent_context({"id": row["id"], "session_id": SESSION})
+
+    call = next(m for m in ctx["messages"] if m.get("tool_calls"))
+    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
+    del mgr
+
+
 async def test_a_row_carries_what_the_run_cost(workspace: Path) -> None:
     await _spawn(workspace, backend=_Busy())
 
