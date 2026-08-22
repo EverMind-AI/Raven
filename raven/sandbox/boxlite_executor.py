@@ -352,6 +352,22 @@ class BoxliteExecutor(SandboxExecutor):
                 stderr=f"Command timed out after {effective_timeout}s",
                 exit_code=-1,
             )
+        except asyncio.CancelledError:
+            # A cancelled turn must not leave the command running in the VM.
+            # ``CancelledError`` derives from ``BaseException``, so neither
+            # ``ExecTool.execute``'s nor ``ToolRegistry.execute``'s
+            # ``except Exception`` sees it and nothing upstream cleans up.
+            #
+            # Awaiting here is fine for a single cancellation, which is what
+            # ``turn.cancel`` sends. A caller that cancels twice interrupts this
+            # await and the VM-side command outlives it until ``stop()`` tears
+            # the box down.
+            if execution is not None:
+                try:
+                    await execution.kill()
+                except Exception:
+                    pass
+            raise
 
     # ------------------------------------------------------------------
     # Process spawning (MCP stdio servers)
