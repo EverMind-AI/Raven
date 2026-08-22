@@ -26,6 +26,8 @@ from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
     EpisodeStart,
+    Notice,
+    NoticeKind,
     Origin,
     OriginPools,
     Reasoning,
@@ -159,6 +161,7 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "name": out.name,
                             "arguments": out.arguments or {},
+                            "blocking": out.blocking,
                             "display": out.display,
                         },
                     },
@@ -172,6 +175,8 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "result_preview": out.result_preview,
                             "truncated": out.truncated,
+                            "metadata": out.metadata,
+                            "diff": out.diff,
                         },
                     },
                 )
@@ -181,11 +186,21 @@ class TuiOutlet:
             # reply uses, so message.complete finalizes it like any other text.
             if out.content:
                 await self._emitter.emit(cid, {"type": "token.delta", "payload": {"text": out.content}})
+        elif isinstance(out, Notice):
+            # Only the kinds that describe what the RUNTIME did to the turn go
+            # on the wire. Progress and tool-hint notices exist for text-only
+            # channels that cannot draw a tool row; this client draws every call
+            # already, so forwarding them would narrate the same work twice.
+            if out.kind is NoticeKind.ACTION_BLOCKED:
+                await self._emitter.emit(
+                    cid,
+                    {"type": "notice", "payload": {"kind": out.kind.value, "detail": out.detail or ""}},
+                )
         elif isinstance(out, EpisodeStart):
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.
             await self._emitter.emit(cid, {"type": "episode.start", "payload": {"index": out.index}})
-        # Notice / MediaOut: eaten (no wire event today).
+        # MediaOut: eaten (no wire event today).
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
         if done:
@@ -234,7 +249,24 @@ def _make_tui_sink(
         await hub.close_stream(conversation_id)
         await hub.wait_idle(channel)
 
-    def _drop(conversation_id: str) -> None:
+    def _owns_lane(conversation_id: str, turn_id: str) -> bool:
+        """Whether the ending turn is the one ``turn.send`` bound this lane to.
+
+        A lane is serial but its slots are per-lane, so a turn the runtime
+        submitted itself can end while a client's turn is still QUEUED behind it
+        on the same lane. Releasing the slots there opens the -32003 guard for a
+        second send and leaves the queued turn's own end with no binding to
+        report against.
+        """
+        return bool(turn_id) and turn_ids.get(conversation_id) == turn_id
+
+    def _drop(conversation_id: str, *, owns: bool) -> None:
+        if not owns:
+            return
+        # usages is keyed by lane like turn_ids, so it is gated the same way: a
+        # turn cancelled while queued shares this key with whichever turn is
+        # actually running, and popping unconditionally would drop that turn's
+        # just-written usage before its own TurnEnded reads it.
         turn_ids.pop(conversation_id, None)
         usages.pop(conversation_id, None)
         if on_turn_end is not None:
@@ -243,18 +275,20 @@ def _make_tui_sink(
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnEnded):
             await _finish(event.conversation_id)
-            turn_id = turn_ids.get(event.conversation_id)
             usage = usages.get(event.conversation_id) or {
                 "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_tokens": 0,
             }
-            _drop(event.conversation_id)
-            await outlet.emit_complete(event.conversation_id, turn_id, usage)
+            # Read before _drop pops the register.
+            _drop(event.conversation_id, owns=_owns_lane(event.conversation_id, event.turn_id))
+            # The ending turn's own id, never the lane slot's current value: the
+            # slot may hold a client turn that has not started yet.
+            await outlet.emit_complete(event.conversation_id, event.turn_id, usage)
             return
         if isinstance(event, TurnFailed):
             await _finish(event.conversation_id)
-            _drop(event.conversation_id)
+            _drop(event.conversation_id, owns=_owns_lane(event.conversation_id, event.turn_id))
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
             if not event.cancelled:

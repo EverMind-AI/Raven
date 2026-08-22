@@ -26,6 +26,7 @@ export type JsonValue = string | number | boolean | null | unknown[] | {};
 export type TurnEvent =
   | MessageStartEvent
   | EpisodeStartEvent
+  | NoticeEvent
   | TokenDeltaEvent
   | ThinkingDeltaEvent
   | ToolStartEvent
@@ -359,6 +360,10 @@ export interface ToolStartEvent {
       [k: string]: JsonValue;
     };
     display?: string | null;
+    /**
+     * The call is a blocking interaction with no automatic deadline. A client that clocks the event stream for liveness must suspend that clock while it is in flight.
+     */
+    blocking?: boolean;
   };
 }
 /**
@@ -382,6 +387,16 @@ export interface ToolCompleteEvent {
     tool_call_id: string;
     result_preview: string;
     truncated: boolean;
+    /**
+     * Opt-in structured payload a tool chose to publish. A client that does not understand a key ignores it.
+     */
+    metadata?: {
+      [k: string]: JsonValue;
+    };
+    /**
+     * Unified diff of what the call changed on disk, when the tool could produce one.
+     */
+    diff?: string;
   };
 }
 /**
@@ -434,6 +449,25 @@ export interface CronMissedEvent {
       scheduled_at: string;
       message: string;
     }[];
+  };
+}
+/**
+ * Prose the runtime wrote, not the model. It must not arrive as token.delta: that buffer is the model's voice, so the text would render as the answer.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "NoticeEvent".
+ */
+export interface NoticeEvent {
+  type: 'notice';
+  payload: {
+    /**
+     * Which runtime decision this reports; action_blocked today.
+     */
+    kind: string;
+    /**
+     * The blocking tool's own first line, when it gave one.
+     */
+    detail?: string;
   };
 }
 /**

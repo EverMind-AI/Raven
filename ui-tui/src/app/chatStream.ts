@@ -77,6 +77,15 @@ export interface ChatStreamOptions {
   watchdogMs?: number
 }
 
+/**
+ * What each runtime notice says to a reader. Keyed by the event's `kind` so a
+ * new kind shows up as its own name until a sentence is written for it.
+ */
+const NOTICE_TEXT: Record<string, string> = {
+  action_blocked:
+    'A safety rule stopped this operation, so the turn ended here. Say the word and I will carry on with the parts that do not need it.'
+}
+
 /** Default server-ack watchdog window — see {@link ChatStreamOptions.watchdogMs}. */
 export const DEFAULT_WATCHDOG_MS = 10_000
 
@@ -172,6 +181,27 @@ const dispatch = (
         const lines = items.map(item => `${item.name} — scheduled ${formatScheduledAt(item.scheduled_at)}: ${item.message}`)
         const noun = count === 1 ? 'reminder' : 'reminders'
         sys(`─── ⏰ missed ${count} ${noun} ───\n${lines.join('\n')}\n${'─'.repeat(40)}`)
+      }
+      return
+    }
+    case 'notice': {
+      // Runtime prose, not the model's, so it must never be merged into the
+      // streamed answer: that buffer is the model's voice, and text pushed into
+      // it renders as the answer -- glued to whatever was narrated just before
+      // and dressed in the answer's own affordances.
+      //
+      // Rendering it is not optional. Before this event existed the runtime
+      // pushed the same sentence down the token stream, so a blocked action was
+      // at least visible; a client that received the notice and drew nothing
+      // would leave the turn ending in silence.
+      //
+      // The sentence is written here rather than looked up: this repo has no
+      // i18n layer, so it is English. An unknown kind falls back to its own
+      // name, which is worse to read than a sentence and better than nothing.
+      if (sys) {
+        const said = NOTICE_TEXT[event.payload.kind] ?? event.payload.kind
+        const detail = event.payload.detail
+        sys(detail ? `${said}\n${detail}` : said)
       }
       return
     }

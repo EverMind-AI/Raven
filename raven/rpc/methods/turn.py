@@ -206,6 +206,12 @@ async def turn_send(
         # conversation == the front-end subscription key, so the runner's stream
         # and the sink's message.complete reach the right subscription.
         conversation=parsed.session_key,
+        # The id this call returns and puts on message.start, so the lane stamps
+        # THIS value on the turn's lifecycle events and the client's correlation
+        # key survives end to end. Without it the lane mints its own, the sink's
+        # ownership check never matches what this bound, and the active-turn slot
+        # is never released -- every later send is refused.
+        turn_id=turn_id,
     )
     try:
         handle = scheduler.submit(req)

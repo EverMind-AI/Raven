@@ -77,6 +77,15 @@ _STORE_MAX_INFLIGHT: int = 4
 # Teardown's total budget for letting those writes finish.
 _STORE_DRAIN_BUDGET_S: float = 15.0
 
+
+def _first_line(text: str) -> str:
+    """The one line of a tool error worth putting in front of a person."""
+    for line in str(text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
     "Would you like me to continue with the remaining parts of the task that do not "
@@ -109,6 +118,7 @@ if TYPE_CHECKING:
     from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
+    from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
@@ -2079,6 +2089,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
@@ -2270,6 +2281,7 @@ class AgentLoop:
 
             if response.has_tool_calls:
                 abort_action = False
+                abort_reason = ""
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -2365,6 +2377,11 @@ class AgentLoop:
                         pending_images.extend(attach_blocks)
                     if getattr(result, "abort_action", False):
                         abort_action = True
+                        # The blocking tool's own words, kept for the reader: the
+                        # canned reply below says an operation stopped but never
+                        # which one, so without this the user is told a thing
+                        # happened and given no way to find out what.
+                        abort_reason = _first_line(model_text)
                         # A single assistant message may contain several parallel
                         # tool calls (for example ``rm`` followed by a Python
                         # fallback). Once policy terminates the action, none of
@@ -2400,11 +2417,22 @@ class AgentLoop:
                     # the rejected operation into an equivalent interpreter,
                     # script, or tool call. Finish the turn in runtime code and
                     # expose only the non-destructive continuation question.
-                    # Streaming callers need the explicit callback because no
-                    # final model response exists to generate token deltas.
+                    # The model must read this, so it goes into the history as an
+                    # assistant message -- but it goes to the CLIENT as a notice.
+                    # Pushed down the token stream instead, it arrived as the
+                    # model's own prose: glued to whatever the model had just
+                    # narrated (nothing separates two segments in one buffer),
+                    # dressed in the answer's copy and branch actions, and always
+                    # in English no matter what language the turn was in.
+                    from raven.spine.events import NoticeKind as _NoticeKind
+
                     messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
                     final_content = _ABORTED_ACTION_REPLY
-                    if on_token_delta is not None:
+                    if on_notice is not None:
+                        await on_notice(_NoticeKind.ACTION_BLOCKED, abort_reason)
+                    elif on_token_delta is not None:
+                        # A channel with no notice outlet still has to say
+                        # something, and silence is the worse failure.
                         await on_token_delta(_ABORTED_ACTION_REPLY)
                     break
 
@@ -2634,6 +2662,7 @@ class AgentLoop:
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         on_episode_start: Callable[[int], Awaitable[None]] | None = None,
+        on_notice: Callable[[NoticeKind, str], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2878,6 +2907,7 @@ class AgentLoop:
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
             on_episode_start=on_episode_start,
+            on_notice=on_notice,
             usage_sink=usage_sink,
             drain=drain,
         )
@@ -3156,6 +3186,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        blocking=bool(info.get("blocking")),
                         display=info.get("display"),
                     )
                 )
@@ -3166,8 +3197,13 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         result_preview=info["result_preview"],
                         truncated=info["truncated"],
+                        metadata=info.get("metadata"),
+                        diff=info.get("diff"),
                     )
                 )
+
+        async def on_notice(kind: NoticeKind, detail: str) -> None:
+            await emit(Notice(kind=kind, detail=detail or None))
 
         async def on_progress(text: str, tool_hint: bool = False) -> None:
             # Keep the progress/tool-hint distinction so an outlet can gate each on
@@ -3260,6 +3296,7 @@ class AgentLoop:
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
                 on_episode_start=on_episode if stream else None,
+                on_notice=on_notice,
                 usage_sink=usage_sink,
                 origin=req.origin,
                 drain=drain,
