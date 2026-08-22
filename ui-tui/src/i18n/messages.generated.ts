@@ -684,6 +684,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.freq.once': 'Once',
     'gui.freq.week': 'Weekly',
     'gui.halted': 'Stopped by user - the output above is kept',
+    'gui.halted_bare': 'Stopped by user',
     'gui.turn_died': 'Turn failed - {e}',
     'gui.notice.by_raven': 'Raven',
     'gui.notice.action_blocked':
@@ -1887,6 +1888,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.freq.once': '仅一次',
     'gui.freq.week': '每周',
     'gui.halted': '用户手动停止 · 已输出内容保留',
+    'gui.halted_bare': '用户手动停止',
     'gui.turn_died': '回合中断 · {e}',
     'gui.notice.by_raven': 'Raven 提示',
     'gui.notice.action_blocked': '这一步被安全规则拦下了，本回合到此结束。要继续做不依赖它的部分，说一声就行。',

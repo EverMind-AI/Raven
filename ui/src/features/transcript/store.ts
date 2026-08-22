@@ -726,8 +726,17 @@ function mergeRun(lane: Lane, group: StepData[]): void {
 export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[], time?: string | null): void {
   stopFlush(lane)
   if (st) st.seal()
-  if (st && st.seg.say.trim()) {
-    const seg = st.seg
+  /* The last step that said something, which is usually the open one -- but a
+     step boundary opens on every episode, and a notice clears the open step
+     outright, so a turn stopped in a later episode has its prose in an earlier
+     one. Promoting only the open step left that prose as narration for the
+     fold to close over, while a reload of the same turn showed it as the
+     answer: the two halves disagreeing again, one case over. */
+  const said = st && st.seg.say.trim()
+    ? st.seg
+    : [...steps].reverse().find((g) => g.say.trim()) || null
+  if (said) {
+    const seg = said
     const text = seg.say
     let at = lane.segs.indexOf(seg)
     seg.say = ''
@@ -745,6 +754,20 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
   }
   foldRuns(lane, steps)
   collapse(lane, time)
+}
+
+/* Whether this turn put anything on the stage: an answer, a fold, or a step
+   still loose. The stop note's promise is checked against this -- "the output
+   above is kept" over a bare question is a promise about nothing. Runtime rows
+   (a note, a status line) are not the turn's output and do not count. */
+export function turnKept(lane: Lane): boolean {
+  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
+    const s = lane.segs[i] as Seg
+    if (s.kind === 'ask') return false
+    if (s.kind === 'note' || s.kind === 'status') continue
+    return true
+  }
+  return false
 }
 
 /* ── toggles (the components call these; scroll pinning stays with them) ── */
@@ -838,13 +861,21 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
   const sealTools = (): void => { if (toolRun) { toolRun.seal(); toolRun = null } }
   const calls = callIndex(messages)
   /* Only the LAST assistant text before the next user message is the turn's
-     answer; the ones before it are the model narrating mid-turn. */
+     answer; the ones before it are the model narrating mid-turn -- and a
+     marker the runtime wrote is neither. A marker carries `text` too (the
+     closing entry of a stopped turn reads "(turn cancelled by the user)", a
+     notice says what the runtime did) because the model reads it on the next
+     turn; counting it as model prose meant the turn's real last words were no
+     longer the last, so they were drawn as narration and the fold closed over
+     them -- under a note promising the output above was kept. */
+  const spoken = (m: HistoryMessage | undefined): boolean =>
+    !!m && m.role === 'assistant' && !m.turn_ended && !m.notice && !!m.text && !!m.text.trim()
   const isFinal = messages.map((m, i) => {
     if (!(m && m.role === 'assistant' && m.text && m.text.trim())) return false
     for (let j = i + 1; j < messages.length; j += 1) {
       const n = messages[j] as HistoryMessage
       if (n && n.role === 'user' && n.text && n.text.trim()) return true
-      if (n && n.role === 'assistant' && n.text && n.text.trim()) return false
+      if (spoken(n)) return false
     }
     return true
   })
@@ -854,25 +885,43 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
   const foldClose = (endAt: number): void => {
     collapse(lane, turnAt && endAt && endAt - turnAt >= 1000 ? durText(endAt - turnAt) : null)
   }
+  /* An answer whose own message also carried tool calls waits for the end of
+     the turn. The text was said BEFORE those calls, and their results come
+     after it in the payload, so emitting it here would fold the work in
+     afterwards and leave the answer sitting ABOVE the calls it introduced --
+     the reverse of the order the same turn ends in live, where finishTurn
+     inserts the answer past the step. */
+  let held: { text: string; when: string | null } | null = null
+  const closeTurn = (endAt: number): void => {
+    foldClose(endAt)
+    if (held) {
+      answer(lane, held.text, held.when)
+      held = null
+    }
+  }
   messages.forEach((m, i) => {
     if (m.role === 'user' && m.text && m.text.trim()) {
       sealTools()
+      closeTurn(msOf(m.timestamp))
       turnAt = msOf(m.timestamp)
       askText(lane, m.text, stamp(m.timestamp as string))
       return
     }
     if (m.role === 'assistant' && m.notice) {
       sealTools()
-      foldClose(msOf(m.timestamp))
+      closeTurn(msOf(m.timestamp))
       note(lane, t('gui.notice.' + (m.notice.kind || ''), undefined, m.notice.kind || ''),
         m.notice.detail || '', { quiet: true })
       return
     }
     if (m.role === 'assistant' && m.turn_ended) {
       sealTools()
-      foldClose(msOf(m.timestamp))
+      closeTurn(msOf(m.timestamp))
       const stopped = m.turn_ended.status === 'cancelled'
-      note(lane, stopped ? t('gui.halted') : t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, ''),
+      /* Same promise as the live stop, checked the same way: a replayed turn
+         whose whole content is this marker has no output above to keep. */
+      const halted = turnKept(lane) ? 'gui.halted' : 'gui.halted_bare'
+      note(lane, stopped ? t(halted) : t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, ''),
         stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped })
       return
     }
@@ -890,6 +939,10 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
       if (!text) return
       if (isFinal[i]) {
         sealTools()
+        if ((m.tool_calls || []).length) {
+          held = { text, when: stamp(m.timestamp as string) }
+          return
+        }
         foldClose(msOf(m.timestamp))
         answer(lane, text, stamp(m.timestamp as string))
       } else if (thought && toolRun) {
@@ -912,6 +965,7 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
     }
   })
   sealTools()
+  closeTurn(0)
 }
 
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
