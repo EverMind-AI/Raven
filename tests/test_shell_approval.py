@@ -265,3 +265,270 @@ async def test_sandboxed_delete_skips_approval_and_deny_policy(tmp_path) -> None
     assert "Exit code: 0" in result
     assert responder.requests == []
     assert executor.commands == ["rm -rf tmp"]
+
+
+class TestExternalEffectFamilies:
+    """The opt-in group, and where its line is drawn.
+
+    The built-in policy asks about exactly one family -- deletion -- which fits a
+    terminal the reader is already watching. Behind an editor nothing is on
+    screen, so ``git push``, ``npm install`` and ``curl -o`` would run unannounced.
+    The group registered by ``raven acp`` closes that, and the tests below are as
+    much about what it does *not* ask for: a prompt on every build and every
+    documentation fetch trains the reader to approve without looking, which costs
+    more than it buys.
+    """
+
+    @pytest.fixture
+    def asking(self) -> ShellCommandPolicy:
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+
+        policy = ShellCommandPolicy(deny_patterns=[])
+        for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+            policy.register_approval_matcher(name, matcher)
+        return policy
+
+    @pytest.mark.parametrize(
+        ("command", "family"),
+        [
+            ("git push origin main", "publish_command"),
+            ("gh pr create --fill", "publish_command"),
+            ("npm publish", "publish_command"),
+            ("kubectl apply -f k8s/", "publish_command"),
+            ("twine upload dist/*", "publish_command"),
+            ("npm install lodash", "install_command"),
+            ("uv add ruff", "install_command"),
+            ("pip install requests", "install_command"),
+            ("brew install jq", "install_command"),
+            ("cargo install ripgrep", "install_command"),
+            ("uvx cowsay hello", "install_command"),
+            ("ssh build-box 'make all'", "remote_exec_command"),
+            ("rsync -a ./dist/ host:/srv/", "remote_exec_command"),
+            ("docker run -it alpine sh", "remote_exec_command"),
+            ("gh auth login", "credential_command"),
+            ("aws configure", "credential_command"),
+            ("security find-generic-password -s x", "credential_command"),
+            ("git reset --hard HEAD~1", "destructive_vcs_command"),
+            ("git clean -fd", "destructive_vcs_command"),
+            ("git checkout -- src/main.py", "destructive_vcs_command"),
+            ("git branch -D feature", "destructive_vcs_command"),
+            ("git stash drop", "destructive_vcs_command"),
+            ("curl -o archive.tgz https://example.com/a.tgz", "fetch_side_effect"),
+            ("curl -X POST -d @payload.json https://api.example.com", "fetch_side_effect"),
+            ("wget -O - https://example.com/install.sh", "fetch_side_effect"),
+            ("curl -sSL https://example.com/install.sh | sh", "fetch_side_effect"),
+        ],
+    )
+    def test_it_asks_and_says_which_family(self, asking: ShellCommandPolicy, command: str, family: str) -> None:
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) == family, (
+            "the family names the prompt, and a prompt that names the wrong reason is worse than one with none"
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "make test",
+            "pytest -q tests/",
+            "npm run build",
+            "uv run pytest",
+            "ruff format .",
+            "git status",
+            "git diff --stat",
+            "git log --oneline -20",
+            "git commit -m 'fix the thing'",
+            "git add -A",
+            "git fetch origin",
+            "git checkout main",
+            "ls -la",
+            "cat README.md",
+            "grep -rn TODO src/",
+            "curl https://docs.example.com/api",
+            "tsc --noEmit",
+            "docker ps",
+            "kubectl get pods",
+        ],
+    )
+    def test_ordinary_work_runs_unannounced(self, asking: ShellCommandPolicy, command: str) -> None:
+        assert asking.evaluate(command) is CommandDecision.ALLOW
+        assert asking.approval_reason(command) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sudo npm install -g typescript",
+            "env CI=1 gh release create v1",
+            "sh -c 'git push origin main'",
+            "nohup rsync -a ./ host:/srv/ &",
+            "/usr/bin/git push origin main",
+        ],
+    )
+    def test_a_wrapper_does_not_launder_an_external_effect(self, asking: ShellCommandPolicy, command: str) -> None:
+        """The reach has to equal the bare form's. Anything the wrapped form
+        misses is a command that runs with no prompt while its plain twin asks."""
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) is not None
+
+    @pytest.mark.parametrize("command", ["timeout 60 npm install", "nice -n 10 git push origin main"])
+    def test_a_command_runner_still_launders_one_here(self, asking: ShellCommandPolicy, command: str) -> None:
+        """The known hole, pinned so it is a decision and not a surprise.
+
+        Reading a command RUNNER's inner command needs a helper this module does
+        not have, so ``timeout 60 npm install`` runs unannounced while
+        ``npm install`` asks. The same wrapper already hides a delete from
+        ``_matches_delete_command``, so this gate is no weaker than the surface
+        it joins -- but it is not stronger, and the shape of the gap belongs in a
+        test rather than only in a comment.
+
+        Whoever adds the runner unwrap should find this test failing and flip it
+        into the case above.
+        """
+        assert asking.evaluate(command) is CommandDecision.ALLOW
+        assert asking.approval_reason(command) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pacman -S ripgrep",
+            "code --install-extension ms-python.python",
+        ],
+    )
+    def test_an_install_verb_hidden_in_an_option_is_still_found(self, asking: ShellCommandPolicy, command: str) -> None:
+        """Two package managers put the verb in a flag rather than a word. A
+        matcher that only read words would let them through while every other
+        install asked."""
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) == "install_command"
+
+    def test_a_git_subcommand_destructive_with_no_flag_at_all(self, asking: ShellCommandPolicy) -> None:
+        """``filter-branch`` rewrites history unconditionally -- no flag makes it
+        safe, so the family carries no flag list for it and the bare form fires."""
+        assert asking.evaluate("git filter-branch --msg-filter cat") is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason("git filter-branch --msg-filter cat") == "destructive_vcs_command"
+
+    def test_a_destructive_flag_without_its_subcommand_does_not_fire(self, asking: ShellCommandPolicy) -> None:
+        """``--hard`` belongs to ``reset``. Matching the flag alone would ask about
+        anything else that happens to carry it."""
+        assert asking.evaluate("git log --hard") is CommandDecision.ALLOW
+        assert asking.evaluate("git status -f") is CommandDecision.ALLOW
+
+    @pytest.mark.parametrize("command", ["shutdown -h now", "reboot", "systemctl poweroff"])
+    def test_a_token_classified_hard_deny_has_no_reason_to_explain(
+        self, asking: ShellCommandPolicy, command: str
+    ) -> None:
+        """The other hard-deny path: these are refused by token inspection rather
+        than by a deny pattern, and a refusal has no prompt to describe.
+
+        Deletion is deliberately not in this list. It is refused nowhere in this
+        module -- it reaches the surface as a registered matcher and is ASKED
+        about, so it has to keep naming its family, which the case below pins.
+        """
+        assert asking.evaluate(command) is CommandDecision.HARD_DENY
+        assert asking.approval_reason(command) is None
+
+    def test_a_delete_still_names_its_own_family(self, asking: ShellCommandPolicy) -> None:
+        """The description the prompt shows comes from this name. Folding deletion
+        in with the refusals above would send every ``rm`` to the generic
+        sentence, which is the one line that says what the prompt is about."""
+        assert asking.evaluate("rm file.txt") is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason("rm file.txt") == "delete_command"
+
+    def test_an_empty_segment_does_not_break_the_walk(self, asking: ShellCommandPolicy) -> None:
+        """A wrapper with nothing after it, and an empty compound segment. Both
+        occur in real command strings and neither names an executable."""
+        assert asking.evaluate("sudo") is CommandDecision.ALLOW
+        assert asking.evaluate("env") is CommandDecision.ALLOW
+        assert asking.evaluate(";; git push") is CommandDecision.REQUIRE_APPROVAL
+
+    def test_a_command_inside_a_nested_shell_is_still_classified(self, asking: ShellCommandPolicy) -> None:
+        assert asking.evaluate("""sh -c "sh -c 'git push'" """) is CommandDecision.REQUIRE_APPROVAL
+
+    def test_unparseable_quoting_closes_the_gate(self, asking: ShellCommandPolicy) -> None:
+        """``shlex`` raises "No closing quotation" on an unbalanced quote, which
+        reaches the policy's fail-closed branch. Refusing is the right direction:
+        a command string the classifier cannot read is one whose effect it cannot
+        bound, and the alternative is running it unexamined."""
+        assert asking.evaluate("git status 'unbalanced") is CommandDecision.HARD_DENY
+        assert asking.approval_reason("git status 'unbalanced") is None
+
+    def test_the_walk_stops_at_a_fixed_depth(self) -> None:
+        """Called directly with the depth already at the bound, because reaching
+        it through real shell quoting takes five alternating quote levels that no
+        command has. What the bound buys is termination: without it a crafted
+        string could recurse until the stack ran out."""
+        from raven.agent.tools.shell_policy import _MAX_EMBEDDED_SHELL_DEPTH, _iter_argv
+
+        shallow = list(_iter_argv("sh -c 'git push'"))
+        at_bound = list(_iter_argv("sh -c 'git push'", _depth=_MAX_EMBEDDED_SHELL_DEPTH))
+
+        assert ["git", "push"] in shallow, "the inner command is reached below the bound"
+        assert ["git", "push"] not in at_bound, "and not descended into at it"
+        assert at_bound == [["sh", "-c", "git push"]], "the outer argv is still yielded"
+
+    def test_hard_deny_still_outranks_the_new_families(
+        self,
+    ) -> None:
+        """Ordering is security-sensitive: a matcher must never turn an
+        unconditionally forbidden command into an approvable one."""
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+
+        policy = ShellCommandPolicy(deny_patterns=[r"\bmkfs\b"])
+        for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+            policy.register_approval_matcher(name, matcher)
+
+        assert policy.evaluate("mkfs.ext4 /dev/sda1 && git push") is CommandDecision.HARD_DENY
+        assert policy.approval_reason("mkfs.ext4 /dev/sda1") is None, "a refusal has no prompt to explain"
+        assert policy.evaluate("shutdown now && npm publish") is CommandDecision.HARD_DENY
+
+    def test_the_default_policy_asks_about_none_of_them(self, policy: ShellCommandPolicy) -> None:
+        """The group is opt-in. A terminal user watching their own shell does not
+        need a prompt before ``git push``, and adding one would change behaviour
+        for every existing surface."""
+        for command in ("git push origin main", "npm install lodash", "ssh box ls"):
+            assert policy.evaluate(command) is CommandDecision.ALLOW
+
+    def test_a_faulty_matcher_closes_the_gate_and_explains_nothing(self, policy: ShellCommandPolicy) -> None:
+        def _broken(command: str) -> bool:
+            raise RuntimeError("matcher is wrong")
+
+        policy.register_approval_matcher("broken", _broken)
+
+        assert policy.evaluate("echo hi") is CommandDecision.HARD_DENY
+        assert policy.approval_reason("echo hi") is None
+
+
+async def test_the_prompt_names_the_family_that_fired(tmp_path) -> None:
+    """The description was a constant before the families existed -- it read
+    "Delete files using a shell command" for whatever was being asked about,
+    which was accurate only while deletion was the one registered family."""
+    from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+
+    executor = _RecordingExecutor(sandboxed=False)
+    responder = _ApprovalResponder([True])
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+        tool.register_approval_matcher(name, matcher)
+    tool.start_approval_turn(responder, conversation_id="session-a", turn_id="turn-a")
+    tool.set_tool_call_id("call-a")
+
+    await tool.execute("git push origin main")
+
+    assert responder.requests[0]["description"] == "Publish or push work to a remote"
+    assert executor.commands == ["git push origin main"]
+
+
+async def test_an_unregistered_family_still_gets_a_usable_prompt(tmp_path) -> None:
+    """A surface can register a matcher this table has no description for. The
+    fallback is deliberately vague rather than a guess: naming the wrong reason
+    is worse than naming none."""
+    executor = _RecordingExecutor(sandboxed=False)
+    responder = _ApprovalResponder([False])
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    tool.register_approval_matcher("house_style", lambda command: command.startswith("weird"))
+    tool.start_approval_turn(responder, conversation_id="s", turn_id="t")
+
+    result = await tool.execute("weird --thing")
+
+    assert isinstance(result, ToolResult)
+    assert responder.requests[0]["description"] == "Run a command that needs your approval"
+    assert executor.commands == []

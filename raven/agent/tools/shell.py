@@ -3,6 +3,7 @@
 import os
 import re
 import shlex
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from hashlib import sha256
@@ -41,6 +42,22 @@ class _ApprovalTurn:
     turn_id: str = ""
     tool_call_id: str = ""
     denied_digests: frozenset[str] = frozenset()
+
+
+# What the reader is being asked about, per family. A constant string was here
+# before -- "Delete files using a shell command" -- which was accurate only while
+# deletion was the one family registered, and became wrong the moment a surface
+# registered more. The fallback is deliberately vague rather than a guess: a
+# prompt that names the wrong reason is worse than one that names none.
+_APPROVAL_DESCRIPTIONS: dict[str, str] = {
+    "delete_command": "Delete files using a shell command",
+    "publish_command": "Publish or push work to a remote",
+    "install_command": "Install software, which runs code from the network",
+    "remote_exec_command": "Run a command on, or copy files to, another machine",
+    "credential_command": "Read or change stored credentials",
+    "destructive_vcs_command": "Discard uncommitted work in this repository",
+    "fetch_side_effect": "Download to a file, upload data, or run what it downloads",
+}
 
 
 class ExecTool(Tool):
@@ -89,6 +106,20 @@ class ExecTool(Tool):
             "exec_tool_approval_turn",
             default=_ApprovalTurn(),
         )
+
+    def register_approval_matcher(self, name: str, matcher: Callable[[str], bool]) -> None:
+        """Add a command family this tool must ask about before running.
+
+        The policy is per-tool rather than process-wide, so a surface that needs
+        to ask about more than deletion has to reach it through the tool it will
+        actually run on. Exposed here because the alternative is a caller
+        touching ``_policy`` -- and the set of families a surface asks about is a
+        property of that surface, not of the policy's internals.
+
+        See ``shell_policy.EXTERNAL_EFFECT_MATCHERS`` for the group ``raven acp``
+        registers and for why the terminal does not.
+        """
+        self._policy.register_approval_matcher(name, matcher)
 
     def start_approval_turn(
         self,
@@ -239,7 +270,9 @@ class ExecTool(Tool):
             turn_id=turn.turn_id,
             tool_call_id=turn.tool_call_id,
             command=command,
-            description="Delete files using a shell command",
+            description=_APPROVAL_DESCRIPTIONS.get(
+                self._policy.approval_reason(command) or "", "Run a command that needs your approval"
+            ),
         )
         if approved:
             return None
