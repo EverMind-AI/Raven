@@ -1819,7 +1819,8 @@
               "diff": {
                 "type": "string",
                 "description": "Unified diff of what the call changed on disk, when the tool could produce one."
-              }
+              },
+              "file_change": { "$ref": "#/components/schemas/FileChange" }
             }
           }
         }
@@ -1911,6 +1912,54 @@
           }
         }
       },
+      "FileChange": {
+        "description": "One file a tool call wrote, as contents rather than as a rendering of them. Beside ToolCompleteEvent.diff rather than instead of it: a client that draws its own diff needs the text, and a unified diff cannot be turned back into the file.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "after"],
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path of the file that was written." },
+          "after": { "type": "string", "description": "The file's full contents after the write." },
+          "before": {
+            "type": "string",
+            "description": "The contents the write replaced. Absent when the file did not exist, so a client renders a creation differently from a rewrite; an empty string means the file existed and was empty."
+          }
+        }
+      },
+      "MediaItem": {
+        "description": "One file the agent produced as part of its reply, by local path.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "mime", "kind"],
+        "properties": {
+          "path": { "type": "string", "description": "Absolute path of the file on the machine the agent runs on." },
+          "mime": {
+            "type": "string",
+            "description": "MIME type as declared by the emit site. Today every producer declares application/octet-stream, so a client that needs the real type should sniff the extension rather than trust this."
+          },
+          "kind": { "type": "string", "description": "Coarse media class; \"file\" is the only value emitted today." }
+        }
+      },
+      "MediaEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "media" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["items"],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/MediaItem" },
+                "description": "The files, in the order the turn produced them. Never empty: an event with nothing to deliver is not emitted."
+              }
+            }
+          }
+        }
+      },
       "NoticeEvent": {
         "description": "Prose the runtime wrote, not the model. It must not arrive as token.delta: that buffer is the model's voice, so the text would render as the answer.",
         "type": "object",
@@ -1941,6 +1990,7 @@
           { "$ref": "#/components/schemas/MessageStartEvent" },
           { "$ref": "#/components/schemas/EpisodeStartEvent" },
           { "$ref": "#/components/schemas/NoticeEvent" },
+          { "$ref": "#/components/schemas/MediaEvent" },
           { "$ref": "#/components/schemas/TokenDeltaEvent" },
           { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
           { "$ref": "#/components/schemas/ToolStartEvent" },
@@ -1957,6 +2007,7 @@
             "message.start": "#/components/schemas/MessageStartEvent",
             "episode.start": "#/components/schemas/EpisodeStartEvent",
             "notice": "#/components/schemas/NoticeEvent",
+            "media": "#/components/schemas/MediaEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",
             "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
             "tool.start": "#/components/schemas/ToolStartEvent",

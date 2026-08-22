@@ -304,7 +304,7 @@ async def test_outlet_deliver_text_to_token_delta():
     assert emitter.emitted == [("tui:c1", {"type": "token.delta", "payload": {"text": "please clarify"}})]
 
 
-async def test_outlet_deliver_eats_chatty_notices_and_media():
+async def test_outlet_deliver_eats_chatty_notices():
     # Progress and tool-hint notices exist for text-only channels that cannot
     # draw a tool row. This client draws every call already, so forwarding them
     # would narrate the same work twice.
@@ -312,10 +312,87 @@ async def test_outlet_deliver_eats_chatty_notices_and_media():
     outlet = TuiOutlet("tui", emitter)
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", conversation_id="tui:c1"))
     await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT, detail="reading", conversation_id="tui:c1"))
-    await outlet.deliver(
-        MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1")
-    )
     assert emitter.emitted == []  # no wire event for these today
+
+
+async def test_outlet_deliver_media_to_a_media_event():
+    """A reply's files reach the wire instead of being dropped at this hop.
+
+    They used to be eaten here, which made the loss invisible to every layer
+    above: a turn that produced a chart answered with text that referred to a
+    file the client was never told about.
+    """
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    await outlet.deliver(
+        MediaOut(
+            media=(
+                Media(path="/tmp/x.png", mime="image/png", kind="image"),
+                Media(path="/tmp/y.csv", mime="text/csv", kind="file"),
+            ),
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "media",
+                "payload": {
+                    "items": [
+                        {"path": "/tmp/x.png", "mime": "image/png", "kind": "image"},
+                        {"path": "/tmp/y.csv", "mime": "text/csv", "kind": "file"},
+                    ]
+                },
+            },
+        )
+    ]
+
+
+async def test_outlet_deliver_media_with_nothing_in_it_emits_nothing():
+    """The contract says ``items`` is never empty, so this cannot be forwarded.
+
+    Not a theoretical guard: the emit site builds the tuple from a reply's path
+    list, and an empty event would still make a client draw an attachment row
+    with nothing behind it.
+    """
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    await outlet.deliver(MediaOut(media=(), conversation_id="tui:c1"))
+    assert emitter.emitted == []
+
+
+async def test_outlet_deliver_tool_complete_forwards_the_file_change():
+    """The structured change beside the rendered diff.
+
+    A protocol client cannot use the diff string at all -- its diff content block
+    is ``{path, newText, oldText}`` -- so this field is the only thing that
+    reaches it, and it is absent rather than null when a call wrote nothing so
+    that every payload the wire already carried keeps its shape.
+    """
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_change"] == {
+        "path": "/tmp/a.txt",
+        "after": "new",
+        "before": "old",
+    }
+
+    emitter.emitted.clear()
+    await outlet.deliver(
+        ToolEvent(phase=ToolPhase.COMPLETE, tool_call_id="t2", result_preview="ok", conversation_id="tui:c1")
+    )
+    assert "file_change" not in emitter.emitted[0][1]["payload"]
 
 
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():

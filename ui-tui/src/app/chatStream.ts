@@ -205,6 +205,14 @@ const dispatch = (
       }
       return
     }
+    case 'media':
+      // Deliberate no-op, and the reason is not that the event is unimportant:
+      // the terminal has no viewer to open a file in, and the reply text that
+      // follows names what the turn produced. The event exists for a client that
+      // can act on a path -- an editor over the protocol turns each item into a
+      // link the reader can click. Rendering the paths here as well is a product
+      // call for this surface, not a consequence of the wire event.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
