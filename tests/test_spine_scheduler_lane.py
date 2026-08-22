@@ -423,3 +423,85 @@ async def test_scheduler_has_inflight_tracks_running_turn():
     except (asyncio.CancelledError, Exception):
         pass
     await sched.shutdown(grace=0.0)
+
+
+# --- turn identity: the second correlation axis alongside the lane ---
+
+
+async def test_worker_mints_a_turn_id_when_the_request_carries_none():
+    # Every submit path but turn.send leaves turn_id unset, so the lane is what
+    # makes those turns identifiable at all -- and a consumer that has to tell an
+    # announce turn's end from the client turn queued behind it on the same lane
+    # has nothing else to go on.
+    runner = SuccessRunner(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(_req())
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert started.turn_id
+    assert ended.turn_id == started.turn_id
+
+
+async def test_a_supplied_turn_id_is_not_re_minted():
+    # turn.send returns its id to the client and puts it on message.start, so the
+    # lifecycle events have to carry that same value or the client's correlation
+    # key stops matching the completion it is waiting for.
+    src = Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
+    runner = SuccessRunner(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(TurnRequest(origin=Origin.USER, source=src, text="hi", turn_id="t-known"))
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert started.turn_id == "t-known"
+    assert ended.turn_id == "t-known"
+
+
+async def test_a_failed_turn_reports_its_own_turn_id():
+    runner = FailingRunner()
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:9")
+    await lane.submit(_req())
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.turn_id and failed.turn_id == started.turn_id
+
+
+async def test_the_runner_sees_the_resolved_turn_id():
+    # The lane puts the id back on the request, so the runner and the lifecycle
+    # events agree on one value -- without that a consumer would be back to
+    # reading a per-lane slot, which is the defect this axis exists to close.
+    seen: list[str | None] = []
+
+    class RecordingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            seen.append(req.turn_id)
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+    events, sink = _collector()
+    lane = Lane(runner=RecordingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    await lane.submit(_req())
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert seen == [ended.turn_id]
+    assert ended.turn_id
+
+
+async def test_a_runner_driven_directly_still_gets_an_identified_turn():
+    """``submit`` resolves the id on the way in, so this branch only runs for a
+    caller that reaches ``_run_turn`` itself -- a test harness, or any future
+    path that bypasses the queue. It exists because a turn that ends unnamed
+    leaves its consumer holding slots with nothing to match, and an empty string
+    would pass a None-check while being exactly that.
+    """
+    runner = SuccessRunner(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False))
+    events, sink = _collector()
+    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:7")
+    src = Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
+
+    await lane._run_turn(TurnRequest(origin=Origin.USER, source=src, text="hi", turn_id=""))
+
+    started = next(e for e in events if isinstance(e, TurnStarted))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert started.turn_id, "an empty id must be replaced, not stamped through"
+    assert ended.turn_id == started.turn_id

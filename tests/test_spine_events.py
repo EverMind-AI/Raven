@@ -41,6 +41,9 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
         "tool_hint",
         "injected",
         "delivery_failed",
+        # Unlike the four above, this one replaces the answer instead of
+        # accompanying it -- see test_a_blocked_action_is_a_notice_kind_of_its_own.
+        "action_blocked",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"
@@ -67,12 +70,14 @@ def test_lifecycle_events_construct_and_are_frozen():
 
 def test_turn_failed_has_no_usage():
     fields = {f.name for f in dataclasses.fields(TurnFailed)}
-    assert fields == {"error", "cancelled", "conversation_id"}  # failure carries no usage
+    # turn_id is the WHICH-turn axis, present on all three lifecycle events; the
+    # point pinned here is still that a failure carries no usage.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id"}
 
 
 def test_turn_ended_carries_usage_latency_and_explicit_reply():
     fields = {f.name for f in dataclasses.fields(TurnEnded)}
-    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id"}
+    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id"}
 
 
 def test_every_deliverable_defaults_source_to_none():
@@ -175,3 +180,54 @@ _ALL_EVENTS = [
 def test_every_event_type_is_frozen(event):
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(event, "_probe", 1)
+
+
+def test_every_lifecycle_event_carries_a_turn_id_axis():
+    # turn_id is the second correlation axis: conversation_id is WHERE a turn ran,
+    # this is WHICH turn ran. Lifecycle-only -- a deliverable is correlated by its
+    # stream, and growing the field there would invite stamping it from a per-lane
+    # slot again, which is the defect this axis exists to close.
+    lifecycle = [
+        TurnStarted(),
+        TurnFailed(error="e", cancelled=False),
+        TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False),
+    ]
+    for event in lifecycle:
+        assert event.turn_id == ""
+    deliverables = [
+        Text(content="hi"),
+        Reasoning(content="hm"),
+        ToolEvent(phase=ToolPhase.START, tool_call_id="t"),
+        Notice(kind=NoticeKind.PROGRESS),
+        EpisodeStart(index=0),
+        MediaOut(media=(Media(path="/tmp/a.jpg", mime="image/jpeg", kind="image"),)),
+        StreamDelta(delta="x"),
+    ]
+    for event in deliverables:
+        assert not hasattr(event, "turn_id")
+
+
+def test_a_blocked_action_is_a_notice_kind_of_its_own():
+    # Not folded into PROGRESS or TOOL_HINT: those accompany an answer, and this
+    # one REPLACES it, so an outlet that renders nothing else must still render
+    # this or the turn ends in silence.
+    assert NoticeKind.ACTION_BLOCKED.value == "action_blocked"
+    assert NoticeKind.ACTION_BLOCKED not in (NoticeKind.PROGRESS, NoticeKind.TOOL_HINT)
+
+
+def test_a_tool_event_can_carry_the_fidelity_a_client_draws_from():
+    # Defaults, so every existing construction site keeps working: a tool that
+    # publishes none of this is indistinguishable from one built before the
+    # fields existed.
+    plain = ToolEvent(phase=ToolPhase.START, tool_call_id="t")
+    assert plain.blocking is False
+    assert plain.metadata is None
+    assert plain.diff is None
+    rich = ToolEvent(
+        phase=ToolPhase.COMPLETE,
+        tool_call_id="t",
+        metadata={"files": 2},
+        diff="--- a\n+++ b",
+    )
+    assert rich.metadata == {"files": 2}
+    assert rich.diff == "--- a\n+++ b"

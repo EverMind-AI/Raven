@@ -148,6 +148,24 @@ class EpisodeStartEvent(_Strict):
     payload: EpisodeStartPayload
 
 
+class NoticePayload(_Strict):
+    kind: str = Field(..., description="Which runtime decision this reports; `action_blocked` today.")
+    detail: str = Field("", description="The blocking tool's own first line, when it gave one.")
+
+
+class NoticeEvent(_Strict):
+    """Prose the runtime wrote, not the model.
+
+    It must not arrive as `token.delta`: that buffer is the model's voice, so
+    the text would render as the answer -- glued to whatever the model narrated
+    just before it, carrying the answer's copy and branch actions, and stuck in
+    English whatever language the turn was in.
+    """
+
+    type: Literal["notice"]
+    payload: NoticePayload
+
+
 class TokenDeltaPayload(_Strict):
     text: str
 
@@ -171,6 +189,14 @@ class ToolStartPayload(_Strict):
     name: str
     arguments: dict[str, JsonValue]
     display: str | None = None
+    blocking: bool = Field(
+        default=False,
+        description=(
+            "The call is a blocking interaction, so it has no automatic deadline and may emit "
+            "nothing for as long as it runs. A client that clocks the event stream for liveness "
+            "must suspend that clock while it is in flight, or it declares a sub-agent run dead."
+        ),
+    )
 
 
 class ToolStartEvent(_Strict):
@@ -192,6 +218,21 @@ class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
     truncated: bool
+    metadata: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Opt-in structured payload a tool chose to publish (a deliver_files manifest, for "
+            "example). A client that does not understand a key ignores it."
+        ),
+    )
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified diff of what the call changed on disk, when the tool could produce one. "
+            "The only record of what a whole-file write replaced: the arguments carry the new "
+            "content and nothing else, so a client without this draws an overwrite as all additions."
+        ),
+    )
 
 
 class ToolCompleteEvent(_Strict):
@@ -253,6 +294,7 @@ TurnEvent = Annotated[
     Union[
         MessageStartEvent,
         EpisodeStartEvent,
+        NoticeEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -1006,6 +1048,8 @@ __all__ = [
     "SessionExportResult",
     "MessageStartEvent",
     "EpisodeStartEvent",
+    "NoticeEvent",
+    "NoticePayload",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",
     "ToolStartEvent",
