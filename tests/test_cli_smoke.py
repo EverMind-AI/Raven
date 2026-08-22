@@ -167,6 +167,10 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
 # Full set of top-level commands + subcommand groups registered on the root
 # app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
 REGISTERED_COMMAND_NAMES = {
+    # The ACP agent server: an editor spawns `raven acp` and speaks
+    # JSON-RPC to its stdio. Distinct from the client direction, which is
+    # not a command -- raven spawns those agents itself.
+    "acp",
     "agent",
     "channels",
     "cron",
