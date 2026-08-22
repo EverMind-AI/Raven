@@ -51,6 +51,7 @@ export interface Shell {
      stay valid: each one is only reached from the island that asked. */
   useInTask?(promptKey: string, name: string): void
   reachText?(reach: string): string
+  reachHint?(reach: string): string
   closeDetail?(): void
   /* Optional verbs: each exists once an island needs it and the shell half
      (demo/155-bridge.js) publishes it. */
@@ -144,7 +145,6 @@ export interface Shell {
   openUrl?(url: string): void
   look?: { get(): LookState; set(patch: Partial<LookState>): void }
   ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
-  renderToolset?(host: HTMLElement): void
 }
 
 declare global {

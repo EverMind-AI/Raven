@@ -12,6 +12,7 @@ window.RavenShell = {
   showPage: (id) => showPage(id),
   useInTask: (key, name) => useInTask(key, name),
   reachText: (reach) => reachText(reach),
+  reachHint: (reach) => reachHint(reach),
   closeDetail: () => closeDetail(),
   copyToClip: (text, done) => copyToClip(text, done),
   showWorkspace: (tab) => { if (!wsOpen) setWs(true); wsPick(tab); },
@@ -71,4 +72,3 @@ if (typeof checkUpdate !== 'undefined') window.RavenShell.checkUpdate = (btn) =>
 if (typeof wsOpenUrl !== 'undefined') window.RavenShell.openUrl = (u) => wsOpenUrl(u);
 if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
 if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };
-if (typeof renderToolset === 'function') window.RavenShell.renderToolset = (host) => renderToolset(host);

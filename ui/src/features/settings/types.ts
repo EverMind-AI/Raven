@@ -45,6 +45,30 @@ export interface UsageStats {
   }
 }
 
+/* One group heading of the toolset panel. */
+export interface ToolGroup {
+  id: string
+  label: string
+  hint?: string
+}
+
+/* One built-in tool. Shared with the legacy layers rather than copied
+   (ui/src/demo/030-fixtures.js declares the array, and the live loadExt
+   rebuilds it), and `on` is the reason the sharing matters: in live mode it is
+   an accessor over `tools.disabledTools` (ui/src/live/090-extensions.js), so
+   assigning it persists the flip. In the demo it is a plain field and the flip
+   is local, which is what the offline page always did. */
+export interface ToolRow {
+  id: string
+  name: string
+  group: string
+  reach: string
+  one: string
+  on: boolean
+  danger?: boolean
+  needs?: string | null
+}
+
 /* Everything the dialog draws from, in one read. `raw` is the config
    settings.get returned (camelCased keys, one level per dot); the fixture
    answers an empty object so every V() read falls back to the schema
@@ -56,6 +80,8 @@ export interface SettingsSnapshot {
   providers: ProviderRow[]
   curProvider: string
   model: string
+  toolGroups: ToolGroup[]
+  tools: ToolRow[]
 }
 
 export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect'

@@ -26,6 +26,17 @@ function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     ],
     curProvider: 'anthropic',
     model: 'claude-opus-4-5',
+    toolGroups: [
+      { id: 'file', label: 'gui.toolgrp.file' },
+      { id: 'net', label: 'gui.toolgrp.net' },
+      { id: 'ask', label: 'gui.toolgrp.ask' },
+    ],
+    tools: [
+      { id: 'read_file', name: 'read', group: 'file', reach: 'local', one: 'reads', on: true },
+      { id: 'write_file', name: 'write', group: 'file', reach: 'local', one: 'writes', on: true, danger: true },
+      { id: 'web_fetch', name: 'fetch', group: 'net', reach: 'net', one: 'fetches', on: true },
+      { id: 'image_generate', name: 'draw', group: 'net', reach: 'net', one: 'draws', on: false, needs: 'key' },
+    ],
     ...over,
   }
 }
@@ -67,6 +78,8 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     openSet: () => shellCalls.push(['openSet', null]),
     closeSet: () => shellCalls.push(['closeSet', null]),
     openConn: () => shellCalls.push(['openConn', null]),
+    reachText: (reach) => `reach:${reach}`,
+    reachHint: (reach) => `hint:${reach}`,
     sessionCount: () => 3,
   }
   window.RavenShell = fakeShell
@@ -317,5 +330,129 @@ describe('settings island', () => {
       screen.getByText('gui.set.mdl.eff_high').click()
     })
     expect(calls).toContainEqual(['set', { key: 'agents.defaults.reasoningEffort', value: 'high' }])
+  })
+
+  /* ---- the toolset panel, which used to be drawn by the legacy layer ---- */
+
+  const toolset = async () => {
+    await act(async () => {
+      screen.getByText('gui.set.pg.toolset').click()
+    })
+  }
+
+  it('draws one card per group that has tools, counting the ones switched on', async () => {
+    install()
+    await mount()
+    await toolset()
+    const cards = [...document.querySelectorAll('#spanels .scard')]
+    /* Three groups in the snapshot, and `ask` holds nothing -- an empty group
+       is not an empty card, it is no card. */
+    expect(cards.map((c) => c.querySelector('.ch .t')!.textContent)).toEqual(['gui.toolgrp.file', 'gui.toolgrp.net'])
+    expect(cards[0]!.querySelector('.ch .d')!.textContent).toBe('gui.caps.tool_on {"on":2,"all":2}')
+    expect(cards[1]!.querySelector('.ch .d')!.textContent).toBe('gui.caps.tool_on {"on":1,"all":2}')
+    expect([...cards[0]!.querySelectorAll('.fset .trow .nm span:first-child')].map((n) => n.textContent))
+      .toEqual(['read', 'write'])
+    /* The badge takes both halves from the shell: the text and the tooltip. */
+    const badge = cards[1]!.querySelector<HTMLElement>('.trow .bdgs .kd')!
+    expect(badge.textContent).toBe('reach:net')
+    expect(badge.title).toBe('hint:net')
+  })
+
+  /* The claim that decides whether this panel may own the flip at all. The
+     rows are the array the legacy layers hold, and in live mode `on` is an
+     accessor that writes tools.disabledTools -- so the flip has to be an
+     assignment on that row, not a copy the island keeps beside it. A local
+     copy would draw the same and persist nothing. */
+  it('flips a tool by assigning on the shared row, so the live accessor persists it', async () => {
+    const data = snap()
+    const writes: boolean[] = []
+    let on = true
+    Object.defineProperty(data.tools[0]!, 'on', {
+      get: () => on,
+      set: (v: boolean) => {
+        on = v
+        writes.push(v)
+      },
+    })
+    const h = install(data)
+    await mount()
+    await toolset()
+    const row = document.querySelectorAll('#spanels .scard')[0]!.querySelector('.trow')!
+    await act(async () => {
+      row.querySelector<HTMLElement>('.ctl .swi')!.click()
+    })
+    expect(writes).toEqual([false])
+    /* And the row repaints from the accessor, rather than from a stale copy. */
+    const again = document.querySelectorAll('#spanels .scard')[0]!.querySelector('.trow')!
+    expect(again.className).toBe('trow off')
+    expect(again.querySelector('.swi')!.getAttribute('aria-checked')).toBe('false')
+    expect(h.shellCalls).toContainEqual(['toast', 'gui.caps.disabled_x {"name":"read"}'])
+  })
+
+  it('offers no switch for a tool withheld for want of a key', async () => {
+    install()
+    await mount()
+    await toolset()
+    const rows = [...document.querySelectorAll('#spanels .scard')[1]!.querySelectorAll('.trow')]
+    const needs = rows[1]!
+    expect(needs.querySelector('.ctl .pnote')!.textContent).toBe('gui.caps.needs_key')
+    expect(needs.querySelector('.ctl .swi')).toBeNull()
+  })
+
+  it('writes a tool credential to its whitelisted key, and only when one was typed', async () => {
+    const { calls } = install()
+    await mount()
+    await toolset()
+    const net = document.querySelectorAll('#spanels .scard')[1]!
+    /* The chip reads unset before the write: the key is absent from raw. */
+    expect(net.querySelector('.trow .nm .kchip')!.className).toBe('kchip off')
+    /* Folded until asked for: an editor per key-taking tool, always open, is
+       four password fields nobody opened. */
+    expect(document.querySelector('#spanels .tkrow')).toBeNull()
+    await act(async () => {
+      net.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    const field = row.querySelector<HTMLInputElement>('input[type="password"]')!
+    /* An empty field is not a write. Whitespace only is the same thing. */
+    field.value = '   '
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini')!.click()
+    })
+    expect(calls).toEqual([])
+    field.value = '  jina-key  '
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini')!.click()
+    })
+    expect(calls).toContainEqual(['set', { key: 'tools.web.jinaApiKey', value: 'jina-key' }])
+  })
+
+  /* Where the refusal lands, which is not where the click did. A tool row has
+     no `.crow` around it, so the legacy nlSay walked up to the `.scard` and
+     appended there -- and only on the card whose row refused. */
+  it('speaks a refused credential write on the card, not in the row', async () => {
+    install(snap(), {
+      set: async () => {
+        throw { notLive: true }
+      },
+    })
+    await mount()
+    await toolset()
+    const cards = [...document.querySelectorAll<HTMLElement>('#spanels .scard')]
+    await act(async () => {
+      cards[1]!.querySelector<HTMLElement>('.trow .ctl .mini.ghost')!.click()
+    })
+    const row = document.querySelector<HTMLElement>('#spanels .tkrow.tkey')!
+    row.querySelector<HTMLInputElement>('input[type="password"]')!.value = 'k'
+    await act(async () => {
+      row.querySelector<HTMLElement>('.mini')!.click()
+    })
+    const live = [...document.querySelectorAll<HTMLElement>('#spanels .scard')]
+    expect(live[1]!.querySelector('.nlmsg')!.textContent).toBe('gui.set.not_live')
+    /* Last child of the card, which is where appending to the host put it --
+       not tucked inside the row list. */
+    expect(live[1]!.lastElementChild!.className).toBe('nlmsg')
+    expect(live[1]!.querySelector('.tkrow .nlmsg')).toBeNull()
+    expect(live[0]!.querySelector('.nlmsg')).toBeNull()
   })
 })

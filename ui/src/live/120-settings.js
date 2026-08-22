@@ -17,28 +17,12 @@ DS.banner = {
 };
 
 /* The config settings.get returned. Keys arrive camelCased
-   (agents.defaults.reasoningEffort), one level per dot. V serves the legacy
-   rows that still read config through it (the capabilities tool rows); the
-   island gets the same object inside its snapshot. */
+   (agents.defaults.reasoningEffort), one level per dot. Handed to the island
+   inside its snapshot, which is now the only reader. */
 let RAW = {};
-V = (path, fallback) => {
-  const v = String(path).split('.').reduce((o, k) => (o == null ? o : o[k]), RAW);
-  return v == null || v === '' ? fallback : v;
-};
 
 let configPathLive = '~/.raven/config.json';
 let everosLive = null;
-
-/* The write half the legacy capabilities rows still use: one whitelisted
-   dotted key per control. Reload-then-redraw keeps every V() read honest
-   after a write. */
-settingsWrite = (key, value, el) => rpc.call('settings.set', { key, value })
-  .then(() => loadSettings())
-  .then(() => { if (setIsOpen()) drawSettings(); toast(T('gui.set.saved')); })
-  .catch((e) => {
-    toast(T('gui.plug.op_failed', { err: (e.data && e.data.detail) || e.message || e }));
-    if (setIsOpen()) drawSettings();
-  });
 
 async function loadEveros() {
   try {
@@ -76,6 +60,7 @@ async function loadProviders() {
 const settingsSnapshot = () => ({
   raw: RAW, configPath: configPathLive, everos: everosLive,
   providers: PROVIDERS, curProvider, model,
+  toolGroups: TOOL_GROUPS, tools: TOOLS,
 });
 
 const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;

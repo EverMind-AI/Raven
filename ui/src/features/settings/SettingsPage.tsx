@@ -6,7 +6,7 @@ import { deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
 import type { SettingsState } from './store'
-import type { EverosSection, ProviderRow } from './types'
+import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode } from 'react'
 
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
@@ -1139,6 +1139,160 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
 
 /* ---- assembly -------------------------------------------------------- */
 
+/* ---- the built-in tool inventory ------------------------------------------
+   Drawn here rather than handed back to the legacy capabilities module, which
+   is what the `renderToolset` shell verb used to do: the panel belongs to this
+   dialog, and a page that lends its own panel out cannot be read on its own.
+
+   Tools are a fixed inventory the agent ships with, not a store -- which is
+   why they sit under the agent here and not in a module for adding and
+   removing things.
+
+   Which tools take a credential, and where it is stored. These used to be a
+   separate settings page of four unexplained key fields; a key belongs on the
+   tool it unlocks, where "set / not set" reads next to the switch it gates. */
+const TOOL_CRED: Record<string, string> = {
+  web_search: 'tools.web.search.apiKey',
+  web_fetch: 'tools.web.jinaApiKey',
+  image_generate: 'tools.media.image.apiKey',
+  deep_research: 'tools.deepResearch.apiKey',
+}
+
+function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>; s: SettingsState }): JSX.Element {
+  const cred = TOOL_CRED[row.id]
+  /* The key's state rides on the row itself: a switched-on tool with no key
+     is the gap this chip exists to make visible. */
+  const keyOn = !!cred && !!V(raw, cred, '')
+  return (
+    <div className={'trow' + (row.on ? '' : ' off')}>
+      <div className="nm">
+        <span>{row.name}</span>
+        {row.danger && (
+          <span className="tag warn" style={{ fontSize: '10px' }}>
+            {t('gui.caps.mutates')}
+          </span>
+        )}
+        {cred && (
+          <span className={'kchip' + (keyOn ? '' : ' off')} style={{ fontSize: '10px' }}>
+            <span className="led" />
+            <span>{t(keyOn ? 'gui.set.tls.key_set' : 'gui.set.tls.key_unset')}</span>
+          </span>
+        )}
+      </div>
+      <div className="one" title={row.one}>
+        {row.one}
+      </div>
+      <div className="bdgs">
+        <span className={'kd' + (row.reach === 'auth' ? ' auth' : '')} title={shell().reachHint?.(row.reach)}>
+          {shell().reachText?.(row.reach)}
+        </span>
+      </div>
+      <div className="ctl">
+        {cred && (
+          <button className="mini ghost" onClick={() => store.toolKeyToggle(row.id)}>
+            {t(s.toolKeyEdit === row.id ? 'gui.set.mem.fold' : 'gui.caps.configure')}
+          </button>
+        )}
+        {row.needs ? (
+          /* No switch: the tool is withheld for want of a key, and a toggle
+             here would promise something the flip cannot deliver. The key is
+             the switch -- fill it and the tool registers itself on the next
+             start. */
+          <span className="pnote">{t('gui.caps.needs_key')}</span>
+        ) : (
+          <button
+            className="swi"
+            role="switch"
+            aria-checked={row.on}
+            aria-label={t('gui.caps.toggle_aria', { name: row.name })}
+            onClick={() => {
+              /* Assigned on the shared row, which is where the persistence
+                 lives: live mode defines `on` as an accessor that writes
+                 tools.disabledTools. Then a redraw, because the flip changed
+                 state React does not hold. */
+              row.on = !row.on
+              store.redraw()
+              shell().toast(t(row.on ? 'gui.caps.enabled_x' : 'gui.caps.disabled_x', { name: row.name }))
+            }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ToolCredRow({ path, raw, say }: { path: string; raw: Record<string, unknown>; say: () => void }): JSX.Element {
+  const box = useRef<HTMLInputElement>(null)
+  const on = !!V(raw, path, '')
+  const put = (v: string): void => {
+    void store.write(path, v).then((r) => {
+      if (r === 'notlive') say()
+    })
+  }
+  return (
+    <div className="tkrow tkey">
+      <span className={'kchip' + (on ? '' : ' off')}>
+        <span className="led" />
+        <span>{t(on ? 'gui.set.tls.key_set' : 'gui.set.tls.key_unset')}</span>
+      </span>
+      <input ref={box} type="password" placeholder="API Key" autoComplete="off" />
+      <button
+        className="mini"
+        onClick={() => {
+          const v = (box.current?.value || '').trim()
+          if (!v) {
+            box.current?.focus()
+            return
+          }
+          put(v)
+        }}
+      >
+        {t(on ? 'gui.model.update' : 'gui.plug.connect')}
+      </button>
+      {on && (
+        <button className="mini ghost" onClick={() => put('')}>
+          {t('gui.set.tls.clear')}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/* One group of the inventory. The refusal lands on the card rather than the
+   row, which is where the legacy nlSay put it -- a tool row has no `.crow`
+   above it, so the search for a host walked up to the `.scard`. */
+function ToolGroupCard({ g, rows, s }: { g: ToolGroup; rows: ToolRow[]; s: SettingsState }): JSX.Element {
+  const [nl, say] = useNl()
+  const on = rows.filter((r) => r.on).length
+  return (
+    <Scard title={t(g.label)} desc={t('gui.caps.tool_on', { on, all: rows.length })}>
+      <div className="fset">
+        {rows.map((r) => {
+          const cred = TOOL_CRED[r.id]
+          return (
+            <Fragment key={r.id}>
+              <ToolLine row={r} raw={s.snap.raw} s={s} />
+              {cred && s.toolKeyEdit === r.id && <ToolCredRow path={cred} raw={s.snap.raw} say={say} />}
+            </Fragment>
+          )
+        })}
+      </div>
+      {nl && <div className="nlmsg">{nl}</div>}
+    </Scard>
+  )
+}
+
+function ToolsetPage({ s }: { s: SettingsState }): JSX.Element {
+  return (
+    <>
+      {s.snap.toolGroups.map((g) => {
+        const rows = s.snap.tools.filter((r) => r.group === g.id)
+        return rows.length ? <ToolGroupCard key={g.id} g={g} rows={rows} s={s} /> : null
+      })}
+    </>
+  )
+}
+
 function PageBody({ tab, s }: { tab: string; s: SettingsState }): JSX.Element {
   switch (tab) {
     case 'look':
@@ -1163,6 +1317,8 @@ function PageBody({ tab, s }: { tab: string; s: SettingsState }): JSX.Element {
       return <ChannelPage s={s} />
     case 'data':
       return <DataPage s={s} />
+    case 'toolset':
+      return <ToolsetPage s={s} />
     default:
       return <UsagePage s={s} />
   }
@@ -1170,19 +1326,6 @@ function PageBody({ tab, s }: { tab: string; s: SettingsState }): JSX.Element {
 
 function Panel({ s }: { s: SettingsState }): JSX.Element {
   const tab = SET_TITLE[s.tab] ? s.tab : 'usage'
-  if (tab === 'toolset') {
-    /* The tool inventory stays a legacy renderer (the rows belong to the
-       capabilities module); the island only hands it the panel to fill. */
-    return (
-      <div
-        className="panel"
-        data-on="true"
-        ref={(el) => {
-          if (el) shell().renderToolset?.(el)
-        }}
-      />
-    )
-  }
   return (
     <div className="panel" data-on="true" style={tab === 'model' ? { animation: 'none' } : undefined}>
       <PageBody tab={tab} s={s} />
