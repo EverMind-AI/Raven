@@ -153,6 +153,10 @@ export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: st
   store.finishTurn(mainLane(), st, segs, time ?? null)
 }
 
+export function turnKept(): boolean {
+  return store.turnKept(mainLane())
+}
+
 export function history(messages: HistoryMessage[]): void {
   store.history(mainLane(), messages)
 }

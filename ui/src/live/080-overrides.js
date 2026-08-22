@@ -200,14 +200,20 @@ function liveSend(text) {
 
 /* A stop is not a failure: everything already streamed stays on the stage, and
    the only new line is the note that a person asked for the stop. Shared by
-   the button and by the cancelled event another client can cause. */
+   the button and by the cancelled event another client can cause.
+
+   The turn ends the same way a finished one does -- finishTurn promotes the
+   prose that streamed into the answer block. Sealing the open step instead
+   left that prose as narration, which the fold then closed over: the reader
+   pressed stop and watched the half-written answer disappear behind
+   "done", under a note saying the output was kept. */
 function softStop() {
   killStatus();
-  stopSayPaint();
-  if (live.st) live.st.seal();
-  collapseTurn(turnDur());
+  RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
   stop_(); busy = false;
-  noteRow(T('gui.halted'), '', { quiet: true, host: $('#stage') });
+  /* Only promise the output was kept when there is output above to keep. */
+  noteRow(T(RavenIslands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
+    { quiet: true, host: $('#stage') });
   resetTurnState();
   drawMeter(); goState(); drawList();
 }

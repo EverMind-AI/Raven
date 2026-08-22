@@ -1987,6 +1987,10 @@
       "en": "Stopped by user - the output above is kept",
       "zh": "用户手动停止 · 已输出内容保留"
     },
+    "gui.halted_bare": {
+      "en": "Stopped by user",
+      "zh": "用户手动停止"
+    },
     "gui.turn_died": {
       "en": "Turn failed - {e}",
       "zh": "回合中断 · {e}"

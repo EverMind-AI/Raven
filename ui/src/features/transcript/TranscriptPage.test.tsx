@@ -130,6 +130,148 @@ describe('transcript island, history', () => {
     expect($('.wkin .dtl .dhd .nm')?.textContent).toBe('pytest -q 2>&1 | tee out.log')
   })
 
+  /* The whole bug: the runtime's closing marker carries text for the MODEL to
+     read on the next turn, and counting it as model prose meant the turn's
+     real last words were no longer the last -- so they were drawn as
+     narration and the fold closed over them, under a note promising the
+     output above was kept. */
+  it("keeps a stopped turn's half-written answer where the reader watched it land", () => {
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'compare the three', timestamp: iso(t0) },
+        { role: 'assistant', text: 'I got as far as the first two:', timestamp: iso(t0 + 4000) },
+        {
+          role: 'assistant', text: '(turn cancelled by the user)',
+          turn_ended: { status: 'cancelled' }, timestamp: iso(t0 + 5000),
+        },
+      ])
+    })
+    expect($('.answer .prose')?.textContent).toBe('I got as far as the first two:')
+    /* Not behind the fold, and the marker's own text is never drawn as prose. */
+    expect($('.tfold')).toBeNull()
+    expect(document.body.textContent).not.toContain('cancelled by the user')
+    const notes = $$('.tnote')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]?.textContent).toContain('en:gui.halted')
+  })
+
+  it('keeps the answer when a runtime notice is what follows it', () => {
+    const t0 = Date.now() - 9000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'save that', timestamp: iso(t0) },
+        { role: 'assistant', text: 'saved it under notes/', timestamp: iso(t0 + 2000) },
+        /* A notice entry carries its prose as `text` because the model reads
+           it on the next turn -- that is what made it look like model prose
+           and pushed the answer above it into the fold. */
+        {
+          role: 'assistant', text: 'I stopped short of that one.',
+          notice: { kind: 'action_blocked', detail: 'needs approval' }, timestamp: iso(t0 + 3000),
+        },
+      ])
+    })
+    expect($('.answer .prose')?.textContent).toBe('saved it under notes/')
+    expect($('.tfold')).toBeNull()
+    expect(document.body.textContent).not.toContain('I stopped short of that one.')
+    expect($$('.tnote')).toHaveLength(1)
+  })
+
+  /* "The output above is kept" over a bare question is a promise about
+     nothing, and the reader reads it as the output having been lost. */
+  it('promises nothing was kept when a stop came before any output', () => {
+    const t0 = Date.now() - 3000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'never mind', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '(turn cancelled by the user)',
+          turn_ended: { status: 'cancelled' }, timestamp: iso(t0 + 500),
+        },
+      ])
+    })
+    expect($('.answer')).toBeNull()
+    /* The whole label, not a substring of it: 'gui.halted_bare' contains
+       'gui.halted', so a containment check passes for the wrong key too. */
+    expect($$('.tnote')[0]?.querySelector('.tx')?.textContent).toBe('en:gui.halted_bare')
+  })
+
+  /* A step boundary opens on every episode, and a notice clears the open step
+     outright, so the prose of a turn stopped later is in an EARLIER step. The
+     first version promoted only the open step, so live hid that prose while a
+     reload of the same turn showed it -- the two halves disagreeing again, one
+     case over. */
+  it('promotes the last prose of the turn, not only the open step\'s', () => {
+    act(() => { mount.ask('check the log') })
+    let first!: ReturnType<typeof mount.step>
+    let second!: ReturnType<typeof mount.step>
+    let third!: ReturnType<typeof mount.step>
+    act(() => {
+      first = mount.step()
+      first.setSay('let me check the log')
+      first.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'line1', 12)
+      first.seal()
+      /* A second episode that also said something, then a third with nothing:
+         the LAST prose of the turn is the answer, not the first. */
+      second = mount.step()
+      second.setSay('the pool is the problem')
+      second.tool('read_file', { path: '/tmp/b.log' }, null).done(true, 'line2', 9)
+      second.seal()
+      third = mount.step()
+    })
+    act(() => { mount.finishTurn(third, [first, second, third], '4s') })
+    expect($('.answer .prose')?.textContent).toBe('the pool is the problem')
+    /* And the earlier prose stays where it was said, inside the fold. */
+    expect($('.tfold')?.textContent).toContain('let me check the log')
+    /* And it lands AFTER the work it introduced, as a finished turn does. */
+    const order = [...document.querySelectorAll('.ask, .tfold, .answer')].map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'tfold', 'answer'])
+    expect(mount.turnKept()).toBe(true)
+  })
+
+  /* The replayed half of the same shape. A stopped turn's last prose usually
+     shares its message with the tool calls it introduced, and their results
+     come after it in the payload -- so emitting the answer on sight put it
+     ABOVE the work, the reverse of the live order. */
+  it('replays an answer that shares its message with tool calls in live order', () => {
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the log', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: 'let me check the log', timestamp: iso(t0 + 2000),
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1' },
+        {
+          role: 'assistant', text: '(turn cancelled by the user)',
+          turn_ended: { status: 'cancelled' }, timestamp: iso(t0 + 5000),
+        },
+      ])
+    })
+    expect($('.answer .prose')?.textContent).toBe('let me check the log')
+    const order = [...document.querySelectorAll('.ask, .tfold, .answer, .tnote')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'tfold', 'answer', 'tnote'])
+    /* The work is inside the fold, not lost with it. */
+    expect($('.tfold .tfb .wkin .wrow .vb')?.textContent).toBe('en:gui.act.v.read_file')
+  })
+
+  /* What the live stop path asks before it picks its label. */
+  it('reports whether the turn put anything on the stage', () => {
+    act(() => { mount.ask('do the thing') })
+    expect(mount.turnKept()).toBe(false)
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.setSay('starting on it') })
+    act(() => { mount.finishTurn(st, [st], '4s') })
+    expect(mount.turnKept()).toBe(true)
+    /* A note is the runtime talking, not the turn's output: it must not flip
+       the answer back to true for the NEXT stop. */
+    act(() => { mount.ask('and again') })
+    act(() => { mount.note('stopped', '', { quiet: true }) })
+    expect(mount.turnKept()).toBe(false)
+  })
+
   it('draws a stored notice and a died turn as quiet and loud note rows', () => {
     act(() => {
       mount.history([
