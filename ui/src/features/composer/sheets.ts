@@ -24,13 +24,28 @@
  * A detached sheet's document-level key handler is still live, which is the one
  * thing this scoping does not fix on its own. Each handler checks
  * `sheet.isConnected` for that reason: otherwise "1" typed in one conversation
- * would answer a question waiting in another.
+ * would answer a question waiting in another. Unregistering it when the sheet
+ * leaves for good is the rack's job, through the teardown below.
  */
 
 import { verb } from '../../shell/bridge'
 import { dockLift } from './store'
 
 const SHEETS = new Map<string, Set<HTMLElement>>()
+
+/* What to run when a sheet leaves the rack for good.
+
+   A sheet's element is not the whole sheet: a tenant may hold a document-level
+   key handler, and detaching the element does not unregister it. The rack is
+   the only place that knows every way a sheet leaves -- answered by the reader,
+   replaced by `dropClass`, or dropped with its conversation by `forget` -- so
+   the takedown is registered here rather than kept as a second copy of
+   who-owns-what beside this one. A tenant that tracked its own could only cover
+   the exits it is told about, and `forget` is not one of them.
+
+   A WeakMap, because a sheet the rack was never told to remove must still be
+   collectable. */
+const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 
 /* A draft is not a session yet -- the page's `cur` is null until the first
    message lands -- but a question can be asked during its first turn, so it
@@ -45,9 +60,10 @@ export const session = (): string => verb('sessionKey')() || '(draft)'
 
 const rack = (): HTMLElement => document.querySelector<HTMLElement>('#sheetRack') || document.body
 
-export function add(el: HTMLElement, key?: string): void {
+export function add(el: HTMLElement, key?: string, teardown?: () => void): void {
   const k = key || session()
   el.dataset.sess = k
+  if (teardown) TEARDOWN.set(el, teardown)
   let bucket = SHEETS.get(k)
   if (!bucket) SHEETS.set(k, (bucket = new Set()))
   bucket.add(el)
@@ -67,6 +83,14 @@ export function remove(el: HTMLElement): void {
     if (!bucket.size) SHEETS.delete(el.dataset.sess as string)
   }
   el.remove()
+  /* Dropped from the map before it is run, because a teardown typically ends in
+     the tenant's own close, which calls back in here. Clearing the entry first
+     makes that second pass find nothing rather than recurse. */
+  const down = TEARDOWN.get(el)
+  if (down) {
+    TEARDOWN.delete(el)
+    down()
+  }
   dockLift()
 }
 

@@ -24,22 +24,6 @@ export interface Approval {
   close(): void
 }
 
-/* The pending approval per conversation, as a function that takes it down.
-
-   Kept at all because the rack cannot: `dropClass` detaches the element, and the
-   element is not what holds the document key handler -- the closure around it
-   is. Without this, every replaced request left one inert listener behind for
-   the life of the page, and replacement is the normal path here: a second
-   request arrives while the first is still waiting.
-
-   Keyed, because one slot for the whole page is not the same scope as the rack
-   it stands in front of. A single slot made a request in one conversation
-   withdraw another conversation's pending question -- silently, with neither
-   callback run, leaving that turn paused on the server with no UI left that
-   could answer it. The rack files sheets per conversation; this has to agree
-   with it or it reaches sideways. */
-const pending = new Map<string, () => void>()
-
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K, cls?: string, text?: string,
 ): HTMLElementTagNameMap[K] => {
@@ -58,11 +42,10 @@ export function open(prompt: string, onAllow?: () => void, onDeny?: () => void):
 
   /* One question at a time in THIS conversation: a new request replaces the
      pending one rather than stacking a second sheet the reader has to answer
-     twice. Two steps, because they retire different things -- the pending
-     approval is withdrawn through its own close, which unregisters its handler,
-     and the class sweep then clears any other sheet of this kind in the same
-     bucket (the clarify question wears `.csheet` too). */
-  pending.get(key)?.()
+     twice. One sweep does it: every sheet of this kind in this bucket goes,
+     including a pending approval and a clarify question, which wears `.csheet`
+     too -- and each goes down through the rack's teardown, so the one that was
+     holding a key handler unregisters it on the way out. */
   dropClass('csheet', key)
 
   const sheet = el('div', 'csheet perm')
@@ -74,7 +57,6 @@ export function open(prompt: string, onAllow?: () => void, onDeny?: () => void):
   const close = (fn?: () => void): void => {
     if (answered) return
     answered = true
-    if (pending.get(key) === withdraw) pending.delete(key)
     document.removeEventListener('keydown', onKey, true)
     sheetRemove(sheet)
     if (fn) fn()
@@ -121,8 +103,10 @@ export function open(prompt: string, onAllow?: () => void, onDeny?: () => void):
   }
   document.addEventListener('keydown', onKey, true)
 
-  pending.set(key, withdraw)
-  sheetAdd(sheet, key)
+  /* The withdrawal handed to the rack, not kept here: the rack sees every exit
+     -- including the conversation being deleted, which never reaches this
+     module -- and a second copy of who-owns-what could only disagree with it. */
+  sheetAdd(sheet, key, withdraw)
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
   return { close: withdraw }

@@ -212,4 +212,62 @@ describe('the sheet rack', () => {
     window.RavenShell = { ...window.RavenShell!, sessionKey: undefined }
     expect(() => add(sheet())).toThrow('RavenShell.sessionKey is not wired')
   })
+
+  /* The takedown a tenant registers on the way in. What makes it the rack's
+     job and not the tenant's is the set of exits: a sheet leaves by being
+     answered, by being replaced, or with its whole conversation -- and only
+     this module is on the path of all three. */
+  describe('the takedown a sheet registers', () => {
+    it('runs when the sheet is removed, and only for that sheet', () => {
+      const ran: string[] = []
+      const a = sheet()
+      const b = sheet()
+      add(a, undefined, () => ran.push('a'))
+      add(b, undefined, () => ran.push('b'))
+      remove(a)
+      expect(ran).toEqual(['a'])
+    })
+
+    it('runs when a class sweep retires the sheet', () => {
+      const ran: string[] = []
+      add(sheet('csheet'), undefined, () => ran.push('swept'))
+      dropClass('csheet')
+      expect(ran).toEqual(['swept'])
+    })
+
+    /* The exit a tenant cannot see. Deleting a conversation never reaches the
+       sheet that was filed under it, so a tenant keeping its own book of
+       takedowns leaves this one un-run -- which is what a document-level key
+       handler outliving its question looks like. */
+    it('runs when the conversation is forgotten, mounted or not', () => {
+      const ran: string[] = []
+      add(sheet(), 'a', () => ran.push('here'))
+      add(sheet(), 'b', () => ran.push('away'))
+      forget('a')
+      expect(ran).toEqual(['here'])
+      forget('b')
+      expect(ran).toEqual(['here', 'away'])
+    })
+
+    /* A takedown that calls back into remove() -- which is the normal shape,
+       since a tenant's close ends there -- must not run twice or recurse. */
+    it('runs once, even when it removes the sheet again itself', () => {
+      let ran = 0
+      const s = sheet()
+      add(s, undefined, () => {
+        ran += 1
+        remove(s)
+      })
+      remove(s)
+      expect(ran).toBe(1)
+    })
+
+    /* Sheets without one are the common case: the dag card has nothing to
+       unregister. */
+    it('is optional', () => {
+      const s = sheet()
+      add(s)
+      expect(() => remove(s)).not.toThrow()
+    })
+  })
 })

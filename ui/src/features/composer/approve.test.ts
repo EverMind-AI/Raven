@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { open } from './approve'
-import { _resetForTests, session, sync } from './sheets'
+import { _resetForTests, forget, session, sync } from './sheets'
 
 import type { Shell } from '../../shell/bridge'
 
@@ -187,7 +187,7 @@ describe('the approval sheet', () => {
      door it needs is a teardown the rack invokes on removal rather than
      bookkeeping kept out here. Named rather than asserted, because the fix is a
      change to the rack. */
-  it('unregisters its key handler on every exit that goes through close', () => {
+  it('unregisters its key handler on every exit, the one the rack owns included', () => {
     type Listener = EventListenerOrEventListenerObject
     const live = new Set<Listener>()
     const realAdd = document.addEventListener.bind(document)
@@ -215,10 +215,44 @@ describe('the approval sheet', () => {
       open('replaced', () => {}, () => {})
       open('replacing', () => {}, () => {})
       expect(live.size).toBe(1)
+
+      /* The exit this module is not told about: the conversation is deleted
+         while its question is still on screen. `forget` removes the sheet
+         straight from the rack, so nothing here runs unless the rack runs it --
+         which is the whole reason the takedown is registered there. */
+      forget(session())
+      expect(live.size).toBe(0)
     } finally {
       document.addEventListener = realAdd
       document.removeEventListener = realRemove
     }
+  })
+
+  /* Deleting the conversation is not answering the question: neither callback
+     may run, and nothing may be left listening on behalf of a conversation that
+     no longer exists. */
+  it('takes a pending question down with its conversation, answering neither way', () => {
+    const said: string[] = []
+    open('mid-question', () => said.push('allow'), () => said.push('deny'))
+    expect(sheets().length).toBe(1)
+    forget('a')
+    expect(sheets().length).toBe(0)
+    expect(said).toEqual([])
+    /* And the keyboard is no longer answering for it. */
+    key('1')
+    expect(said).toEqual([])
+  })
+
+  /* The teardown ends in this module's own close, which calls back into the
+     rack's remove. Whatever order those two do their work in, one pass has to
+     be the end of it. */
+  it('takes a sheet down once, though its takedown re-enters the rack', () => {
+    let ran = 0
+    const a = open('once', () => { ran += 1 }, () => { ran += 1 })
+    a.close()
+    a.close()
+    expect(ran).toBe(0)
+    expect(sheets().length).toBe(0)
   })
 
   it('names itself for a screen reader and takes the focus', () => {
