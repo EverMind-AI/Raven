@@ -214,6 +214,8 @@ function softStop() {
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(T(RavenIslands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') });
+  /* A stopped turn still produced what it produced. */
+  RavenIslands.transcript.artifacts(WS.turn);
   resetTurnState();
   drawMeter(); goState(); drawList();
 }

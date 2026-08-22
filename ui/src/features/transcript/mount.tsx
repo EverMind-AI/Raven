@@ -153,6 +153,12 @@ export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: st
   store.finishTurn(mainLane(), st, segs, time ?? null)
 }
 
+/* The turn's products, as its closing line. The turn number is the workspace
+   record's own; the list is read from the source when the tiles draw. */
+export function artifacts(turn: number): void {
+  store.artifacts(mainLane(), turn)
+}
+
 export function turnKept(): boolean {
   return store.turnKept(mainLane())
 }

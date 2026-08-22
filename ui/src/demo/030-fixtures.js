@@ -170,6 +170,24 @@ const stateText = (st) => T((STATE_TXT[st] || STATE_TXT.off).t);
 /* ══ scripted runs ════════════════════════════════════════════════ */
 const NOKEY = 'Error: web search is not configured (no API key)';
 
+/* What the GTM run writes out, so the products bar in demo mode shows a
+   miniature of a real document rather than a placeholder for one. */
+const GTM_DOC = `## GTM Agent 赛道对比
+
+抓取自三家官网，2026-08。
+
+| 产品 | 定位 | 核心能力 |
+| --- | --- | --- |
+| Clay | 数据编排 | 100+ 数据源做线索富化 |
+| 11x | 数字销售代表 | 全自动外呼与跟进 |
+| Unify | 意图信号 | 网站访客到线索的意图判定 |
+
+### 判断
+
+三家都在把整条链路交给 agent 自动跑，差异在起点：Clay 从数据起，11x 从触达起，
+Unify 从信号起。
+`;
+
 const ANSWER_GTM = `## GTM Agent 赛道速览
 
 抓取了三家代表产品的官网。**共同点是把「找线索 → 判断意图 → 个性化触达」整条链路交给 agent 自动跑**，而不再只卖数据或模板。
@@ -237,6 +255,8 @@ const RUNS = {
       { t:'t-', d:900, id:5, ok:true, r:'{"status":200,"extractor":"jina-reader","length":3960}', ms:900 },
       { t:'ep', d:420 },
       { t:'think', d:850, s:5, x:'三家数据够了，整理成对比表，再给趋势判断。要标注搜索没跑，融资数字可能滞后。' },
+      { t:'t+', d:260, id:6, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
+      { t:'t-', d:340, id:6, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:340 },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 一处存疑
@@ -282,6 +302,8 @@ const RUNS = {
         r:`DAG ${DAG_RUN}: 4 个节点全部完成` },
       { t:'ep', d:400 },
       { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
+      { t:'t+', d:240, id:6, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
+      { t:'t-', d:320, id:6, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:320 },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 可信度

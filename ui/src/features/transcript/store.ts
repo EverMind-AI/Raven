@@ -2,9 +2,11 @@ import * as dagNodes from '../dag/nodes'
 import { ds, shell, t, verb } from '../../shell/bridge'
 import { md } from '../../shell/prose'
 
+import type { WsChange } from '../workspace/types'
 import type {
-  AnswerData, AskData, CallData, CallHandle, DeliveredData, FoldData, HistoryMessage,
-  Hunk, Lane, NoteData, NoteHandle, QaData, Seg, StatusData, StepData, StepHandle, TranscriptSource,
+  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
+  DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
+  StatusData, StepData, StepHandle, TranscriptSource,
 } from './types'
 import type { Shell } from '../../shell/bridge'
 
@@ -17,6 +19,63 @@ import type { Shell } from '../../shell/bridge'
  */
 
 export const source = (): TranscriptSource => ds<TranscriptSource>('transcript')
+
+/* Tolerated missing rather than thrown on: a page that has installed no
+   artifacts source has no products to show, and the bar is drawn from the same
+   boot sequence that installs it. */
+export function artifactsSource(): ArtifactsSource {
+  try {
+    return ds<ArtifactsSource>('artifacts')
+  } catch {
+    return { changes: () => [] }
+  }
+}
+
+/* The file's own first lines, out of the row the workspace record already
+   holds. A write tool's hunk IS what it wrote -- hunkFromWrite keeps the first
+   forty lines as rows and folds the rest into one gap row -- so a text product
+   draws a miniature of itself with nothing fetched, live and on replay both
+   (session.resume carries the write's arguments, and the panel's replay
+   rebuilds the same hunk from them). Null when the row carries no content, and
+   then the tile shows the file's kind rather than inventing a picture. */
+export function artifactHead(c: WsChange): string | null {
+  const out: string[] = []
+  for (const h of c.hunks || []) {
+    for (const r of h.rows || []) {
+      if (r[0] === 'add') out.push(String(r[1] == null ? '' : r[1]))
+      else if (r[0] === 'gap' && Array.isArray(r[1])) for (const l of r[1]) out.push(String(l))
+    }
+  }
+  return out.length ? out.join('\n') : null
+}
+
+/* A product is a file the turn WROTE. An edit is not one: a change inside a
+   file that already existed is what the workspace panel's diff view is for,
+   and a second entrance to the same review is a second thing to keep in step.
+   `kind` already draws that line -- the record promotes a row to 'write' the
+   moment a write tool touches it -- so no list of extensions has to guess
+   which files count as documents. */
+export function artifactsOf(turn: number): ArtifactRow[] {
+  let rows: WsChange[] = []
+  try {
+    rows = artifactsSource().changes(turn) || []
+  } catch {
+    return []
+  }
+  return rows.filter((c) => c && c.kind === 'write').map((c) => {
+    const shown = `${c.dir || ''}${c.name || ''}` || String(c.key || '')
+    const name = String(c.name || shown)
+    const dot = name.lastIndexOf('.')
+    return {
+      path: String(c.key || ''),
+      dir: String(c.dir || ''),
+      name,
+      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
+      head: artifactHead(c),
+      lines: c.add || 0,
+    }
+  })
+}
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
@@ -300,6 +359,23 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 
 export function delivered(lane: Lane, p: { label: string; isDag: boolean; err: boolean; open: () => void }): void {
   push(lane, { v: 0, id: nextId(), kind: 'sdlv', ...p } satisfies DeliveredData)
+}
+
+/* The turn's products, as its closing line. Appended once the turn is over and
+   only when it produced something: a bar reading "0 products" is furniture the
+   reader learns to skip, and then skips on the turn that had some.
+
+   Nothing is copied in. The row list is read from the source when the tiles
+   draw, so a reload -- which rebuilds the workspace record from history -- and
+   a live turn cannot disagree about what a turn produced. */
+export function artifacts(lane: Lane, turn: number): void {
+  if (!artifactsOf(turn).length) return
+  push(lane, { v: 0, id: nextId(), kind: 'arts', turn, all: false } satisfies ArtsData)
+}
+
+export function toggleArts(lane: Lane, seg: ArtsData): void {
+  seg.all = !seg.all
+  bump(lane, seg)
 }
 
 export function status(lane: Lane, text: string): void {
@@ -892,6 +968,15 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
      the reverse of the order the same turn ends in live, where finishTurn
      inserts the answer past the step. */
   let held: { text: string; when: string | null } | null = null
+  /* The turn number the workspace record files a change under, counted the way
+     it counts them: one per user message with text (wsOnHistory in
+     demo/100-workspace.js does exactly this, over these same messages). Two
+     readers of one numbering rather than a number passed between them, because
+     the panel's replay and this one are separate entry points on the same
+     payload -- but that makes the rule itself the contract, so it is stated
+     here and there in the same words. */
+  let turnNo = 0
+  /* The fold and the answer the turn was holding. */
   const closeTurn = (endAt: number): void => {
     foldClose(endAt)
     if (held) {
@@ -899,10 +984,18 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
       held = null
     }
   }
+  /* The products, last. Two call sites, and every turn reaches exactly one:
+     the next question closes the turn before it, and the end of the payload
+     closes the final one. Neither runs before the note a stop marker leaves,
+     which is the order softStop appends them in live -- the note, then the
+     products. */
+  const closeProducts = (): void => { artifacts(lane, turnNo) }
   messages.forEach((m, i) => {
     if (m.role === 'user' && m.text && m.text.trim()) {
       sealTools()
       closeTurn(msOf(m.timestamp))
+      closeProducts()
+      turnNo += 1
       turnAt = msOf(m.timestamp)
       askText(lane, m.text, stamp(m.timestamp as string))
       return
@@ -965,7 +1058,9 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
     }
   })
   sealTools()
+  /* The last turn has no following question to close it. */
   closeTurn(0)
+  closeProducts()
 }
 
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the

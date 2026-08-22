@@ -362,6 +362,7 @@ window.RavenIslands = {
     foldRuns: transcript.foldRuns,
     finishTurn: transcript.finishTurn,
     turnKept: transcript.turnKept,
+    artifacts: transcript.artifacts,
     history: transcript.history,
     delivered: transcript.delivered,
     dagFeed: transcript.dagFeed,

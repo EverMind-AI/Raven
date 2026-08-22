@@ -4,12 +4,15 @@ import { flushSync } from 'react-dom'
 import * as dag from '../dag/graph'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
-import { openPath as wsOpenPath } from '../workspace/store'
+import {
+  RENDERED as WS_RENDERED, fileKind, fileURL, openPath as wsOpenPath,
+} from '../workspace/store'
 import * as store from './store'
 
 import type { DagNode } from '../dag/types'
 import type {
-  AnswerData, AskData, CallData, DeliveredData, FoldData, Lane, NoteData, QaData, Seg, StatusData, StepData,
+  AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, FoldData, Lane,
+  NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
 import * as lightbox from '../../shell/lightbox'
@@ -898,6 +901,130 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
   )
 })
 
+/* ── the turn's products ───────────────────────────────────────────────
+   A turn that wrote files ends with them. As tiles rather than a list of
+   names, because four documents out of one turn read as four identical names
+   and as four different miniatures -- that difference is what the extra
+   height buys. */
+
+const ART_CAP = 6
+/* How many of the file's own lines a miniature draws. More than fills the
+   tile at this scale; the rest would be rendered and then clipped. */
+const ART_HEAD_LINES = 16
+/* Above this an image is not worth fetching whole to paint 164 pixels of it,
+   and the tile shows its kind instead. There is no thumbnailer to ask -- the
+   gateway's /file serves the file itself -- so this ceiling is the only guard
+   between a tile and an eight-megabyte screenshot. */
+const ART_IMG_MAX = 2 * 1024 * 1024
+
+/* Text draws itself with nothing to wait for: a write tool's hunk already
+   carried what it wrote, live and on replay both, so `head` is in memory
+   before the tile mounts.
+
+   Markdown goes through the renderer the full-size viewer uses, and the
+   result is SCALED by the stylesheet. Not set in a smaller font: shrinking
+   the type re-wraps every line and stops a heading from being a heading, so
+   what the tile showed would be a different document from the one it names. */
+const ArtMini = memo(function ArtMini({ row }: { row: ArtifactRow }): ReactElement {
+  if (!row.head) return <span className="pic none"><Ico d={ACT_ICO.doc as string} cls="fi" /></span>
+  const head = row.head.split('\n').slice(0, ART_HEAD_LINES).join('\n')
+  if (fileKind(row.name) === 'md') {
+    return (
+      <span className="pic doc">
+        <span className="mini prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(head) }} />
+      </span>
+    )
+  }
+  return <span className="pic doc"><span className="mini"><span className="raw">{head}</span></span></span>
+})
+
+/* An image has to come down the wire, so this is the tile that can be slow.
+   It asks for the size first -- a HEAD on the same URL, no RPC of its own --
+   and only then decides whether to fetch the picture at all. Both waits are
+   covered by the skeleton: a tile that jumps from blank to full reads as the
+   page having been broken until that moment. */
+const ArtShot = memo(function ArtShot({ row }: { row: ArtifactRow }): ReactElement {
+  const [st, setSt] = useState<'probe' | 'load' | 'ok' | 'no'>('probe')
+  const url = fileURL(row.path)
+  useEffect(() => {
+    let alive = true
+    /* HEAD on the same URL the picture would come from. The response carries
+       Content-Length and no body, so asking costs one round trip and no
+       bytes -- and a page that cannot serve the file answers 401 or 404 here
+       rather than after a megabyte. */
+    fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+      .then((r) => {
+        if (!alive) return
+        const n = Number(r.headers.get('content-length'))
+        setSt(!r.ok || (Number.isFinite(n) && n > ART_IMG_MAX) ? 'no' : 'load')
+      })
+      .catch(() => { if (alive) setSt('no') })
+    return () => { alive = false }
+  }, [url])
+  if (st === 'no') return <span className="pic none"><Ico d={ACT_ICO.image as string} cls="fi" /></span>
+  return (
+    <span className={'pic shot' + (st === 'ok' ? '' : ' skel')}>
+      {st === 'probe' ? null : (
+        <img src={url} alt="" loading="lazy" decoding="async"
+          onLoad={() => setSt('ok')} onError={() => setSt('no')} />
+      )}
+      {st === 'ok' ? null : <span className="sk" />}
+    </span>
+  )
+})
+
+const ArtTile = memo(function ArtTile({ row, onOpen }: { row: ArtifactRow; onOpen: () => void }): ReactElement {
+  /* Where it opens, said before the click: a kind the page renders opens in
+     the viewer, a kind it cannot read leaves for the host. */
+  const kind = fileKind(row.name)
+  const away = !WS_RENDERED[kind]
+  return (
+    <div className="atile" title={row.path}>
+      {kind === 'img' || kind === 'svg' ? <ArtShot row={row} /> : <ArtMini row={row} />}
+      <span className="cap">
+        <span className="nm">{row.name}</span>
+        <span className="mt">
+          {row.ext ? row.ext.toUpperCase() : t('gui.arts.file')}
+          {row.lines ? ` \u00b7 ${t('gui.arts.lines', { n: String(row.lines) })}` : ''}
+        </span>
+        {away ? <span className="away">{t('gui.arts.away')}</span> : null}
+      </span>
+      {/* The whole tile is the target; a covering button keeps that one
+          keyboard stop and one accessible name, and leaves the picture free
+          to be block content a <button> may not contain. */}
+      <button className="hit" aria-label={t('gui.arts.open', { f: row.name })} onClick={onOpen} />
+    </div>
+  )
+})
+
+const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
+  useSeg(lane, seg)
+  const rows = store.artifactsOf(seg.turn)
+  /* Read, not stored -- so a turn whose products the source no longer knows
+     about draws nothing rather than a bar of dead names. */
+  if (!rows.length) return null
+  const shown = seg.all ? rows : rows.slice(0, ART_CAP)
+  const rest = rows.length - shown.length
+  return (
+    <div className="arts">
+      <div className="ahd">
+        <span className="lb">{t('gui.arts.head')}</span>
+        <span className="n">{rows.length}</span>
+      </div>
+      <div className="atiles">
+        {shown.map((r) => (
+          <ArtTile key={r.path} row={r} onOpen={() => wsOpenPath(r.path)} />
+        ))}
+        {rest > 0 ? (
+          <button className="amore" onClick={() => store.toggleArts(lane, seg)}>
+            {t('gui.arts.more', { n: String(rest) })}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+})
+
 const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldData }): ReactElement {
   useSeg(lane, seg)
   const headRef = useRef<HTMLButtonElement | null>(null)
@@ -928,6 +1055,7 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
     case 'qa': return <QaView lane={lane} seg={seg} />
     case 'status': return <StatusView lane={lane} seg={seg} />
     case 'sdlv': return <DeliveredView lane={lane} seg={seg} />
+    case 'arts': return <ArtsView lane={lane} seg={seg} />
     case 'fold': return <FoldView lane={lane} seg={seg} />
     default: return null
   }

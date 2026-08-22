@@ -1991,6 +1991,30 @@
       "en": "Stopped by user",
       "zh": "用户手动停止"
     },
+    "gui.arts.head": {
+      "en": "Produced",
+      "zh": "本轮产物"
+    },
+    "gui.arts.open": {
+      "en": "Open {f}",
+      "zh": "打开 {f}"
+    },
+    "gui.arts.more": {
+      "en": "{n} more",
+      "zh": "还有 {n} 个"
+    },
+    "gui.arts.lines": {
+      "en": "{n} lines",
+      "zh": "{n} 行"
+    },
+    "gui.arts.file": {
+      "en": "FILE",
+      "zh": "文件"
+    },
+    "gui.arts.away": {
+      "en": "opens outside",
+      "zh": "交给应用打开"
+    },
     "gui.turn_died": {
       "en": "Turn failed - {e}",
       "zh": "回合中断 · {e}"

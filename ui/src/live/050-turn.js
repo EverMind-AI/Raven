@@ -208,6 +208,10 @@ function finishTurn(usage) {
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
   RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
+  /* The turn's products close it, after the answer and after any note: the
+     bar is the last line of a turn, and it is only drawn once the turn is
+     over -- nothing grows it mid-flight. */
+  RavenIslands.transcript.artifacts(WS.turn);
   busy = false;
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */
