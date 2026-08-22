@@ -6,6 +6,7 @@ All tests run without boxlite installed and without KVM/Hypervisor access.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -224,6 +225,143 @@ class TestDirectExecutor:
         result = await e.exec("sleep 10", timeout=1)
         assert result.exit_code == -1
         assert "Timed" in result.stderr
+
+    async def test_cancel_kills_the_whole_process_group(self, tmp_path):
+        """A cancelled exec must leave nothing of the command running.
+
+        The assertion is on a *grandchild*, which is the only thing that tells
+        the fix apart from what it replaced: ``sh -c "sleep 30 & wait"`` runs the
+        sleep as a child of the shell, so killing the shell alone leaves the
+        sleep running, holding the pipes and the workspace. Only ``killpg``
+        reaches it.
+        """
+        pid_file = tmp_path / "grandchild.pid"
+        e = DirectExecutor()
+        command = f"sleep 30 & echo $! > {pid_file}; wait"
+        task = asyncio.create_task(e.exec(command, timeout=60))
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+        else:
+            task.cancel()
+            pytest.fail("the command never reported its grandchild pid")
+
+        grandchild = int(pid_file.read_text().strip())
+        os.kill(grandchild, 0)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+        else:
+            os.kill(grandchild, 9)
+            pytest.fail(f"grandchild {grandchild} survived the cancel")
+
+    async def test_kill_falls_back_to_process_kill_without_killpg(self, monkeypatch):
+        """Windows has no killpg and no SIGKILL, and ignores start_new_session.
+
+        The fallback keeps the reach this had before the group kill was added,
+        rather than raising AttributeError on every timeout and cancellation.
+        """
+        monkeypatch.delattr(os, "killpg", raising=False)
+        process = MagicMock()
+
+        DirectExecutor._kill_process_group(process, 1234)
+
+        process.kill.assert_called_once_with()
+
+    async def test_the_windows_fallback_tolerates_a_process_already_reaped(self, monkeypatch):
+        """On win32 ``Process.kill()`` itself raises once the process is gone.
+
+        ``BaseSubprocessTransport._check_proc`` raises ``ProcessLookupError``
+        after ``_proc`` is cleared, and it is cleared by the same callback that
+        wakes ``wait()`` -- so a cancellation arriving one loop iteration after
+        the process finished hits exactly that. Unguarded, the error would leave
+        this frame in place of the ``CancelledError``, and the caller's
+        ``except Exception`` would report a failed tool call for a turn that was
+        cancelled.
+
+        The previous case uses a ``MagicMock``, whose ``kill()`` never raises,
+        so this shape was the one the fallback was not covered for.
+        """
+        monkeypatch.delattr(os, "killpg", raising=False)
+        process = MagicMock()
+        process.kill.side_effect = ProcessLookupError
+
+        DirectExecutor._kill_process_group(process, 1234)
+
+        process.kill.assert_called_once_with()
+
+    async def test_kill_tolerates_a_group_that_is_already_gone(self, monkeypatch):
+        """The group can exit between the cancellation and the signal.
+
+        That race is the normal ending of a short command, not a failure, so it
+        must not turn into an exception on the way out of a cancelled turn.
+        """
+
+        def _gone(pgid, sig):
+            raise ProcessLookupError
+
+        monkeypatch.setattr(os, "killpg", _gone)
+
+        DirectExecutor._kill_process_group(MagicMock(), 1234)
+
+    async def test_a_second_cancellation_does_not_mask_the_first(self, monkeypatch):
+        """A repeat cancel interrupts the reap; the kill has already landed.
+
+        Driven with a process whose ``wait()`` never returns, so the reap is
+        still in flight when the second cancellation arrives -- the same shape a
+        shutdown path that cancels twice produces, without waiting out the 5s
+        guard for real.
+        """
+        killed: list[int] = []
+        process = MagicMock()
+        process.pid = 4321
+        process.returncode = None
+
+        async def _never(*a, **kw):
+            await asyncio.Event().wait()
+
+        process.communicate = _never
+        process.wait = _never
+
+        async def _fake_spawn(*a, **kw):
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_spawn)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append(pgid))
+
+        task = asyncio.create_task(DirectExecutor().exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert killed == [4321], "the group must be signalled before the reap is abandoned"
+
+    async def test_cancel_propagates_rather_than_being_swallowed(self):
+        """The kill must not turn a cancellation into a normal return.
+
+        ``ToolRegistry.execute`` distinguishes "the turn was cancelled" from
+        "the tool answered" only by the exception, so swallowing it here would
+        report a fabricated result for work that never finished.
+        """
+        e = DirectExecutor()
+        task = asyncio.create_task(e.exec("sleep 30", timeout=60))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     async def test_exec_env(self):
         e = DirectExecutor()
@@ -550,6 +688,65 @@ class TestBoxliteExecTimeout:
         result = await executor.exec("cmd", timeout=1)
         assert result.exit_code == -1
         execution.kill.assert_awaited_once()
+
+
+class TestBoxliteExecCancel:
+    @staticmethod
+    def _wedged_executor(tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=60)
+        execution = _make_mock_execution()
+        execution.stdout.return_value = _infinite_stream()
+        execution.stderr.return_value = _infinite_stream()
+
+        async def _slow_wait():
+            await asyncio.sleep(30)
+            return MagicMock(exit_code=0)
+
+        execution.wait = AsyncMock(side_effect=_slow_wait)
+        mock_box = MagicMock()
+        mock_box.exec = AsyncMock(return_value=execution)
+        executor._box = mock_box
+        return executor, execution
+
+    async def test_cancel_kills_the_vm_side_execution(self, tmp_path):
+        """A cancelled turn must stop the command inside the VM, not just drop it."""
+        executor, execution = self._wedged_executor(tmp_path)
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        execution.kill.assert_awaited_once()
+
+    async def test_cancel_tolerates_a_failing_kill(self, tmp_path):
+        """A kill that fails must not replace the cancellation with its own error.
+
+        The VM can already be gone by the time the turn is cancelled; reporting
+        that as the reason the turn ended would be wrong twice over.
+        """
+        executor, execution = self._wedged_executor(tmp_path)
+        execution.kill = AsyncMock(side_effect=RuntimeError("box is gone"))
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        execution.kill.assert_awaited_once()
+
+    async def test_cancel_still_raises_after_the_kill(self, tmp_path):
+        """The cleanup must not convert a cancellation into a returned result."""
+        executor, _ = self._wedged_executor(tmp_path)
+
+        task = asyncio.create_task(executor.exec("cmd", timeout=60))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
 
 
 async def _infinite_stream():
