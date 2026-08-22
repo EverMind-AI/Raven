@@ -30,6 +30,9 @@ export interface SettingsState {
   epoch: number
   mdlAdv: boolean
   memEdit: string | null
+  /* The tool whose credential editor is unfolded, one at a time. In the store
+     rather than the component because every draw remounts the panel. */
+  toolKeyEdit: string | null
   /* undefined = never answered (drawn as loading), null = no counter behind
      the page (the demo's no-data note). */
   usage: UsageStats | null | undefined
@@ -42,11 +45,15 @@ export interface SettingsState {
 
 const initial = (): SettingsState => ({
   tab: 'usage',
-  snap: { raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [], curProvider: '', model: '' },
+  snap: {
+    raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [],
+    curProvider: '', model: '', toolGroups: [], tools: [],
+  },
   loaded: false,
   epoch: 0,
   mdlAdv: false,
   memEdit: null,
+  toolKeyEdit: null,
   usage: undefined,
   provOpen: null,
   provAll: false,
@@ -153,6 +160,10 @@ export async function everosSave(section: string, fields: Record<string, string>
 
 export function memEditSet(sec: string): void {
   set({ memEdit: state.memEdit === sec ? null : sec, epoch: state.epoch + 1 })
+}
+
+export function toolKeyToggle(id: string): void {
+  set({ toolKeyEdit: state.toolKeyEdit === id ? null : id, epoch: state.epoch + 1 })
 }
 
 export function advToggle(): void {

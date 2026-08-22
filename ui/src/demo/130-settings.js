@@ -23,11 +23,6 @@ window.sTab = 'usage';
 // and the About card both render this as "--" rather than as a guess.
 let APP_VERSION = null;
 
-/* Config reads for the LEGACY rows that remain (the capabilities page's tool
-   rows): the demo answers with the fallback, live.js overrides V to read the
-   config it pulled over settings.get. The island reads its own snapshot. */
-let V = (path, fallback) => fallback;
-
 /* Real writes that only the live layer can perform. The demo keeps a local
    effect so the shell stays explorable; live.js swaps in the RPC. */
 let checkUpdate = () => notLive();
@@ -57,10 +52,6 @@ function nlSay(el, reset, msg) {
   setTimeout(() => m.remove(), 3600);
 }
 const notLive = () => toast(T('gui.set.not_live'));
-
-/* live.js points settingsWrite at the settings.set RPC; the capabilities
-   rows fall back to the tagged refusal while it is null. */
-let settingsWrite = null;
 
 /* ---- appearance -----------------------------------------------------
    Each front end's own business, so it persists here rather than in the
@@ -145,31 +136,6 @@ function ntfPush(title, body, opts) {
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 const modKey = () => (isMac() ? '⌘' : 'Ctrl +');
 
-/* ---- the built-in tool inventory --------------------------------------
-   Grouped by what it touches; no add and no remove. The rows themselves
-   (toolLine / toolCredRow) belong to the capabilities module; the island
-   hands this the panel to fill. */
-function renderToolset(host) {
-  host.innerHTML = '';
-  TOOL_GROUPS.forEach((g) => {
-    const items = TOOLS.filter((t) => t.group === g.id);
-    if (!items.length) return;
-    const on = items.filter((t) => t.on).length;
-    const c = mk('div', 'scard');
-    const h = mk('div', 'ch');
-    h.appendChild(mk('div', 't', T(g.label)));
-    h.appendChild(mk('div', 'd', T('gui.caps.tool_on', { on, all: items.length })));
-    c.appendChild(h);
-    const set = mk('div', 'fset');
-    items.forEach((t) => {
-      set.appendChild(toolLine(t));
-      if (TOOL_CRED[t.id] && toolKeyEdit === t.id) set.appendChild(toolCredRow(t, TOOL_CRED[t.id]));
-    });
-    c.appendChild(set);
-    host.appendChild(c);
-  });
-}
-
 /* The draw shim every caller keeps: the boot list, the chrome, redrawAll,
    and the capabilities rows. */
 function drawSettings() {
@@ -192,6 +158,7 @@ DS.settings ??= {
   load: async () => ({
     raw: {}, configPath: '~/.raven/config.json', everos: null,
     providers: PROVIDERS, curProvider: '', model,
+    toolGroups: TOOL_GROUPS, tools: TOOLS,
   }),
   set: async () => { throw { notLive: true }; },
   everosSet: async () => { throw { notLive: true }; },
