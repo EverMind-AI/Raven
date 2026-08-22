@@ -90,6 +90,8 @@ afterEach(() => {
      declared after it. */
   store.FT.hide = false
   store.FT.w = 208
+  localStorage.clear()
+  store._resetAppsForTests()
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -177,6 +179,146 @@ describe('workspace island', () => {
     })
     expect(state.ws.file?.path).toBe('/repo/src/app.py')
     expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
+  })
+
+  /* A kind the page cannot render: the note offers the host's own application
+     for it. Both actions run where the GATEWAY runs, which is why the offer is
+     conditional -- see the withheld case below. */
+  it('offers the host application for a file it cannot render', async () => {
+    const opened: Array<[string, string | undefined]> = []
+    const state = install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
+      hostIsLocal: () => true,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    /* Nothing chosen yet, so the button names the kind and the host decides. */
+    const go = await screen.findByText('gui.ws.open_with_host {"k":"PPTX"}')
+    await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
+    expect(opened).toEqual([['/repo/deck.pptx', undefined]])
+    expect(state.shellCalls.filter((c) => c[0] === 'toast')).toEqual([])
+  })
+
+  it('remembers the application per kind, not per file', async () => {
+    const opened: Array<[string, string | undefined]> = []
+    const state = install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
+      hostIsLocal: () => true,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const pick = await screen.findByText('gui.ws.open_with_pick')
+    await act(async () => {
+      ;(pick.closest('button') as HTMLButtonElement)
+        .dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+    })
+    const menu = state.shellCalls.find((c) => c[0] === 'menuAt')?.[1] as Array<{ label: string; fn: () => void }>
+    expect(menu.map((x) => (typeof x === 'string' ? x : x.label))).toContain('Keynote')
+    await act(async () => { menu.find((x) => x.label === 'Keynote')!.fn() })
+    expect(opened).toEqual([['/repo/deck.pptx', 'Keynote']])
+    /* The choice was for pptx, so ANOTHER pptx inherits it. */
+    expect(store.appFor('/elsewhere/other.pptx')).toBe('Keynote')
+    expect(store.appFor('/elsewhere/sheet.xlsx')).toBeNull()
+  })
+
+  it('lets the reader hand the kind back to the host default', async () => {
+    const opened: Array<[string, string | undefined]> = []
+    store.setAppFor('/x/a.pptx', 'Keynote')
+    const state = install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
+      hostIsLocal: () => true,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    /* A chosen application names itself on the button -- and IS what the
+       button sends, rather than the button meaning "host default" whatever it
+       says. */
+    const go = await screen.findByText('gui.ws.open_with_app {"a":"Keynote"}')
+    await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
+    expect(opened).toEqual([['/repo/deck.pptx', 'Keynote']])
+    opened.length = 0
+    const pick = screen.getByText('gui.ws.open_with_pick')
+    await act(async () => {
+      ;(pick.closest('button') as HTMLButtonElement)
+        .dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
+    })
+    const menu = state.shellCalls.find((c) => c[0] === 'menuAt')?.[1] as Array<{ label: string; fn: () => void }>
+    /* The current one is marked, so the reader can see what they are changing. */
+    expect(menu.some((x) => typeof x !== 'string' && x.label.includes('gui.ws.open_with_now'))).toBe(true)
+    await act(async () => {
+      menu.find((x) => typeof x !== 'string' && x.label === 'gui.ws.open_with_default')!.fn()
+    })
+    expect(opened).toEqual([['/repo/deck.pptx', undefined]])
+    expect(store.appFor('/x/a.pptx')).toBeNull()
+  })
+
+  /* `open` runs on the gateway's host. On a remote serve that is not the
+     reader's screen, so the offer is withheld rather than launching a program
+     somebody else would have to close. */
+  it('withholds the offer when the gateway is not this desktop', async () => {
+    install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      openIn: async () => ({}),
+      hostIsLocal: () => false,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
+    /* And copying the path, which needs no host at all, stays. */
+    expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
+  })
+
+  it('withholds the offer when the source cannot open at all', async () => {
+    install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      hostIsLocal: () => true,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
+  })
+
+  it('says why nothing opened rather than failing silently', async () => {
+    const state = install(emptyWs({
+      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+    }), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+      openIn: async () => { throw new Error('open failed: no such application') },
+      hostIsLocal: () => true,
+    }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const go = await screen.findByText('gui.ws.open_with_host {"k":"PPTX"}')
+    await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(state.shellCalls).toContainEqual(['toast', 'open failed: no such application'])
+  })
+
+  /* A value read back out of storage is input too: a page that wrote something
+     else, or somebody editing the key by hand, must not reach a command line. */
+  it('refuses a stored application name that is not one', async () => {
+    localStorage.setItem('raven.openWith', JSON.stringify({ pptx: '/bin/sh', xlsx: 'Numbers' }))
+    store._resetAppsForTests()
+    expect(store.appFor('/x/a.pptx')).toBeNull()
+    expect(store.appFor('/x/a.xlsx')).toBe('Numbers')
+    localStorage.setItem('raven.openWith', 'not json at all')
+    store._resetAppsForTests()
+    expect(store.appFor('/x/a.xlsx')).toBeNull()
   })
 
   it('keeps the demo file tab an empty note without a browsable source', async () => {

@@ -158,6 +158,86 @@ export function fileKind(p: string): string {
 }
 export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1 }
 
+/* ── which application gets a file the page cannot render ──────────────
+   Per EXTENSION, not one global default, because that is the shape of the
+   want: code in an editor, a deck in a presentation app. Front-end state
+   mirrored to localStorage -- the gateway is told the name on each call
+   rather than holding the map, so nothing about this preference has to be
+   valid on another machine.
+
+   An application NAME only, matching the server's own rule. The check is
+   here as well as there because a value read back out of storage is input
+   too: a page that saved something else, or somebody editing the key by
+   hand, must not put it on a command line. */
+const APP_KEY = 'raven.openWith'
+const APP_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,63}$/
+
+function readApps(): Record<string, string> {
+  let raw = ''
+  try {
+    raw = localStorage.getItem(APP_KEY) || ''
+  } catch {
+    return {}
+  }
+  if (!raw) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const out: Record<string, string> = {}
+    for (const [ext, app] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof app === 'string' && APP_NAME.test(app)) out[ext.toLowerCase()] = app
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+let apps: Record<string, string> | null = null
+const appMap = (): Record<string, string> => (apps ??= readApps())
+
+export const extOf = (path: string): string => {
+  const name = String(path).split('/').pop() || ''
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+/* The application chosen for this file's kind, or null for the host default. */
+export const appFor = (path: string): string | null => appMap()[extOf(path)] || null
+
+export function setAppFor(path: string, app: string | null): void {
+  const ext = extOf(path)
+  if (!ext) return
+  const next = { ...appMap() }
+  if (app && APP_NAME.test(app)) next[ext] = app
+  else delete next[ext]
+  apps = next
+  try {
+    localStorage.setItem(APP_KEY, JSON.stringify(next))
+  } catch {
+    /* Private mode throws on write. Losing the preference is the whole cost. */
+  }
+}
+
+/* Whether handing a file to an application is worth offering at all: the
+   source has the verb, and the host it would run on is this desktop. A remote
+   serve would start the program on somebody else's screen, which is worse than
+   not offering -- so an unknown answer counts as no. */
+export const canOpenInApp = (): boolean => {
+  const src = source()
+  return !!src.openIn && !!src.hostIsLocal && src.hostIsLocal()
+}
+
+export function openInApp(path: string, app?: string | null): Promise<unknown> {
+  const src = source()
+  if (!src.openIn) return Promise.resolve(null)
+  return src.openIn(path, app || undefined)
+}
+
+export function _resetAppsForTests(): void {
+  apps = null
+}
+
 /* Which icon colour a tree row gets, from the name alone. */
 export const ftKindOf = (name: string): string => {
   const k = fileKind(name)

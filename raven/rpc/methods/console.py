@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -1175,6 +1176,72 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     return {"ok": True}
 
 
+# An application NAME, and nothing that could be anything else. The check is a
+# whitelist rather than a blacklist because this string becomes an argv element
+# next to a resolved path: letters, digits, spaces, and the four punctuation
+# marks real application names use. That rejects a separator (no arbitrary
+# binary by path), a leading dash (no flag smuggled into `open`), and every
+# shell metacharacter -- which cannot reach a shell anyway, since nothing here
+# runs one, but a name that looks like a command is a name worth refusing.
+_APP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._+-]{0,63}$")
+
+
+async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
+    """Hand one file to the host's own application for it.
+
+    The other half of the viewer: a kind the page can render opens in the page,
+    and a kind it cannot -- a pptx, a spreadsheet, an archive -- opens in
+    whatever the reader picked for it. Fenced exactly like ``fs.reveal``
+    (``resolve_readable``): a path the page may not render is not one it may
+    launch an application on either.
+
+    Like ``fs.reveal``, this runs on the GATEWAY's host, which is the reader's
+    own desktop for a localhost page and somebody else's machine otherwise. The
+    page is what decides whether to offer it.
+
+    ``app`` is placed as a single argv element, never concatenated into a
+    command line and never passed to a shell.
+    """
+    import subprocess
+    import sys
+
+    from raven.rpc.files import resolve_readable
+
+    raw = str(params.get("path") or "").strip()
+    if not raw:
+        raise ConfigValidationError("path is required")
+    app = params.get("app")
+    app = str(app).strip() if app is not None else ""
+    if app and not _APP_NAME.match(app):
+        raise ConfigValidationError("app must be an application name, not a path or a command")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        # Same two roots as fs.reveal, for the same reason: the panel's rows are
+        # relative to the session's working directory, an uploaded attachment's
+        # chip carries `uploads/<name>` and only agent home holds that.
+        listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
+        p = listed if listed.exists() else Path(raw)
+    try:
+        target = resolve_readable(str(p))
+    except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
+        raise ConfigValidationError(str(e)) from None
+    if sys.platform == "darwin":
+        argv = ["open", "-a", app, str(target)] if app else ["open", str(target)]
+    elif sys.platform.startswith("win"):
+        # `start` is a shell builtin, so the launcher is cmd itself -- with the
+        # empty string standing in for the window title `start` would otherwise
+        # read the quoted path as. An application choice has no portable form
+        # here, so the file goes to its own default.
+        argv = ["cmd", "/c", "start", "", str(target)]
+    else:
+        argv = [app, str(target)] if app else ["xdg-open", str(target)]
+    try:
+        subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise ConfigValidationError(f"open failed: {e}") from None
+    return {"ok": True, **({"app": app} if app else {})}
+
+
 async def fs_read(params: dict, *, agent_loop_factory=None) -> dict:
     root = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or ""))
     rel = str(params.get("path") or "")
@@ -1242,6 +1309,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("fs.read", bind(fs_read))
     dispatcher.register("fs.upload", bind(fs_upload))
     dispatcher.register("fs.reveal", bind(fs_reveal))
+    dispatcher.register("fs.open", bind(fs_open))
 
 
 __all__ = ["register_console_methods"]

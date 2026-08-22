@@ -2368,6 +2368,27 @@ class FsRevealResult(_Strict):
     ok: Literal[True]
 
 
+class FsOpenParams(_Strict):
+    path: str = Field(..., description="Absolute, or relative to the session's working directory.")
+    app: str | None = Field(
+        default=None,
+        description=(
+            "Which installed application to hand the file to. Absent means the host's own default. "
+            "A NAME, not a path or a command line: the server rejects anything with a separator, a "
+            "shell character or a leading dash, and never runs it through a shell."
+        ),
+    )
+    session: str | None = None
+
+
+class FsOpenResult(_Strict):
+    ok: Literal[True]
+    app: str | None = Field(
+        default=None,
+        description="The application asked for, echoed back; absent when the host default was used.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # memory.* — the EverOS long-term memory browser
 # ---------------------------------------------------------------------------
@@ -2796,6 +2817,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "fs.read": (FsReadParams, FsReadResult),
     "fs.upload": (FsUploadParams, FsUploadResult),
     "fs.reveal": (FsRevealParams, FsRevealResult),
+    "fs.open": (FsOpenParams, FsOpenResult),
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),

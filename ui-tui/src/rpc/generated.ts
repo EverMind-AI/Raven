@@ -3160,6 +3160,32 @@ export interface FsRevealResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsOpenParams".
+ */
+export interface FsOpenParams {
+  /**
+   * Absolute, or relative to the session's working directory.
+   */
+  path: string;
+  /**
+   * Which installed application to hand the file to. Absent means the host's own default. A NAME, not a path or a command line: the server rejects anything with a separator, a shell character or a leading dash, and never runs it through a shell.
+   */
+  app?: string;
+  session?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FsOpenResult".
+ */
+export interface FsOpenResult {
+  ok: true;
+  /**
+   * The application asked for, echoed back; absent when the host default was used.
+   */
+  app?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "MemoryStatsParams".
  */
 export interface MemoryStatsParams {}

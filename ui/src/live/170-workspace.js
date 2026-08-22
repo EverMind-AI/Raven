@@ -70,6 +70,15 @@ DS.workspace = {
     return r;
   }),
   reveal: (p) => rpc.call('fs.reveal', { path: p, session: cur || '' }),
+  /* The other half of the viewer: a kind the page cannot render goes to the
+     host's own application for it. `app` is a name the reader picked, or
+     absent for the host default. Only offered while the gateway IS this
+     desktop -- see hostIsLocal below. */
+  openIn: (p, app) => rpc.call('fs.open', { path: p, session: cur || '', ...(app ? { app } : {}) }),
+  /* Whether an application launched on the gateway's host would appear on the
+     reader's own screen. `open` runs where the gateway runs, so on a remote
+     serve these actions would start programs on somebody else's machine. */
+  hostIsLocal: () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname),
   shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
 };
 
