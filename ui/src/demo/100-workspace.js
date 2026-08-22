@@ -287,3 +287,15 @@ DS.workspace ??= {
   shortPath: (p) => String(p),
   openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
 };
+
+/* ── the turn's products ───────────────────────────────────────────────
+   The record's own rows for one turn, unfiltered. Which of them counts as a
+   product, and what a tile can draw of it, are the transcript island's to
+   decide -- see artifactsOf in features/transcript/store.ts.
+
+   The turn number is the one WS.changes files rows under: bumped per turn by
+   the live layer, and per user message with text by wsOnHistory. The
+   transcript counts it the same way over the same payload. */
+DS.artifacts ??= {
+  changes: (turn) => WS.changes.filter((c) => c.turn === turn),
+};

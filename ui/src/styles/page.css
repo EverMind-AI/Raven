@@ -939,6 +939,82 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv.err .ic { stroke: var(--clay); }
 .sdlv.err .tx { color: var(--clay); }
 
+/* ── the turn's products ──────────────────────────────────────────────
+   The closing line of a turn that wrote files: one tile per file, showing
+   what the file IS. Four documents out of one turn are four identical names
+   and four different miniatures, and that difference is what the tiles buy
+   over a list.
+   Tiles wrap; they never scroll sideways. A file name has no length limit and
+   the reading column is fixed, which is exactly how the delegated row grew
+   past the page. */
+.arts { margin: 20px 0 2px; min-width: 0; }
+.arts .ahd {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--faint);
+}
+.arts .ahd .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.atiles {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  gap: 9px; min-width: 0;
+}
+.atile {
+  position: relative; display: grid; min-width: 0; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
+  transition: border-color .14s, box-shadow .14s, transform .14s;
+}
+.atile:hover { border-color: var(--faint); box-shadow: var(--elev-up); transform: translateY(-2px); }
+@media (prefers-reduced-motion: reduce) { .atile:hover { transform: none; } }
+/* One keyboard stop and one accessible name for the whole tile, laid over it
+   -- which also leaves the picture free to be block content, since a <button>
+   may not contain any. */
+.atile .hit {
+  position: absolute; inset: 0; border: 0; background: none; padding: 0;
+  cursor: pointer; border-radius: inherit;
+}
+.atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
+.atile .pic {
+  display: grid; height: 100px; overflow: hidden; position: relative;
+  background: var(--surface); border-bottom: 1px solid var(--line-soft);
+}
+.atile .pic.none { place-items: center; }
+.atile .pic.none .fi { width: 20px; height: 20px; stroke: var(--faint); }
+.atile .pic.doc { background: var(--ink); place-items: start; }
+.atile .pic.shot { background: var(--surface); }
+.atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* The miniature: the file rendered at its own size and then SCALED. A smaller
+   font would re-wrap every line and stop a heading from being a heading, so
+   the tile would show a different document from the one it names. */
+.atile .mini {
+  display: block; width: 250%; height: 250%; padding: 9px 11px;
+  transform: scale(.4); transform-origin: top left; pointer-events: none;
+}
+.atile .mini .raw {
+  display: block; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  color: var(--muted); white-space: pre; overflow: hidden;
+}
+.atile .mini.prose > :first-child { margin-top: 0; }
+.atile .cap { display: grid; gap: 2px; padding: 7px 9px 8px; min-width: 0; }
+.atile .cap .nm {
+  font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.atile .cap .mt {
+  font-family: var(--mono); font-size: 10px; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+/* Where it opens, said before the click rather than after it. */
+.atile .cap .away { font-family: var(--mono); font-size: 10px; color: var(--sky); }
+/* An image is the one tile that can be slow, so it gets the same shimmering
+   placeholder the rail and the hub cards use -- a tile that jumps from blank
+   to full reads as the page having been broken until that moment. */
+.atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
+.amore {
+  display: grid; place-items: center; min-height: 60px; padding: 8px;
+  border: 1px dashed var(--line); border-radius: 10px; background: none;
+  font-size: 12.5px; color: var(--muted); cursor: pointer;
+}
+.amore:hover { color: var(--text); border-color: var(--faint); }
+
 /* an empty target would still spend a flex gap, opening a hole after the verb */
 .wrow .ar:empty { display: none; }
 /* the answer that came back from an ask: the row's payload, so it keeps full

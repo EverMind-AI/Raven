@@ -53,18 +53,40 @@ function wire(over: Partial<TranscriptSource> = {}): void {
   }
   window.DS = {
     transcript: source,
-    workspace: { shortPath: (p: string) => p },
+    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) },
+    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] },
     /* The renderer reads this for what counts as an openable path. */
     prose: { pathOf: () => null, linkTargetOf: () => null },
   }
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
 }
 
+/* What the artifacts source hands back, per turn, and where a tile's open
+   lands when the page cannot browse (which is the fixture case). */
+const PRODUCED = new Map<number, unknown[]>()
+const opened: string[] = []
+
+/* A workspace-record row in the shape the panel's own hooks build: a write
+   carries what it wrote as `add` rows, plus a `gap` row for the tail past the
+   fortieth line. */
+const wrote = (name: string, body: string | null, kind = 'write'): unknown => {
+  const lines = body == null ? [] : body.split('\n')
+  const rows: unknown[] = lines.slice(0, 40).map((l, i) => ['add', l, null, i + 1])
+  if (lines.length > 40) rows.push(['gap', lines.slice(40)])
+  return {
+    key: `/w/${name}`, dir: '/w/', name, kind, add: lines.length, del: 0,
+    hunks: body == null ? [] : [{ rows, add: lines.length, del: 0 }], turn: 0,
+  }
+}
+const art = (name: string, head: string | null, _lines = 3): unknown => wrote(name, head)
+
 const $ = <T extends Element = HTMLElement>(sel: string): T | null => document.querySelector<T>(sel)
 const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
 
 beforeEach(() => {
   store._resetForTests()
+  PRODUCED.clear()
+  opened.length = 0
   wire()
 })
 
@@ -286,6 +308,263 @@ describe('transcript island, history', () => {
     expect(notes[0]?.textContent).toContain('en:gui.notice.memory_flush')
     expect(notes[1]?.classList.contains('bad')).toBe(true)
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
+  })
+})
+
+describe("the turn's products", () => {
+  it('closes a replayed turn with a tile per file it wrote', () => {
+    const t0 = Date.now() - 30000
+    PRODUCED.set(1, [art('report.md', '# Pricing\n\nThe middle tier is the only one all three move.')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'write it up', timestamp: iso(t0) },
+        { role: 'assistant', text: 'done, in report.md', timestamp: iso(t0 + 4000) },
+      ])
+    })
+    const bar = $('.arts')
+    expect(bar).toBeTruthy()
+    expect(bar?.querySelector('.ahd .n')?.textContent).toBe('1')
+    /* The bar is the turn's LAST line: after the answer, nothing after it. */
+    const kinds = [...document.querySelectorAll('.answer, .arts')].map((n) => n.className.split(' ')[0])
+    expect(kinds).toEqual(['answer', 'arts'])
+    const tile = $('.atile')
+    expect(tile?.querySelector('.cap .nm')?.textContent).toBe('report.md')
+    /* The miniature is the file's own first lines, through the same markdown
+       renderer the full-size viewer uses -- so a heading is still a heading. */
+    expect(tile?.querySelector('.mini.prose h2')?.textContent).toBe('Pricing')
+    expect(tile?.querySelector('.mini.prose')?.textContent).toContain('middle tier')
+  })
+
+  it('draws no bar at all for a turn that produced nothing', () => {
+    const t0 = Date.now() - 5000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'just checking', timestamp: iso(t0) },
+        { role: 'assistant', text: 'nothing to change', timestamp: iso(t0 + 1000) },
+      ])
+    })
+    expect($('.arts')).toBeNull()
+    /* Not an empty one drawn as nothing: no segment for it at all. A bar that
+       exists and renders blank still takes a place in the turn's list, and the
+       next thing that walks that list has to know to skip it. */
+    expect(mount.mainLane().segs.some((g) => g.kind === 'arts')).toBe(false)
+  })
+
+  /* An edit is the diff panel's business. The record already draws that line,
+     which is why no list of extensions has to guess what a document is. */
+  it('counts what the turn wrote, not what it edited', () => {
+    PRODUCED.set(1, [wrote('kept.md', '# Kept'), wrote('touched.py', 'x = 1', 'edit')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'both', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    expect([...document.querySelectorAll('.atile .cap .nm')].map((n) => n.textContent)).toEqual(['kept.md'])
+    expect($('.arts .ahd .n')?.textContent).toBe('1')
+  })
+
+  /* The record keeps the first forty lines as rows and folds the tail into one
+     gap row. Reading only the rows would silently cut a long file's content at
+     forty lines -- invisible here, since the miniature shows fewer than that,
+     but the same head is what any later reader of it would get. */
+  it('reads a long file past the fortieth line', () => {
+    const body = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n')
+    PRODUCED.set(1, [wrote('long.txt', body)])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'long one', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    const rows = PRODUCED.get(1) as Array<Parameters<typeof store.artifactHead>[0]>
+    const head = store.artifactHead(rows[0]!)
+    expect(head?.split('\n')).toHaveLength(60)
+    expect(head?.split('\n')[59]).toBe('line 60')
+    /* The tile draws only what fits it. The rest would be rendered and then
+       clipped by the box, which is work per tile for pixels nobody sees. */
+    const mini = $('.atile .mini .raw')?.textContent || ''
+    expect(mini).toContain('line 16')
+    expect(mini).not.toContain('line 17')
+  })
+
+  /* The closing call for a turn happens at the NEXT question, so the number it
+     passes has to be the turn that just ended -- not the one about to start,
+     and not a constant. Only a middle turn can catch that. */
+  it('closes a middle turn with its own products', () => {
+    const t0 = Date.now() - 60000
+    PRODUCED.set(1, [art('first.md', '# First')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'one', timestamp: iso(t0) },
+        { role: 'assistant', text: 'first answer', timestamp: iso(t0 + 1000) },
+        { role: 'user', text: 'two', timestamp: iso(t0 + 2000) },
+        { role: 'assistant', text: 'second answer', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    expect(document.querySelectorAll('.arts')).toHaveLength(1)
+    expect($('.atile .cap .nm')?.textContent).toBe('first.md')
+    const order = [...document.querySelectorAll('.ask, .answer, .arts')].map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'answer', 'arts', 'ask', 'answer'])
+  })
+
+  it('files each turn products under its own turn', () => {
+    const t0 = Date.now() - 60000
+    PRODUCED.set(2, [art('second.md', '# Second')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'one', timestamp: iso(t0) },
+        { role: 'assistant', text: 'first answer', timestamp: iso(t0 + 1000) },
+        { role: 'user', text: 'two', timestamp: iso(t0 + 2000) },
+        { role: 'assistant', text: 'second answer', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    /* Turn 1 produced nothing, turn 2 produced one file: one bar, and it sits
+       after the SECOND answer. */
+    expect(document.querySelectorAll('.arts')).toHaveLength(1)
+    expect($('.atile .cap .nm')?.textContent).toBe('second.md')
+    const order = [...document.querySelectorAll('.ask, .answer, .arts')].map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'answer', 'ask', 'answer', 'arts'])
+  })
+
+  /* The products are the turn's LAST line, which means after the answer -- and
+     a stopped turn's answer is often one this replay was holding back until
+     the end of the turn, landing at the same moment as the products. */
+  it('puts the products below an answer it was holding', () => {
+    const t0 = Date.now() - 40000
+    PRODUCED.set(1, [art('draft.md', '# Draft')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'draft it', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: 'wrote the first section', timestamp: iso(t0 + 2000),
+          tool_calls: [{ id: 'c1', name: 'write_file', arguments: '{"path":"/w/draft.md"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'write_file', text: 'ok' },
+        /* No marker: this turn ends only because the next question arrives, so
+           the held answer and the products land at the same call site and
+           their order there is the whole assertion. */
+        { role: 'user', text: 'carry on', timestamp: iso(t0 + 6000) },
+      ])
+    })
+    const order = [...document.querySelectorAll('.ask, .tfold, .answer, .tnote, .arts')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'tfold', 'answer', 'arts', 'ask'])
+    expect($('.atile .cap .nm')?.textContent).toBe('draft.md')
+  })
+
+  /* A turn can reach its end twice over -- the stop marker ends it, and so
+     does the next question. The products are the turn's, not each ending's. */
+  it('draws one bar for a turn that ended twice', () => {
+    const t0 = Date.now() - 40000
+    PRODUCED.set(1, [art('half.md', '# Half written')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'start it', timestamp: iso(t0) },
+        { role: 'assistant', text: 'got this far', timestamp: iso(t0 + 2000) },
+        {
+          role: 'assistant', text: '(turn cancelled by the user)',
+          turn_ended: { status: 'cancelled' }, timestamp: iso(t0 + 3000),
+        },
+        { role: 'user', text: 'again then', timestamp: iso(t0 + 5000) },
+        { role: 'assistant', text: 'done', timestamp: iso(t0 + 7000) },
+      ])
+    })
+    expect(document.querySelectorAll('.arts')).toHaveLength(1)
+    expect(document.querySelectorAll('.atile')).toHaveLength(1)
+    const order = [...document.querySelectorAll('.ask, .answer, .tnote, .arts')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['ask', 'answer', 'tnote', 'arts', 'ask', 'answer'])
+  })
+
+  it('folds past the sixth tile and opens the rest on ask', () => {
+    PRODUCED.set(1, Array.from({ length: 9 }, (_, i) => art(`f${i}.md`, `# f${i}`)))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'nine of them', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    expect(document.querySelectorAll('.atile')).toHaveLength(6)
+    const more = $('.amore') as HTMLElement
+    expect(more.textContent).toBe('en:gui.arts.more {"n":"3"}')
+    act(() => { more.click() })
+    expect(document.querySelectorAll('.atile')).toHaveLength(9)
+    expect($('.amore')).toBeNull()
+  })
+
+  it('says which files leave for an app, and opens what it is given', () => {
+    PRODUCED.set(1, [art('deck.pptx', null, 0), art('notes.md', '# Notes')])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make the deck', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    const tiles = [...document.querySelectorAll('.atile')]
+    /* The pptx cannot be rendered here and says so on the tile; the markdown
+       next to it says nothing, because it opens in the viewer. */
+    expect(tiles[0]?.querySelector('.away')?.textContent).toBe('en:gui.arts.away')
+    expect(tiles[1]?.querySelector('.away')).toBeNull()
+    /* No content for it, so no invented picture: its kind, and that is all. */
+    expect(tiles[0]?.querySelector('.pic.none')).toBeTruthy()
+    ;(tiles[0]?.querySelector('.hit') as HTMLElement).click()
+    expect(opened).toEqual(['/w/deck.pptx'])
+  })
+
+  /* The one tile that can be slow, and the whole reason there is a skeleton. */
+  it('holds a shimmering placeholder over an image until its picture lands', async () => {
+    let answer: ((r: unknown) => void) | null = null
+    vi.stubGlobal('fetch', () => new Promise((res) => { answer = res }))
+    PRODUCED.set(1, [art('chart.png', null, 0)])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'chart it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    /* While the size is unknown: the placeholder, and no request for pixels. */
+    expect($('.pic.shot.skel .sk')).toBeTruthy()
+    expect($('.atile img')).toBeNull()
+    await act(async () => {
+      answer?.({ ok: true, headers: { get: () => '90000' } })
+    })
+    /* Size known and under the ceiling: the picture is asked for, and the
+       placeholder stays until it has actually arrived. */
+    const img = $('.atile img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('loading')).toBe('lazy')
+    expect($('.pic.shot.skel')).toBeTruthy()
+    act(() => { img.dispatchEvent(new Event('load')) })
+    expect($('.pic.shot.skel')).toBeNull()
+    expect($('.pic.shot .sk')).toBeNull()
+  })
+
+  it('refuses to fetch an image too big to be worth a thumbnail', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, headers: { get: () => String(9 * 1024 * 1024) } }))
+    PRODUCED.set(1, [art('huge.png', null, 0)])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'screenshot it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($('.atile img')).toBeNull()
+    expect($('.pic.none')).toBeTruthy()
+  })
+
+  it('shows the kind rather than an error when the file cannot be reached', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('offline')))
+    PRODUCED.set(1, [art('gone.png', null, 0)])
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'draw it', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($('.pic.none')).toBeTruthy()
   })
 })
 

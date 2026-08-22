@@ -6,6 +6,7 @@
 
 import type { SnapshotRow } from '../dag/nodes'
 import type { DagNode } from '../dag/types'
+import type { WsChange } from '../workspace/types'
 
 export interface Hunk {
   add: number
@@ -142,6 +143,33 @@ export interface DeliveredData {
   open: () => void
 }
 
+/* One file this turn produced, as the bar shows it. `head` is the file's own
+   first lines when the page already has them -- a write tool's hunk carries
+   what it wrote, so a text artifact needs no fetch to draw a miniature of
+   itself. Absent means the page has no content for it (a binary, or a replay
+   that kept no diff) and the tile shows its kind instead. */
+export interface ArtifactRow {
+  path: string
+  dir: string
+  name: string
+  ext: string
+  head: string | null
+  lines: number
+}
+
+export interface ArtsData {
+  v: number
+  id: number
+  kind: 'arts'
+  /* Which turn's products these are. The list is READ from the source at
+     render time rather than copied in here: the workspace record is rebuilt
+     from history on a reload, and a copy taken while the turn was live would
+     then disagree with it. */
+  turn: number
+  /* Whether the fold beyond the sixth tile is open. */
+  all: boolean
+}
+
 export interface FoldData {
   v: number
   id: number
@@ -151,7 +179,9 @@ export interface FoldData {
   steps: StepData[]
 }
 
-export type Seg = AskData | StepData | AnswerData | NoteData | QaData | StatusData | DeliveredData | FoldData
+export type Seg =
+  | AskData | StepData | AnswerData | NoteData | QaData | StatusData | DeliveredData
+  | ArtsData | FoldData
 
 export interface Lane {
   key: string
@@ -215,6 +245,16 @@ export interface HistoryMessage {
   diff?: string | string[]
   notice?: { kind?: string; detail?: string }
   turn_ended?: { status?: string; reason?: string }
+}
+
+/* What the artifact bar reads, and all it reads: the workspace record's rows
+   for one turn, exactly as that record holds them.
+   Deliberately NOT the finished list. Which of those rows counts as a product,
+   and what a tile can draw of it, are presentation decisions -- they belong to
+   the island that draws them, where they can be tested, rather than to the
+   legacy layer that happens to own the record. */
+export interface ArtifactsSource {
+  changes(turn: number): WsChange[]
 }
 
 /* The pull half of the seam. Event pushes arrive through the island API the

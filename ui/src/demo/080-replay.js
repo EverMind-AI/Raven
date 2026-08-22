@@ -4,6 +4,11 @@
    anything scheduled from *inside* a fired callback must use a plain delay
    — passing the cumulative offset there would defer it by the whole run. */
 function replay(run, instant) {
+  /* Same bookkeeping the live turn machine does at turn start: the workspace
+     record files a change under the turn it happened in, and until this the
+     demo filed every turn's under zero -- so a follow-up in one session
+     inherited the previous turn's changes. */
+  WS.turn += 1;
   let st = null; const open_ = {}; let t = 0; const steps = [];
   const fire = (fn, d) => {
     if (instant) { fn(); return; }
@@ -60,6 +65,8 @@ function replay(run, instant) {
       if (st) st.seal();
       foldSilentRuns(steps);
       collapseTurn(null);
+      /* The turn's products close it, exactly as in live mode. */
+      RavenIslands.transcript.artifacts(WS.turn);
       busy = false; use = run.use;
       setCtx(((run.use && run.use.in) || 0) + ((run.use && run.use.out) || 0), 200000);
       const s = sess(cur);
