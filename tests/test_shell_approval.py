@@ -532,3 +532,81 @@ async def test_an_unregistered_family_still_gets_a_usable_prompt(tmp_path) -> No
     assert isinstance(result, ToolResult)
     assert responder.requests[0]["description"] == "Run a command that needs your approval"
     assert executor.commands == []
+
+
+class TestASandboxContainsSomeThingsAndNotOthers:
+    """The sandbox short-circuit used to skip the whole classification, which made
+    the SAFER configuration prompt less than the plain one -- for exactly the
+    operations a sandbox has no say over."""
+
+    def _asking(self) -> ShellCommandPolicy:
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+
+        policy = ShellCommandPolicy(deny_patterns=[r"\bmkfs\b"])
+        for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+            policy.register_approval_matcher(name, matcher)
+        return policy
+
+    @pytest.mark.parametrize(
+        "command",
+        ["git push origin main", "npm install lodash", "ssh host ls", "curl -o out https://example.com"],
+    )
+    def test_an_effect_the_sandbox_cannot_hold_still_asks(self, command: str) -> None:
+        """A microVM does not contain a push, an install, or a connection to
+        another machine: the bytes leave the box either way."""
+        assert self._asking().evaluate(command, sandboxed=True) is CommandDecision.REQUIRE_APPROVAL
+        assert self._asking().approval_reason(command, sandboxed=True) is not None
+
+    @pytest.mark.parametrize("command", ["rm file.txt", "rm -rf tmp", "shutdown now", "mkfs.ext4 /dev/sda1"])
+    def test_what_the_sandbox_does_hold_is_neither_asked_about_nor_refused(self, command: str) -> None:
+        """Deleting a tree, powering off, formatting a disk: inside a microVM the
+        machine in question IS the sandbox. Running one is what a sandbox is for,
+        so the prompt and the refusal both drop away."""
+        assert self._asking().evaluate(command, sandboxed=True) is CommandDecision.ALLOW
+        assert self._asking().approval_reason(command, sandboxed=True) is None
+
+    @pytest.mark.parametrize("command", ["shutdown now", "mkfs.ext4 /dev/sda1"])
+    def test_the_refusals_still_stand_unsandboxed(self, command: str) -> None:
+        """The other half: nothing above weakens the plain configuration."""
+        assert self._asking().evaluate(command) is CommandDecision.HARD_DENY
+
+    @pytest.mark.parametrize("command", ["rm file.txt", "rm -rf tmp"])
+    def test_a_delete_is_still_asked_about_unsandboxed(self, command: str) -> None:
+        """Deletion is asked about rather than refused in this module, so the
+        sandbox skip has to leave that answer intact outside a sandbox."""
+        assert self._asking().evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert self._asking().approval_reason(command) == "delete_command"
+
+
+async def test_the_tool_refuses_a_hard_denied_command_before_running_it(tmp_path) -> None:
+    """The gate's other exit. A refusal has to happen at the tool rather than at
+    the policy: a decision nobody acts on is not a guard, and the executor must
+    never see the command -- which is what makes ``executor.commands`` the
+    assertion that matters here rather than the returned text.
+    """
+    executor = _RecordingExecutor(sandboxed=False)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+
+    # Powering the machine off, which the policy refuses by token inspection
+    # rather than by a deny pattern. A deny-pattern command would exit through
+    # the workspace guard above instead, so this case would pass while never
+    # reaching the branch it is about.
+    result = await tool.execute("shutdown -h now")
+
+    assert "blocked by safety guard" in str(result)
+    assert executor.commands == [], "a refused command must not reach the executor"
+
+
+async def test_the_tool_refuses_a_deny_pattern_at_its_own_exit(tmp_path) -> None:
+    """The gate has two refusal exits and they are not the same code path: an
+    operator's deny pattern is caught by the workspace guard, before the policy is
+    consulted at all. Covering one and assuming the other is how a guard stops
+    firing without any test noticing.
+    """
+    executor = _RecordingExecutor(sandboxed=False)
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path), extra_deny_patterns=[r"\bmkfs\b"])
+
+    result = await tool.execute("mkfs.ext4 /dev/sda1")
+
+    assert "Error" in str(result)
+    assert executor.commands == []

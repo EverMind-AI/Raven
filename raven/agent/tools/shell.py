@@ -210,24 +210,32 @@ class ExecTool(Tool):
     ) -> str | ToolResult:
         cwd = working_dir or self.working_dir or os.getcwd()
 
-        if not self._executor.is_sandboxed:
+        sandboxed = self._executor.is_sandboxed
+        if not sandboxed:
             # Non-sandboxed: full guard — deny-list patterns AND workspace restriction.
             guard_error = self._guard_command(command, cwd)
             if guard_error:
                 return self._terminal_error(guard_error)
-            decision = self._policy.evaluate(command)
-            if decision is CommandDecision.HARD_DENY:
-                return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
-            if decision is CommandDecision.REQUIRE_APPROVAL:
-                approval_error = await self._request_approval(command)
-                if approval_error:
-                    return approval_error
         elif self.restrict_to_workspace:
             # Sandboxed: skip the deny-list (microVM provides real isolation), but still
             # enforce workspace restriction so operator-set boundaries are respected.
             workspace_error = self._check_workspace_restriction(command, cwd)
             if workspace_error:
                 return self._terminal_error(workspace_error)
+
+        # Classification runs either way, and the sandbox flag reaches it rather
+        # than skipping it. A microVM contains what a command does to files; it
+        # does not contain a push, an install, or a connection to another machine.
+        # Short-circuiting the whole check on the flag made the SAFER
+        # configuration prompt less than the plain one, for exactly the
+        # operations the sandbox has no say over.
+        decision = self._policy.evaluate(command, sandboxed=sandboxed)
+        if decision is CommandDecision.HARD_DENY:
+            return self._terminal_error("Error: Command blocked by safety guard (policy evaluation failed)")
+        if decision is CommandDecision.REQUIRE_APPROVAL:
+            approval_error = await self._request_approval(command, sandboxed=sandboxed)
+            if approval_error:
+                return approval_error
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
@@ -251,7 +259,7 @@ class ExecTool(Tool):
             return f"Error executing command: {str(e)}"
         return result.as_text(self._MAX_OUTPUT)
 
-    async def _request_approval(self, command: str) -> ToolResult | None:
+    async def _request_approval(self, command: str, *, sandboxed: bool = False) -> ToolResult | None:
         """Request one-shot authority for an exact command, failing closed.
 
         The responder belongs to the current turn and is installed only for an
@@ -271,7 +279,8 @@ class ExecTool(Tool):
             tool_call_id=turn.tool_call_id,
             command=command,
             description=_APPROVAL_DESCRIPTIONS.get(
-                self._policy.approval_reason(command) or "", "Run a command that needs your approval"
+                self._policy.approval_reason(command, sandboxed=sandboxed) or "",
+                "Run a command that needs your approval",
             ),
         )
         if approved:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from enum import StrEnum
 from pathlib import PurePath
 
@@ -438,6 +439,38 @@ def _matches_fetch_side_effect(command: str) -> bool:
     return False
 
 
+_SURFACE_FAMILIES: ContextVar[tuple[tuple[str, ApprovalMatcher], ...]] = ContextVar(
+    "raven_surface_approval_families", default=()
+)
+
+
+def set_surface_approval_families(families: tuple[tuple[str, ApprovalMatcher], ...]) -> None:
+    """Declare the families every tool on THIS surface must ask about.
+
+    Per surface rather than per tool because a per-tool registration reaches the
+    main loop only: a sub-agent builds its own ``ExecTool`` with its own policy,
+    so a delegated ``git push`` runs unannounced while the identical command asks
+    in the main agent.
+
+    A ContextVar and not a module global, which is the difference between a scope
+    and a leak. A task copies the context it was created in, so every tool built
+    under the connection that declared this -- the main loop's, and each
+    sub-agent's, however deep -- inherits it, while a second connection, or a
+    test, is unaffected by what another one declared.
+
+    Must be set before the tools are built: a policy reads this once at
+    construction, so a tool made earlier keeps the families it was born with.
+    """
+
+    _SURFACE_FAMILIES.set(tuple(families))
+
+
+def surface_approval_families() -> tuple[tuple[str, ApprovalMatcher], ...]:
+    """The families this surface asks about; empty unless one declared them."""
+
+    return _SURFACE_FAMILIES.get()
+
+
 EXTERNAL_EFFECT_MATCHERS: tuple[tuple[str, ApprovalMatcher], ...] = (
     ("publish_command", _matches_publish_command),
     ("install_command", _matches_install_command),
@@ -472,14 +505,31 @@ class ShellCommandPolicy:
     def __init__(self, *, deny_patterns: list[str]) -> None:
         # Compile once because every direct shell execution crosses this policy.
         self._deny_patterns = tuple(re.compile(pattern, re.IGNORECASE) for pattern in deny_patterns)
-        self._approval_matchers: list[tuple[str, ApprovalMatcher]] = [("delete_command", _matches_delete_command)]
+        # Deletion is built in and marked as contained: a sandbox really does hold
+        # it, so a sandboxed turn does not have to ask about it.
+        self._approval_matchers: list[tuple[str, ApprovalMatcher, bool]] = [
+            ("delete_command", _matches_delete_command, False)
+        ]
+        # Whatever this surface asks about, picked up at construction so a tool
+        # built later -- a sub-agent's, most of all -- carries the same families as
+        # the main loop's. Without this a delegated ``git push`` runs unannounced.
+        for name, matcher in surface_approval_families():
+            self._approval_matchers.append((name, matcher, True))
 
-    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher) -> None:
-        """Extend approval classification with a named command-family matcher."""
+    def register_approval_matcher(self, name: str, matcher: ApprovalMatcher, *, escapes_sandbox: bool = True) -> None:
+        """Extend approval classification with a named command-family matcher.
 
-        self._approval_matchers.append((name, matcher))
+        ``escapes_sandbox`` says whether a sandbox contains this family's effect.
+        True by default because the families a surface registers are the ones
+        whose effects leave the workspace -- pushing, installing, reaching another
+        machine -- and a microVM does not contain a network call. A family a
+        sandbox really does hold (deletion) sets it False, which is what lets a
+        sandboxed turn skip the prompt it does not need.
+        """
 
-    def approval_reason(self, command: str) -> str | None:
+        self._approval_matchers.append((name, matcher, escapes_sandbox))
+
+    def approval_reason(self, command: str, *, sandboxed: bool = False) -> str | None:
         """The name of the family that makes this command need approval.
 
         Separate from :meth:`evaluate` because the caller needs both answers and
@@ -493,7 +543,7 @@ class ShellCommandPolicy:
         hard-denied command: there is no prompt to explain.
         """
 
-        if any(pattern.search(command) for pattern in self._deny_patterns):
+        if not sandboxed and any(pattern.search(command) for pattern in self._deny_patterns):
             return None
         try:
             # Only the hard denies short-circuit: there is no prompt to explain
@@ -501,9 +551,11 @@ class ShellCommandPolicy:
             # -- it reaches this surface as a registered matcher like every other
             # family, so it must fall through and name itself, or the prompt for
             # an ``rm`` loses the one line that says what it is about.
-            if _matches_system_power_command(command):
+            if not sandboxed and _matches_system_power_command(command):
                 return None
-            for name, matcher in self._approval_matchers:
+            for name, matcher, escapes in self._approval_matchers:
+                if sandboxed and not escapes:
+                    continue
                 if matcher(command):
                     return name
         except Exception:
@@ -512,17 +564,24 @@ class ShellCommandPolicy:
             return None
         return None
 
-    def evaluate(self, command: str) -> CommandDecision:
+    def evaluate(self, command: str, *, sandboxed: bool = False) -> CommandDecision:
         """Classify a command, reducing authority when a matcher cannot decide."""
 
         # Hard deny runs first so an approval matcher can never convert an
         # unconditionally forbidden command into an approvable operation.
-        if any(pattern.search(command) for pattern in self._deny_patterns):
+        #
+        # Every refusal below is about damage a sandbox holds: a deny pattern, or
+        # the machine powered off. Inside a microVM the machine in question IS the
+        # sandbox, which is what the sandboxed path is allowed to skip -- and
+        # skipping it is the point of running one. What a sandbox does NOT hold is
+        # a push, an install, or a connection to another machine, so those
+        # families still ask.
+        if not sandboxed and any(pattern.search(command) for pattern in self._deny_patterns):
             return CommandDecision.HARD_DENY
         try:
-            if _matches_system_power_command(command):
+            if not sandboxed and _matches_system_power_command(command):
                 return CommandDecision.HARD_DENY
-            if any(matcher(command) for _, matcher in self._approval_matchers):
+            if any(matcher(command) for _name, matcher, escapes in self._approval_matchers if escapes or not sandboxed):
                 return CommandDecision.REQUIRE_APPROVAL
         except Exception:
             # Matchers inspect untrusted command text and may be extended later.
@@ -531,4 +590,11 @@ class ShellCommandPolicy:
         return CommandDecision.ALLOW
 
 
-__all__ = ["EXTERNAL_EFFECT_MATCHERS", "ApprovalMatcher", "CommandDecision", "ShellCommandPolicy"]
+__all__ = [
+    "EXTERNAL_EFFECT_MATCHERS",
+    "ApprovalMatcher",
+    "CommandDecision",
+    "ShellCommandPolicy",
+    "set_surface_approval_families",
+    "surface_approval_families",
+]

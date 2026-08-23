@@ -82,9 +82,12 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, channel: str = A
     translator = UpdateTranslator(emit=emit, side_channel=lambda method, params: questions.handle(method, params))
     questions = AcpQuestions(outbound=outbound, translator=translator, emit=emit)
     permissions = AcpPermissionBroker(outbound=outbound, translator=translator)
+    # Declared BEFORE the engine is built, because a policy reads the surface's
+    # families at construction: set afterwards, the tools that already exist keep
+    # the families they were born with and the declaration reaches nothing.
+    _ask_before_external_effects()
     stack = await build_stack(translator, channel=channel, approval_responder=permissions)
     questions.set_broker(stack.question_broker)
-    _ask_before_external_effects(stack.agent_loop)
     methods = AcpMethods(
         dispatcher=stack.dispatcher,
         translator=translator,
@@ -147,8 +150,8 @@ async def build_stack(
     return await build_rpc_stack(translator.send_frame, channel=channel, approval_responder=approval_responder)
 
 
-def _ask_before_external_effects(agent_loop: Any) -> None:
-    """Register the command families this surface must ask about.
+def _ask_before_external_effects() -> None:
+    """Declare the command families this surface must ask about.
 
     The built-in policy asks about exactly one family, deletion -- which fits a
     terminal the reader is already watching and does not fit an agent behind an
@@ -156,31 +159,23 @@ def _ask_before_external_effects(agent_loop: Any) -> None:
     run with nothing on screen. This is the single most visible difference
     between an agent somebody trusts and one they do not.
 
-    Per tool rather than process-wide because the policy is: a surface's set of
-    families is a property of that surface. A missing tool or engine is not an
-    error here -- there is then nothing that can run a command either.
+    Per process rather than per tool, and that is the fix for what used to be a
+    hole here. Registering on the main loop's ``ExecTool`` reached the main loop
+    only: a sub-agent builds its own tool with its own policy, so a delegated
+    ``git push`` ran unannounced while the identical command asked in the main
+    agent. The process IS the surface in this deployment -- one editor, one stdio
+    child -- so the declaration belongs at that scope and every tool built here,
+    delegated or not, inherits it.
 
-    **What this does not reach, measured.** A sub-agent builds its own
-    ``ExecTool`` (``subagent/backends/raven_loop.py``) with its own policy, and
-    nothing calls ``start_approval_turn`` on it -- only the main loop's tool gets
-    a responder, from ``rpc/spine.py``. So a delegated agent's ``git push`` runs
-    with no prompt even after this ran; verified by evaluating the same command on
-    both instances. Registering the families there too would make it *refused*
-    rather than asked, because a tool with no responder fails closed -- which is
-    safe and is also a different product decision. Left alone deliberately, and
-    written into the compatibility matrix rather than half-closed here: giving
-    sub-agents an approval path means routing a lane's conversation id into a task
-    that outlives its turn, which is its own change.
+    What a delegated command gets is a REFUSAL, not a prompt: a sub-agent's tool
+    has no approval responder, and a tool that cannot ask fails closed. That is
+    the deliberate half of this decision. Asking on a sub-agent's behalf means
+    routing a lane's conversation id into a task that outlives its turn, which is
+    its own change; until then, refusing with a reason beats acting in silence.
     """
-    from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+    from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS, set_surface_approval_families
 
-    tools = getattr(agent_loop, "tools", None)
-    exec_tool = tools.get("exec") if tools is not None else None
-    if exec_tool is None or not hasattr(exec_tool, "register_approval_matcher"):
-        logger.warning("acp: no exec tool to register approval matchers on")
-        return
-    for name, matcher in EXTERNAL_EFFECT_MATCHERS:
-        exec_tool.register_approval_matcher(name, matcher)
+    set_surface_approval_families(EXTERNAL_EFFECT_MATCHERS)
     logger.info("acp: {} command families will ask before running", len(EXTERNAL_EFFECT_MATCHERS))
 
 

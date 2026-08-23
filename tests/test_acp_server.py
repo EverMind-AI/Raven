@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-from types import SimpleNamespace
 
 import pytest
 from loguru import logger
@@ -381,49 +380,74 @@ class TestApprovalWiring:
     somebody trusts and one they do not.
     """
 
-    def test_the_external_effect_families_are_registered_on_the_exec_tool(self):
-        from raven.agent.tools.registry import ToolRegistry
+    @pytest.fixture(autouse=True)
+    def _restore_process_families(self):
+        """The declaration is process-wide, so a test that sets it has to put it
+        back or every later test inherits an ACP surface's policy."""
+        from raven.agent.tools import shell_policy
+
+        before = shell_policy.surface_approval_families()
+        yield
+        shell_policy.set_surface_approval_families(before)
+
+    def test_the_families_reach_a_tool_built_after_the_declaration(self):
         from raven.agent.tools.shell import ExecTool
         from raven.agent.tools.shell_policy import CommandDecision
 
+        server._ask_before_external_effects()
         tool = ExecTool(working_dir="/tmp")
-        registry = ToolRegistry()
-        registry.register(tool)
-
-        server._ask_before_external_effects(SimpleNamespace(tools=registry))
 
         assert tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
         assert tool._policy.evaluate("npm install lodash") is CommandDecision.REQUIRE_APPROVAL
         assert tool._policy.evaluate("pytest -q") is CommandDecision.ALLOW
 
-    def test_a_sub_agents_own_tool_is_not_reached(self):
-        """Recorded rather than left to be discovered. A sub-agent builds its own
-        ``ExecTool`` with its own policy and never gets a responder, so its
-        ``git push`` still runs unannounced. Registering the families there would
-        make it refused instead of asked, which is a different product decision.
+    def test_a_sub_agents_own_tool_inherits_them_too(self):
+        """The hole this closed: a sub-agent builds its own ``ExecTool`` with its
+        own policy, so a per-tool registration reached the main loop only and a
+        delegated ``git push`` ran unannounced while the identical command asked
+        in the main agent. Declared per process, both carry it.
         """
-        from raven.agent.tools.registry import ToolRegistry
         from raven.agent.tools.shell import ExecTool
         from raven.agent.tools.shell_policy import CommandDecision
 
+        server._ask_before_external_effects()
         main_tool = ExecTool(working_dir="/tmp")
         sub_tool = ExecTool(working_dir="/tmp")
-        registry = ToolRegistry()
-        registry.register(main_tool)
-
-        server._ask_before_external_effects(SimpleNamespace(tools=registry))
 
         assert main_tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
-        assert sub_tool._policy.evaluate("git push origin main") is CommandDecision.ALLOW, (
-            "if this ever starts asking, the compatibility matrix entry is stale"
-        )
+        assert sub_tool._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
 
-    def test_no_engine_and_no_tool_are_both_survivable(self):
-        from raven.agent.tools.registry import ToolRegistry
+    async def test_a_delegated_command_is_refused_because_it_cannot_ask(self):
+        """The deliberate half. A sub-agent's tool has no approval responder, and
+        a tool that cannot ask fails closed -- so the command is refused with a
+        reason rather than run in silence. Asking on a sub-agent's behalf needs a
+        lane's conversation id routed into a task that outlives its turn, which is
+        its own change.
+        """
+        from raven.agent.tools.shell import ExecTool
 
-        server._ask_before_external_effects(None)
-        server._ask_before_external_effects(SimpleNamespace())
-        server._ask_before_external_effects(SimpleNamespace(tools=ToolRegistry()))
+        server._ask_before_external_effects()
+        sub_tool = ExecTool(working_dir="/tmp")
+
+        result = await sub_tool.execute("git push origin main")
+
+        assert "requires user approval" in str(result)
+        assert "not interactive" in str(result)
+
+    def test_a_tool_built_before_the_declaration_keeps_what_it_was_born_with(self):
+        """Why ``serve`` declares before it builds the engine. A policy reads the
+        process's families once, at construction, so a declaration that lands
+        afterwards reaches nothing -- and the surface would look configured while
+        every existing tool stayed silent.
+        """
+        from raven.agent.tools.shell import ExecTool
+        from raven.agent.tools.shell_policy import CommandDecision
+
+        early = ExecTool(working_dir="/tmp")
+        server._ask_before_external_effects()
+
+        assert early._policy.evaluate("git push origin main") is CommandDecision.ALLOW
+        assert ExecTool(working_dir="/tmp")._policy.evaluate("git push origin main") is CommandDecision.REQUIRE_APPROVAL
 
     async def test_the_permission_broker_is_the_stacks_approval_transport(self, stub):
         from raven.acp.permissions import AcpPermissionBroker
