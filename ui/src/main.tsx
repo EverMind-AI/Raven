@@ -42,12 +42,14 @@ import * as ctxchip from './shell/ctxchip'
 import * as find from './shell/find'
 import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
+import * as menuWriter from './shell/menu'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
 import * as perm from './shell/perm'
 import { md } from './shell/prose'
 import * as scrollbars from './shell/scrollbars'
 import { toggle as toggleTheme } from './shell/theme'
+import * as toastWriter from './shell/toast'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -75,6 +77,8 @@ declare global {
     drawFoot?: typeof foot.draw
     drawCtx?: typeof ctxchip.draw
     setCtx?: typeof ctxchip.set
+    toast?: typeof toastWriter.show
+    menuAt?: typeof menuWriter.show
   }
 }
 
@@ -129,6 +133,11 @@ window.closePermPop = perm.close
    tooltip is a translated string, so a flip has to redraw it. */
 window.drawCtx = ctxchip.draw
 window.setCtx = ctxchip.set
+/* Two chrome writers reached from both legacy layers and modern islands. The
+   old names remain the concat layers' door; RavenShell late-binds those same
+   names for islands until the bridge calls are retired on Axis 2. */
+window.toast = toastWriter.show
+window.menuAt = menuWriter.show
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -286,6 +295,7 @@ panes.install()
 navfly.install()
 find.install()
 chips.install()
+menuWriter.install()
 
 /* The model picker renders nothing until asked. One root at the body rather
    than a host inside a page: the popover is anchored to whatever button opened
