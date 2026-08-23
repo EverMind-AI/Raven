@@ -25,6 +25,8 @@ const MAX_TYPED_RUN = 32
 // eslint-disable-next-line no-control-regex
 const CONTROL_BYTE_RE = /[\x00-\x1f\x7f]/
 
+const RAW_ESCAPE_CONTROL_SUFFIXES = new Set(['\r', '\n', '\b', '\x7f'])
+
 // eslint-disable-next-line no-control-regex
 const META_KEY_CODE_RE = /^(?:\x1b)([a-zA-Z0-9])$/
 
@@ -260,7 +262,23 @@ function pushTextKeys(out: ParsedInput[], text: string, bracketedPaste: Brackete
     return
   }
 
-  for (const codePoint of text) {
+  const codePoints = [...text]
+
+  for (let index = 0; index < codePoints.length; index++) {
+    const codePoint = codePoints[index]!
+    const nextCodePoint = codePoints[index + 1]
+
+    if (
+      codePoint === '\x1b' &&
+      nextCodePoint !== undefined &&
+      RAW_ESCAPE_CONTROL_SUFFIXES.has(nextCodePoint)
+    ) {
+      out.push(parseKeypress(codePoint + nextCodePoint))
+      index++
+
+      continue
+    }
+
     out.push(parseKeypress(codePoint))
   }
 }

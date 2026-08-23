@@ -363,6 +363,34 @@ describe('plain text run splitting', () => {
       expect(seqs(keys).slice(1)).toEqual(['a', 'b'])
     })
 
+    it('keeps raw alt+enter ESC+CR as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\r')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ kind: 'key', name: '', sequence: '\x1b\r' })
+    })
+
+    it('keeps raw alt+enter ESC+LF as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\n')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ kind: 'key', name: '', sequence: '\x1b\n' })
+    })
+
+    it('keeps raw meta+backspace ESC+DEL as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\x7f')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ name: 'backspace', sequence: '\x1b\x7f', meta: true })
+    })
+
+    it('keeps raw meta+backspace ESC+BS as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\b')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ name: 'backspace', sequence: '\x1b\b', meta: true })
+    })
+
     it('splits a run longer than a typing burst', () => {
       const [keys] = parseMultipleKeypresses(confirmed, 'x'.repeat(33))
 
