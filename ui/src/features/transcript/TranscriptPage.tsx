@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useRef, useState, useSyncExternalStore } fro
 import { flushSync } from 'react-dom'
 
 import * as dag from '../dag/graph'
+import { DagGraph } from '../dag/DagGraph'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
 import {
@@ -432,76 +433,6 @@ const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: Ste
    `dag.get` instead of from the arguments -- which is a difference in where the
    nodes come from (features/dag/nodes.ts) and in nothing that is drawn. */
 
-function DagGraph({ lane, c, selId }: { lane: Lane; c: CallData; selId: string | null }): ReactElement {
-  const { W, H } = dag.CARD
-  const nodes = c.nodes
-  const { at, width, height } = dag.layout(nodes, dag.CARD)
-  const done = new Set(nodes.filter((n) => n.status === 'completed').map((n) => n.id))
-  /* A handle earns its place in the box only when it is shared, which is when it
-     means "these steps continue one session". A handle held by one node is minted
-     per node and reads as a mangled copy of the id above it. */
-  const held = new Map<string, number>()
-  nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1) })
-  const edges: ReactNode[] = []
-  nodes.forEach((n) => {
-    n.depends_on.forEach((pid) => {
-      const a = at.get(pid)
-      const b = at.get(n.id)
-      if (!a || !b) return
-      const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 5, y2 = b.y + H / 2, mid = (x1 + x2) / 2
-      const cls = done.has(pid) ? ' flowed' : ''
-      edges.push(<path key={`e${pid}-${n.id}`} className={'edge' + cls}
-        d={`M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`} />)
-      /* The head is its own path: a marker-end inherits the line's stroke width
-         and ends up heavier than the line it caps. */
-      edges.push(<path key={`t${pid}-${n.id}`} className={'tip' + cls}
-        d={`M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`} />)
-    })
-  })
-  return (
-    <div className="canvas">
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        {edges}
-        {nodes.map((n) => {
-          const p = at.get(n.id)
-          if (!p) return null
-          const pick = (): void => store.pickDagNode(lane, c, n.id)
-          const mark = dag.MARKS[n.status]
-          const handle = n.instance && (held.get(n.instance) || 0) > 1 ? ' @' + n.instance : ''
-          return (
-            <g key={n.id} className="gnd" transform={`translate(${p.x} ${p.y})`} role="button" tabIndex={0}
-              data-st={n.status || 'pending'} {...(selId === n.id ? { 'data-sel': '1' } : {})}
-              onClick={(e) => { e.stopPropagation(); pick() }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); pick() }
-              }}>
-              <rect width={W} height={H} rx={9} />
-              {n.status === 'running'
-                ? <g className="bars" transform={`translate(${16 - 5} ${H / 2 - 5})`}>
-                    <rect x={0} y={2} width={2.4} height={6} rx={1.2} />
-                    <rect x={4} y={0} width={2.4} height={10} rx={1.2} />
-                    <rect x={8} y={2} width={2.4} height={6} rx={1.2} />
-                  </g>
-                : <path className={'mk ' + (mark ? mark.cls : 'wait')}
-                    transform={`translate(16 ${H / 2})`}
-                    d={mark ? mark.d : 'M-3.6 0a3.6 3.6 0 1 0 7.2 0a3.6 3.6 0 1 0 -7.2 0'} />}
-              <text className="id" x={29} y={17}>{n.id}</text>
-              <text className="ag" x={29} y={28}>{n.subagent + handle}</text>
-              {/* On the second line, not beside the id as the wide sheet has it:
-                  at card scale that layout has to reserve the clock's column on
-                  the id's own line, and a node id then clips at nine characters. */}
-              <text className="tm" x={W - 9} y={28} textAnchor="end">
-                {n.status === 'running' ? '' : dag.took(n, Date.now())}
-              </text>
-              <title>{n.id + ' \u00b7 ' + n.subagent + (n.instance ? ' @' + n.instance : '')}</title>
-            </g>
-          )
-        })}
-      </svg>
-    </div>
-  )
-}
-
 /* One of a node's inputs, and where it came from. The three sources read
    differently on purpose: a literal is the words themselves, the other two name
    something to go and read. */
@@ -664,7 +595,9 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
       <div className="dtl dlg dagc" hidden={!c.open}>
         <div className="bd">
           <div className="dgr">{grid}</div>
-          {drawn ? <DagGraph lane={lane} c={c} selId={selId} /> : null}
+          {drawn ? <DagGraph active={c.open} dims={dag.CARD} nodes={c.nodes} now={Date.now()}
+            surface="card" selectedId={selId} stopPropagation
+            onPick={(n) => store.pickDagNode(lane, c, n.id)} /> : null}
           {sel ? <DagNodePanel lane={lane} c={c} n={sel} /> : null}
         </div>
       </div>

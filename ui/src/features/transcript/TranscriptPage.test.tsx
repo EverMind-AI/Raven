@@ -780,10 +780,10 @@ describe('transcript island, the delegation verbs', () => {
   }
 
   const nodeStates = (card: HTMLElement): string[] =>
-    [...card.querySelectorAll<HTMLElement>('.gnd')].map((n) => n.dataset.st!)
+    [...card.querySelectorAll<HTMLElement>('.nd')].map((n) => n.dataset.st!)
 
   const pickNode = (card: HTMLElement, i: number): void => {
-    card.querySelectorAll('.gnd')[i]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    card.querySelectorAll('.nd')[i]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   }
 
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
@@ -1159,7 +1159,7 @@ describe('transcript island, delegated calls', () => {
       mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'tb-scan', status: 'completed' })
     })
     const card = openDagCard()
-    const nodes = [...card.querySelectorAll<HTMLElement>('.gnd')]
+    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
     expect(nodes).toHaveLength(2)
     expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'pending'])
     /* The dependency the event carried is drawn as an edge, which is the whole
@@ -1201,7 +1201,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
     expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
-    const marked = [...card.querySelectorAll<HTMLElement>('.gnd')].filter((g) => g.dataset.sel === '1')
+    const marked = [...card.querySelectorAll<HTMLElement>('.nd')].filter((g) => g.dataset.sel === '1')
     expect(marked).toHaveLength(1)
     expect(marked[0]!.querySelector('.id')!.textContent).toBe('brief')
   })
@@ -1245,7 +1245,7 @@ describe('transcript island, delegated calls', () => {
       mount.dagFeed('dag.node_updated', { run_id: 'r5', node: 'brief', status: 'failed' })
     })
     const card = openDagCard()
-    const at = (i: number): Element => card.querySelectorAll('.gnd')[i] as Element
+    const at = (i: number): Element => card.querySelectorAll('.nd')[i] as Element
     expect(card.querySelector('.npanel .nm')!.textContent).toBe('brief')
 
     act(() => { at(1).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
@@ -1287,7 +1287,7 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
     await act(async () => { await Promise.resolve(); await Promise.resolve() })
-    const nodes = [...card.querySelectorAll<HTMLElement>('.gnd')]
+    const nodes = [...card.querySelectorAll<HTMLElement>('.nd')]
     expect(nodes.map((n) => n.dataset.st)).toEqual(['completed', 'running'])
     act(() => { nodes[1]!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     const panel = card.querySelector('.npanel') as HTMLElement
