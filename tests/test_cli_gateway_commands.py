@@ -519,7 +519,7 @@ def test_gateway_provider_resolves_vendors_per_call():
 
 
 # ---------------------------------------------------------------------------
-# _build_deliverable_store — deliver_files is gated on the web channel
+# _build_deliverable_store — every gateway channel can deliver files
 # ---------------------------------------------------------------------------
 #
 # The gateway's build path (agent + channel + cron + heartbeat stack) hangs
@@ -529,8 +529,6 @@ def test_gateway_provider_resolves_vendors_per_call():
 
 
 def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
-    """The web channel is the only surface that can render a delivery box, so it
-    is the only one that constructs the store that enables the tool."""
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.cli.gateway_commands import _build_deliverable_store
     from raven.config.schema import Config
@@ -543,14 +541,15 @@ def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) ->
     assert isinstance(store, DeliverableStore)
 
 
-def test_gateway_passes_no_store_when_web_disabled(tmp_config: Path) -> None:
+def test_gateway_builds_deliverables_store_when_web_disabled(tmp_config: Path) -> None:
+    from raven.agent.tools._deliverables import DeliverableStore
     from raven.cli.gateway_commands import _build_deliverable_store
     from raven.config.schema import Config
 
     cfg = Config()
     cfg.gateway.web.enabled = False
 
-    assert _build_deliverable_store(cfg) is None
+    assert isinstance(_build_deliverable_store(cfg), DeliverableStore)
 
 
 # ---------------------------------------------------------------------------

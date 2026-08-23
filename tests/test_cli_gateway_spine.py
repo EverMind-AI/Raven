@@ -13,6 +13,7 @@ from raven.spine import (
     TurnRequest,
     Usage,
 )
+from raven.spine.delivery import Capabilities
 from raven.spine.message import Media
 
 
@@ -32,6 +33,7 @@ def _req(text="ping", *, channel="telegram", chat_id="c1", conversation="cron:1"
 class _FakeChannel:
     def __init__(self, name="telegram") -> None:
         self.name = name
+        self.capabilities = Capabilities()
         self.sent: list[tuple[str, str, list[str] | None]] = []
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:

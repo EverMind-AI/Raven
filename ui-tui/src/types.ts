@@ -160,7 +160,8 @@ export interface Episode {
 
 export interface Msg {
   info?: SessionInfo
-  kind?: 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  kind?: 'artifacts' | 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
+  artifacts?: TurnArtifacts
   panelData?: PanelData
   role: Role
   text: string
@@ -179,6 +180,20 @@ export interface Msg {
   todos?: TodoItem[]
   todoIncomplete?: boolean
   todoCollapsedByDefault?: boolean
+}
+
+export interface TurnArtifactFile {
+  change?: 'edit' | 'new'
+  ext: string
+  missing?: boolean
+  name: string
+  size?: number
+  title?: string
+}
+
+export interface TurnArtifacts {
+  changes: TurnArtifactFile[]
+  deliveries: TurnArtifactFile[]
 }
 
 export type Role = 'assistant' | 'system' | 'tool' | 'user'

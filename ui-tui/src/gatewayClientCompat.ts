@@ -111,7 +111,8 @@ export class GatewayClientCompat extends EventEmitter {
     this.startPromise = (async () => {
       await this.rpcClient.rpc('system.hello', {
         client_version: CLIENT_VERSION,
-        client_capabilities: CLIENT_CAPABILITIES
+        client_capabilities: CLIENT_CAPABILITIES,
+        surface: 'tui'
       })
       // Defer event publish so `useMainApp.ts`'s useEffect (which attaches
       // `.on('event', ...)` then calls `drain()`) can mount before we

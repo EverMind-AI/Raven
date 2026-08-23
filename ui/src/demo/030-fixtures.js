@@ -188,6 +188,27 @@ const GTM_DOC = `## GTM Agent 赛道对比
 Unify 从信号起。
 `;
 
+const GTM_DELIVERY_FILES = [
+  { path:'research/gtm-compare.md', name:'gtm-compare.md', title:'GTM agent 赛道对比', size:1824, media_type:'text/markdown' },
+  { path:'research/pricing.csv', name:'pricing.csv', title:'产品定价明细', size:936, media_type:'text/csv' },
+  { path:'research/source-notes.pdf', name:'source-notes.pdf', title:'官网摘录', size:88420, media_type:'application/pdf' },
+  { path:'research/market-map.xlsx', name:'market-map.xlsx', title:'市场分层', size:24118, media_type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { path:'research/brief.docx', name:'brief.docx', title:'研究摘要', size:16820, media_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+];
+
+const GTM_FILE_EVENTS = [
+  { t:'t+', d:180, id:6, n:'write_file', a:{ path:'research/pricing.csv', content:'product,plan,price\nClay,Launch,167\n11x,Digital Worker,custom\nUnify,Growth,custom\n' } },
+  { t:'t-', d:220, id:6, ok:true, r:'wrote research/pricing.csv (4 lines)', ms:220 },
+  { t:'t+', d:160, id:7, n:'write_file', a:{ path:'research/market-map.json', content:'{"leaders":["Clay","11x","Unify"],"reviewed":"2026-08"}\n' } },
+  { t:'t-', d:190, id:7, ok:true, r:'wrote research/market-map.json (1 line)', ms:190 },
+  { t:'t+', d:150, id:8, n:'edit_file', a:{ path:'research/README.md', old_text:'## Status\nDraft\n', new_text:'## Status\nResearch complete\n' } },
+  { t:'t-', d:180, id:8, ok:true, r:'updated research/README.md', ms:180 },
+  { t:'t+', d:150, id:9, n:'edit_file', a:{ path:'research/sources.md', old_text:'- Clay\n- 11x\n', new_text:'- Clay\n- 11x\n- Unify\n' } },
+  { t:'t-', d:180, id:9, ok:true, r:'updated research/sources.md', ms:180 },
+  { t:'t+', d:260, id:10, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
+  { t:'t-', d:340, id:10, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:340 },
+];
+
 const ANSWER_GTM = `## GTM Agent 赛道速览
 
 抓取了三家代表产品的官网。**共同点是把「找线索 → 判断意图 → 个性化触达」整条链路交给 agent 自动跑**，而不再只卖数据或模板。
@@ -255,8 +276,10 @@ const RUNS = {
       { t:'t-', d:900, id:5, ok:true, r:'{"status":200,"extractor":"jina-reader","length":3960}', ms:900 },
       { t:'ep', d:420 },
       { t:'think', d:850, s:5, x:'三家数据够了，整理成对比表，再给趋势判断。要标注搜索没跑，融资数字可能滞后。' },
-      { t:'t+', d:260, id:6, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
-      { t:'t-', d:340, id:6, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:340 },
+      ...GTM_FILE_EVENTS,
+      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+        meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 一处存疑
@@ -302,8 +325,10 @@ const RUNS = {
         r:`DAG ${DAG_RUN}: 4 个节点全部完成` },
       { t:'ep', d:400 },
       { t:'think', d:850, s:5, x:'官网与检索结果对得上，可以出表。' },
-      { t:'t+', d:240, id:6, n:'write_file', a:{ path:'research/gtm-compare.md', content: GTM_DOC } },
-      { t:'t-', d:320, id:6, ok:true, r:'wrote research/gtm-compare.md (18 lines)', ms:320 },
+      ...GTM_FILE_EVENTS,
+      { t:'t+', d:120, id:11, n:'deliver_files', a:{ files:[{ path:'research/gtm-compare.md' }] } },
+      { t:'t-', d:120, id:11, ok:true, r:'Delivered 1 file: gtm-compare.md', ms:120,
+        meta:{ raven_delivery:{ files:GTM_DELIVERY_FILES } } },
       { t:'answer', d:500, x: ANSWER_GTM + `
 
 ### 可信度
@@ -405,4 +430,3 @@ let SESS = [
   { id:'k3', title:'昨日错误日志汇总', last:'2 类错误',
     when:'昨天 08:00', run:null, from:'cron', job:'j1' }
 ];
-

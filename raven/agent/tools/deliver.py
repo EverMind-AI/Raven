@@ -1,4 +1,4 @@
-"""Hand output files to the user as downloadable deliverables (web UI only)."""
+"""Register finished output files for delivery on every Raven client."""
 
 from __future__ import annotations
 
@@ -13,9 +13,6 @@ from raven.agent import workdir
 from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.base import Tool
 from raven.agent.tools.filesystem import _resolve_path, _with_current_root
-
-_WEB_CHANNEL = "web"
-
 
 @dataclass(frozen=True)
 class _DeliverCtx:
@@ -40,13 +37,6 @@ class DeliverFilesTool(Tool):
     than the return value, which the model reads: bytes and UI detail must not
     enter the model's context.
     """
-
-    # A delivery is a download box, which only the web UI has. The store is
-    # already gated on ``gateway.web.enabled``, but that gate is per process and
-    # one gateway serves the IM channels from the same registry, so without this
-    # the tool is advertised on every one of them. ``execute`` keeps its own
-    # channel check as the backstop for a caller that never set a context.
-    channels = frozenset({_WEB_CHANNEL})
 
     def __init__(
         self,
@@ -88,8 +78,8 @@ class DeliverFilesTool(Tool):
         return (
             "Deliver finished output files to the user -- the only way to hand one over. "
             "Never write a path or a link instead; neither reaches the user. Call this once "
-            "the file is on disk, for final artifacts only, not scratch files. The web UI "
-            "shows them as download cards in a Deliverables panel."
+            "the file is on disk, for final artifacts only, not scratch files. Raven renders "
+            "the resulting delivery in the form supported by the current client or channel."
         )
 
     @property
@@ -132,11 +122,6 @@ class DeliverFilesTool(Tool):
         self, files: list[dict[str, Any]] | None = None, message: str | None = None, **kwargs: Any
     ) -> str:
         ctx = self._cur()
-        if ctx.channel != _WEB_CHANNEL:
-            return (
-                f"Error: deliver_files is only available on the web UI channel "
-                f"(current channel: {ctx.channel}). Give the user the file path instead."
-            )
         if not files:
             return "Error: deliver_files needs at least one file."
 

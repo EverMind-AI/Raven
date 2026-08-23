@@ -80,6 +80,41 @@ describe('toTranscriptMessages', () => {
 
     expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toBe('Search Files ✓')
   })
+
+  it('restores delivered and changed files after a restart', () => {
+    const rows = [
+      { role: 'user', text: 'build it' },
+      {
+        role: 'assistant',
+        text: '',
+        tool_calls: [
+          { id: 'w1', name: 'write_file', arguments: JSON.stringify({ path: '/tmp/report.md' }) },
+          { id: 'e1', name: 'edit_file', arguments: JSON.stringify({ file_path: '/tmp/chart.csv' }) }
+        ]
+      },
+      {
+        role: 'tool',
+        name: 'deliver_files',
+        text: 'Delivered report.md',
+        metadata: {
+          raven_delivery: {
+            files: [{ name: 'report.md', path: '/tmp/report.md', size: 1200, missing: true }]
+          }
+        }
+      },
+      { role: 'assistant', text: 'Done.' }
+    ]
+
+    const artifacts = toTranscriptMessages(rows).find(msg => msg.kind === 'artifacts')?.artifacts
+
+    expect(artifacts?.deliveries).toEqual([
+      { ext: 'MD', missing: true, name: 'report.md', size: 1200, title: 'report.md' }
+    ])
+    expect(artifacts?.changes).toEqual([
+      { change: 'new', ext: 'MD', name: 'report.md' },
+      { change: 'edit', ext: 'CSV', name: 'chart.csv' }
+    ])
+  })
 })
 
 describe('MessageLine', () => {
@@ -123,6 +158,48 @@ describe('MessageLine', () => {
       .find(line => line.includes('Okay'))
 
     expect(renderedLine).toContain('Ψ > Okay')
+  })
+
+  it('renders compact artifact sections with a missing marker', () => {
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+    const stderr = new PassThrough()
+    let output = ''
+
+    Object.assign(stdout, { columns: 80, isTTY: false, rows: 24 })
+    Object.assign(stdin, { isTTY: false })
+    Object.assign(stderr, { isTTY: false })
+    stdout.on('data', chunk => { output += chunk.toString() })
+
+    const instance = renderSync(
+      React.createElement(MessageLine, {
+        cols: 80,
+        msg: {
+          artifacts: {
+            changes: [{ change: 'edit', ext: 'CSV', name: 'pricing.csv' }],
+            deliveries: [{ ext: 'PDF', missing: true, name: 'report.pdf', title: 'Final report' }]
+          },
+          kind: 'artifacts',
+          role: 'system',
+          text: ''
+        },
+        t: DEFAULT_THEME
+      }),
+      {
+        patchConsole: false,
+        stderr: stderr as NodeJS.WriteStream,
+        stdin: stdin as NodeJS.ReadStream,
+        stdout: stdout as NodeJS.WriteStream
+      }
+    )
+
+    instance.unmount()
+    instance.cleanup()
+
+    const rendered = stripAnsi(output)
+    expect(rendered).toContain('Final report')
+    expect(rendered).toContain('[missing]')
+    expect(rendered).toContain('pricing.csv')
   })
 })
 

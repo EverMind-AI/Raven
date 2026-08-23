@@ -484,6 +484,33 @@ async def test_session_resume_prefers_live_cache_with_unflushed_tail(
     assert msgs[1]["text"] == "unflushed tail"
 
 
+def test_resume_marks_missing_deliveries_without_dropping_metadata(tmp_path: Path) -> None:
+    present = tmp_path / "report.pdf"
+    present.write_bytes(b"pdf")
+    messages = [
+        {
+            "role": "tool",
+            "content": "Delivered files",
+            "metadata": {
+                "raven_delivery": {
+                    "message": "Final files",
+                    "files": [
+                        {"name": "report.pdf", "path": str(present), "size": 3},
+                        {"name": "gone.csv", "path": str(tmp_path / "gone.csv"), "size": 8},
+                    ],
+                },
+                "other": "kept",
+            },
+        }
+    ]
+
+    wire = session_module._map_to_wire(messages, "tui:s1")
+
+    metadata = wire[0]["metadata"]
+    assert metadata["other"] == "kept"
+    assert [item["missing"] for item in metadata["raven_delivery"]["files"]] == [False, True]
+
+
 async def test_session_resume_unknown_id_does_not_create_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resuming an unknown session_id does not write any file to the workspace."""
     cfg = load_config()

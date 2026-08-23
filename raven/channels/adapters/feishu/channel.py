@@ -19,6 +19,7 @@ from loguru import logger
 
 from raven.channels.adapters.feishu import cards, content
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.errors import transient_network
 from raven.channels.media import save_media_bytes
 from raven.channels.transcribe import transcribe_audio
@@ -42,6 +43,7 @@ _DEDUP_CAP = 1000
 
 
 class FeishuChannel(ChannelBase):
+    capabilities = Capabilities(file_attachments=True)
     """Feishu bot over a WebSocket long connection — no public IP / webhook."""
 
     name = "feishu"

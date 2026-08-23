@@ -108,15 +108,7 @@ def _build_gateway_channels(config) -> set[str]:
 
 
 def _build_deliverable_store(config):
-    """Build the store backing ``deliver_files``, gated on the web channel.
-
-    The web UI is the only surface with a download box for delivered files, so
-    the store (and, through it, the tool) exists only when
-    ``config.gateway.web.enabled`` is true. Returns ``None`` otherwise, which
-    keeps the tool unregistered everywhere else.
-    """
-    if not config.gateway.web.enabled:
-        return None
+    """Build the shared store backing ``deliver_files`` on every outlet."""
 
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.config.paths import get_deliverables_path

@@ -4,7 +4,7 @@ import { md } from '../../shell/prose'
 
 import type { WsChange } from '../workspace/types'
 import type {
-  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
+  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle, DeliveryRow,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   StatusData, StepData, StepHandle, TranscriptSource,
 } from './types'
@@ -49,20 +49,17 @@ export function artifactHead(c: WsChange): string | null {
   return out.length ? out.join('\n') : null
 }
 
-/* A product is a file the turn WROTE. An edit is not one: a change inside a
-   file that already existed is what the workspace panel's diff view is for,
-   and a second entrance to the same review is a second thing to keep in step.
-   `kind` already draws that line -- the record promotes a row to 'write' the
-   moment a write tool touches it -- so no list of extensions has to guess
-   which files count as documents. */
-export function artifactsOf(turn: number): ArtifactRow[] {
+/* Every file this turn created or edited. The workspace record already owns
+   that classification and survives live/replay through the same tool rows. */
+export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
+  if (!lane.main) return []
   let rows: WsChange[] = []
   try {
     rows = artifactsSource().changes(turn) || []
   } catch {
     return []
   }
-  return rows.filter((c) => c && c.kind === 'write').map((c) => {
+  return rows.filter(Boolean).map((c) => {
     const shown = `${c.dir || ''}${c.name || ''}` || String(c.key || '')
     const name = String(c.name || shown)
     const dot = name.lastIndexOf('.')
@@ -73,9 +70,55 @@ export function artifactsOf(turn: number): ArtifactRow[] {
       ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
       head: artifactHead(c),
       lines: c.add || 0,
+      deleted: c.del || 0,
+      change: c.kind === 'write' ? 'new' : 'edit',
     }
   })
 }
+
+const deliveriesByLane = new WeakMap<Lane, Map<number, DeliveryRow[]>>()
+
+const deliveryMap = (lane: Lane): Map<number, DeliveryRow[]> => {
+  let found = deliveriesByLane.get(lane)
+  if (!found) {
+    found = new Map()
+    deliveriesByLane.set(lane, found)
+  }
+  return found
+}
+
+export function recordDelivery(lane: Lane, turn: number, metadata: unknown): void {
+  const root = metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : null
+  const raw = root && root.raven_delivery && typeof root.raven_delivery === 'object'
+    ? root.raven_delivery as Record<string, unknown> : null
+  const files = raw && Array.isArray(raw.files) ? raw.files : []
+  if (!files.length) return
+  const rows = deliveryMap(lane).get(turn) || []
+  const byPath = new Map(rows.map((row) => [row.path, row]))
+  files.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return
+    const item = entry as Record<string, unknown>
+    const path = String(item.path || '')
+    if (!path) return
+    const name = String(item.name || path.split('/').pop() || path)
+    const dot = name.lastIndexOf('.')
+    byPath.set(path, {
+      path,
+      name,
+      title: String(item.title || name),
+      description: String(item.description || ''),
+      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
+      size: Number(item.size) || 0,
+      mediaType: String(item.media_type || ''),
+      downloadPath: String(item.download_path || ''),
+      missing: item.missing === true,
+    })
+  })
+  deliveryMap(lane).set(turn, [...byPath.values()])
+}
+
+export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
+  deliveryMap(lane).get(turn) || []
 
 /* Straight to the renderer rather than out through the shell: prose.ts is a
    pure function in this same bundle, and a bridge verb would round-trip
@@ -430,12 +473,15 @@ export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
    draw, so a reload -- which rebuilds the workspace record from history -- and
    a live turn cannot disagree about what a turn produced. */
 export function artifacts(lane: Lane, turn: number): void {
-  if (!artifactsOf(turn).length) return
-  push(lane, { v: 0, id: nextId(), kind: 'arts', turn, all: false } satisfies ArtsData)
+  if (!artifactsOf(lane, turn).length && !deliveriesOf(lane, turn).length) return
+  push(lane, {
+    v: 0, id: nextId(), kind: 'arts', turn, deliveriesOpen: false, changesOpen: false,
+  } satisfies ArtsData)
 }
 
-export function toggleArts(lane: Lane, seg: ArtsData): void {
-  seg.all = !seg.all
+export function toggleArts(lane: Lane, seg: ArtsData, section: 'deliveries' | 'changes'): void {
+  if (section === 'deliveries') seg.deliveriesOpen = !seg.deliveriesOpen
+  else seg.changesOpen = !seg.changesOpen
   bump(lane, seg)
 }
 
@@ -994,6 +1040,7 @@ export const callParts = (raw: unknown): { name: string; display: string } => {
 
 export function history(lane: Lane, messages: HistoryMessage[]): void {
   const src = source()
+  deliveriesByLane.set(lane, new Map())
   let toolRun: StepHandle | null = null
   const sealTools = (): void => { if (toolRun) { toolRun.seal(); toolRun = null } }
   const calls = callIndex(messages)
@@ -1149,6 +1196,7 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
       return
     }
     if (m.role === 'tool') {
+      recordDelivery(lane, turnNo, m.metadata)
       if (!toolRun) toolRun = newStep(lane)
       const hit = calls.get(String(m.tool_call_id || '')) || { name: '', args: null }
       const parts = callParts(hit.name || m.name || 'tool')

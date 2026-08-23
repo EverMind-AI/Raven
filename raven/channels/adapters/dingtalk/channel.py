@@ -24,6 +24,7 @@ from loguru import logger
 from raven.channels.adapters.dingtalk import parsing
 from raven.channels.adapters.dingtalk.api import DingTalkAPI
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.media import save_media_bytes
 from raven.config.schema import DingTalkConfig
 
@@ -81,6 +82,7 @@ class DingTalkCallbackHandler(CallbackHandler):
 
 
 class DingTalkChannel(ChannelBase):
+    capabilities = Capabilities(file_attachments=True)
     config: DingTalkConfig
     name = "dingtalk"
     display_name = "DingTalk"

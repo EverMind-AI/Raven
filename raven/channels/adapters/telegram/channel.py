@@ -21,6 +21,7 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from raven.channels.base import ChannelBase
+from raven.channels.contract import Capabilities
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_media_dir
 from raven.config.schema import TelegramConfig
@@ -167,6 +168,7 @@ def _markdown_to_html(text: str) -> str:
 
 
 class TelegramChannel(ChannelBase):
+    capabilities = Capabilities(file_attachments=True)
     """Telegram bot over long polling — no webhook / public IP needed."""
 
     config: TelegramConfig

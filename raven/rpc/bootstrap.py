@@ -36,6 +36,7 @@ class RpcStack:
     # surface of its own (the gateway's IM channels) needs the handle to build
     # a per-conversation routing shim over both (see RoutingQuestionBroker).
     question_broker: Any = None
+    deliverables: Any = None
 
 
 async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> RpcStack:
@@ -259,6 +260,7 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
         teardown=teardown,
         direct_targets=direct_targets,
         question_broker=question_broker,
+        deliverables=getattr(agent_loop, "_deliverables", None),
     )
 
 

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+from raven.agent.tools._deliverables import DeliverableStore
 from raven.config import load_config
 from raven.rpc import files as files_module
 from raven.rpc.transports.ws import WsGateway, build_app
@@ -173,6 +174,31 @@ async def test_file_too_large_is_refused(client: TestClient, tmp_path: Path, mon
     r = await client.get("/file", params={"path": str(tmp_path / "big.txt")}, headers=auth())
 
     assert r.status == 413
+
+
+async def test_delivered_file_uses_its_capability_route_without_the_viewer_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAVEN_SERVE_TOKEN", TOKEN)
+    path = tmp_path / "large.bin"
+    path.write_bytes(b"0123456789")
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    record = store.register(
+        path=str(path), name=path.name, media_type="application/octet-stream", size=path.stat().st_size,
+        conversation="tui:default",
+    )
+    gateway = WsGateway()
+    server = TestServer(build_app(gateway, None, deliverables=store))
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        denied = await client.head("/files/download", params={"token": record.token})
+        served = await client.head("/files/download", params={"token": record.token}, headers=auth())
+        assert denied.status == 401
+        assert served.status == 200
+        assert served.headers["Content-Disposition"].startswith("attachment;")
+    finally:
+        await client.close()
 
 
 async def test_content_type_for_known_binaries(tmp_path: Path) -> None:

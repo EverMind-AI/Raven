@@ -271,9 +271,29 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             "delegated",
             "reasoning_ms",
             "duration_ms",
+            "metadata",
         ):
             if extra_key in m:
                 entry[extra_key] = m[extra_key]
+        metadata = entry.get("metadata")
+        if isinstance(metadata, dict):
+            delivery = metadata.get("raven_delivery")
+            if isinstance(delivery, dict) and isinstance(delivery.get("files"), list):
+                entry["metadata"] = {
+                    **metadata,
+                    "raven_delivery": {
+                        **delivery,
+                        "files": [
+                            {
+                                **item,
+                                "missing": not os.path.isfile(str(item.get("path") or "")),
+                            }
+                            if isinstance(item, dict)
+                            else item
+                            for item in delivery["files"]
+                        ],
+                    },
+                }
         reasoning = m.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             entry["reasoning_content"] = reasoning

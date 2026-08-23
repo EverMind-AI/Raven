@@ -2003,13 +2003,33 @@
       "en": "Produced",
       "zh": "本轮产物"
     },
+    "gui.arts.delivered": {
+      "en": "Delivered this turn",
+      "zh": "本轮交付"
+    },
+    "gui.arts.changed": {
+      "en": "Files changed this turn",
+      "zh": "本轮文件变更"
+    },
     "gui.arts.open": {
       "en": "Open {f}",
       "zh": "打开 {f}"
     },
     "gui.arts.more": {
-      "en": "{n} more",
-      "zh": "还有 {n} 个"
+      "en": "Show {n} remaining",
+      "zh": "展开剩余 {n} 个"
+    },
+    "gui.arts.less": {
+      "en": "Show less",
+      "zh": "收起"
+    },
+    "gui.arts.new": {
+      "en": "New",
+      "zh": "新建"
+    },
+    "gui.arts.edit": {
+      "en": "Edited",
+      "zh": "编辑"
     },
     "gui.arts.lines": {
       "en": "{n} lines",
@@ -2022,6 +2042,10 @@
     "gui.arts.away": {
       "en": "opens outside",
       "zh": "交给应用打开"
+    },
+    "gui.arts.missing": {
+      "en": "[missing]",
+      "zh": "【已丢失】"
     },
     "gui.turn_died": {
       "en": "Turn failed - {e}",

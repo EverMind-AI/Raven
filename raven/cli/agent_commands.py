@@ -271,6 +271,8 @@ def register(app: typer.Typer) -> None:
             ec_config,
             registry=plugin_registry,
         )
+        from raven.agent.tools._deliverables import DeliverableStore
+        from raven.config.paths import get_deliverables_path
 
         # No cron_service here: with the REPL gone this process is never a
         # cron runner, so registering CronTool would create jobs nothing
@@ -315,6 +317,7 @@ def register(app: typer.Typer) -> None:
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
             plugin_tools=plugin_tools,
+            deliverables=DeliverableStore(get_deliverables_path()),
         )
         agent_loop.configure_personalization(config.agents.defaults.enable_personalization)
         attach_sentinel_spawn(sentinel_runner, agent_loop)

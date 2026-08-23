@@ -19,6 +19,7 @@ import asyncio
 import os
 import tempfile
 import zipfile
+from collections.abc import Callable
 from urllib.parse import quote
 
 from aiohttp import web
@@ -90,13 +91,20 @@ def _build_archive(tmp_name: str, records: list[DeliverableRecord]) -> None:
             archive.write(record.path, arcname=_unique_arcname(record.name, taken))
 
 
-def add_files_routes(app: web.Application, store: DeliverableStore | None) -> None:
+def add_files_routes(
+    app: web.Application,
+    store: DeliverableStore | None,
+    *,
+    guard: Callable[[web.Request], None] | None = None,
+) -> None:
     """Register the deliverable download routes. A None store registers nothing,
     so a gateway without the web channel exposes no download surface at all."""
     if store is None:
         return
 
     async def download(request: web.Request) -> web.StreamResponse:
+        if guard is not None:
+            guard(request)
         token = request.query.get("token")
         if not token:
             raise web.HTTPBadRequest(text="token is required")
@@ -112,6 +120,8 @@ def add_files_routes(app: web.Application, store: DeliverableStore | None) -> No
         )
 
     async def download_archive(request: web.Request) -> web.StreamResponse:
+        if guard is not None:
+            guard(request)
         tokens = request.query.getall("token", [])
         records = [r for r in (resolve_download(store, t) for t in tokens) if r is not None]
         if not records:

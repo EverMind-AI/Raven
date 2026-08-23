@@ -121,7 +121,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop)
     ws_gateway.dispatcher = stack.dispatcher
 
-    app = build_app(ws_gateway, resolve_ui_dist())
+    app = build_app(ws_gateway, resolve_ui_dist(), deliverables=stack.deliverables)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", bound_port)
