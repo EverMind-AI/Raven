@@ -407,6 +407,55 @@ describe('subagents island, an instance detail', () => {
     expect(messages[1]!.timestamp).toBe(1755900000000)
   })
 
+  it('names its own empty note instead of the list\'s', async () => {
+    /* An instance with no turns used to inherit `agents_none` -- "no background
+       work yet" -- from the shared renderer, under the row just opened. */
+    const row = inst({ handle: 'quiet', status: 'completed', resumable: true })
+    instances([row], { instanceHistory: async () => ({ turns: [] }) })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('quiet')).closest('.sarow')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(paints[0]!.opts).toMatchObject({ empty: 'gui.ws.instance_empty' })
+  })
+
+  it('says the handle once when a node names its instance after itself', async () => {
+    /* nodeId and handle are the same string when a graph writes
+       `instance: "synthesize"` on node `synthesize`, and the header printed
+       both. */
+    const same = inst({ handle: 'synthesize', status: 'completed', nodeId: 'synthesize', runId: 'r9' })
+    instances([same], { instanceHistory: async () => ({ turns: [] }) })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('synthesize')).closest('.sarow')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(document.querySelector('.sahd .trow b')?.textContent).toBe('synthesize')
+    expect(document.querySelector('.sahd .trow .sp')).toBeNull()
+  })
+
+  it('still shows the handle when the node id differs from it', async () => {
+    const minted = inst({ handle: 'research-a2a-da81fa', status: 'completed', nodeId: 'research_a2a', runId: 'r9' })
+    instances([minted], { instanceHistory: async () => ({ turns: [] }) })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('research_a2a')).closest('.sarow')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(document.querySelector('.sahd .trow b')?.textContent).toBe('research_a2a')
+    expect(document.querySelector('.sahd .trow .sp')?.textContent).toBe('research-a2a-da81fa')
+  })
+
   it('carries the conversation on, addressed to this instance', async () => {
     const said: Array<[string, string, string]> = []
     await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {

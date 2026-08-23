@@ -260,8 +260,13 @@ function InstanceDetail(
           <b>{row?.nodeId || open.handle}</b>
           {/* The handle stays visible, in the slot this header already gives
               machine-readable detail: it is what a direct turn is addressed to,
-              so it is worth being able to read even when the node names it. */}
-          {row?.nodeId ? <span className="sp">{open.handle}</span> : null}
+              so it is worth being able to read even when the node names it.
+              Only when it says something the title does not, though: a graph
+              that names a node's instance after the node itself made the header
+              read "synthesize synthesize". */}
+          {row?.nodeId && row.nodeId !== open.handle
+            ? <span className="sp">{open.handle}</span>
+            : null}
           <span className="who">{open.agent}</span>
           {row?.runId ? <span className="gr">{t('gui.ws.instance_of_graph')}</span> : null}
         </div>

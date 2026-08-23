@@ -4759,6 +4759,14 @@
       "en": "No background work yet",
       "zh": "还没有后台任务"
     },
+    "gui.ws.instance_empty": {
+      "en": "No conversation on record for this sub-agent.",
+      "zh": "这个子智能体还没有留下对话记录。"
+    },
+    "gui.ws.spawn_empty": {
+      "en": "This call has not written anything yet.",
+      "zh": "这次调用还没有产出。"
+    },
     "gui.ws.instance_forget": {
       "en": "Remove",
       "zh": "移出列表"

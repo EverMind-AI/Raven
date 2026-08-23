@@ -431,7 +431,14 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
       const row = state.instances.find((x) => x.agent === agent && x.handle === handle)
       const ctx = toInstanceCtx(r?.turns, row?.status ?? undefined)
       paintedStatus = ctx.status || null
-      verb('agentStagePaint')(box, ctx, { key: `in:${agent}:${handle}`, reset: stageFresh })
+      /* Its own empty note, like the dag stage below. Left out, the shared
+         renderer falls back to the list's `agents_none` -- "no background
+         work yet" -- under the row the reader has just opened. */
+      verb('agentStagePaint')(
+        box,
+        ctx,
+        { key: `in:${agent}:${handle}`, empty: t('gui.ws.instance_empty'), reset: stageFresh },
+      )
       stageFresh = false
     })
     .catch((e: unknown) => {
@@ -456,7 +463,11 @@ export function paintSpawn(box: HTMLElement, id: string): void {
       const who = (r && r.agent) || 'raven'
       if (state.who !== who) set({ who })
       paintedStatus = (r && r.status) || null
-      verb('agentStagePaint')(box, r, { key: `sp:${id}`, reset: stageFresh })
+      verb('agentStagePaint')(
+        box,
+        r,
+        { key: `sp:${id}`, empty: t('gui.ws.spawn_empty'), reset: stageFresh },
+      )
       stageFresh = false
     })
     .catch((e: unknown) => {
