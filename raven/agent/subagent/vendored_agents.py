@@ -456,9 +456,31 @@ def merge_vendored_seeds(configs: list[Any] | None, vendored: list[Any] | None) 
             continue
         if name not in by_name:
             order.append(name)
+        else:
+            # The one field taken back off the discovered row when the config row
+            # wins. `owns` is a manifest fact about what the agent is for, not a
+            # user preference, and config rows written before the field existed
+            # carry no answer at all -- without this the section it feeds would
+            # stay empty on every install until each agent was reinstalled.
+            # `None` is that absence; `""` is the user saying "owns nothing" and
+            # is left alone.
+            cfg = _fill_owns(cfg, by_name[name])
         by_name[name] = cfg
 
     return [by_name[name] for name in order]
+
+
+def _fill_owns(cfg: Any, discovered: Any) -> Any:
+    """``cfg`` with ``owns`` taken from ``discovered`` when it declares none."""
+    if getattr(cfg, "owns", None) is not None:
+        return cfg
+    found = getattr(discovered, "owns", None)
+    if not found:
+        return cfg
+    try:
+        return cfg.model_copy(update={"owns": found})
+    except Exception:  # noqa: BLE001 - a duck-typed row must not sink the table
+        return cfg
 
 
 def _launcher_is_gone(cfg: Any) -> bool:

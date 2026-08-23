@@ -76,6 +76,7 @@ class AgentRow:
     enabled: bool
     caps: AgentCaps
     injectable: Injectable
+    owns: str
     config: Any
     """The validated config object. Only the backend factory reads it."""
 
@@ -87,6 +88,7 @@ class AgentRow:
             self.caps.stateful,
             self.caps.reads_local_files,
             self.caps.live_progress,
+            self.owns,
         )
 
 
@@ -112,6 +114,7 @@ def _row_for(cfg: Any) -> AgentRow:
             live_progress=meta.live_progress,
         ),
         injectable=Injectable(skills=builtin, mcps=builtin),
+        owns=meta.owns,
         config=cfg,
     )
 

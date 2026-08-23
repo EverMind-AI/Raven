@@ -1013,6 +1013,18 @@ class ThirdPartyCliSubagentConfig(Base):
     automatic backstop instead.
     """
 
+    owns: str | None = None
+    """What kind of work this agent owns, as one clause completing "``<name>``
+    ...". Rendered into the identity prompt's Delegation section so the model is
+    told not to do that work itself; agents that declare nothing are absent from
+    it, which is what an install with no specialists reads as.
+
+    ``None`` is "not declared" and is filled in from the folder's manifest for a
+    vendored agent, so a config written before this field existed still gets one.
+    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
+    so that opting an agent out is possible and is not undone by that fill.
+    """
+
     name: str
     kind: Literal["cli"] = "cli"
     description: str = ""
@@ -1094,6 +1106,18 @@ class ThirdPartyOpenAISubagentConfig(Base):
     ``timeout`` is ``None`` by default, meaning no automatic limit: the run is
     ended by hand (manual stop), not by a timer. Set it to opt into an
     automatic backstop instead.
+    """
+
+    owns: str | None = None
+    """What kind of work this agent owns, as one clause completing "``<name>``
+    ...". Rendered into the identity prompt's Delegation section so the model is
+    told not to do that work itself; agents that declare nothing are absent from
+    it, which is what an install with no specialists reads as.
+
+    ``None`` is "not declared" and is filled in from the folder's manifest for a
+    vendored agent, so a config written before this field existed still gets one.
+    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
+    so that opting an agent out is possible and is not undone by that fill.
     """
 
     name: str
@@ -1249,6 +1273,18 @@ class ThirdPartyAcpSubagentConfig(Base):
     handshake nothing in the code would know which to believe.
     """
 
+    owns: str | None = None
+    """What kind of work this agent owns, as one clause completing "``<name>``
+    ...". Rendered into the identity prompt's Delegation section so the model is
+    told not to do that work itself; agents that declare nothing are absent from
+    it, which is what an install with no specialists reads as.
+
+    ``None`` is "not declared" and is filled in from the folder's manifest for a
+    vendored agent, so a config written before this field existed still gets one.
+    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
+    so that opting an agent out is possible and is not undone by that fill.
+    """
+
     name: str
     kind: Literal["acp"] = "acp"
     description: str = ""
@@ -1356,6 +1392,19 @@ class BuiltinAgentConfig(Base):
     narrows to those entries -- the empty case has to be expressible because
     "this agent gets no skills" is a real charter, and folding it into ``null``
     would advertise the opposite of what was written.
+    """
+
+    owns: str | None = None
+    """What kind of work this agent owns, as one clause completing "``<name>``
+    ...". Rendered into the identity prompt's Delegation section so the model is
+    told not to do that work itself; agents that declare nothing are absent from
+    it, which is what an install with no specialists reads as.
+
+    ``None`` is "not declared" and inherits the seed's own value when this row
+    overrides one (``_overrides`` drops a field still holding its default), so a
+    row written to retune ``skills`` cannot silently strip a seed's ownership.
+    ``""`` is the user saying this agent owns nothing -- kept distinct precisely
+    so that opting an agent out is possible and is not undone by that inherit.
     """
 
     name: str

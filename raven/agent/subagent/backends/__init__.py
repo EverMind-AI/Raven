@@ -26,7 +26,7 @@ from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_sub
 
 
 class AgentMeta(NamedTuple):
-    """One third-party sub-agent as the tool descriptions advertise it.
+    """One third-party sub-agent as the prompt surfaces advertise it.
 
     Named rather than a bare tuple because every field here is a *choice the
     model has to make correctly* — which agent, whether an ``instance`` handle
@@ -51,6 +51,17 @@ class AgentMeta(NamedTuple):
     one is about the reply reaching a human as it forms, and the model is never
     told about it. This one is about the *work* being reportable at all, which
     is what a caller planning around a long-running agent needs to know."""
+
+    owns: str = ""
+    """What kind of work this agent owns, or ``""`` when it claims none.
+
+    Unlike the three capabilities above this one is not rendered into the tool
+    descriptions: it drives the identity prompt's Delegation section instead, so
+    the rule about who does what is stated once, where the model reads it before
+    choosing a tool rather than after. That section is conditional on the turn
+    holding a tool to delegate *with* -- see ``render._delegation_block`` -- so a
+    declaration here is what makes the rule available, not what makes it appear.
+    """
 
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
@@ -102,6 +113,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             True,
             True,
             True,
+            getattr(cfg, "owns", None) or "",
         )
     if kind == "acp":
         if snapshot is None:
@@ -120,6 +132,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # the transport, not about the agent, so it is read from `kind` rather
         # than from anything the agent or the operator says.
         kind == "acp",
+        getattr(cfg, "owns", None) or "",
     )
 
 

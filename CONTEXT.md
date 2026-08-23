@@ -105,6 +105,26 @@ covering everything. Pull discovery builds no skills segment, so it has no gate 
 nothing on these grounds.
 _Avoid_: treating it as the table — the roster is the enabled subset, formatted for a prompt.
 
+**Ownership** (`owns`, on a sub-agent's manifest and on any config entry, built-in included):
+One clause naming the kind of work an agent owns, completing "`<name>` ...". Every agent
+declaring one gets a line in the identity prompt's `## Delegation` section telling the model
+not to do that work itself; an install where none declares one renders no section and reads
+byte-identically to one without the field. Distinct from `description`, which says what the
+agent *can* do and is read when choosing between agents — this says what the main agent must
+*stop* doing, and is read before it reaches for a tool. `None` means undeclared and is filled
+in for it: from the folder's manifest for a vendored agent, from the package seed for a
+built-in override, so a config written before the field existed still gets one. `""` is the
+user declaring the agent owns nothing and is never refilled.
+
+Two things never carry ownership. The generic row (`raven`) claims none whatever a config
+says, because it carries no capability bias and a line about it would prohibit the agent
+reading it from doing its own work. And the section is withheld entirely on a turn holding
+no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
+`tools.disabledTools`, and a prohibition outliving every means of handing the work over
+leaves a request with no compliant action at all. Only the paths the turn does hold are named.
+_Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
+the model reads it only once it is already choosing an agent.
+
 **Subagent working directory** (`workspace=` on every backend's `run`):
 Where a sub-agent's commands and file tools act: the *session's* working directory, the same
 one the dispatching turn's own tools get. Every dispatch supplies it — `spawn` captures

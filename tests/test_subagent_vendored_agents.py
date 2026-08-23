@@ -742,3 +742,51 @@ def test_a_manifest_that_declares_itself_off_stays_off(tree: Path) -> None:
     (row,) = va.discover_vendored_rows()
 
     assert row.enabled is False
+
+
+def test_a_manifest_can_declare_what_its_agent_owns(tree: Path) -> None:
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows
+
+    _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
+    row = next(r for r in discover_vendored_rows() if r.name == "Scribe")
+    assert row.owns == "owns decks."
+
+
+def test_a_stored_row_written_before_owns_existed_still_gets_it(tree: Path) -> None:
+    """The trap this closes: config rows win over discovered ones whole, so an
+    install whose config predates the field would never see it and the feature
+    would be silently inert until every agent was reinstalled. ``owns`` is a
+    manifest fact about what the agent is for, not a user preference, so an
+    unset one is filled from the folder."""
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+
+    folder = _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
+    # Without this the stored row's command names a launcher that is not there,
+    # which sends the merge down the wholesale-replacement path and would let
+    # this test pass without the field-level fill existing.
+    (folder / "run.py").write_text("", encoding="utf-8")
+    discovered = discover_vendored_rows()
+    stored = next(r for r in discovered if r.name == "Scribe").model_copy(
+        update={"owns": None, "description": "edited by the user"}
+    )
+
+    merged = merge_vendored_seeds([stored], discovered)
+    row = next(r for r in merged if r.name == "Scribe")
+    assert row.owns == "owns decks."
+    # Proves the fill was field-level: a wholesale swap would take the
+    # manifest's description back too.
+    assert row.description == "edited by the user"
+
+
+def test_an_explicit_empty_owns_is_the_users_opt_out(tree: Path) -> None:
+    """Absent and explicitly-blank are different answers: blank means the user
+    took the agent out of the delegation section on purpose."""
+    from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
+
+    folder = _folder(tree, "scribe", manifest={**_MANIFEST, "name": "Scribe", "owns": "owns decks."}, venv=True)
+    (folder / "run.py").write_text("", encoding="utf-8")
+    discovered = discover_vendored_rows()
+    stored = next(r for r in discovered if r.name == "Scribe").model_copy(update={"owns": ""})
+
+    merged = merge_vendored_seeds([stored], discovered)
+    assert next(r for r in merged if r.name == "Scribe").owns == ""
