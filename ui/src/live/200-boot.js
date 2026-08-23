@@ -1,4 +1,18 @@
 /* ---- boot ---------------------------------------------------------- */
+DS.onboard = {
+  options: () => rpc.call('model.options', {}),
+  saveKey: (slug, api_key, api_base) => rpc.call('model.save_key', {
+    slug,
+    ...(api_key ? { api_key } : {}),
+    ...(api_base ? { api_base } : {}),
+  }),
+  setModel: (value, provider) => rpc.call('config.set', { key: 'model', value, provider }),
+  recheck: async () => {
+    try { return (await rpc.call('setup.status', {})).provider_configured !== false; }
+    catch { return true; }
+  },
+};
+
 (async () => {
   /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page
@@ -49,19 +63,7 @@
       const cannedInstead = /[?&]onboard=demo/.test(location.search);
       if (!cannedInstead && (setup.provider_configured === false
           || /[?&]onboard=1/.test(location.search))) {
-        showOnboard({
-          options: () => rpc.call('model.options', {}),
-          saveKey: (slug, api_key, api_base) => rpc.call('model.save_key', {
-            slug,
-            ...(api_key ? { api_key } : {}),
-            ...(api_base ? { api_base } : {}),
-          }),
-          setModel: (value, provider) => rpc.call('config.set', { key: 'model', value, ...(provider ? { provider } : {}) }),
-          recheck: async () => {
-            try { return (await rpc.call('setup.status', {})).provider_configured !== false; }
-            catch { return true; }
-          },
-        });
+        showOnboard();
       }
     } catch (e) {
       if (window.console) console.warn('[live boot] setup.status failed; skipping onboarding gate', e);
@@ -85,4 +87,3 @@
     bootFail(e);
   }
 })();
-
