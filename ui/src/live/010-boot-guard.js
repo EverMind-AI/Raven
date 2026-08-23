@@ -38,7 +38,7 @@ window.__liveBoot = 1;
    task as the demo paint, so nothing mock survives to the first frame) and hold
    the session rail on skeleton rows until the real list lands. */
 SESS = []; cur = null;
-SKILLS.length = 0; PLUGINS.length = 0; CRONS.length = 0; TOOLS.length = 0;
+SKILLS.length = 0; PLUGINS.length = 0; CRONS.length = 0;
 $('#stage').innerHTML = '';
 $('#flash').textContent = '';
 $('#title').textContent = T('gui.new_task');
@@ -51,5 +51,4 @@ let listReady = false;
   };
   drawList();
 }
-
 

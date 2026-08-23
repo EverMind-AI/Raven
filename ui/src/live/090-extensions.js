@@ -1,8 +1,8 @@
 /* ---- module pages: real data ---------------------------------------
-   Real lists are loaded on page open and written into the demo's data
-   arrays IN PLACE, so every existing renderer keeps working. Mutations
-   the demo makes locally (t.on = ..., c.state = ...) are intercepted
-   with property setters that persist through settings.set. */
+   Skills and plugins still refill the demo arrays their legacy pages read.
+   Built-in tools belong only to DS.settings now, so live keeps those rows in
+   its own list. Row mutations are intercepted with property setters that
+   persist through settings.set. */
 
 const fmt2 = (n) => String(n).padStart(2, '0');
 function fmtStamp(ms) {
@@ -31,6 +31,7 @@ const TOOL_DANGER = new Set(['write_file', 'edit_file', 'exec']);
 
 let disabledToolsLive = [];
 let pluginsDisabledLive = [];
+let toolsLive = [];
 
 /* The engine re-reads tools.disabledTools once per assembled tool array, so the
    toggle lands on the next turn. Not the same promise as the plugin toggle below:
@@ -113,8 +114,7 @@ async function loadExt() {
   const raw = cfg.settings || {};
   disabledToolsLive = (raw.tools && raw.tools.disabledTools) || [];
   pluginsDisabledLive = (raw.plugins && raw.plugins.disabled) || [];
-  TOOLS.length = 0;
-  ext.tools.filter((t) => !t.mcp_server).forEach((t) => TOOLS.push(mkToolRow(t)));
+  toolsLive = ext.tools.filter((t) => !t.mcp_server).map(mkToolRow);
   SKILLS.length = 0;
   ext.skills.forEach((s) => SKILLS.push(mkSkillRow(s)));
   PLUGINS.length = 0;
@@ -138,4 +138,3 @@ openCaps = async function (tab) {
   try { await loadExt(); extLoaded = true; } catch (e) { toast(`加载失败：${e.message || e}`); }
   drawCaps(); drawCapsBadge();
 };
-
