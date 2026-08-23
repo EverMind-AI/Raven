@@ -682,7 +682,7 @@ export interface DirectTarget {
   handle: string;
 }
 /**
- * One sub-agent instance this session has used, verbatim from the instance registry. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` are set only on a dag-node row.
+ * One sub-agent instance this session has used, verbatim from the instance registry apart from `resumable`. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` name the DAG node an instance belongs to: set on a dag-node row, and on the ordinary row of a stateful node, which is what lets one invocation's two rows be reported as one.
  */
 export interface InstanceRow {
   sessionKey: string;
@@ -695,6 +695,10 @@ export interface InstanceRow {
   nodeId?: string;
   createdAtMs?: number;
   updatedAtMs?: number;
+  /**
+   * Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row.
+   */
+  resumable?: boolean;
 }
 /**
  * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.

@@ -80,6 +80,86 @@ def _session_dir(agent_loop_factory: "AgentLoopFactory | None", session_key: str
         return None
 
 
+def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per invocation: a stateful DAG node's two rows become one.
+
+    Such a node owns both a ``dag-node`` row, which carries its status, and an
+    ordinary row for the handle its sub-agent committed under. Neither alone is
+    reportable: the ordinary row never receives a status, because the DAG path
+    does not go through ``spawn``, and the ``dag-node`` handle names a node
+    rather than a conversation, so it cannot be resumed. The pair is therefore
+    reported as the addressable row wearing the node's status.
+
+    A stateless node runs on no handle and keeps its ``dag-node`` row -- with
+    no ordinary row to fall back to, dropping it would take that node off the
+    list altogether. This is why the two are paired rather than one ``kind``
+    being filtered out wholesale.
+    """
+    by_node: dict[tuple[str, str], dict[str, Any]] = {}
+    # A node that declares no instance handle commits under its task id, which is
+    # the node id. Rows written before the link existed carry no ``nodeId``, so
+    # that equality is the only thing left to pair them by -- and it is an exact
+    # match on a name the runner chose, not a guess at ``mint_handle``'s slug.
+    by_name: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        run_id, node_id = row.get("runId"), row.get("nodeId")
+        if row.get("kind") == "dag-node" and isinstance(run_id, str) and isinstance(node_id, str):
+            by_node[(run_id, node_id)] = row
+            by_name.setdefault((str(row.get("agent")), node_id), []).append(row)
+
+    def paired(row: dict[str, Any]) -> dict[str, Any] | None:
+        run_id, node_id = row.get("runId"), row.get("nodeId")
+        if isinstance(run_id, str) and isinstance(node_id, str):
+            return by_node.get((run_id, node_id))
+        # Only when exactly one node answers to the name: two runs of one graph
+        # in a session both hold a node called `synthesize`, and a handle that
+        # cannot say which of them it ran is not evidence about either.
+        same = by_name.get((str(row.get("agent")), str(row.get("handle"))), [])
+        return same[0] if len(same) == 1 else None
+
+    claimed: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("kind") == "dag-node":
+            continue
+        node = paired(row)
+        if node is None:
+            out.append(row)
+            continue
+        claimed.add((str(node.get("runId")), str(node.get("nodeId"))))
+        out.append(
+            {
+                **row,
+                "status": node.get("status") or row.get("status"),
+                "runId": node.get("runId"),
+                "nodeId": node.get("nodeId"),
+            }
+        )
+    out.extend(node for key, node in by_node.items() if key not in claimed)
+    return sorted(out, key=lambda r: r.get("updatedAtMs") or 0, reverse=True)
+
+
+def _mark_resumable(rows: list[dict[str, Any]], manager: Any) -> list[dict[str, Any]]:
+    """Say per row whether a conversation can be opened with it.
+
+    Answered here rather than left to each front end: statefulness is a
+    property of the agent's configured backend, so a reader guessing from
+    ``kind`` calls an acp instance unresumable -- and every surface would have
+    to guess the same way independently. A ``dag-node`` row is never
+    addressable whatever its agent can do.
+    """
+
+    def resumable(row: dict[str, Any]) -> bool:
+        if row.get("kind") == "dag-node" or manager is None:
+            return False
+        try:
+            return bool(manager.declared_stateful(row.get("agent")))
+        except Exception:  # noqa: BLE001 - an unreadable roster is not a resumable one
+            return False
+
+    return [{**row, "resumable": resumable(row)} for row in rows]
+
+
 async def instances_list(
     params: dict[str, Any],
     *,
@@ -91,14 +171,15 @@ async def instances_list(
     handoff = getattr(loop, "_direct_handoff", None)
     session_key = str(params.get("session_key") or "")
 
+    reconciled = reconcile_instance_rows(
+        get_registry().list_instances(session_key),
+        live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
+        # Every graph tool, not just the registered one -- see
+        # ``raven.agent.subagent_dag.live``.
+        active_run_ids=(lambda: live_run_ids(loop)),
+    )
     return {
-        "instances": reconcile_instance_rows(
-            get_registry().list_instances(session_key),
-            live_handles=(lambda key: manager.live_handles(key) if manager is not None else set()),
-            # Every graph tool, not just the registered one -- see
-            # ``raven.agent.subagent_dag.live``.
-            active_run_ids=(lambda: live_run_ids(loop)),
-        ),
+        "instances": _mark_resumable(_collapse_dag_rows(reconciled), manager),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }
 
@@ -428,17 +509,51 @@ def _dag_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list[
     return out
 
 
+def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str) -> str | None:
+    """The ``dag-node`` record the named row was reported *with*, if any.
+
+    Read back through ``_collapse_dag_rows`` rather than off the row's own
+    ``runId``: what a client asks to forget is one row of the collapsed list,
+    and the pairing that produced it is the only thing that says which status
+    record would otherwise survive. Rows written before ``link_dag_node``
+    existed carry no ``runId`` at all and are paired by name, so reading the
+    field here would miss exactly those.
+
+    ``None`` for the unpaired ``dag-node`` row of a stateless node, whose own
+    handle is already the one being forgotten.
+    """
+    for row in _collapse_dag_rows(rows):
+        if row.get("agent") != agent or row.get("handle") != handle:
+            continue
+        run_id, node_id = row.get("runId"), row.get("nodeId")
+        if not isinstance(run_id, str) or not isinstance(node_id, str):
+            return None
+        paired = f"{run_id}/{node_id}"
+        return None if paired == handle else paired
+    return None
+
+
 async def instances_forget(params: dict[str, Any]) -> dict[str, Any]:
     """Drop one instance's registry row.
+
+    Both records where the row is a collapsed pair. A stateful DAG node is
+    listed as one row and has to be forgotten as one: dropping only the
+    addressable handle leaves the node's status record behind, and the next
+    ``instances`` reports *that* on its own -- so the row the reader dismissed
+    came back, unaddressable, on the following refresh.
 
     The record directories stay: they are the audit trail, and the handoff the
     main agent was given names paths inside them.
     """
-    removed = await get_registry().forget(
-        str(params.get("session_key") or ""),
-        str(params.get("agent") or ""),
-        str(params.get("handle") or ""),
-    )
+    registry = get_registry()
+    session_key = str(params.get("session_key") or "")
+    agent = str(params.get("agent") or "")
+    handle = str(params.get("handle") or "")
+
+    paired = _paired_handle(registry.list_instances(session_key), agent, handle)
+    removed = await registry.forget(session_key, agent, handle)
+    if paired is not None:
+        removed = await registry.forget(session_key, agent, paired) or removed
     return {"removed": bool(removed)}
 
 

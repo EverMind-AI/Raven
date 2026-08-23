@@ -39,6 +39,19 @@ const turnDur = () => {
 
 function onEvent(ev) {
   const p = ev.payload || {};
+  /* A turn addressed to a sub-agent instance, not to this conversation. The
+     client holds ONE subscription per session, and the lane stamps every event
+     of a direct chat with its `target` precisely so the two can be told apart
+     here (see `_subscription` in raven/rpc/spine.py); an untagged frame is the
+     main agent's.
+
+     Dropping them was already the effect -- a delta arriving with no turn of
+     ours open finds no slot to land in -- but only by accident. Send a direct
+     turn while the main agent is answering and that slot exists, and one
+     instance's words get typed into the conversation as if raven had said them.
+     These belong on the instance's own page, which reads them back through
+     `subagents.instance.history`. */
+  if (p.target) { RavenIslands.subagents.directEvent(p.target, ev.type); return; }
   if (ev.type === 'message.start') {
     /* Read BEFORE busy is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */

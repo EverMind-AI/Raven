@@ -31,12 +31,16 @@ def _isolated_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> insta
 
 
 class _FakeManager:
-    def __init__(self, live: set[tuple[str, str]] | None = None) -> None:
+    def __init__(self, live: set[tuple[str, str]] | None = None, stateful: set[str] | None = None) -> None:
         self._live = live or set()
+        self._stateful = stateful or set()
         self.session_dirs: dict[str, Path] = {}
 
     def live_handles(self, session_key: str) -> set[tuple[str, str]]:
         return self._live
+
+    def declared_stateful(self, agent: str | None) -> bool:
+        return agent in self._stateful
 
     def _session_dir(self, session_key: str) -> Path:
         return self.session_dirs[session_key]
@@ -928,3 +932,209 @@ async def test_instance_create_without_a_live_loop_fails_rather_than_reporting_s
     would leave the picker announcing an instance that does not exist."""
     with pytest.raises(RuntimeError, match="no agent loop"):
         await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=None)
+
+
+# ── one row per invocation ───────────────────────────────────────────────────
+# A stateful DAG node owns two records: its own status row, and the handle its
+# sub-agent committed under. Reported separately, four fan-out nodes read back
+# as eight instances, each node once as a handle nothing can resume.
+
+
+async def test_a_stateful_node_is_reported_once_on_its_addressable_handle(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_dag_node("s1", "r1", "research_a2a", "hermes", "completed")
+    await _isolated_registry.link_dag_node("s1", "hermes", "research-a2a-726da8", "r1", "research_a2a")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["handle"] for r in out["instances"]] == ["research-a2a-726da8"]
+    row = out["instances"][0]
+    # The node's status, which only the dag-node row carries: the DAG never goes
+    # through `spawn`, so nothing ever writes a status on the ordinary row.
+    assert row["status"] == "completed"
+    assert (row["runId"], row["nodeId"]) == ("r1", "research_a2a")
+
+
+async def test_a_whole_fan_out_is_one_row_per_node(_isolated_registry: Any) -> None:
+    nodes = ["research_a2a", "research_mcp", "research_acp", "synthesize"]
+    for node in nodes:
+        await _isolated_registry.upsert_dag_node("s1", "r1", node, "hermes", "completed")
+        await _isolated_registry.link_dag_node("s1", "hermes", f"{node}-h", "r1", node)
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert len(out["instances"]) == len(nodes)
+    assert {r["nodeId"] for r in out["instances"]} == set(nodes)
+
+
+async def test_a_stateless_node_keeps_the_only_row_it_has(_isolated_registry: Any) -> None:
+    """It runs on no handle, so there is no ordinary row to fall back to --
+    filtering ``dag-node`` wholesale would take the node off the list."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "shape", "stateless-agent", "completed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["kind"], r["handle"]) for r in out["instances"]] == [("dag-node", "r1/shape")]
+
+
+async def test_a_node_that_committed_under_its_own_id_is_paired_too(_isolated_registry: Any) -> None:
+    """Rows written before the link existed carry no ``nodeId``. A node that
+    declared no handle commits under its task id, which is the node id, so that
+    equality still pairs them -- otherwise every session that already ran keeps
+    reporting its graph twice for good."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "synthesize", "claude_code", "completed")
+    await _isolated_registry.commit("s1", "claude_code", "synthesize", "sess-a")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["handle"], r["status"], r["nodeId"]) for r in out["instances"]] == [
+        ("synthesize", "completed", "synthesize")
+    ]
+
+
+async def test_two_runs_of_one_node_name_are_left_alone(_isolated_registry: Any) -> None:
+    """The name pairing is a fallback and must not guess: with two runs holding a
+    node of the same name, a handle cannot say which of them it ran."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "synthesize", "claude_code", "completed")
+    await _isolated_registry.upsert_dag_node("s1", "r2", "synthesize", "claude_code", "failed")
+    await _isolated_registry.commit("s1", "claude_code", "synthesize", "sess-a")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert sorted(r["handle"] for r in out["instances"]) == ["r1/synthesize", "r2/synthesize", "synthesize"]
+
+
+async def test_a_spawn_that_belongs_to_no_graph_is_untouched(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_spawn("s1", "hermes", "lone", "completed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["handle"] for r in out["instances"]] == ["lone"]
+    assert out["instances"][0].get("runId") is None
+
+
+async def test_the_node_a_handle_belongs_to_survives_a_later_status_write(_isolated_registry: Any) -> None:
+    """Every writer rebuilds its record whole, and the link is the only thing
+    that can pair a minted handle back to its node."""
+    await _isolated_registry.link_dag_node("s1", "hermes", "h", "r1", "shape")
+    await _isolated_registry.commit("s1", "hermes", "h", "cli-session-9")
+    await _isolated_registry.upsert_spawn("s1", "hermes", "h", "running")
+
+    rows = _isolated_registry.list_instances("s1")
+
+    assert [(r["runId"], r["nodeId"], r["agentId"]) for r in rows] == [("r1", "shape", "cli-session-9")]
+
+
+async def test_a_link_written_before_the_binding_does_not_retype_the_row(_isolated_registry: Any) -> None:
+    """The link lands when the node dispatches, which is before an acp backend
+    has a session id to commit -- stamping ``cli`` there would make ``lookup``
+    refuse the acp id that arrives afterwards."""
+    await _isolated_registry.link_dag_node("s1", "raven-acp", "h", "r1", "shape")
+    await _isolated_registry.commit("s1", "raven-acp", "h", "acp-session-1", kind="acp")
+
+    assert await _isolated_registry.lookup("s1", "raven-acp", "h", kind="acp") == "acp-session-1"
+
+
+# ── which rows can be talked to ──────────────────────────────────────────────
+
+
+async def test_instances_say_which_rows_can_be_talked_to(_isolated_registry: Any) -> None:
+    """The predicate is the manager's, not the row's: statefulness belongs to the
+    agent's configured backend, and every front end guessing at it separately is
+    how one of them calls an acp instance unresumable."""
+    await _isolated_registry.upsert_spawn("s1", "hermes", "chatty", "completed")
+    await _isolated_registry.upsert_spawn("s1", "one-shot", "quiet", "completed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "shape", "hermes", "completed")
+    manager = _FakeManager(stateful={"hermes"})
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+
+    assert {r["handle"]: r["resumable"] for r in out["instances"]} == {
+        "chatty": True,
+        "quiet": False,
+        # A handle that names a node is not a conversation, whatever its agent can do.
+        "r1/shape": False,
+    }
+
+
+async def test_a_manager_that_cannot_answer_statefulness_reports_not_resumable(_isolated_registry: Any) -> None:
+    class _Broken(_FakeManager):
+        def declared_stateful(self, agent: str | None) -> bool:
+            raise RuntimeError("roster unreadable")
+
+    await _isolated_registry.upsert_spawn("s1", "hermes", "h", "completed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_Broken())))
+
+    assert [r["resumable"] for r in out["instances"]] == [False]
+
+
+# ── forgetting a row that is really two records ──────────────────────────────
+#
+# The list reports a stateful DAG node as one row, so it has to be forgettable as
+# one. Dropping only the addressable handle left the node's status record behind,
+# and the next list reported *that* on its own -- the row the reader dismissed
+# came back, as something nothing can be said to.
+
+
+async def test_forgetting_a_collapsed_dag_row_does_not_bring_it_back(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_dag_node("s1", "r1", "research_a2a", "hermes", "completed")
+    await _isolated_registry.link_dag_node("s1", "hermes", "research-a2a-726da8", "r1", "research_a2a")
+    factory = _factory(_FakeLoop(_FakeManager()))
+
+    before = await instances_list({"session_key": "s1"}, agent_loop_factory=factory)
+    assert [r["handle"] for r in before["instances"]] == ["research-a2a-726da8"]
+
+    forgotten = await instances_forget({"session_key": "s1", "agent": "hermes", "handle": "research-a2a-726da8"})
+
+    assert forgotten == {"removed": True}
+    after = await instances_list({"session_key": "s1"}, agent_loop_factory=factory)
+    assert after["instances"] == []
+
+
+async def test_forgetting_a_name_paired_row_takes_the_node_record_too(_isolated_registry: Any) -> None:
+    """Paired by name rather than by link, which is every session that ran before
+    the link existed -- and exactly the case reading ``runId`` off the named
+    record would miss, since that record has none."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "synthesize", "claude_code", "completed")
+    await _isolated_registry.commit("s1", "claude_code", "synthesize", "sess-a")
+    factory = _factory(_FakeLoop(_FakeManager()))
+
+    await instances_forget({"session_key": "s1", "agent": "claude_code", "handle": "synthesize"})
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=factory)
+    assert out["instances"] == []
+
+
+async def test_forgetting_a_stateless_nodes_own_row_removes_it(_isolated_registry: Any) -> None:
+    """Its handle already *is* ``<run>/<node>``; there is no second record to
+    chase, and chasing one would delete the row twice."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "shape", "oneshot", "completed")
+
+    forgotten = await instances_forget({"session_key": "s1", "agent": "oneshot", "handle": "r1/shape"})
+
+    assert forgotten == {"removed": True}
+    assert _isolated_registry.list_instances("s1") == []
+
+
+async def test_forgetting_an_unpaired_handle_leaves_both_runs_nodes_alone(_isolated_registry: Any) -> None:
+    """Two runs hold a node of that name, so the handle says nothing about which
+    of them it ran -- and a row the list refuses to pair must not be forgotten as
+    a pair either, or dismissing it silently takes a node of the other run."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "synthesize", "claude_code", "completed")
+    await _isolated_registry.upsert_dag_node("s1", "r2", "synthesize", "claude_code", "failed")
+    await _isolated_registry.commit("s1", "claude_code", "synthesize", "sess-a")
+
+    await instances_forget({"session_key": "s1", "agent": "claude_code", "handle": "synthesize"})
+
+    assert sorted(r["handle"] for r in _isolated_registry.list_instances("s1")) == [
+        "r1/synthesize",
+        "r2/synthesize",
+    ]
+
+
+async def test_forgetting_a_lone_spawn_is_unchanged(_isolated_registry: Any) -> None:
+    """No graph, nothing to pair, and the answer is still the plain one."""
+    await _isolated_registry.upsert_spawn("s1", "hermes", "lone", "completed")
+
+    assert await instances_forget({"session_key": "s1", "agent": "hermes", "handle": "lone"}) == {"removed": True}
+    assert _isolated_registry.list_instances("s1") == []

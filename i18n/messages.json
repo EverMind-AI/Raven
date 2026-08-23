@@ -4707,6 +4707,46 @@
       "en": "No background work yet",
       "zh": "还没有后台任务"
     },
+    "gui.ws.instance_forget": {
+      "en": "Remove",
+      "zh": "移出列表"
+    },
+    "gui.ws.instance_say": {
+      "en": "Send",
+      "zh": "发送"
+    },
+    "gui.ws.instance_say_hint": {
+      "en": "Carry on with {name}",
+      "zh": "继续和 {name} 对话"
+    },
+    "gui.ws.instance_resumable": {
+      "en": "can continue",
+      "zh": "可继续"
+    },
+    "gui.ws.instance_of_graph": {
+      "en": "from a graph",
+      "zh": "来自编排"
+    },
+    "gui.ws.instance_live": {
+      "en": "Working",
+      "zh": "进行中"
+    },
+    "gui.ws.instance_bad": {
+      "en": "Did not finish",
+      "zh": "未完成"
+    },
+    "gui.ws.instance_idle": {
+      "en": "Not addressed yet",
+      "zh": "尚未对话"
+    },
+    "gui.ws.instance_done": {
+      "en": "Finished",
+      "zh": "已完成"
+    },
+    "gui.ws.instance_forget_note": {
+      "en": "Drops the row. The records stay on disk.",
+      "zh": "只移除这一行,记录仍留在磁盘上。"
+    },
     "gui.ws.browser": {
       "en": "Browser",
       "zh": "浏览器"

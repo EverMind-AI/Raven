@@ -28,6 +28,29 @@ DS.agents = {
   node: (runId, node) => rpc.call('dag.node', { run_id: runId, node, session_key: cur })
     .then((r) => (r && r.node) || {}),
   absent: () => !rpcHas('subagent'),
+  /* The stateful handles. Scoped to the open session like everything else here,
+     and answering with no rows on an absent surface for the same reason `list`
+     does -- a panel that cannot tell "none" from "not supported" makes the
+     reader guess. */
+  instances: (sessionId) => {
+    if (!rpcHas('subagents')) return Promise.resolve([]);
+    return rpc.call('subagents.instances', { session_key: sessionId })
+      .then((r) => (r && r.instances) || [])
+      .catch((e) => { if (rpcGone('subagents', e)) return []; throw e; });
+  },
+  /* Addressed by (agent, handle) inside the open session: a handle is unique
+     per agent, not globally, so both halves travel. */
+  instanceHistory: (agent, handle) =>
+    rpc.call('subagents.instance.history', { session_key: cur, agent, handle }).then((r) => r || {}),
+  instanceForget: (agent, handle) =>
+    rpc.call('subagents.instance.forget', { session_key: cur, agent, handle }).then(() => undefined),
+  /* A turn addressed to one instance rather than to the conversation: the same
+     `turn.send` the composer uses, with a `target`. An instance's turn runs on
+     its own lane, so it is concurrent with the main agent's and with every other
+     instance's, and is refused only by *that* instance still answering. */
+  instanceSend: (agent, handle, text) =>
+    rpc.call('turn.send', { session_key: cur, content: text, target: { agent, handle } })
+      .then(() => undefined),
   /* The heartbeat, forwarded rather than acted on: a run in flight has to
      move on screen without being reopened, and every judgement about what
      that takes belongs to the island that is drawing it. */

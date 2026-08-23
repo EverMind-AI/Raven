@@ -2241,6 +2241,13 @@ textarea:focus, textarea:focus-visible,
    both taking the wheel is how a reader loses their place. */
 .ws-body[data-view="agents"] { display: flex; flex-direction: column; overflow: hidden; }
 .satx { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
+/* Carrying the conversation on, below the transcript rather than inside its
+   scroller: an input that scrolls away with the history is one the reader has
+   to go hunting for. Reuses .agf for the field box and only reshapes it. */
+.sasend { flex: none; gap: 6px; padding: 10px 12px 12px; border-top: 1px solid var(--line-soft); }
+.sasend .foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.sasend .why { flex: 1; min-width: 0; font-size: 11px; color: var(--clay);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The same reading measure the transcript gives itself, for the same reason: a
    panel pulled wide (or opened full screen) would otherwise set a reply in one
    200-character line. Capped, not fixed, so the ordinary narrow panel is

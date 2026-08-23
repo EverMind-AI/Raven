@@ -181,7 +181,13 @@ class InstanceRow(_Strict):
     make the TUI and the web UI disagree about what an instance is, which is the
     hardest class of bug to find later.
 
-    ``runId`` / ``nodeId`` are set only on a ``dag-node`` row.
+    ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
+    a ``dag-node`` row and also on the ordinary row of a stateful node, which is
+    what lets one invocation's two rows be reported as one.
+
+    ``resumable`` is the exception to "verbatim": the registry does not store it,
+    because whether a row can be talked to depends on the agent's configured
+    backend rather than on anything in the record.
 
     The camelCase is carried by aliases rather than by the attribute names, so
     the wire keeps the registry's spelling while the Python side stays like
@@ -198,6 +204,7 @@ class InstanceRow(_Strict):
     node_id: str | None = Field(default=None, alias="nodeId")
     created_at_ms: int | None = Field(default=None, alias="createdAtMs")
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
+    resumable: bool | None = None
 
 
 class TranscriptToolCall(_Strict):

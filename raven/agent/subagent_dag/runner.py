@@ -85,6 +85,26 @@ async def _write_node_status(session_key: str | None, run_id: str, node_id: str,
         logger.opt(exception=True).warning("DAG registry write failed for node {} (status={})", node_id, status)
 
 
+async def _link_node_instance(
+    session_key: str | None, run_id: str, node_id: str, agent: str, handle: str | None
+) -> None:
+    """Best-effort record that this node's instance handle belongs to this node.
+
+    Only a stateful node has one: a stateless node runs on no handle, so its
+    ``dag-node`` row is the only row it will ever have. Same never-fail-a-node
+    contract as ``_write_node_status``.
+    """
+    if not session_key or not handle:
+        return
+    try:
+        await asyncio.wait_for(
+            get_registry().link_dag_node(session_key, agent, handle, run_id, node_id),
+            timeout=_REGISTRY_WRITE_TIMEOUT_S,
+        )
+    except Exception:  # noqa: BLE001 - a link must never fail or hang a node
+        logger.opt(exception=True).warning("DAG registry link failed for node {} (handle={})", node_id, handle)
+
+
 @dataclass
 class DagRunResult:
     """The outcome of one DAG run, returned to the main agent."""
@@ -586,6 +606,7 @@ async def _run_node(
             {"run_id": store.run_id, "node": node.id, "status": "running", "started_at": started_at_ms},
         )
         await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
+        await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
         try:
             prompt = await render_prompt(
                 node,
