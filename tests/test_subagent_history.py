@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -209,3 +210,205 @@ def test_direct_record_survives_an_unwritable_root(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr("pathlib.Path.mkdir", boom)
     record = DirectChatRecord.open(tmp_path, agent="A", handle="h", task_id="t1", task="q")
     record.finish(status="completed", output="a")
+
+
+@pytest.mark.asyncio
+async def test_a_declared_identity_becomes_a_memory_record(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent import manager as manager_mod
+
+    calls: list[dict] = []
+
+    async def _fake_record(**kwargs) -> None:
+        calls.append(kwargs)
+        await kwargs["write"]('{"agent": "Raven-Code", "status": "settled", "memories": []}')
+
+    monkeypatch.setattr(manager_mod, "record_memories", _fake_record)
+
+    d = _session_dir(tmp_path, "web:abc")
+    record = SpawnRecord.open(d, task_id="t1", task="ask", meta={"agent": "Raven-Code"})
+    record.finish(status="completed", output="done")
+
+    await manager_mod.write_memory_record_for(
+        directory=record.dir,
+        filename="memory.json",
+        agent="Raven-Code",
+        identity=manager_mod.EverosIdentity(
+            user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:"
+        ),
+        resolve_session_id=_noop_key,
+        budget_s=0.0,
+    )
+
+    assert json.loads((record.dir / "memory.json").read_text(encoding="utf-8"))["agent"] == "Raven-Code"
+    assert calls and calls[0]["agent"] == "Raven-Code"
+
+
+async def _noop_key() -> str:
+    return "cli:abc"
+
+
+# --- the spawn path's own scheduling, through the manager --------------------
+
+
+class _StubProvider:
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+def _spawn_manager(tmp_path, *, agent: str, backend, identity=None):
+    """A manager whose ``agent``'s backend is fully under the test's control."""
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    # Declared through config, not injected: the manager reads the identity off
+    # the registry row, so a hand-placed map would test nothing.
+    manager = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path / "home",
+        session_dir=lambda key: _session_dir(tmp_path, key),
+        agents=[
+            ThirdPartyCliSubagentConfig(
+                name=agent,
+                command="cat {agent_id}",
+                resume_command="cat --resume {agent_id}",
+                everos={"userId": agent, "agentId": agent} if identity is not None else None,
+            )
+        ],
+    )
+    manager.registry._backends[agent] = backend
+    manager._submit = lambda *a, **k: None
+    return manager
+
+
+def _spawn_origin(agent: str, tmp_path) -> dict:
+    return {
+        "channel": "cli",
+        "chat_id": "direct",
+        "session_key": "s1",
+        "agent": agent,
+        "instance": None,
+        "handle": "h1",
+        "workspace": tmp_path,
+    }
+
+
+def _fake_record_calls(monkeypatch):
+    from raven.agent.subagent import manager as manager_mod
+
+    calls: list[dict] = []
+
+    async def _fake_record(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(manager_mod, "record_memories", _fake_record)
+    return calls
+
+
+def _identity() -> "object":
+    from raven.agent.subagent_memory import EverosIdentity
+
+    return EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+
+
+@pytest.mark.asyncio
+async def test_a_completed_spawn_schedules_a_memory_record(tmp_path, monkeypatch) -> None:
+    """The path a naive `finally` placement (before the `record.finish` branches
+    existed) would have gotten right by accident and wrong on every other
+    outcome -- this is the one that has to keep working.
+    """
+
+    class _Backend:
+        async def run(self, task, **kw):
+            return "ok"
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _spawn_manager(tmp_path, agent="Coder", backend=_Backend(), identity=_identity())
+
+    await manager._run_subagent_inner(
+        task_id="t1",
+        task="do it",
+        label="l",
+        origin=_spawn_origin("Coder", tmp_path),
+        executor=None,
+        provider=_StubProvider(),
+        model="m",
+    )
+    await asyncio.gather(*list(manager._record_tasks))
+
+    assert len(calls) == 1
+    assert calls[0]["agent"] == "Coder"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_spawn_still_schedules_a_memory_record(tmp_path, monkeypatch) -> None:
+    class _Backend:
+        async def run(self, task, **kw):
+            raise RuntimeError("boom")
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _spawn_manager(tmp_path, agent="Coder", backend=_Backend(), identity=_identity())
+
+    await manager._run_subagent_inner(
+        task_id="t1",
+        task="do it",
+        label="l",
+        origin=_spawn_origin("Coder", tmp_path),
+        executor=None,
+        provider=_StubProvider(),
+        model="m",
+    )
+    await asyncio.gather(*list(manager._record_tasks))
+
+    assert len(calls) == 1
+    assert calls[0]["agent"] == "Coder"
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_spawn_schedules_no_memory_record(tmp_path, monkeypatch) -> None:
+    """A recorder scheduled after a cancellation sweep's snapshot is
+    unreapable (F1) -- the fix is to never schedule one for a cancelled call.
+    """
+
+    class _Backend:
+        async def run(self, task, **kw):
+            raise asyncio.CancelledError()
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _spawn_manager(tmp_path, agent="Coder", backend=_Backend(), identity=_identity())
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager._run_subagent_inner(
+            task_id="t1",
+            task="do it",
+            label="l",
+            origin=_spawn_origin("Coder", tmp_path),
+            executor=None,
+            provider=_StubProvider(),
+            model="m",
+        )
+
+    assert manager._record_tasks == set()
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_with_no_declared_identity_schedules_no_memory_record(tmp_path, monkeypatch) -> None:
+    class _Backend:
+        async def run(self, task, **kw):
+            return "ok"
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _spawn_manager(tmp_path, agent="Coder", backend=_Backend(), identity=None)
+
+    await manager._run_subagent_inner(
+        task_id="t1",
+        task="do it",
+        label="l",
+        origin=_spawn_origin("Coder", tmp_path),
+        executor=None,
+        provider=_StubProvider(),
+        model="m",
+    )
+
+    assert manager._record_tasks == set()
+    assert calls == []

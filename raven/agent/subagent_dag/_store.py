@@ -91,6 +91,30 @@ def output_path_in(backend: Any, root: str, run_id: str, node_id: str) -> str:
     return backend.join_path(root, run_id, f"{node_id}.out.md")
 
 
+def memory_path_in(backend: Any, root: str, run_id: str, node_id: str) -> str:
+    """Path of one node's Memory record, for any run under ``root``.
+
+    Module-level for the same reason as :func:`output_path_in`: a node's
+    upstream may belong to an earlier run, whose record has to be named from
+    the layout this store writes rather than guessed.
+
+    Args:
+        backend (`BackendBase`):
+            Backend supplying the environment's path semantics.
+        root (`str`):
+            The session's DAG history root.
+        run_id (`str`):
+            The run that produced the node.
+        node_id (`str`):
+            The node id.
+
+    Returns:
+        `str`:
+            ``<root>/<run_id>/<node_id>.memory.json``.
+    """
+    return backend.join_path(root, run_id, f"{node_id}.memory.json")
+
+
 async def read_index(backend: Any, root: str) -> list[dict]:
     """Every run recorded for this session, oldest first.
 
@@ -293,6 +317,19 @@ class DagRunStore:
                 ``<run_dir>/<node_id>.transcript.jsonl``.
         """
         return self._backend.join_path(self.run_dir, f"{node_id}.transcript.jsonl")
+
+    def memory_path(self, node_id: str) -> str:
+        """Path of a node's Memory record.
+
+        Args:
+            node_id (`str`):
+                The node id.
+
+        Returns:
+            `str`:
+                ``<run_dir>/<node_id>.memory.json``.
+        """
+        return memory_path_in(self._backend, self._root, self.run_id, node_id)
 
     async def init(self, graph_json: str, node_ids: list[str] | None = None) -> None:
         """Create the run dir (implicitly) and persist ``graph.json``.

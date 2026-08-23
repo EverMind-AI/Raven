@@ -11,6 +11,10 @@
   "transcriptFormat": "text",
   "maxOutputChars": 30000,
   "timeout": null,
+  "everos": {
+    "userId": "raven-research",
+    "agentId": "raven-research"
+  },
   "recommendedLlm": {
     "provider": "custom",
     "model": "openai/gpt-5.6-sol-pro",

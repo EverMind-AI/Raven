@@ -16,6 +16,7 @@ from raven.agent.subagent_dag import (
     DagReadError,
     DagRunStore,
     DagValidationError,
+    SessionNodes,
     check_confined,
     make_run_id,
     parse_dag_spec,
@@ -675,3 +676,102 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
     # Still parseable, so a playbook's own nodes[] survives the round trip.
     spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi", "skills": ["s"]}]})
     assert spec.nodes[0].skills == ["s"]
+
+
+# --- upstream memory records appended to a node's prompt ---------------------
+
+
+def _memory_spec(nodes: list[dict]):
+    return parse_dag_spec({"nodes": nodes})
+
+
+_CHAIN = [
+    {"id": "a", "subagent": "x", "prompt_template": "first"},
+    {"id": "b", "subagent": "x", "prompt_template": "second", "depends_on": ["a"]},
+    {"id": "c", "subagent": "x", "prompt_template": "third", "depends_on": ["b"]},
+]
+
+
+async def test_a_node_is_told_its_upstream_memory_paths() -> None:
+    spec = _memory_spec(_CHAIN)
+    by_id = {n.id: n for n in spec.nodes}
+    rendered = await render_prompt(
+        by_id["c"],
+        backend=_FakeBackend(),
+        cwd="/w",
+        output_paths={},
+        runs_root="/hist/mas_dag",
+        run_id="run1",
+        by_id=by_id,
+    )
+    # Transitive: c depends on b, which depends on a.
+    assert "/hist/mas_dag/run1/b.memory.json" in rendered
+    assert "/hist/mas_dag/run1/a.memory.json" in rendered
+    # Its own record is not upstream of itself.
+    assert "c.memory.json" not in rendered
+
+
+async def test_a_root_node_is_told_nothing() -> None:
+    spec = _memory_spec(_CHAIN)
+    by_id = {n.id: n for n in spec.nodes}
+    rendered = await render_prompt(
+        by_id["a"],
+        backend=_FakeBackend(),
+        cwd="/w",
+        output_paths={},
+        runs_root="/hist/mas_dag",
+        run_id="run1",
+        by_id=by_id,
+    )
+    assert rendered == "first"
+
+
+async def test_the_block_says_what_to_do_when_a_record_is_absent() -> None:
+    spec = _memory_spec(_CHAIN)
+    by_id = {n.id: n for n in spec.nodes}
+    rendered = await render_prompt(
+        by_id["b"],
+        backend=_FakeBackend(),
+        cwd="/w",
+        output_paths={},
+        runs_root="/hist/mas_dag",
+        run_id="run1",
+        by_id=by_id,
+    )
+    # Written asynchronously after a node finishes, so absence is the common
+    # case and the node has to be told to carry on rather than wait or fail.
+    assert "may not exist yet" in rendered
+    assert "proceed without it" in rendered
+
+
+async def test_an_agent_that_cannot_read_local_files_is_told_nothing() -> None:
+    spec = _memory_spec(_CHAIN)
+    by_id = {n.id: n for n in spec.nodes}
+    rendered = await render_prompt(
+        by_id["c"],
+        backend=_FakeBackend(),
+        cwd="/w",
+        output_paths={},
+        runs_root="/hist/mas_dag",
+        run_id="run1",
+        by_id=by_id,
+        capabilities={"x": AgentCapabilities(reads_local_files=False)},
+    )
+    assert rendered == "third"
+    assert "memory.json" not in rendered
+
+
+async def test_a_cross_run_upstream_is_named_with_its_own_run() -> None:
+    spec = _memory_spec([{"id": "d", "subagent": "x", "prompt_template": "only", "depends_on": ["earlier"]}])
+    by_id = {n.id: n for n in spec.nodes}
+    rendered = await render_prompt(
+        by_id["d"],
+        backend=_FakeBackend(),
+        cwd="/w",
+        output_paths={},
+        runs_root="/hist/mas_dag",
+        run_id="run2",
+        by_id=by_id,
+        session_nodes=SessionNodes(owner={"earlier": "run1"}, state={"earlier": "completed"}),
+    )
+    assert "/hist/mas_dag/run1/earlier.memory.json" in rendered

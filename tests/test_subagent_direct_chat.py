@@ -1560,3 +1560,129 @@ async def test_a_spawned_turns_steps_are_readable_over_rpc(tmp_path, monkeypatch
     assert live[0]["content"] == "find the TODOs", "the task, which the view never typed"
     assert live[1]["tool_calls"][0]["name"] == "grep"
     assert live[2]["content"] == "3 hits"
+
+
+# --- the direct-chat path's own scheduling, through the manager --------------
+
+
+def _third_party_direct_chat_manager(tmp_path, *, run, everos=True):
+    """A stateful third-party agent whose backend is fully under the test's control."""
+    from raven.agent.subagent.manager import SubagentManager
+
+    class StubProvider:
+        def get_default_model(self):
+            return "stub"
+
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    manager = SubagentManager(
+        provider=StubProvider(),
+        workspace=tmp_path / "home",
+        session_dir=lambda key: tmp_path / "sessions" / key,
+        agents=[
+            ThirdPartyCliSubagentConfig(
+                name="Coder",
+                command="cat {agent_id}",
+                resume_command="cat --resume {agent_id}",
+                everos={"userId": "coder", "agentId": "coder"} if everos else None,
+            )
+        ],
+    )
+
+    class _Backend:
+        kind = "cli"
+        streams = False
+
+        async def run(self, *args, **kwargs):
+            return await run(*args, **kwargs)
+
+    manager.registry._backends["Coder"] = _Backend()
+    return manager
+
+
+def _fake_record_calls(monkeypatch):
+    from raven.agent.subagent import manager as manager_mod
+
+    calls: list[dict] = []
+
+    async def _fake_record(**kwargs) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(manager_mod, "record_memories", _fake_record)
+    return calls
+
+
+def _everos_identity():
+    from raven.agent.subagent_memory import EverosIdentity
+
+    return EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+
+
+@pytest.mark.asyncio
+async def test_a_completed_chat_schedules_a_memory_record(tmp_path, monkeypatch):
+    """The path a naive `finally` placement would have skipped the record on
+    every successful direct chat -- the one that has to keep working.
+    """
+
+    async def run(task, **kw):
+        return "ok"
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _third_party_direct_chat_manager(tmp_path, run=run)
+
+    await manager.chat(session_key="s1", agent="Coder", handle="h", text="hi")
+    await asyncio.gather(*list(manager._record_tasks))
+
+    assert len(calls) == 1
+    assert calls[0]["agent"] == "Coder"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_chat_still_schedules_a_memory_record(tmp_path, monkeypatch):
+    from raven.agent.subagent.direct_chat import DirectChatError
+
+    async def run(task, **kw):
+        raise RuntimeError("boom")
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _third_party_direct_chat_manager(tmp_path, run=run)
+
+    with pytest.raises(DirectChatError):
+        await manager.chat(session_key="s1", agent="Coder", handle="h", text="hi")
+    await asyncio.gather(*list(manager._record_tasks))
+
+    assert len(calls) == 1
+    assert calls[0]["agent"] == "Coder"
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_chat_schedules_no_memory_record(tmp_path, monkeypatch):
+    """A recorder scheduled after a cancellation sweep's snapshot is
+    unreapable (F1) -- the fix is to never schedule one for a cancelled turn.
+    """
+
+    async def run(task, **kw):
+        raise asyncio.CancelledError()
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _third_party_direct_chat_manager(tmp_path, run=run)
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.chat(session_key="s1", agent="Coder", handle="h", text="hi")
+
+    assert manager._record_tasks == set()
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_chat_with_no_declared_identity_schedules_no_memory_record(tmp_path, monkeypatch):
+    async def run(task, **kw):
+        return "ok"
+
+    calls = _fake_record_calls(monkeypatch)
+    manager = _third_party_direct_chat_manager(tmp_path, run=run, everos=False)
+
+    await manager.chat(session_key="s1", agent="Coder", handle="h", text="hi")
+
+    assert manager._record_tasks == set()
+    assert calls == []

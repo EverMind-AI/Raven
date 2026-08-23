@@ -994,6 +994,60 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     return preset
 
 
+class SubagentEverosConfig(Base):
+    """A sub-agent's everos identity, as the host must address it to read back
+    what that sub-agent wrote.
+
+    Declared rather than discovered. The alternative -- reading the fork's own
+    config.json next to its ``run.py`` -- would couple the host to a directory
+    convention that lives entirely inside each fork.
+    """
+
+    user_id: str | None = None
+    """Owner of this sub-agent's ``episode`` memories.
+
+    Under ``source="trace"`` this is also a write target, not just where the
+    host reads back from (as under ``source="agent"``): it is the owner
+    ``prime_from_turn`` writes the captured conversation's ``user`` rows under.
+    """
+    agent_id: str | None = None
+    """Owner of this sub-agent's ``agent_case`` memories.
+
+    Under ``source="trace"`` this is also a write target, not just where the
+    host reads back from (as under ``source="agent"``): it is the owner
+    ``prime_from_turn`` writes the captured conversation's ``assistant``/``tool``
+    rows under.
+    """
+    base_url: str | None = None
+    """everos service for this sub-agent. ``None`` takes the host's own."""
+    session_prefix: str = "cli:"
+    """What the fork's launcher prepends to the host-minted id before handing it
+    to its Raven as ``--session``. Configurable because that is a convention
+    living in each fork's run.py, not something the host controls."""
+    source: Literal["agent", "trace"] = "agent"
+    """Where this agent's memories come from.
+
+    ``agent`` -- the sub-agent runs everos itself and writes them; the host only
+    reads them back. ``trace`` -- nobody wrote anything, so the host hands
+    everos the conversation it captured and lets everos extract from it.
+
+    Declared rather than derived from ``kind``: a cli entry may be a Raven fork
+    (which writes) or an arbitrary third-party CLI such as codex (which does
+    not), so the kind cannot answer this.
+    """
+
+    @model_validator(mode="after")
+    def _check_owner_declared(self) -> "SubagentEverosConfig":
+        if not self.user_id and not self.agent_id:
+            raise ValueError("everos needs userId or agentId (it could query nothing otherwise)")
+        # A trace payload splits across both tracks -- the prompt is a `user`
+        # row and the work is `assistant`/`tool` -- so one id alone would write
+        # half of it under an owner nothing reads back.
+        if self.source == "trace" and not (self.user_id and self.agent_id):
+            raise ValueError("everos source 'trace' needs both userId and agentId")
+        return self
+
+
 class ThirdPartyCliSubagentConfig(Base):
     """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
 
@@ -1066,6 +1120,9 @@ class ThirdPartyCliSubagentConfig(Base):
     env: dict[str, str] = Field(default_factory=dict)
     timeout: int | None = None
     max_output_chars: int = 30000
+    everos: SubagentEverosConfig | None = None
+    """This agent's everos identity, or ``None`` for an agent that writes no
+    everos memory. Declaring it is what turns the Memory record on."""
 
     @model_validator(mode="after")
     def _check_stateful_matches_resume(self) -> "ThirdPartyCliSubagentConfig":
@@ -1191,6 +1248,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
     max_tokens: int | None = None
     timeout: int | None = None
     max_output_chars: int = 128000
+    everos: SubagentEverosConfig | None = None
+    """This agent's everos identity, or ``None`` for an agent the host records no
+    memory for."""
 
     @model_validator(mode="after")
     def _allow_replayed_state(self) -> "ThirdPartyOpenAISubagentConfig":
@@ -1309,6 +1369,11 @@ class ThirdPartyAcpSubagentConfig(Base):
     """Per-task ceiling for one ``session/prompt``. ``None`` means no automatic
     limit, matching the cli config: a long task is ended by hand, not a timer."""
     max_output_chars: int = 30000
+    everos: SubagentEverosConfig | None = None
+    """This agent's everos identity, or ``None`` for an agent the host records no
+    memory for. Not in :data:`ACP_UNSUPPORTED_FIELDS` because it declares nothing
+    about the agent -- it is how the *host* addresses that agent's memories, which
+    no ``initialize`` handshake reports."""
 
     @model_validator(mode="before")
     @classmethod

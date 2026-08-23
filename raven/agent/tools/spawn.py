@@ -110,6 +110,14 @@ class SpawnTool(Tool):
                 "`run_subagent_dag` instead, so the independent parts run concurrently and each "
                 "step's output reaches the next through a file."
             )
+            # The result carries this path; without a word here the agent has a
+            # directory it does not know the use of.
+            base += (
+                " The result names a `Record:` directory holding this call's prompt and output. "
+                "It may also hold `memory.json` -- what the sub-agent concluded for itself, "
+                "rather than the answer it gave you -- written after the call, so absence is "
+                "normal."
+            )
         return base
 
     @property

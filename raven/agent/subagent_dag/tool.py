@@ -44,6 +44,7 @@ from raven.agent.subagent_dag._store import SessionNodes, index_guard, read_sess
 from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
 from raven.agent.subagent_history import dag_root, session_history_root
+from raven.agent.subagent_memory import EverosIdentity
 from raven.agent.tools.base import Tool, ToolResult
 
 if TYPE_CHECKING:
@@ -237,6 +238,7 @@ class SubAgentDagTool(Tool):
         announce: DagAnnouncer | None = None,
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
+        everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
     ) -> None:
@@ -260,6 +262,11 @@ class SubAgentDagTool(Tool):
         # direct chat do. Injected rather than imported: this tool is built from
         # the same config as the manager but does not own one.
         self._state_for = state_for
+        # The manager's everos identity lookup, so a node whose sub-agent
+        # declares one leaves a Memory record on the same terms `spawn` and a
+        # direct chat do. Injected for the same reason as `state_for`: this
+        # tool is built from the same config as the manager but does not own one.
+        self._everos_for = everos_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -892,6 +899,8 @@ class SubAgentDagTool(Tool):
                 semaphore=self._gate,
                 session_key=origin.conversation,
                 state_for=self._state_for,
+                everos_for=self._everos_for,
+                capabilities=self._capability_map(),
                 run_id=run_id,
                 cancel=cancel,
                 auto_instances=auto_instances,

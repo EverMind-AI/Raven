@@ -17,6 +17,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -24,7 +25,7 @@ from pydantic import ValidationError
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SubagentManager
-from raven.config.schema import AgentDefaults
+from raven.config.schema import AgentDefaults, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -204,7 +205,9 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
     executor = _RecordingExecutor()
     announcements: list[dict[str, str]] = []
 
-    async def _capture_announcement(task_id, label, task, result, origin, status) -> None:
+    async def _capture_announcement(task_id, label, task, result, origin, status, record_dir=None) -> None:
+        # `record_dir` is accepted but not captured: this test asserts the exact
+        # announcement dict, and the record path is covered by its own tests.
         announcements.append({"result": result, "status": status})
 
     monkeypatch.setattr(manager, "_announce_result", _capture_announcement)
@@ -904,3 +907,262 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
 
     with pytest.raises(SubagentNoAnswerError, match="no answer"):
         await backend.run("research it", task_id="n2", workspace=tmp_path, executor=None)
+
+
+# --- a spawn's memory record has to be findable ------------------------------
+
+
+async def test_a_spawn_announce_names_the_record_directory() -> None:
+    """Without it the record is unreachable: the directory carries a timestamp
+    prefix the agent cannot guess, and no agent-facing tool lists spawn history.
+    A DAG's summary names its run dir for the same reason."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        "t1",
+        "audit the checkout",
+        "do the thing",
+        "done",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        "ok",
+        record_dir="/hist/web/sess1/subagents/spawn/20260818T090000Z-t1",
+    )
+
+    assert len(submitted) == 1
+    assert "/hist/web/sess1/subagents/spawn/20260818T090000Z-t1" in submitted[0].text
+
+
+async def test_a_spawn_announce_without_a_record_directory_says_nothing_about_it() -> None:
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        "t1", "l", "task", "done", {"channel": "cli", "chat_id": "direct", "session_key": "cli"}, "ok"
+    )
+
+    assert "Record:" not in submitted[0].text
+
+
+# --- a trace agent's record is primed with the call's own turn --------------
+
+
+class _StubThirdPartyBackend:
+    """A third-party backend double: answers or fails, nothing else.
+
+    Installed over the real one `AgentRegistry.apply` built (a real CLI/ACP
+    backend would shell out), so a spawn through `_run_subagent_inner` still
+    exercises the manager's own dispatch and memory-scheduling wiring end to
+    end, against a subprocess that never runs.
+    """
+
+    def __init__(self, *, reply: str | None = None, error: str | None = None) -> None:
+        self.reply = reply
+        self.error = error
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        if self.error is not None:
+            raise RuntimeError(self.error)
+        return self.reply if self.reply is not None else task
+
+
+def _third_party_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, agents: list) -> SubagentManager:
+    """A manager whose roster is real third-party config, registry isolated.
+
+    `everos_identity` and the non-trace resolver both read through
+    `get_registry()`; without pointing it at a tmp_path-scoped file, a test
+    dispatch would land a row in the developer's own
+    `~/.raven/subagent_instances.json`.
+    """
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    registry = InstanceRegistry(tmp_path / "reg.json")
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
+    return SubagentManager(provider=_StubProvider(), workspace=tmp_path, agents=agents)
+
+
+async def _run_one_spawn(manager: SubagentManager, *, agent: str, prompt: str, reply: str) -> None:
+    """Run one spawn straight through `_run_subagent_inner`, against a stub reply.
+
+    Calls the inner dispatch directly rather than `spawn()`: the background
+    task and the concurrency gate around it are somebody else's tests, and
+    this is about what one finished call wires into the memory scheduler.
+    """
+    manager.registry._backends[agent] = _StubThirdPartyBackend(reply=reply)
+    manager.set_submit(lambda req: None)
+    await manager._run_subagent_inner(
+        "task-a",
+        prompt,
+        prompt[:30],
+        {"channel": "cli", "chat_id": "direct", "session_key": "cli", "agent": agent},
+        _DummyExecutor(),
+        manager.provider,
+        manager.model,
+    )
+
+
+async def _run_one_failing_spawn(manager: SubagentManager, *, agent: str, prompt: str, error: str) -> None:
+    """Same as `_run_one_spawn`, but the backend raises instead of answering."""
+    manager.registry._backends[agent] = _StubThirdPartyBackend(error=error)
+    manager.set_submit(lambda req: None)
+    await manager._run_subagent_inner(
+        "task-a",
+        prompt,
+        prompt[:30],
+        {"channel": "cli", "chat_id": "direct", "session_key": "cli", "agent": agent},
+        _DummyExecutor(),
+        manager.provider,
+        manager.model,
+    )
+
+
+async def _drain_record_tasks(manager: SubagentManager) -> None:
+    """Wait for every memory-record background task this manager scheduled."""
+    await asyncio.gather(*list(manager._record_tasks))
+
+
+async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
+    """Make the poll after a prime fail on its first look, with no sleep.
+
+    A primed trace record still polls for what it just handed everos, and
+    there is no live everos in this test process. Raising here is what
+    `_poll` treats as "unavailable" and returns immediately for, instead of
+    sleeping through the whole backoff schedule against a host nothing is
+    listening on.
+    """
+    raise RuntimeError("no live everos in tests")
+
+
+class TestTraceSourceWiring:
+    """A `trace` agent's record is primed with the same turn the log records."""
+
+    async def test_trace_agent_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
+        primed: list[tuple[str, list[dict]]] = []
+
+        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+            primed.append((session_id, turn))
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyAcpSubagentConfig(
+                    name="Coder",
+                    command="hermes acp",
+                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
+        ):
+            await _run_one_spawn(manager, agent="Coder", prompt="read it", reply="no readme")
+            await _drain_record_tasks(manager)
+
+        assert primed, "a trace agent must be primed"
+        session_id, turn = primed[0]
+        assert session_id.startswith("trace:Coder:")
+        assert turn[0]["role"] == "user" and turn[0]["content"] == "read it"
+        assert turn[-1]["content"] == "no readme"
+
+    async def test_agent_source_is_never_primed(self, tmp_path: Path, monkeypatch) -> None:
+        primed: list[str] = []
+
+        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+            primed.append(session_id)
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Raven-Code",
+                    command="raven --prompt {prompt}",
+                    everos={"agentId": "raven-code"},
+                )
+            ],
+        )
+        with patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime):
+            await _run_one_spawn(manager, agent="Raven-Code", prompt="read it", reply="done")
+            await _drain_record_tasks(manager)
+
+        assert primed == []
+
+    async def test_a_failed_call_still_primes_with_its_error(self, tmp_path: Path, monkeypatch) -> None:
+        # The turn worth extracting from is often the one that went wrong, and
+        # append_turn already records a failure as `[failed] <error>`. The
+        # dispatch's own exception branch prepends "Error: " to whatever the
+        # backend raised, so that prefix is part of the turn too.
+        primed: list[list[dict]] = []
+
+        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+            primed.append(turn)
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyAcpSubagentConfig(
+                    name="Coder",
+                    command="hermes acp",
+                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
+        ):
+            await _run_one_failing_spawn(manager, agent="Coder", prompt="read it", error="boom")
+            await _drain_record_tasks(manager)
+
+        assert primed
+        assert "[failed] Error: boom" in primed[0][-1]["content"]
+
+    async def test_a_direct_chat_primes_with_prompt_and_answer(self, tmp_path: Path, monkeypatch) -> None:
+        """The `chat()` lane reaches `prime_from_turn` through its own `finally`
+        block, not `_run_subagent_inner`'s the spawn lane above exercises -- so
+        the wiring needs its own test rather than trusting that one covers it.
+
+        Cli rather than the acp "Coder" config the rest of this class uses:
+        `chat()` calls `_require_addressable`, which rejects a stateless agent,
+        and an acp row's statefulness comes from a live capability snapshot
+        this test has none of. A cli row's comes straight from `resumeCommand`.
+        """
+        primed: list[tuple[str, list[dict]]] = []
+
+        async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+            primed.append((session_id, turn))
+            return True
+
+        manager = _third_party_manager(
+            tmp_path,
+            monkeypatch,
+            agents=[
+                ThirdPartyCliSubagentConfig(
+                    name="Coder",
+                    command="cat {agent_id}",
+                    resume_command="cat --resume {agent_id}",
+                    everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+                )
+            ],
+        )
+        manager.registry._backends["Coder"] = _StubThirdPartyBackend(reply="no readme")
+        with (
+            patch("raven.agent.subagent.manager.prime_from_turn", _fake_prime),
+            patch("raven.agent.subagent_memory.collect_memories", _unavailable_everos),
+        ):
+            await manager.chat(session_key="cli", agent="Coder", handle="h1", text="read it")
+            await _drain_record_tasks(manager)
+
+        assert primed, "a trace agent must be primed"
+        session_id, turn = primed[0]
+        assert session_id.startswith("trace:Coder:")
+        assert turn[0]["role"] == "user" and turn[0]["content"] == "read it"
+        assert turn[-1]["content"] == "no readme"

@@ -97,6 +97,33 @@ def _append(path: Path, records: list[dict[str, Any]], *, header: dict[str, Any]
         logger.warning("Subagent instance log {} could not be appended: {}", path, exc)
 
 
+def build_turn(
+    *,
+    prompt: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
+    answer: str | None = None,
+    error: str | None = None,
+) -> list[dict[str, Any]]:
+    """One finished turn as message rows: what was asked, what the run did on
+    the way where the transport could see it, and what came back.
+
+    Separate from :func:`append_turn` because a second caller needs the same
+    rows without writing them: a sub-agent the host extracts memories *for*
+    hands this turn to everos. Sharing the recipe is the point -- if the two
+    drifted, the extracted memory would describe a conversation that no log on
+    disk agrees with, and nothing would notice.
+    """
+    turn: list[dict[str, Any]] = []
+    if prompt is not None:
+        turn.append({"role": "user", "content": prompt, "timestamp": datetime.now().isoformat()})
+    turn.extend(m for m in (messages or []) if isinstance(m, dict))
+    if answer is not None:
+        turn.append({"role": "assistant", "content": answer, "timestamp": datetime.now().isoformat()})
+    if error is not None:
+        turn.append({"role": "assistant", "content": f"[failed] {error}", "timestamp": datetime.now().isoformat()})
+    return turn
+
+
 def append_turn(
     session_dir: Path | None,
     *,
@@ -108,27 +135,26 @@ def append_turn(
     messages: list[dict[str, Any]] | None = None,
     answer: str | None = None,
     error: str | None = None,
-) -> None:
-    """Add one finished turn to this instance's conversation.
+) -> list[dict[str, Any]]:
+    """Add one finished turn to this instance's conversation, and return it.
 
     The transcript grows by the turn as a conversation does: what was asked, what
     the run did on the way where the transport could see it, and what came back.
     A failed turn is appended too, as the error it ended with -- the run whose
     record is worth having is the one that went wrong.
+
+    Returns the turn it just logged (empty when nothing was written), so a
+    caller that also has to hand this call's conversation to everos for
+    extraction reads back exactly what landed on disk instead of building its
+    own copy that could drift from it.
     """
     if session_dir is None or not agent or not handle:
-        return
-    turn: list[dict[str, Any]] = []
-    if prompt is not None:
-        turn.append({"role": "user", "content": prompt, "timestamp": datetime.now().isoformat()})
-    turn.extend(m for m in (messages or []) if isinstance(m, dict))
-    if answer is not None:
-        turn.append({"role": "assistant", "content": answer, "timestamp": datetime.now().isoformat()})
-    if error is not None:
-        turn.append({"role": "assistant", "content": f"[failed] {error}", "timestamp": datetime.now().isoformat()})
+        return []
+    turn = build_turn(prompt=prompt, messages=messages, answer=answer, error=error)
 
     header = _header(session_key=session_key, agent=agent, handle=handle, kind=kind)
     _append(transcript_path(session_dir, agent, handle), turn, header=header)
+    return turn
 
 
 def message_rows(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:
@@ -165,6 +191,7 @@ def message_rows(session_dir: Path, agent: str, handle: str) -> list[dict[str, A
 
 __all__ = [
     "append_turn",
+    "build_turn",
     "instance_root",
     "message_rows",
     "transcript_path",

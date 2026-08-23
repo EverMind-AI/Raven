@@ -115,8 +115,8 @@ def add_turn_to_instance_log(
     error: str | None = None,
     activity: Any = None,
     kind: str = "",
-) -> None:
-    """Add one finished turn to the instance's own conversation log.
+) -> list[dict[str, Any]]:
+    """Add one finished turn to the instance's own conversation log, and return it.
 
     Every lane that owns a record calls this, because an instance's conversation
     is spread across all of them: the same handle can be dispatched by ``spawn``,
@@ -125,11 +125,16 @@ def add_turn_to_instance_log(
 
     Typed loosely and failing silently for the same reason the rest of this
     module is: an audit trail must never take down the run it describes.
+
+    Returns the turn ``append_turn`` wrote, empty on an early return or a
+    failed write. A caller that also has to hand this call's conversation to
+    everos for extraction reads back exactly what landed on disk instead of
+    building its own copy that could drift from it.
     """
     agent = str(meta.get("agent") or "")
     handle = str(meta.get("handle") or meta.get("instance") or "")
     if session_dir is None or not agent or not handle:
-        return
+        return []
     # A transport that narrated as it went already has that prose on the steps it
     # was said before, so the closing row is what it said last -- not `output`,
     # which is every burst joined for the caller receiving the answer. A lane
@@ -139,7 +144,7 @@ def add_turn_to_instance_log(
     try:
         from raven.agent.subagent.instance_log import append_turn
 
-        append_turn(
+        return append_turn(
             session_dir,
             agent=agent,
             handle=handle,
@@ -152,6 +157,7 @@ def add_turn_to_instance_log(
         )
     except Exception as exc:  # noqa: BLE001 - the instance log may not break a run
         logger.warning("Subagent instance log could not be updated: {}", exc)
+        return []
 
 
 class SpawnRecord:
@@ -176,6 +182,10 @@ class SpawnRecord:
         # directory's path does not spell out.
         self.session_dir = session_dir
         self.task = task
+        # What `finish` logged, for a caller that also has to hand this call's
+        # conversation to everos. Empty until `finish` runs, and stays empty if
+        # it returns early -- there is nothing to prime with in that case either.
+        self.turn: list[dict[str, Any]] = []
 
     @classmethod
     def open(
@@ -238,7 +248,7 @@ class SpawnRecord:
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Subagent history at {} could not be finished: {}", self.dir, exc)
-        add_turn_to_instance_log(
+        self.turn = add_turn_to_instance_log(
             self.session_dir,
             meta=self._read_meta(),
             prompt=self.task,
