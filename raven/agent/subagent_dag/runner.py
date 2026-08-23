@@ -22,6 +22,7 @@ from loguru import logger
 
 from raven.agent.subagent import activity
 from raven.agent.subagent.instances import get_registry, hold_handle
+from raven.agent.subagent_dag._capabilities import AgentCapabilities
 from raven.agent.subagent_dag._errors import DagValidationError
 from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
 from raven.agent.subagent_dag._render import render_prompt
@@ -32,6 +33,13 @@ from raven.agent.subagent_dag._store import (
     make_run_id,
     node_live_key,
     read_session_nodes,
+)
+from raven.agent.subagent_memory import (
+    TRACE_BUDGET_S,
+    EverosIdentity,
+    prime_from_turn,
+    record_memories,
+    trace_session_id,
 )
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
@@ -51,6 +59,10 @@ def _now_ms() -> int:
 
 
 ProgressPublisher = Callable[[str, dict], Awaitable[None]]
+
+# asyncio only holds a weak reference to a running task, so a fire-and-forget
+# record has to be kept alive by its scheduler until it finishes.
+_RECORD_TASKS: set[asyncio.Task] = set()
 
 
 async def _emit(publisher: ProgressPublisher | None, name: str, value: dict) -> None:
@@ -133,6 +145,8 @@ async def run_dag(
     cancel: asyncio.Event | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     auto_instances: frozenset[str] = frozenset(),
+    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    capabilities: dict[str, AgentCapabilities] | None = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -236,6 +250,11 @@ async def run_dag(
     node_ended_at: dict[str, int] = {}
     node_activity: dict[str, dict] = {}
     gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
+    # This run's own memory-record pollers, so an outer cancellation of this
+    # run's task (below) can reap the ones it already scheduled for completed
+    # nodes -- `_RECORD_TASKS` is process-global and reachable by no
+    # cancellation path at all.
+    record_tasks: set[asyncio.Task] = set()
 
     deps: dict[str, list[str]] = {nid: graph_deps(node, by_id) for nid, node in by_id.items()}
     dependents: dict[str, list[str]] = {nid: [] for nid in by_id}
@@ -322,8 +341,11 @@ async def run_dag(
                         semaphore=gate,
                         progress_publisher=progress_publisher,
                         state_for=state_for,
+                        everos_for=everos_for,
+                        capabilities=capabilities,
                         session_key=session_key,
                         subagents_root=subagents_root,
+                        record_tasks=record_tasks,
                     )
                     for nids in groups.values()
                 ),
@@ -354,6 +376,14 @@ async def run_dag(
         # and the two refusals that produces contradict each other.
         _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
+        # This run's own memory-record pollers, scheduled for nodes that had
+        # already completed before this cancellation landed, would otherwise
+        # keep polling with nothing left to reap them.
+        pending_records = [t for t in record_tasks if not t.done()]
+        for t in pending_records:
+            t.cancel()
+        if record_tasks:
+            await asyncio.gather(*record_tasks, return_exceptions=True)
         raise
 
 
@@ -482,15 +512,19 @@ async def _run_group(
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
+    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
     subagents_root: str | None = None,
+    record_tasks: "set[asyncio.Task] | None" = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
         await _run_node(
             by_id[nid],
             node_backends[nid],
+            by_id=by_id,
             store=store,
             backend=backend,
             workdir=workdir,
@@ -506,9 +540,12 @@ async def _run_group(
             node_activity=node_activity,
             semaphore=semaphore,
             state_for=state_for,
+            everos_for=everos_for,
+            capabilities=capabilities,
             progress_publisher=progress_publisher,
             session_key=session_key,
             subagents_root=subagents_root,
+            record_tasks=record_tasks,
         )
 
 
@@ -536,22 +573,28 @@ async def _add_node_to_instance_log(
     did: Any,
     session_key: str | None,
     error: str | None = None,
-) -> None:
-    """Add this node's turn to the instance's own conversation.
+    output: str | None = None,
+) -> list[dict[str, Any]]:
+    """Add this node's turn to the instance's own conversation, and return it.
 
     A node is one turn of an instance that a ``spawn`` call or a direct chat may
     also have talked to, so it belongs in the same file as those. Addressed from
     ``subagents_root`` -- ``<session_dir>/subagents``, which the caller already
     resolved -- rather than derived from the run directory, whose depth differs
     between the real layout and a store pointed somewhere else.
+
+    Returns the turn it just logged (empty on an early return or a failed
+    write), so a caller that also has to hand this node's conversation to
+    everos for extraction reads back exactly what landed on disk instead of
+    building its own copy that could drift from it.
     """
     if not subagents_root:
-        return
+        return []
     handle = getattr(node, "instance", None) or node.id
     try:
         from raven.agent.subagent_history import add_turn_to_instance_log
 
-        add_turn_to_instance_log(
+        return add_turn_to_instance_log(
             Path(subagents_root).parent,
             meta={"agent": node.subagent, "handle": handle, "session_key": session_key or ""},
             # Read off the activity rather than from the caller's `prompt`, which
@@ -561,18 +604,26 @@ async def _add_node_to_instance_log(
             # one -- and the live read does emit the question, so it appeared
             # while the node ran and vanished when it landed.
             prompt=getattr(did, "prompt", None),
+            # Passed for the same reason `spawn` and the direct chat pass it: a
+            # transport that never narrates reports no closing text, and without
+            # `output` the turn then carries no answer row at all -- the reader
+            # folds a message from one `user` row to the next, so the node's
+            # conclusion would land inside the following turn.
+            output=output,
             error=error,
             activity=did,
             kind="dag",
         )
     except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
         logger.warning("DAG node {} could not be added to its instance log: {}", node.id, exc)
+        return []
 
 
 async def _run_node(
     node: DagNodeSpec,
     agent_backend: Any,
     *,
+    by_id: dict[str, DagNodeSpec],
     store: DagRunStore,
     backend: Any,
     workdir: str,
@@ -588,9 +639,12 @@ async def _run_node(
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
+    everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+    capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
     subagents_root: str | None = None,
+    record_tasks: "set[asyncio.Task] | None" = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
@@ -607,6 +661,7 @@ async def _run_node(
         )
         await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
         await _link_node_instance(session_key, store.run_id, node.id, node.subagent, node.instance)
+        node_output: str | None = None
         try:
             prompt = await render_prompt(
                 node,
@@ -616,6 +671,9 @@ async def _run_node(
                 runs_root=store.root,
                 roots=roots,
                 session_nodes=session_nodes,
+                run_id=store.run_id,
+                by_id=by_id,
+                capabilities=capabilities,
             )
             prompt_path = store.prompt_path(node.id)
             output_path = store.output_path(node.id)
@@ -676,6 +734,7 @@ async def _run_node(
                     finally:
                         node_activity[node.id] = did.as_meta()
             await store.write_text(output_path, result or "")
+            node_output = result
             status[node.id] = "completed"
             output_paths[node.id] = output_path
         except Exception as exc:  # noqa: BLE001 - record and continue
@@ -683,7 +742,7 @@ async def _run_node(
             status[node.id] = "failed"
             errors[node.id] = str(exc)
         await _write_node_transcript(store, node.id, did)
-        await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id))
+        turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()
         node_ended_at[node.id] = ended_at_ms
         await _emit(
@@ -698,6 +757,106 @@ async def _run_node(
             },
         )
         await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
+    # Scheduled after the `async with semaphore` above has already exited, so a
+    # node's slot is released the moment its own work is done -- not held for
+    # however long the recorder's poll budget takes.
+    identity = everos_for(node.subagent) if everos_for is not None else None
+    if identity is not None:
+        _schedule_node_memory(
+            node, store=store, identity=identity, session_key=session_key, record_tasks=record_tasks, turn=turn
+        )
+
+
+def _schedule_node_memory(
+    node: DagNodeSpec,
+    *,
+    store: DagRunStore,
+    identity: EverosIdentity,
+    session_key: str | None,
+    record_tasks: "set[asyncio.Task] | None" = None,
+    turn: list[dict[str, Any]] | None = None,
+) -> None:
+    """Fire off this node's Memory record without waiting on it.
+
+    Never awaited by the dispatch path: everos extraction runs an LLM, and the
+    run must not wait on the host's bookkeeping (see `record_memories`'s own
+    docstring, and the same reasoning `SubagentManager._schedule_memory_record`
+    already applies to spawn and a direct chat). ``turn`` is only read for a
+    ``trace`` identity, whose record has no other conversation to poll for.
+    """
+    task = asyncio.create_task(
+        _record_node_memory(node, store=store, identity=identity, session_key=session_key, turn=turn)
+    )
+    # `_RECORD_TASKS` is a GC anchor only (asyncio holds just a weak reference
+    # to a running task): the actual cancellation path is `record_tasks`,
+    # this run's own set, which `run_dag`'s cancellation branch reaps.
+    _RECORD_TASKS.add(task)
+    task.add_done_callback(_RECORD_TASKS.discard)
+    if record_tasks is not None:
+        record_tasks.add(task)
+        task.add_done_callback(record_tasks.discard)
+
+
+async def _record_node_memory(
+    node: DagNodeSpec,
+    *,
+    store: DagRunStore,
+    identity: EverosIdentity,
+    session_key: str | None,
+    turn: list[dict[str, Any]] | None = None,
+) -> None:
+    """Write this node's Memory record, swallowing any failure.
+
+    Written through the store rather than to a local path: a DAG run's files go
+    to the session's workspace backend, which may not be this filesystem.
+    """
+    if identity.source == "trace":
+        # The host owns both the write and the read here, so it mints the join
+        # key instead of resolving one the node's own run committed.
+        session_id = trace_session_id(node.subagent, f"{store.run_id}:{node.id}")
+        rows = turn or []
+
+        async def _resolve() -> str | None:
+            return session_id
+
+        async def _prime(sid: str) -> bool:
+            return await prime_from_turn(identity=identity, session_id=sid, turn=rows)
+
+        prime, budget = _prime, TRACE_BUDGET_S
+    else:
+
+        async def _resolve() -> str | None:
+            # `instance or id` mirrors CliAgentBackend.run's own derivation
+            # (cli_agent.py:368), which is the handle the registry row was
+            # committed under. A node naming no instance still has a row, keyed by
+            # its node id, so keying on `instance` alone would drop the record for
+            # the common case.
+            handle = node.instance or node.id
+            # `session_key or "default"` mirrors CliAgentBackend.run's own key
+            # (cli_agent.py:445), which is what the registry row was committed
+            # under; looking up under `session_key or ""` instead would silently
+            # miss every row for a `run_dag(session_key=None)` call.
+            agent_id = await get_registry().lookup(session_key or "default", node.subagent, handle)
+            return f"{identity.session_prefix}{agent_id}" if agent_id else None
+
+        prime, budget = None, None
+
+    async def _write(text: str) -> None:
+        await store.write_text(store.memory_path(node.id), text)
+
+    try:
+        kwargs = {"budget_s": budget} if budget is not None else {}
+        await record_memories(
+            agent=node.subagent,
+            identity=identity,
+            resolve_session_id=_resolve,
+            write=_write,
+            instance=node.instance,
+            prime=prime,
+            **kwargs,
+        )
+    except Exception:  # noqa: BLE001 - a record must never fail a node
+        logger.opt(exception=True).warning("Memory record for DAG node {} failed", node.id)
 
 
 async def _finalize(

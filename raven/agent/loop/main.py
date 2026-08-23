@@ -1092,6 +1092,7 @@ class AgentLoop:
                 session_dir=self.sessions.session_dir,
                 is_paused=lambda: self.subagents.paused,
                 state_for=self.subagents.instance_state,
+                everos_for=self.subagents.everos_identity,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 adopt=self.subagents.adopt_background_run,

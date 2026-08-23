@@ -92,7 +92,7 @@ rm -rf ~/.raven/workspace/subagent_sessions/raven-ppt/jobs/<job>
 `subagent.json` registers a stateful CLI subagent:
 
 ```
-{PYTHON} .../raven-ppt/run.py --job {agent_id} --session ppt:{agent_id} --prompt-file {prompt_file}
+{PYTHON} .../raven-ppt/run.py --job {agent_id} --session cli:{agent_id} --prompt-file {prompt_file}
 ```
 
 `install.py` resolves `{PYTHON}` and `{SUBAGENT_DIR}` at install time. It is the
@@ -139,7 +139,7 @@ python3 run.py --verbose --job my-deck --prompt-file task.md
 ```
 
 `--material` passes a file explicitly rather than through the prose. `--session`
-makes a run resumable; the launcher passes `ppt:<agent_id>` when the gateway
+makes a run resumable; the launcher passes `cli:<agent_id>` when the gateway
 spawns it, so a reused instance handle continues one deck.
 
 ## Install

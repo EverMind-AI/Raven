@@ -18,7 +18,7 @@ from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent_dag import DagValidationError, parse_dag_spec
 from raven.agent.subagent_dag._store import read_session_nodes
 from raven.agent.subagent_dag.backend import LocalFileBackend
-from raven.agent.subagent_dag.runner import run_dag
+from raven.agent.subagent_dag.runner import DagRunResult, run_dag
 from raven.agent.subagent_dag.tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.tools.base import ToolResult
 from raven.config.schema import ThirdPartyCliSubagentConfig
@@ -50,6 +50,22 @@ def _isolated_instance_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_record_tasks() -> None:
+    """`_RECORD_TASKS` is a process-global GC anchor, not scoped to a run.
+
+    Left alone, a test whose assertion runs before its own poller finishes
+    draining (or that fails before reaching that assertion) leaves an entry
+    behind that would poison every later test asserting on the same set.
+    Clearing it around each test makes those assertions test-local instead.
+    """
+    from raven.agent.subagent_dag import runner as runner_mod
+
+    runner_mod._RECORD_TASKS.clear()
+    yield
+    runner_mod._RECORD_TASKS.clear()
+
+
 class _InMemBackend:
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
@@ -73,9 +89,10 @@ class _InMemBackend:
 class _FakeExec:
     """A SubagentBackend that echoes its task, tagged by node id."""
 
-    def __init__(self, fail_ids: set[str] | None = None) -> None:
+    def __init__(self, fail_ids: set[str] | None = None, *, reply: str | None = None) -> None:
         self.fail_ids = fail_ids or set()
         self.calls: list[dict] = []
+        self.reply = reply
 
     async def run(
         self,
@@ -90,6 +107,15 @@ class _FakeExec:
         self.calls.append({"task_id": task_id, "session_key": session_key, "instance": instance})
         if task_id in self.fail_ids:
             raise RuntimeError(f"boom {task_id}")
+        if self.reply is not None:
+            # A narrating backend's closing text is what `_add_node_to_instance_log`
+            # reads as the node's answer, not this return value -- so a test that
+            # cares what lands in the instance log has to set it the same way
+            # acp_agent.py does, not just return the text.
+            from raven.agent.subagent import activity
+
+            activity.note_closing(self.reply)
+            return self.reply
         return f"OUT[{task_id}]:{task}"
 
 
@@ -2142,6 +2168,68 @@ async def test_an_outer_cancellation_still_records_the_run_as_over() -> None:
         await _run([{"id": "other", "subagent": "x", "prompt_template": "{{ plan.output }}"}], backend, "/hist/mas_dag")
 
 
+async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A node that already completed before the cancellation lands has already
+    scheduled its own memory-record poller (fire-and-forget, per `_run_node`).
+
+    `_RECORD_TASKS` alone is reachable by no cancellation path -- it exists
+    only to keep the task from being garbage-collected -- so without a
+    run-scoped set that this run's own cancellation branch reaps, that poller
+    would keep running with nothing left to stop it.
+    """
+    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent_memory import EverosIdentity
+
+    poller_started = asyncio.Event()
+    poller_cancelled = asyncio.Event()
+
+    async def _fake_record(**kwargs: Any) -> None:
+        poller_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            poller_cancelled.set()
+            raise
+
+    monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+
+    identity = EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+    blocked = asyncio.Event()
+
+    class _Blocking(_FakeExec):
+        async def run(self, task, **kw):  # type: ignore[override]
+            blocked.set()
+            await asyncio.Event().wait()
+
+    backend = _InMemBackend()
+    task = asyncio.create_task(
+        run_dag(
+            parse_dag_spec(
+                {
+                    "nodes": [
+                        {"id": "a", "subagent": "x", "prompt_template": "hi"},
+                        {"id": "b", "subagent": "y", "prompt_template": "hi"},
+                    ]
+                }
+            ),
+            resolve=_by_name({"x": _FakeExec(), "y": _Blocking()}),
+            backend=backend,
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            subagents_root="/hist",
+            everos_for=lambda name: identity if name == "x" else None,
+        )
+    )
+    await blocked.wait()
+    await asyncio.wait_for(poller_started.wait(), timeout=2)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.wait_for(poller_cancelled.wait(), timeout=2)
+
+
 # --- the index is the uniqueness guarantee, so its writes are serialized ------
 
 
@@ -2846,6 +2934,47 @@ async def test_a_node_writes_its_question_into_the_instance_log(tmp_path: Path) 
     assert [r["content"] for r in rows if r.get("role") == "user"] == ["count the todos"]
 
 
+async def test_a_node_writes_its_answer_into_the_instance_log(tmp_path: Path) -> None:
+    """The turn's own answer, for a transport that reports no closing text.
+
+    ``add_turn_to_instance_log`` derives the answer from ``output`` when the
+    activity reports no ``closing`` -- which is every transport that cannot tell
+    narration from the reply, the cli lane among them. The DAG lane passed no
+    ``output``, so such a node's turn ended on its last step and carried no
+    answer row at all, while ``spawn`` and the direct chat both passed one.
+
+    That row is also the conclusion an everos extraction reads, so without it a
+    trace-sourced record would describe the work and never the result.
+
+    Deliberately the plain ``_FakeExec``: the ``reply=`` form calls
+    ``note_closing``, which supplies the answer by the other route and would let
+    this pass with the ``output`` argument removed.
+    """
+    from raven.agent.subagent.instance_log import transcript_path
+
+    session_dir = tmp_path / "s"
+    spec = parse_dag_spec(
+        {"nodes": [{"id": "a", "subagent": "x", "prompt_template": "count the todos", "instance": "h1"}]}
+    )
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root=str(session_dir / "subagents" / "mas_dag"),
+        session_key="web:s1",
+        subagents_root=str(session_dir / "subagents"),
+    )
+
+    rows = [
+        json.loads(line)
+        for line in transcript_path(session_dir, "x", "h1").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows[-1]["role"] == "assistant"
+    assert rows[-1]["content"] == "OUT[a]:count the todos"
+
+
 async def test_a_failed_node_writes_the_failure_into_the_instance_log(tmp_path: Path) -> None:
     """``append_turn`` promises a failed turn is appended as the error it ended
     with, and the runner holds that error the whole time."""
@@ -2870,3 +2999,180 @@ async def test_a_failed_node_writes_the_failure_into_the_instance_log(tmp_path: 
     body = transcript_path(session_dir, "x", "h1").read_text(encoding="utf-8")
 
     assert "the node blew up" in body
+
+
+# --- memory record ---------------------------------------------------------
+
+
+async def _run_one_node_dag(
+    tmp_path: Path,
+    *,
+    node_id: str = "n1",
+    subagent: str = "x",
+    prompt: str = "hi",
+    output: str | None = None,
+    everos_for: "Any | None" = None,
+    instance: str | None = None,
+) -> DagRunResult:
+    """Run a single-node DAG over the real file backend, under `tmp_path`.
+
+    Uses `LocalFileBackend`, like `test_cross_run_reference_works_over_the_real_file_backend`,
+    so the memory record a node leaves behind can be read back as a real file.
+
+    `subagents_root` is passed so the node's turn actually reaches the instance
+    log instead of short-circuiting on `_add_node_to_instance_log`'s own guard --
+    the parent of `run_root`, the same relationship `run_dag`'s docstring
+    describes between the two in the real layout.
+    """
+    (tmp_path / "wd").mkdir()
+    return await run_dag(
+        parse_dag_spec(
+            {
+                "nodes": [
+                    {
+                        "id": node_id,
+                        "subagent": subagent,
+                        "prompt_template": prompt,
+                        **({"instance": instance} if instance else {}),
+                    }
+                ]
+            }
+        ),
+        resolve=_by_name({subagent: _FakeExec(reply=output)}),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path / "wd"),
+        run_root=str(tmp_path / "hist" / "mas_dag"),
+        subagents_root=str(tmp_path / "hist"),
+        session_key="web:sess1",
+        everos_for=everos_for,
+    )
+
+
+async def _drain_record_tasks() -> None:
+    """Wait for every memory-record background task the runner scheduled.
+
+    Copies `_RECORD_TASKS` before gathering it: each task's own done-callback
+    discards itself from that set as it finishes, and iterating a set something
+    else is concurrently mutating is a bug waiting to happen.
+    """
+    from raven.agent.subagent_dag import runner as runner_mod
+
+    await asyncio.gather(*list(runner_mod._RECORD_TASKS))
+
+
+async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent_memory import EverosIdentity
+
+    async def _fake_record(**kwargs: Any) -> None:
+        await kwargs["write"]('{"agent": "Raven-Code", "status": "settled", "memories": []}')
+
+    monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+
+    identity = EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+    result = await _run_one_node_dag(tmp_path, everos_for=lambda _name: identity)
+    # The record is scheduled fire-and-forget once the node releases its
+    # semaphore slot; run_dag returns without waiting for it, so drain it
+    # explicitly before reading what it wrote.
+    await _drain_record_tasks()
+    written = Path(result.dir) / "n1.memory.json"
+    assert json.loads(written.read_text(encoding="utf-8"))["status"] == "settled"
+
+
+async def test_a_node_without_an_everos_identity_schedules_no_memory_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent_dag import runner as runner_mod
+
+    calls: list[Any] = []
+
+    async def _fake_record(**kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    await _run_one_node_dag(tmp_path, everos_for=lambda _name: None)
+    assert not runner_mod._RECORD_TASKS
+    assert calls == []
+
+
+async def test_a_node_schedules_no_memory_task_without_everos_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent_dag import runner as runner_mod
+
+    calls: list[Any] = []
+
+    async def _fake_record(**kwargs: Any) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    await _run_one_node_dag(tmp_path)
+    assert not runner_mod._RECORD_TASKS
+    assert calls == []
+
+
+async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The runner is the only place `node.instance` can reach the recorder, and
+    every stateful node now has one -- minted by the tool when the author named
+    none."""
+    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent_memory import EverosIdentity
+
+    seen: dict[str, Any] = {}
+
+    async def _fake_record(**kwargs: Any) -> None:
+        seen.update(kwargs)
+        await kwargs["write"]("{}")
+
+    monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    identity = EverosIdentity(user_id="u", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+    await _run_one_node_dag(tmp_path, everos_for=lambda _name: identity, instance="audit-a3f9c1")
+    await _drain_record_tasks()
+
+    assert seen["instance"] == "audit-a3f9c1"
+
+
+async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `trace` node's record is primed with the same turn the log records,
+    under the session id the host mints from this run and this node."""
+    from raven.agent import subagent_memory as memory_mod
+    from raven.agent.subagent_dag import runner as runner_mod
+    from raven.agent.subagent_memory import EverosIdentity
+
+    primed: list[tuple[str, list[dict]]] = []
+
+    async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+        primed.append((session_id, turn))
+        return True
+
+    async def _unavailable_everos(*args: Any, **kwargs: Any) -> list:
+        raise RuntimeError("no live everos in tests")
+
+    monkeypatch.setattr(runner_mod, "prime_from_turn", _fake_prime)
+    # The prime lands (faked above), but the poll after it is real: nothing in
+    # this test process is listening at the identity's base url, so make the
+    # first look fail fast instead of sleeping through the whole poll budget.
+    monkeypatch.setattr(memory_mod, "collect_memories", _unavailable_everos)
+
+    identity = EverosIdentity(
+        user_id="liv",
+        agent_id="coder",
+        base_url="http://everos.test",
+        session_prefix="cli:",
+        source="trace",
+    )
+    result = await _run_one_node_dag(
+        tmp_path,
+        node_id="inspect",
+        subagent="Coder",
+        prompt="read it",
+        output="no readme",
+        everos_for=lambda _name: identity,
+    )
+    await _drain_record_tasks()
+
+    assert primed
+    session_id, turn = primed[0]
+    assert session_id == f"trace:Coder:{result.run_id}:inspect"
+    assert turn[0]["content"] == "read it"
+    assert turn[-1]["content"] == "no readme"

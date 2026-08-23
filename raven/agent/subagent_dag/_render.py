@@ -3,11 +3,12 @@
 
 from typing import Any
 
+from ._capabilities import AgentCapabilities
 from ._errors import DagValidationError
-from ._graph import DagNodeSpec
+from ._graph import DagNodeSpec, graph_deps
 from ._paths import check_confined, split_reference
 from ._placeholders import Placeholder, iter_placeholders
-from ._store import SessionNodes, output_path_in
+from ._store import SessionNodes, memory_path_in, output_path_in
 
 
 async def render_prompt(
@@ -19,6 +20,9 @@ async def render_prompt(
     runs_root: str | None = None,
     roots: tuple[str, ...] | None = None,
     session_nodes: SessionNodes | None = None,
+    run_id: str | None = None,
+    by_id: dict[str, "DagNodeSpec"] | None = None,
+    capabilities: dict[str, "AgentCapabilities"] | None = None,
 ) -> str:
     """Render ``node.prompt_template`` into the node's prompt text.
 
@@ -79,7 +83,80 @@ async def render_prompt(
         parts.append(cache[ph.raw])
         last = end
     parts.append(template[last:])
-    return "".join(parts)
+    rendered = "".join(parts)
+    upstream = _upstream_memory_lines(
+        node,
+        backend=backend,
+        runs_root=runs_root,
+        run_id=run_id,
+        by_id=by_id,
+        capabilities=capabilities,
+        session_nodes=session_nodes,
+    )
+    if upstream:
+        rendered = f"{rendered}\n\n{_MEMORY_BLOCK_HEADING}\n\n" + "\n".join(upstream) + f"\n\n{_MEMORY_BLOCK_NOTE}"
+    return rendered
+
+
+_MEMORY_BLOCK_HEADING = "## Upstream memory records"
+
+_MEMORY_BLOCK_NOTE = (
+    "These are written asynchronously after a node finishes, so a file may not exist yet, or may\n"
+    'carry \'"status": "pending"\'. Either way that upstream has no distilled memory available yet:\n'
+    "proceed without it rather than waiting for it or treating its absence as an error."
+)
+
+
+def _transitive_upstream(node: DagNodeSpec, by_id: dict[str, DagNodeSpec]) -> list[str]:
+    """Every node this one depends on, directly or through another, in id order.
+
+    Walks ``depends_on`` rather than ``graph_deps`` at the first level so an
+    upstream belonging to an earlier run is kept: it has no node in this graph,
+    but it does have a record, and the walk simply cannot recurse past it.
+    """
+    seen: set[str] = set()
+    frontier = list(node.depends_on)
+    while frontier:
+        dep = frontier.pop()
+        if dep in seen:
+            continue
+        seen.add(dep)
+        upstream = by_id.get(dep)
+        if upstream is not None:
+            frontier.extend(graph_deps(upstream, by_id))
+    seen.discard(node.id)
+    return sorted(seen)
+
+
+def _upstream_memory_lines(
+    node: DagNodeSpec,
+    *,
+    backend: Any,
+    runs_root: str | None,
+    run_id: str | None,
+    by_id: dict[str, DagNodeSpec] | None,
+    capabilities: dict[str, AgentCapabilities] | None,
+    session_nodes: SessionNodes | None,
+) -> list[str]:
+    """One ``- <id>: <path>`` line per upstream whose record this node may read.
+
+    Empty when the paths cannot be named (no run history root or run id), when
+    the node has no upstream, or when its sub-agent cannot open local paths --
+    the same capability the path placeholders are gated on, for the same reason:
+    a path reaches an agent running elsewhere as meaningless text.
+    """
+    if not runs_root or not run_id or by_id is None:
+        return []
+    caps = (capabilities or {}).get(node.subagent)
+    if caps is not None and not caps.reads_local_files:
+        return []
+    lines: list[str] = []
+    for dep in _transitive_upstream(node, by_id):
+        owner = run_id if dep in by_id else (session_nodes.owner.get(dep) if session_nodes else None)
+        if owner is None:
+            continue
+        lines.append(f"- {dep}: {memory_path_in(backend, runs_root, owner, dep)}")
+    return lines
 
 
 async def _resolve(

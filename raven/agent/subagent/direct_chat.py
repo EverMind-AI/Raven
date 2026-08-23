@@ -110,6 +110,10 @@ class DirectChatRecord:
         # conversation a spawn call started, and it lands in the same file.
         self.session_dir = session_dir
         self.task = task
+        # What `finish` logged, for a caller that also has to hand this call's
+        # conversation to everos. Empty until `finish` runs, and stays empty if
+        # it returns early -- there is nothing to prime with in that case either.
+        self.turn: list[dict[str, Any]] = []
 
     @classmethod
     def open(
@@ -167,7 +171,7 @@ class DirectChatRecord:
             self._write_meta(meta)
         except OSError as exc:
             logger.warning("Direct chat history at {} could not be finished: {}", self.dir, exc)
-        add_turn_to_instance_log(
+        self.turn = add_turn_to_instance_log(
             self.session_dir,
             meta={**self._read_meta(), "agent": self.agent, "handle": self.handle},
             prompt=self.task,

@@ -31,6 +31,14 @@ from raven.agent.subagent.instance_state import InstanceState, instance_state_pa
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_history import SpawnRecord
+from raven.agent.subagent_memory import (
+    TRACE_BUDGET_S,
+    EverosIdentity,
+    identity_from_config,
+    prime_from_turn,
+    record_memories,
+    trace_session_id,
+)
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.sandbox import SandboxConfig, build_executor
@@ -67,6 +75,46 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
             handle,
             status,
         )
+
+
+def _host_everos_base_url() -> str:
+    """The host's own everos service, used by any sub-agent that names none."""
+    from raven.plugin.memory.everos._health import DEFAULT_EVEROS_BASE_URL, configured_base_url
+
+    try:
+        from raven.config.raven import load_raven_config
+
+        return configured_base_url(load_raven_config())
+    except Exception:  # noqa: BLE001 - a missing plugin config must not sink the manager
+        return DEFAULT_EVEROS_BASE_URL
+
+
+async def write_memory_record_for(
+    *,
+    directory: Path,
+    filename: str,
+    agent: str,
+    identity: EverosIdentity,
+    resolve_session_id,
+    instance: str | None = None,
+    budget_s: float | None = None,
+    prime: Callable[[str], Awaitable[bool]] | None = None,
+) -> None:
+    """Write one call's Memory record into a local record directory."""
+
+    async def _write(text: str) -> None:
+        (directory / filename).write_text(text, encoding="utf-8")
+
+    kwargs = {"budget_s": budget_s} if budget_s is not None else {}
+    await record_memories(
+        agent=agent,
+        identity=identity,
+        resolve_session_id=resolve_session_id,
+        write=_write,
+        instance=instance,
+        prime=prime,
+        **kwargs,
+    )
 
 
 class SubagentManager:
@@ -148,6 +196,8 @@ class SubagentManager:
         # tool rather than built twice (see ``AgentRegistry``). The in-process
         # factory is bound after construction because it is a bound method of this
         # object.
+        self._record_tasks: set[asyncio.Task] = set()
+        self._session_record_tasks: dict[str, set[asyncio.Task]] = {}
         self.registry = AgentRegistry()
         self.registry.set_builtin_builder(self.build_builtin_backend)
         self.registry.apply(agents or [])
@@ -228,6 +278,102 @@ class SubagentManager:
     def list_agents(self) -> list[AgentMeta]:
         """Advertised capabilities of every enabled agent (for the tool descriptions)."""
         return self.registry.meta()
+
+    def everos_identity(self, agent: str | None) -> EverosIdentity | None:
+        """The declared identity for ``agent``, or ``None`` when it declared none.
+
+        Read off the registry row rather than kept in a map of its own: the row
+        holds the config the identity is declared in, so a hot ``apply_agents``
+        cannot leave the two disagreeing.
+        """
+        row = self.registry.get(agent or "")
+        if row is None:
+            return None
+        return identity_from_config(getattr(row.config, "everos", None), _host_everos_base_url())
+
+    def _schedule_memory_record(
+        self,
+        *,
+        task_id: str,
+        agent: str | None,
+        handle: str,
+        session_key: str | None,
+        directory: Path,
+        filename: str,
+        instance: str | None = None,
+        turn: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Record what this call wrote into everos, in the background.
+
+        Never awaited by the dispatch path: everos extraction runs an LLM, and a
+        sub-agent's reply must not wait on the host's bookkeeping. Callers must
+        not schedule this for a call that ended via ``CancelledError``: that
+        poller would be created after the cancellation sweep took its snapshot,
+        leaving it unreapable (see ``cancel_all`` / ``cancel_by_session``).
+
+        ``turn`` is only read for a ``trace`` identity, whose memories nobody
+        wrote -- it is what gets primed. An ``agent`` identity's memories were
+        already written by the sub-agent itself, so its resolver still looks up
+        the session id the registry has on file.
+        """
+        identity = self.everos_identity(agent)
+        if identity is None:
+            return
+
+        if identity.source == "trace":
+            # The host owns both the write and the read here, so it mints the
+            # join key instead of resolving one the sub-agent committed.
+            session_id = trace_session_id(agent or "", task_id)
+            rows = turn or []
+
+            async def _resolve() -> str | None:
+                return session_id
+
+            async def _prime(sid: str) -> bool:
+                return await prime_from_turn(identity=identity, session_id=sid, turn=rows)
+
+            prime, budget = _prime, TRACE_BUDGET_S
+        else:
+
+            async def _resolve() -> str | None:
+                agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
+                return f"{identity.session_prefix}{agent_id}" if agent_id else None
+
+            prime, budget = None, None
+
+        task = asyncio.create_task(
+            write_memory_record_for(
+                directory=directory,
+                filename=filename,
+                agent=agent or "",
+                identity=identity,
+                resolve_session_id=_resolve,
+                instance=instance,
+                budget_s=budget,
+                prime=prime,
+            )
+        )
+        self._track_record(task, session_key)
+
+    def _track_record(self, task: asyncio.Task, session_key: str | None) -> None:
+        """Index a memory poller so the cancellation sweeps can reap it.
+
+        Its own index, not ``_track``: that one feeds ``_session_tasks``, whose
+        reader refuses a working-directory change while a session has work in
+        flight -- and a poller is not work the user is waiting on.
+        """
+        self._record_tasks.add(task)
+        if session_key:
+            self._session_record_tasks.setdefault(session_key, set()).add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._record_tasks.discard(t)
+            if session_key and (s := self._session_record_tasks.get(session_key)) is not None:
+                s.discard(t)
+                if not s:
+                    del self._session_record_tasks[session_key]
+
+        task.add_done_callback(_done)
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
@@ -541,6 +687,7 @@ class SubagentManager:
             # reaches it: the record name is a task id no reader of an instance
             # ever saw, so without this the steps of the turn on screen were
             # published and unreachable until the log landed at turn end.
+            cancelled = False
             with activity.collecting(
                 live_key=record.dir.name, instance=(session_key, agent, handle), prompt=text
             ) as did:
@@ -564,6 +711,7 @@ class SubagentManager:
                             **kwargs,
                         )
                 except asyncio.CancelledError:
+                    cancelled = True
                     await _write_spawn_status(session_key, agent, handle, "cancelled")
                     record.finish(status="cancelled", activity=did)
                     raise
@@ -571,9 +719,25 @@ class SubagentManager:
                     await _write_spawn_status(session_key, agent, handle, "failed")
                     record.finish(status="failed", error=f"Error: {exc}", activity=did)
                     raise DirectChatError(record.meta()) from exc
-                await _write_spawn_status(session_key, agent, handle, "completed")
-                record.finish(status="completed", output=reply, activity=did)
-                return reply, record.meta()
+                else:
+                    await _write_spawn_status(session_key, agent, handle, "completed")
+                    record.finish(status="completed", output=reply, activity=did)
+                    return reply, record.meta()
+                finally:
+                    # Not for a cancelled call: this poller would be created
+                    # after the cancellation sweep took its snapshot, so nothing
+                    # could reap it (see cancel_all / cancel_by_session).
+                    if not cancelled:
+                        self._schedule_memory_record(
+                            task_id=task_id,
+                            agent=agent,
+                            handle=handle,
+                            session_key=session_key,
+                            directory=record.dir,
+                            filename="memory.json",
+                            instance=handle,
+                            turn=record.turn,
+                        )
 
     @asynccontextmanager
     async def _hold_instance_slot(self, session_key: str, agent: str, handle: str) -> AsyncIterator[None]:
@@ -761,6 +925,7 @@ class SubagentManager:
         # while it is still in flight, and by instance so the conversation view
         # can: a spawned call is a turn of the same instance a direct chat talks
         # to, and watching it there is the same question.
+        cancelled = False
         with activity.collecting(
             live_key=record.dir.name, instance=(session_key or "", agent or "", handle), prompt=task
         ) as did:
@@ -807,8 +972,11 @@ class SubagentManager:
                     )
                 await _write_spawn_status(session_key, agent, handle, "completed")
                 record.finish(status="completed", output=final_result, activity=did)
-                await self._announce_result(task_id, label, task, final_result, origin, "ok")
+                await self._announce_result(
+                    task_id, label, task, final_result, origin, "ok", record_dir=str(record.dir)
+                )
             except asyncio.CancelledError:
+                cancelled = True
                 await _write_spawn_status(session_key, agent, handle, "cancelled")
                 record.finish(status="cancelled", activity=did)
                 raise
@@ -816,13 +984,32 @@ class SubagentManager:
                 await _write_spawn_status(session_key, agent, handle, "failed")
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
-                await self._announce_result(task_id, label, task, ABORTED_ACTION_RESULT, origin, "error")
+                await self._announce_result(
+                    task_id, label, task, ABORTED_ACTION_RESULT, origin, "error", record_dir=str(record.dir)
+                )
             except Exception as e:
                 await _write_spawn_status(session_key, agent, handle, "failed")
                 error_msg = f"Error: {str(e)}"
                 logger.error("Subagent [{}] failed: {}", task_id, e)
                 record.finish(status="failed", error=error_msg, activity=did)
-                await self._announce_result(task_id, label, task, error_msg, origin, "error")
+                await self._announce_result(
+                    task_id, label, task, error_msg, origin, "error", record_dir=str(record.dir)
+                )
+            finally:
+                # Not for a cancelled call: this poller would be created after
+                # the cancellation sweep took its snapshot, so nothing could
+                # reap it (see cancel_all / cancel_by_session).
+                if not cancelled:
+                    self._schedule_memory_record(
+                        task_id=task_id,
+                        agent=agent,
+                        handle=handle,
+                        session_key=session_key,
+                        directory=record.dir,
+                        filename="memory.json",
+                        instance=origin.get("instance"),
+                        turn=record.turn,
+                    )
 
     def set_submit(self, submit) -> None:
         self._submit = submit
@@ -857,6 +1044,7 @@ class SubagentManager:
         result: str,
         origin: dict[str, Any],
         status: str,
+        record_dir: str | None = None,
     ) -> None:
         """Announce the subagent result to the main agent via the spine.
 
@@ -880,12 +1068,13 @@ class SubagentManager:
             if origin.get("instance")
             else ""
         )
+        record_line = f"\n\nRecord: {record_dir}" if record_dir else ""
         announce_content = f"""[Subagent '{label}' {status_text}]
 
 Task: {task}
 {handle_line}
 Result:
-{fenced_result}
+{fenced_result}{record_line}
 
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
 
@@ -965,6 +1154,14 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep techn
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # The memory pollers this session left running. Reaped here so a closing
+        # session is not held open by one, and counted separately because they
+        # are bookkeeping, not the sub-agents the caller asked to stop.
+        records = [t for t in self._session_record_tasks.get(session_key, set()) if not t.done()]
+        for t in records:
+            t.cancel()
+        if records:
+            await asyncio.gather(*records, return_exceptions=True)
         # Drop this session's rate-limit entry on teardown: pruning empties a
         # deque but never removes the key, so without this the dict would keep
         # one entry per session for the process's life.
@@ -1056,4 +1253,11 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep techn
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Same for the memory pollers: at shutdown an unreaped one dies pending,
+        # with its httpx client never closed and its record never written.
+        records = [t for t in self._record_tasks if not t.done()]
+        for t in records:
+            t.cancel()
+        if records:
+            await asyncio.gather(*records, return_exceptions=True)
         return len(tasks)

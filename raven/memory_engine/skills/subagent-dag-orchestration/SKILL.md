@@ -53,6 +53,13 @@ When the run finishes you get the terminal-node outputs plus every node's output
 path — as a message once the run ends, or as the call's own result when you asked for
 `background: false`.
 
+A node also leaves a **memory record**, `<node>.memory.json`, if its sub-agent runs on
+a long-term memory backend: what that sub-agent distilled from the call into its own
+memory, as `{"agent", "status", "memories": [{"type", "text"}]}`. This is separate from
+its output file — the output is its answer to you, the record is what it concluded for
+itself. Every node is told the paths of its upstream nodes' records automatically, so
+you do not pass them: see `Upstream memory records` below.
+
 A DAG run has no timeout — a long run is ended by hand (manual stop), not by a clock.
 
 ## Background by default
@@ -206,6 +213,32 @@ beside them. It stops there. The user's long-term memory, the installed skills, 
 *other* conversation's transcript sit outside it and are refused — so reference an earlier
 run's outputs, or files the user pointed you at.
 
+### Upstream memory records
+
+Every node whose sub-agent can open local paths gets this appended to its rendered
+prompt, listing each **transitive** upstream and the path of that node's record:
+
+```
+## Upstream memory records
+
+- research: <run-dir>/research.memory.json
+- audit: <run-dir>/audit.memory.json
+```
+
+Three things follow, and getting any of them wrong wastes a node's turn:
+
+- **You do not write this.** It is appended for you. There is no placeholder for it and
+  no `inputs` key to set; adding one duplicates what is already there.
+- **Paths, not contents.** The node opens them itself with its own file tool. A
+  sub-agent the roster tags `[no-local-files]` gets no block at all, because a path it
+  cannot open is noise.
+- **A listed file often does not exist yet.** A record is written after its node
+  finished, by a poller that waits for the memory backend to finish distilling, while
+  the scheduler starts the next node as soon as its dependencies complete. So absence is
+  the normal case, not a fault: a node that finds the file missing, or carrying
+  `"status": "pending"`, should carry on without it. Do not add a node whose only job is
+  to wait for one, and do not treat a missing record as a failed upstream.
+
 ## Examples
 
 The `subagent` values below are placeholders — substitute the names the tool reports
@@ -296,6 +329,10 @@ Terminal outputs:
 - The run dir also holds `<node>.prompt.md` (the rendered prompt), `graph.json`, and
   `manifest.json` — useful when a node's answer looks wrong and you need to see what it
   was actually asked.
+- It may also hold `<node>.memory.json` per node (see `Upstream memory records` below).
+  These are **not** listed in the summary, because a record is written asynchronously
+  after its node finished and so may not exist when the summary is composed. `read_file`
+  one directly if you want to know what a sub-agent took away from its step.
 
 ## Anti-patterns
 

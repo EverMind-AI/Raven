@@ -11,6 +11,10 @@
   "maxOutputChars": 60000,
   "timeout": null,
   "transcriptFormat": "text",
+  "everos": {
+    "userId": "raven-oncall",
+    "agentId": "raven-oncall"
+  },
   "recommendedLlm": {
     "provider": "custom",
     "model": "anthropic/claude-opus-5",

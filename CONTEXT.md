@@ -793,6 +793,52 @@ within a process (`_store.index_guard`); two processes sharing one session still
 _Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
 sat in whatever directory the run happened to use and had no `spawn` counterpart.
 
+**Memory record** (`raven/agent/subagent_memory.py`):
+What one Subagent wrote into everos during one call, written beside that call's own
+`prompt.md` / `out.md` inside Subagent history: `memory.json` for a `spawn` call and a
+Direct Chat turn, `<node>.memory.json` for a DAG node. Holds the sub-agent's name, a
+`status`, its `instance` handle when the call had one, and a list of `{type, text}` items -- `episode` (its `subject` and `episode`) and
+`agent_case` (its `task_intent`, `approach` and `key_insight`), joined with ` - ` and
+uncapped. Never everos's `summary`, which is a 200-character prefix of `episode` cut
+mid-word; it is the fallback only when `episode` is absent. Its reader is another
+sub-agent asking what this one did, so it carries text and nothing else; identity, session
+id and item ids are logged, not recorded. `status` distinguishes three outcomes: `settled`
+(everos returned memories and the result stopped growing), `pending` (nothing was found
+within the poll budget, which may mean the sub-agent wrote nothing or that extraction had
+not finished), `unavailable` (everos could not be read, or -- for a `trace`-sourced record --
+the conversation could not be written to it in the first place).
+
+`source` says where the memories came from: `agent` for a sub-agent that runs
+everos and wrote them itself, `trace` for one that does not, whose conversation
+the host handed to everos to extract from. A reader weighing a record should
+know which it is holding.
+
+Produced only for an agent whose
+config declares an everos identity; the
+join key is `<sessionPrefix><instance agent id>`, the id the host mints and the fork
+passes on to its own Raven. A `trace`-sourced record keys on `trace:<agent>:<call_id>`
+instead (`trace_session_id`), its own namespace, not a session-prefixed instance id.
+For an `agent`-sourced record, attribution is per *instance*, not per call: a
+memory everos extracts late can appear in two consecutive records. A `trace`-sourced
+record does not share this ambiguity -- its key is already per-call by construction. Unlike the Handoff Block below, this
+file is NOT raven-minted: its `text` is an everos LLM summary of the sub-agent's own output,
+and the spec names another sub-agent as its eventual reader. Nothing reads it today, so a
+channel that carries its `text` does not exist, but whichever one is built must run that text
+through `wrap_untrusted` (`raven/security/trust.py`) before it reaches another sub-agent's
+prompt, the same as any other sub-agent-controlled content. Passing a path, as the DAG block
+below does, does not need wrapping: the path is raven-minted, only the file's contents are not.
+A DAG node is told where its upstream records are: every node whose sub-agent can open
+local paths gets an `## Upstream memory records` block appended to its rendered prompt,
+listing each transitive upstream's node id and the absolute path of its record. Paths only --
+nothing injects a record's text. Suppressed entirely for a sub-agent the roster tags
+[no-local-files], on the same capability that refuses path placeholders. The listed files
+usually do not exist yet when the node starts, because the record is written by a
+fire-and-forget poller after the upstream finished while the runner starts the next wave
+immediately; the block therefore tells the node to proceed without a missing or `pending`
+record rather than wait for it.
+_Avoid_: "memory trace" -- an earlier name for the recorder, from a draft where it also
+captured the call's time window.
+
 **Handoff Block** (`raven/agent/subagent/direct_chat.py`):
 The pointer block the runtime prepends to the user's next turn to the main agent after
 direct-chat activity: per instance, a UTC time span and the paths of each turn's
