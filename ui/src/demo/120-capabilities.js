@@ -38,7 +38,24 @@ function extSet(tab) {
   closeDetail();
 }
 
-function openCaps(tab) { extSet(tab); showPage('capsPage'); drawCaps(); }
+DS.capabilities ??= { loaded: () => true, load: async () => false };
+
+async function openCaps(tab) {
+  extSet(tab);
+  showPage('capsPage');
+  const src = DS.capabilities;
+  if (src.loaded()) { drawCaps(); drawCapsBadge(); }
+  else {
+    const box = $('#capsBody'); box.innerHTML = '';
+    box.appendChild(RavenIslands.skills.skeleton);
+  }
+  try {
+    if (await src.load()) { drawCaps(); drawCapsBadge(); }
+  } catch (e) {
+    toast(`加载失败：${e.message || e}`);
+    drawCaps(); drawCapsBadge();
+  }
+}
 const openSkills = () => openCaps('skill');
 const openPlugins = () => openCaps('plugin');
 function closeCaps() { showPage(null); closeDetail(); }

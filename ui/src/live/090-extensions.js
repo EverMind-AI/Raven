@@ -1,8 +1,7 @@
 /* ---- module pages: real data ---------------------------------------
-   Skills and plugins still refill the demo arrays their legacy pages read.
-   Built-in tools belong only to DS.settings now, so live keeps those rows in
-   its own list. Row mutations are intercepted with property setters that
-   persist through settings.set. */
+   Live owns the rows behind the skills, plugins and settings sources. Row
+   mutations are intercepted with property setters that persist through
+   settings.set. */
 
 const fmt2 = (n) => String(n).padStart(2, '0');
 function fmtStamp(ms) {
@@ -32,6 +31,9 @@ const TOOL_DANGER = new Set(['write_file', 'edit_file', 'exec']);
 let disabledToolsLive = [];
 let pluginsDisabledLive = [];
 let toolsLive = [];
+let skillsLive = [];
+let pluginsLive = [];
+let extLoaded = false;
 
 /* The engine re-reads tools.disabledTools once per assembled tool array, so the
    toggle lands on the next turn. Not the same promise as the plugin toggle below:
@@ -94,8 +96,8 @@ function mkPluginRow(p) {
   return o;
 }
 
-/* Legacy-state mapping keeps the rail badge (needsAttn counts 'need'/'fail')
-   working; the plugin page itself renders from the raw snapshot in o.m. */
+/* Legacy-state mapping keeps the capability badge's need/fail vocabulary;
+   the plugin page itself renders from the raw snapshot in o.m. */
 const MCP_LEGACY = { connected: 'on', connecting: 'on', auth_required: 'need', error: 'fail', disconnected: 'off' };
 
 function mkMcpRow(m) {
@@ -115,24 +117,12 @@ async function loadExt() {
   disabledToolsLive = (raw.tools && raw.tools.disabledTools) || [];
   pluginsDisabledLive = (raw.plugins && raw.plugins.disabled) || [];
   toolsLive = ext.tools.filter((t) => !t.mcp_server).map(mkToolRow);
-  SKILLS.length = 0;
-  ext.skills.forEach((s) => SKILLS.push(mkSkillRow(s)));
-  PLUGINS.length = 0;
-  ext.plugins.forEach((p) => PLUGINS.push(mkPluginRow(p)));
-  ext.mcp.forEach((m) => PLUGINS.push(mkMcpRow(m)));
+  skillsLive = ext.skills.map(mkSkillRow);
+  pluginsLive = ext.plugins.map(mkPluginRow).concat(ext.mcp.map(mkMcpRow));
+  extLoaded = true;
 }
 
-let extLoaded = false;
-openCaps = async function (tab) {
-  /* Page first, data second: the old await-first shape left the previous
-     tab's cards on screen until the RPC returned -- the "stale flash". */
-  extSet(tab);
-  showPage('capsPage');
-  if (extLoaded) { drawCaps(); drawCapsBadge(); }
-  else {
-    const box = $('#capsBody'); box.innerHTML = '';
-    box.appendChild(RavenIslands.skills.skeleton);
-  }
-  try { await loadExt(); extLoaded = true; } catch (e) { toast(`加载失败：${e.message || e}`); }
-  drawCaps(); drawCapsBadge();
+DS.capabilities = {
+  loaded: () => extLoaded,
+  load: async () => { await loadExt(); return true; },
 };

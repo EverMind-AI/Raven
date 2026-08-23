@@ -34,9 +34,9 @@ export interface HubDetail {
   skill_md?: string
 }
 
-/* An installed row. Both sources answer the same shared SKILLS array the
-   page has always drawn from: ext.list fills it in live mode, the demo's
-   fixtures in stub mode. `hub` marks a market install (removable); a
+/* An installed row. Each source owns its list: ext.list fills the live one,
+   while the demo source owns its fixture list. `hub` marks a market install
+   (removable); a
    hand-written or builtin skill has no hub entry and cannot be removed. */
 export interface InstalledSkill {
   id: string

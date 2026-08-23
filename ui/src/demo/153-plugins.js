@@ -210,6 +210,11 @@ DS.plugins ??= (() => {
     },
     togglePy: async (row, on) => { row.state = on ? 'on' : 'off'; },
     auth: async () => null,
+    manual: async (name, address) => {
+      const transport = /^https?:\/\//.test(address) ? 'http' : 'stdio';
+      const m = { name, enabled: true, state: 'connected', transport, tool_count: 0 };
+      mcpRows.push({ id: 'mcp:' + name, name, src: address, m });
+    },
     rows: () => pyRows.concat(mcpRows),
     reload: async () => {},
   };

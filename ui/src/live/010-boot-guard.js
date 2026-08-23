@@ -34,11 +34,11 @@ window.__liveBoot = 1;
 (() => { const r = document.querySelector('.rail'); if (r) r.dataset.counts = 'pending'; })();
 
 /* The demo shell has already seeded and painted its mock data by the time this
-   runs. In live mode none of it may reach the eye: clear it synchronously (same
-   task as the demo paint, so nothing mock survives to the first frame) and hold
-   the session rail on skeleton rows until the real list lands. */
+   runs. Clear the shared session and schedule containers synchronously, blank
+   the conversation, and hold the rail on skeleton rows until the real list
+   lands. Skills and plugins now read live-owned source rows instead. */
 SESS = []; sessionSet(null);
-SKILLS.length = 0; PLUGINS.length = 0; CRONS.length = 0;
+CRONS.length = 0;
 $('#stage').innerHTML = '';
 $('#flash').textContent = '';
 $('#title').textContent = T('gui.new_task');

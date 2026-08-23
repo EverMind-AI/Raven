@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,24 @@ _pending_tasks: set[asyncio.Task] = set()
 # exempt from the 90s progress bound for up to 17 minutes -- does not hold the
 # HTTP request open. The reconcile itself is never cancelled by this.
 _MCP_APPLY_WAIT = 5.0
+
+
+def _mcp_wire_entry(item: dict) -> dict:
+    """Expand the manual-add wire shorthand into an MCP config entry."""
+    entry = dict(item)
+    address = str(entry.pop("address", "") or "").strip()
+    if not address:
+        return entry
+    if entry.get("command") or entry.get("url"):
+        raise ValueError("an MCP server cannot combine address with command or url")
+    if address.startswith(("http://", "https://")):
+        entry["url"] = address
+        return entry
+    argv = shlex.split(address)
+    if not argv:
+        raise ValueError("an MCP server address cannot be empty")
+    entry["command"], entry["args"] = argv[0], argv[1:]
+    return entry
 
 
 def _reexec_process() -> None:  # pragma: no cover - replaces the running process image
@@ -986,7 +1005,7 @@ def register_config_methods(
         A slow one keeps running and the panel shows ``connecting`` until it is
         reopened -- which is honest, and better than a hung request.
         """
-        set_mcp_servers(params.get("servers") or [])
+        set_mcp_servers([_mcp_wire_entry(item) for item in params.get("servers") or []])
         applied = False
         if agent is not None and hasattr(agent, "apply_mcp_config"):
             from loguru import logger

@@ -174,7 +174,7 @@ export function install(it: HubItem): void {
     .finally(() => set({ busy: null }))
 }
 
-/* Removal of a market row whose installed twin is not on SKILLS (or is
+/* Removal of a market row whose installed twin is not in the source (or is
    gone already): the market card just flips back to installable. */
 export function removeMarket(it: HubItem): void {
   set({ busy: it.id })
