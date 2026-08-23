@@ -212,6 +212,10 @@ export function pickDefault(anchor: HTMLElement): boolean {
   return true
 }
 
+export function checkUpdate(btn: HTMLButtonElement): void {
+  void source().checkUpdate(btn)
+}
+
 /* Every open re-reads the counters; the floor keeps the redraw-triggered
    re-asks from spinning, and a failed refresh keeps the numbers it already
    has rather than reporting "no usage" for a dropped call. */
