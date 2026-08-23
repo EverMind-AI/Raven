@@ -131,9 +131,7 @@ openCaps = async function (tab) {
   if (extLoaded) { drawCaps(); drawCapsBadge(); }
   else {
     const box = $('#capsBody'); box.innerHTML = '';
-    const g = mk('div', 'hubgrid');
-    for (let i = 0; i < 6; i++) g.appendChild(hubSkeleton());
-    box.appendChild(g);
+    box.appendChild(RavenIslands.skills.skeleton);
   }
   try { await loadExt(); extLoaded = true; } catch (e) { toast(`加载失败：${e.message || e}`); }
   drawCaps(); drawCapsBadge();

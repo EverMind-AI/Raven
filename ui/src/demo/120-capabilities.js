@@ -1,5 +1,5 @@
 /* ══ module 2: capabilities page ══════════════════════════════════ */
-let extTab = 'skill', cKind = 'all', cQuery = '', dCur = null;
+let extTab = 'skill', cKind = 'all', cQuery = '';
 
 /* Only one module page at a time. They used to cover the whole window, so
    two open at once was invisible; now that the rail stays put, the one behind
@@ -60,128 +60,7 @@ function closeSet() {
   markNewCurrent();
 }
 
-function afterCapChange(c, msg) {
-  drawCaps(); drawCapsBadge(); drawBanner();
-  if (dCur === c.id) openDetail(c.id);
-  toast(msg, c.state === 'on'
-    ? { label: T('gui.caps.back_to_chat'), fn: () => { closeCaps(); $('#ta').focus(); } }
-    : null);
-}
-
-function openDetail(id) {
-  const c = cap(id); if (!c) return;
-  dCur = id;
-  if ($('#capsPage').dataset.open !== 'true') openCaps();
-  $('#dTitle').textContent = c.name;
-  const b = $('#dBody'); b.innerHTML = '';
-
-  const st = STATE_TXT[c.state];
-  const head = mk('div');
-  const badge = mk('span', 'tag' + (st.cls === 'warn' || st.cls === 'bad' ? ' warn' : ''), T(st.t));
-  head.appendChild(badge);
-  if (c.update && c.state === 'on') {
-    const up = mk('button', 'mini', T('gui.detail.update_to_v', { v: c.update }));
-    up.style.marginLeft = '8px';
-    up.onclick = () => {
-      c.ver = c.update; delete c.update;
-      afterCapChange(c, T('gui.detail.updated_v', { v: c.ver }));
-    };
-    head.appendChild(up);
-  }
-  b.appendChild(head);
-
-  b.appendChild(mk('p', null, c.one)).style.cssText = 'margin:0;color:var(--muted);font-size:13px';
-  if (c.why) b.appendChild(mk('div', 'note', c.why)).style.borderTop = '0';
-
-  if (c.state === 'fail') {
-    const e = mk('div', 'probe bad', '⚠ ' + c.err);
-    b.appendChild(e);
-  }
-
-  const dl = mk('dl', 'kv');
-  const kv = (k, v) => { dl.append(mk('dt', null, k), mk('dd', null, v)); };
-  kv(T('gui.detail.kind'), T(SKILLS.includes(c) ? 'gui.detail.kind_skill' : 'gui.detail.kind_plugin'));
-  kv(T('gui.detail.reach'), `${reachText(c.reach)} · ${reachHint(c.reach)}`);
-  if (c.cat) kv(T('gui.detail.category'), c.cat);
-  kv(T('gui.detail.source'), c.src);
-  kv(T('gui.detail.version'), c.ver);
-  if (c.account) kv(T('gui.detail.account'), c.account);
-  b.appendChild(dl);
-
-  if (c.fields && c.fields.length) {
-    b.appendChild(mk('span', 'lab', T('gui.detail.config')));
-    const box = mk('div'); box.style.cssText = 'display:grid;gap:9px';
-    const inputs = [];
-    c.fields.forEach((f) => {
-      const w = mk('div'); w.style.cssText = 'display:grid;gap:5px';
-      w.appendChild(mk('label', null, f.k)).style.cssText = 'font-size:12.5px;color:var(--muted)';
-      const inp = mk('input');
-      inp.type = f.pw ? 'password' : 'text';
-      inp.placeholder = f.ph || '';
-      if (f.val) inp.value = f.val;
-      w.appendChild(inp); box.appendChild(w); inputs.push([f, inp]);
-    });
-    b.appendChild(box);
-
-    const row = mk('div'); row.style.cssText = 'display:flex;gap:8px;margin-top:4px';
-    const save = mk('button', 'mini', T(c.state === 'on' ? 'gui.detail.save' : 'gui.detail.save_on'));
-    save.onclick = () => {
-      const missing = inputs.some(([f, i]) => !i.value.trim() && f.pw);
-      if (missing) { toast(T('gui.detail.need_cred')); inputs[0][1].focus(); return; }
-      inputs.forEach(([f, i]) => { f.val = i.value; });
-      c.state = 'on'; delete c.err;
-      afterCapChange(c, T('gui.caps.enabled_x', { name: c.name }));
-    };
-    row.appendChild(save);
-    b.appendChild(row);
-  }
-
-  if (PLUGINS.includes(c)) {
-    const probe = mk('div');
-    const t = mk('button', 'mini ghost', T('gui.detail.test'));
-    const out = mk('div', 'probe');
-    t.onclick = () => {
-      out.className = 'probe'; out.textContent = T('gui.detail.testing');
-      setTimeout(() => {
-        if (c.state === 'fail') { out.className = 'probe bad'; out.textContent = '✗ ' + c.err; }
-        else if (c.state === 'on') {
-          out.className = 'probe ok';
-          out.textContent = '✓ ' + T('gui.detail.test_ok', { n: c.tools.length });
-        } else { out.className = 'probe'; out.textContent = T('gui.detail.test_off'); }
-      }, 900);
-    };
-    probe.append(t, out);
-    b.appendChild(probe);
-  }
-
-  if (c.tools && c.tools.length) {
-    b.appendChild(mk('span', 'lab', T('gui.detail.tools')));
-    const g = mk('div', 'chips');
-    c.tools.forEach((t) => g.appendChild(mk('span', 'tag', t)));
-    b.appendChild(g);
-  }
-
-  b.appendChild(mk('span', 'lab', T('gui.detail.can_do')));
-  const pg = mk('div', 'chips');
-  (c.perms || []).forEach((p) => pg.appendChild(mk('span', 'tag warn', p)));
-  if (!c.perms || !c.perms.length) pg.appendChild(mk('span', 'tag', T('gui.detail.no_ext')));
-  b.appendChild(pg);
-
-  if (c.state === 'on' || c.state === 'off' || c.state === 'fail' || c.state === 'need') {
-    const foot = mk('div'); foot.style.cssText = 'border-top:1px solid var(--line-soft);padding-top:14px';
-    const rm = mk('button', 'mini ghost danger', T('gui.detail.remove'));
-    rm.onclick = () => confirmAsk(T('gui.detail.remove_title'),
-      T('gui.detail.remove_body', { name: c.name }), T('gui.detail.remove_yes'), () => {
-        c.state = 'add'; delete c.err; (c.fields || []).forEach((f) => delete f.val);
-        closeDetail(); afterCapChange(c, T('gui.caps.removed_x', { name: c.name }));
-      });
-    foot.appendChild(rm);
-    b.appendChild(foot);
-  }
-
-  $('#detail').dataset.open = 'true';
-}
-function closeDetail() { $('#detail').dataset.open = 'false'; dCur = null; }
+function closeDetail() { $('#detail').dataset.open = 'false'; }
 
 /* ══ module 2b: external agents ════════════════════════════════════
    The renderer is the xa island (ui/src/features/xa/); what remains here

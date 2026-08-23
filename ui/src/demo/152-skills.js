@@ -19,37 +19,6 @@ function useInTask(promptKey, name) {
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
-/* Placeholder card shown while a hub round-trip is in flight. The island
-   draws its own copy for the market grid; this one remains because the
-   extensions loader (live layer) builds the caps page's first-open
-   skeleton from it. */
-function hubSkeleton() {
-  const c = mk('div', 'hubcard skel');
-  c.setAttribute('aria-hidden', 'true');
-  const bar = (w, h, extra) => {
-    const b = mk('span', 'sk');
-    b.style.cssText = `width:${w};height:${h};${extra || ''}`;
-    return b;
-  };
-  const top = mk('div', 'top');
-  const head = mk('div', 'pmhead');
-  head.appendChild(bar('34px', '34px', 'border-radius:10px;flex:none'));
-  const id = mk('div', 'pmid');
-  id.style.cssText = 'display:grid;gap:6px';
-  id.append(bar('110px', '12px'), bar('70px', '9px'));
-  head.appendChild(id);
-  top.appendChild(head);
-  c.appendChild(top);
-  const one = mk('div');
-  one.style.cssText = 'display:grid;gap:7px';
-  one.append(bar('100%', '10px'), bar('72%', '10px'));
-  c.appendChild(one);
-  const foot = mk('div', 'foot');
-  foot.append(bar('58px', '22px', 'margin-left:auto;border-radius:8px'));
-  c.appendChild(foot);
-  return c;
-}
-
 /* Mirror of the island's view, read by the plugin layer's hero sync. */
 let skView = 'market';
 

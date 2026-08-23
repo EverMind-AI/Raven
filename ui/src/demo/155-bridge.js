@@ -45,7 +45,7 @@ window.RavenShell = {
   dropDraft: (id) => dropDraft(id),
   openCron: () => openCron(),
   navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]) }),
-  openWebsearch: () => { openPlugins(); openDetail('websearch'); },
+  openWebsearch: () => { openPlugins(); RavenIslands.plugins.openMarket('websearch'); },
   openXa: () => openXa(),
   openConn: () => openConn(),
   markNew: () => markNewCurrent(),

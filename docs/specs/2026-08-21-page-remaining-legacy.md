@@ -64,13 +64,13 @@ distance to the next declaration, which is what produced the 173 above.
 |---|---|---|---|
 | `showOnboard` | `demo/160-boot.js` | 204 | island -- `features/onboard/`; this cell said *undecided* and that is settled, see below |
 | dag sheet svg (`dagSvg` + `drawDag`) | `live/240-external-agents.js` | 156 | island (half done: geometry is already `RavenIslands.dag`) |
-| `openDetail` | `demo/120-capabilities.js` | 113 | island (the caps detail drawer) |
+| `openDetail` | `demo/120-capabilities.js` | 113 | **removed** -- its sole remaining entry opens the plugin island's market detail |
 | clarify sheet | `live/070-notify.js` | 112 | the rack's next tenant, beside the approval sheet -- not a writer, for the reason below |
 | settings toolset (`renderToolset`, `toolLine`, `toolCredRow`) | `demo/130`, `demo/120` | 96 | into the settings island, which currently delegates it back out -- and this row is an **Axis 2** reduction, not an Axis 1 move; see below |
 | `approveSheet` | `demo/040-state.js` | 57 | **next** -- `features/composer/approve.ts` on the composer's bag (`!182`, open); decided, not landed |
 | the sheet dock (`sheetSession` .. `sheetsSync`) | `demo/040-state.js` | 47 | **moved** -- `features/composer/sheets.ts` (`!180`); this row said *writer* and that was wrong, see below |
 | `upShade` | `live/210-update-notice.js` | 39 | writer |
-| `hubSkeleton` | `demo/152-skills.js` | 26 | into the skills island |
+| `hubSkeleton` | `demo/152-skills.js` | 26 | **moved** -- the skills island owns the first-load skeleton host |
 | `menuAt` | `demo/040-state.js` | 13 | writer |
 | `toast` | `demo/040-state.js` | 11 | writer |
 | small (`ico`, `mkMcpRow`, `authFail`, two install buttons) | various | ~120 | fold into whoever ends up owning each |

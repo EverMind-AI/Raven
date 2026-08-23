@@ -25,7 +25,7 @@ import * as plugins from './features/plugins/store'
 import { RailApp } from './features/rail/RailPage'
 import * as rail from './features/rail/store'
 import { plainTitle } from './features/rail/title'
-import { SkillsApp } from './features/skills/SkillsPage'
+import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
 import * as skills from './features/skills/store'
 import * as subagents from './features/subagents/mount'
 import * as subagentsStore from './features/subagents/store'
@@ -165,6 +165,8 @@ window.md = md
    under #capsBody on every skill-tab draw: the plugin tab clears that box
    with innerHTML, which must never tear down nodes React owns. */
 const skillsHost = document.createElement('div')
+const skillsSkeletonHost = document.createElement('div')
+skillsSkeletonHost.className = 'hubgrid'
 
 /* The plugins island renders into a host node it owns the same way: the
    tab chrome (demo/153-plugins.js) re-appends it on every plugin draw. */
@@ -186,6 +188,7 @@ window.RavenIslands = {
   },
   skills: {
     attach: (box: Element) => box.appendChild(skillsHost),
+    skeleton: skillsSkeletonHost,
     redraw: skills.redraw,
     reset: skills.reset,
     dropDrawer: skills.dropDrawer,
@@ -276,6 +279,7 @@ window.RavenIslands = {
     setQuery: plugins.setQuery,
     searchIfIdle: plugins.searchIfIdle,
     toggleView: plugins.toggleView,
+    openMarket: (id: string) => plugins.openDetail('market', id),
     toggleMcp: plugins.toggleMcp,
     installedCount: plugins.installedCount,
     event: plugins.onEvent,
@@ -335,6 +339,7 @@ if (memHost) createRoot(memHost).render(<MemoryApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
 createRoot(skillsHost).render(<SkillsApp />)
+createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <SkillsSkeleton key={i} />)}</>)
 
 /* The workspace island mounts lazily: #wsBody is shared ground -- the agents
    and browser tabs draw into it through their own island roots, so the

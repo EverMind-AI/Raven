@@ -73,7 +73,7 @@ function Stars({ score }: { score?: number | null }): JSX.Element {
 
 /* Placeholder card shown the instant a chip / query flips, so the page
    answers the click immediately instead of freezing on stale results. */
-function Skeleton(): JSX.Element {
+export function Skeleton(): JSX.Element {
   return (
     <div className="hubcard skel" aria-hidden="true">
       <div className="top">
