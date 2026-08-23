@@ -36,18 +36,16 @@ async function loadSettings() {
   configPathLive = r.config_path || configPathLive;
   drawBanner();
   const defaults = (RAW.agents && RAW.agents.defaults) || {};
-  if (defaults.workspace) CFG.cwd = defaults.workspace;
-  CFG.endpoint = r.config_path;
   if (defaults.model) { model = defaults.model; setModelLabel(); }
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
 let curProvider = '';
+let providersLive = [];
 
 async function loadProviders() {
   const mo = await rpc.call('model.options', {});
-  PROVIDERS.length = 0;
-  (mo.providers || []).forEach((p) => PROVIDERS.push({
+  providersLive = (mo.providers || []).map((p) => ({
     id: p.slug, name: p.name, models: p.models || [], on: p.authenticated,
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     env: p.key_env || '', warn: p.warning || '',
@@ -59,7 +57,7 @@ async function loadProviders() {
 
 const settingsSnapshot = () => ({
   raw: RAW, configPath: configPathLive, everos: everosLive,
-  providers: PROVIDERS, curProvider, model,
+  providers: providersLive, curProvider, model,
   toolGroups: TOOL_GROUPS, tools: toolsLive,
 });
 
@@ -232,7 +230,7 @@ const setModelLabel = () => { $('#modelName').textContent = shortModel(model); $
    repaints from, and the rpc call that can reject. Splitting those two is what
    lets the picker be optimistic and still roll back. */
 DS.model = {
-  providers: () => PROVIDERS,
+  providers: () => providersLive,
   current: () => model,
   setLocal: (m) => { model = m; setModelLabel(); },
   persist: (m) => rpc.call('config.set', { key: 'model', value: m }),

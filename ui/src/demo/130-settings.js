@@ -4,8 +4,8 @@
    the capabilities rows and the live layer's redrawAll still call -- the
    look/notification plumbing other parts share, and the fixture source. */
 
-/* Read by the chrome's model chip menu and rebuilt in place by the live
-   loadProviders, so the fixture snapshot and the picker read the same rows. */
+/* The fixture provider rows. Live mode owns the rows fetched from its model
+   source, so it never refills this demo list in place. */
 const PROVIDERS = [
   { id: 'minimax', name: 'MiniMax', models: ['minimax-m3', 'minimax-m2'], on: true, kind: 'api_key' },
   { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5', 'claude-sonnet-4-6'], on: true, kind: 'api_key' },

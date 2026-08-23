@@ -12,10 +12,7 @@ const CFG = {
      preference, and following the system would mean the desktop shell's
      launch splash (decided before this page can report anything) and the
      first painted frame could disagree. 'system' stays available in settings. */
-  theme: 'light', motion: 'on', codeFont: 'system',
-  budget: 8192, temp: 1.0, confirmRisky: true,
-  cwd: '~/Project/raven', endpoint: 'https://gw.raven.dev', region: 'ap-shanghai',
-  image: 'raven/sandbox:0.1.9', mem: 4
+  theme: 'light', motion: 'on', codeFont: 'system'
 };
 
 const stop_ = () => { timers.forEach(clearTimeout); timers = []; };
@@ -290,4 +287,3 @@ document.addEventListener('selectionchange', () => {
   sel.removeAllRanges();
   sel.addRange(clamped);
 });
-

@@ -372,12 +372,9 @@ describe('settings island', () => {
     expect(badge.title).toBe('hint:net')
   })
 
-  /* The claim that decides whether this panel may own the flip at all. The
-     rows are the array the legacy layers hold, and in live mode `on` is an
-     accessor that writes tools.disabledTools -- so the flip has to be an
-     assignment on that row, not a copy the island keeps beside it. A local
-     copy would draw the same and persist nothing. */
-  it('flips a tool by assigning on the shared row, so the live accessor persists it', async () => {
+  /* The source row owns the live accessor that writes tools.disabledTools, so
+     the flip has to assign that row rather than a copy the island keeps. */
+  it('flips a tool by assigning on the source row, so the live accessor persists it', async () => {
     const data = snap()
     const writes: boolean[] = []
     let on = true
