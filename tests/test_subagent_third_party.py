@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 import re
@@ -3098,9 +3099,29 @@ def test_mint_handle_slugifies_the_seed_and_appends_a_unique_suffix() -> None:
     assert re.fullmatch(r"refactor-auth-[0-9a-f]{6}", handle)
 
 
-def test_mint_handle_never_repeats() -> None:
-    seen = {instances_mod.mint_handle("research") for _ in range(200)}
-    assert len(seen) == 200
+def test_mint_handle_draws_its_suffix_afresh_on_every_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two mints of one seed differ, because the suffix is drawn and not derived.
+
+    This replaced an assertion that 200 mints are 200 distinct handles. The code
+    does not promise that and cannot: the suffix is six hex characters, so 200
+    draws collide with probability about ``200**2 / (2 * 16**6)`` -- roughly one
+    run in 840, which is a red pipeline every few hundred builds and blocks
+    whoever is trying to merge that day. Widening the suffix would only move the
+    number; six characters is a deliberate trade for a handle a person reads and
+    types, and no caller needs more.
+
+    What a caller does rely on is that a second spawn is not handed the first
+    one's handle, and therefore its session. That is a statement about the draw
+    rather than about luck, and it is checkable exactly.
+    """
+    drawn = itertools.count(1)
+    monkeypatch.setattr(instances_mod.uuid, "uuid4", lambda: uuid.UUID(int=next(drawn) << 104))
+
+    assert [instances_mod.mint_handle("research") for _ in range(3)] == [
+        "research-000001",
+        "research-000002",
+        "research-000003",
+    ]
 
 
 def test_mint_handle_bounds_the_slug_and_trims_a_dangling_separator() -> None:
