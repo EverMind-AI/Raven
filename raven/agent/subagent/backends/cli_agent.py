@@ -16,6 +16,7 @@ spawn with the same handle resumes that session.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shlex
@@ -53,6 +54,88 @@ if TYPE_CHECKING:
 _READ_CHUNK = 65536
 """Stdout/stderr read size for the streaming pump. Not a line cap: lines are
 reassembled from these chunks, so a transcript line of any length is fine."""
+
+_FAILURE_CHARS = 240
+"""Cap on what a failed dispatch says out loud. The whole stdout and stderr are
+kept on the span (see ``_record``), so this text exists for a person reading a
+conversation, not for diagnosis -- and uncapped it put an entire JSON transcript
+into one."""
+
+
+def _one_line(said: str) -> str:
+    """One line, capped.
+
+    A structured field holds whatever the agent put in it, newlines included, so
+    collapsing is part of the promise rather than tidying: a "one line" that
+    reaches a conversation as three is not one.
+    """
+    return " ".join(said.split())[:_FAILURE_CHARS]
+
+
+def _parsed(line: str) -> Any:
+    """This line's JSON, or ``None`` if it is not a frame.
+
+    The opener test is not a shortcut for the parse; it is what keeps the parse
+    off every line of a plain-text transcript.
+    """
+    if not (line.startswith("{") or line.startswith("[")):
+        return None
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
+def _framed(line: str) -> bool:
+    """Whether this line is structured output rather than a sentence.
+
+    Asymmetric, because the two openers say different amounts. Nothing prints
+    prose beginning with ``{``, so an object opener is a frame whether or not it
+    parses -- which is what still keeps a transcript truncated mid-line from
+    being read out as the failure.
+
+    A leading ``[`` says very little: ``[ERROR] token expired`` and
+    ``[2026-08-22T10:11:12] connecting`` are what a great many CLIs print, and
+    calling those frames discarded exactly the sentence this module exists to
+    find. So a bracket counts only when the line really is JSON.
+    """
+    if line.startswith("{"):
+        return True
+    return line.startswith("[") and _parsed(line) is not None
+
+
+def _human_failure(stdout: str, stderr: str) -> str:
+    """The one line worth showing for a CLI that exited non-zero.
+
+    An agent with a JSON transcript format reports its own errors as a frame per
+    line, carrying the sentence a person actually needs (an expired login, a
+    disabled account, a bad flag) in ``result`` or ``error``. Read from the last
+    line back, because the terminal frame is the one holding the verdict.
+
+    Then the last plain line either stream ends with -- stderr first, then
+    stdout. Not stderr alone: ``transcript_format`` defaults to ``text``, and
+    such a command says ``token expired`` on stdout with nothing on stderr at
+    all; so does a JSON-format one that dies before emitting any JSON, on its
+    usage message. Framed lines are skipped here, because an unparsed frame is
+    the dump this exists to keep out.
+
+    Nothing at all is the last resort, and a fine one: the caller then says
+    which agent failed and with what code, which beats showing a transcript.
+    """
+    for line in reversed(stdout.splitlines()):
+        frame = _parsed(line.strip())
+        if not isinstance(frame, dict):
+            continue
+        for key in ("result", "error", "message"):
+            said = frame.get(key)
+            if isinstance(said, str) and said.strip():
+                return _one_line(said)
+    for stream in (stderr, stdout):
+        for line in reversed(stream.splitlines()):
+            line = line.strip()
+            if line and not _framed(line):
+                return _one_line(line)
+    return ""
 
 
 class CliAgentTimeoutError(RuntimeError):
@@ -341,8 +424,13 @@ class CliAgentBackend:
                     }
                 )
             if proc.returncode != 0:
-                tail = (stdout + "\n" + stderr).strip()[-2000:]
-                raise RuntimeError(f"CLI agent {self.name!r} exited {proc.returncode}: {tail}")
+                # One line, not the tail of the transcript. The transcript itself
+                # is on the span above, which is where a diagnosis reads it from;
+                # what reaches an exception message ends up quoted verbatim in
+                # the instance's conversation and in the DAG node's error, so a
+                # 2000-char JSON dump was shown to whoever was watching.
+                said = _human_failure(stdout, stderr)
+                raise RuntimeError(f"CLI agent {self.name!r} exited {proc.returncode}" + (f": {said}" if said else ""))
             return stdout, stderr
         finally:
             try:

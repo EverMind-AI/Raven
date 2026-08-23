@@ -310,6 +310,94 @@ async def test_cli_backend_nonzero_exit_raises(tmp_path: Path) -> None:
         await be.run("x", task_id="t4", workspace=tmp_path, executor=None)
 
 
+async def test_cli_failure_says_the_one_line_and_not_the_transcript(tmp_path: Path) -> None:
+    """What a failed dispatch says reaches the instance's conversation verbatim,
+    and these CLIs answer errors with a whole JSON frame per line. Quoting the
+    tail of that put a page of `cache_creation_input_tokens` in front of whoever
+    was watching the run; the sentence they need is inside it."""
+    said = "Your organization has disabled Claude subscription access for Claude Code"
+    frames = (
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]},'
+        '"usage":{"cache_creation_input_tokens":0},"error":"oauth_org_not_allowed"}\n'
+        '{"is_error":true,"api_error_status":403,"result":"%s","type":"result",'
+        '"usage":{"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}\n'
+    ) % (said, said)
+    frames_file = tmp_path / "frames.jsonl"
+    frames_file.write_text(frames, encoding="utf-8")
+    script = tmp_path / "fail.sh"
+    script.write_text(f"#!/bin/sh\ncat {frames_file}\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    be = CliAgentBackend(name="claude_code", command=f"{script} {{prompt}}")
+    with pytest.raises(RuntimeError) as caught:
+        await be.run("x", task_id="t6", workspace=tmp_path, executor=None)
+
+    message = str(caught.value)
+    assert said in message
+    # Nothing of the frame itself: not its keys, not its braces, not its length.
+    assert "cache_creation_input_tokens" not in message
+    assert "{" not in message
+    assert len(message) < 400
+
+
+async def test_a_text_transport_failure_still_says_what_went_wrong(tmp_path: Path) -> None:
+    """`transcript_format` defaults to `text`, and such a command puts its whole
+    diagnostic on stdout as a plain line. Reading structured frames and then only
+    stderr left it saying nothing but that it had exited."""
+    script = tmp_path / "expired.sh"
+    script.write_text("#!/bin/sh\necho 'token expired'\nexit 1\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    be = CliAgentBackend(name="plain", command=f"{script} {{prompt}}")
+    with pytest.raises(RuntimeError, match="token expired"):
+        await be.run("x", task_id="t7", workspace=tmp_path, executor=None)
+
+
+def test_human_failure_falls_back_to_stderr_then_stdout_then_nothing() -> None:
+    from raven.agent.subagent.backends.cli_agent import _human_failure
+
+    assert _human_failure("", "boom: no such flag\n") == "boom: no such flag"
+    # `transcript_format` defaults to `text`: such a command says what went wrong
+    # on stdout and nothing on stderr, and stderr alone left it saying nothing.
+    assert _human_failure("token expired\n", "") == "token expired"
+    assert _human_failure("out says this\n", "err says this\n") == "err says this"
+    # An unparsed frame is the dump this exists to keep out, so it is not a
+    # fallback either -- silence is better.
+    assert _human_failure('{"noise": "' + "x" * 500 + '"}\n', "") == ""
+    assert _human_failure("", "") == ""
+    # Capped, so no single enormous line can stand in for the dump.
+    assert len(_human_failure("", "x" * 5000)) == 240
+
+
+def test_a_bracketed_diagnostic_is_prose_not_a_frame() -> None:
+    """`[ERROR] token expired` is what a great many CLIs print. Taking every
+    leading bracket for a structured frame discarded exactly the sentence this
+    module exists to find, on both streams."""
+    from raven.agent.subagent.backends.cli_agent import _human_failure
+
+    assert _human_failure("[ERROR] token expired\n", "") == "[ERROR] token expired"
+    assert _human_failure("", "[ERROR] token expired\n") == "[ERROR] token expired"
+    # A timestamp prefix parses no better, and is no less a sentence.
+    assert _human_failure("[2026-08-22T10:11:12] disk full\n", "") == "[2026-08-22T10:11:12] disk full"
+    # A real array frame still is one: it parses, and an unread frame is the
+    # dump this exists to keep out.
+    assert _human_failure('[{"result": "boom"}]\n', "") == ""
+    # And the protection that motivated the bracket test in the first place: an
+    # object opener is structured output whether or not it parses, because
+    # nothing prints prose that starts that way.
+    assert _human_failure('{"result": "half a fr\n', "") == ""
+
+
+def test_human_failure_is_one_line_even_when_the_field_is_not() -> None:
+    """A structured field carries whatever the agent put in it. Returned as-is,
+    the exception became three conversation lines despite the one-line promise."""
+    from raven.agent.subagent.backends.cli_agent import _human_failure
+
+    said = _human_failure('{"result": "first line\\nsecond line\\n\\tthird"}\n', "")
+    assert said == "first line second line third"
+    assert "\n" not in _human_failure("", "one\ntwo\n")
+
+
 async def test_cli_backend_timeout_raises(tmp_path: Path) -> None:
     be = CliAgentBackend(name="slow", command="sleep 5", timeout=1)
     with pytest.raises(RuntimeError):
