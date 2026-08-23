@@ -208,9 +208,19 @@ export function stamp(when: number | string | Date): string {
 }
 
 /* Two result shapes carry the run id and only one is persisted; the restore
-   path is the one this exists for. */
+   path is the one this exists for.
+
+   Per line (`m`), not from the start of the string: a stored tool result arrives
+   wrapped in the untrusted-content fence, whose `[BEGIN UNTRUSTED ...]` header
+   is the first line. Anchored at the string start this matched only the
+   unfenced form -- so every *restored* card failed to bind its run, and with no
+   run id it never asked `dagRows` for the node states. A live card looked right
+   because its events had already filled it in; the same card after a refresh
+   showed its node names with no status and a 0.0s clock. Still line-anchored
+   rather than a bare search, so a run id is only read from a line that opens
+   with the announcement. */
 export const dagRunIdFrom = (res: unknown): string | null =>
-  (/^DAG\s+(?:run\s+)?(\S+?)[:\s]/.exec(String(res || '')) || [])[1] || null
+  (/^DAG\s+(?:run\s+)?(\S+?)[:\s]/m.exec(String(res || '')) || [])[1] || null
 
 export const DOT_OF: Record<string, string> = {
   pending: '', running: 'run', completed: 'ok',
