@@ -81,13 +81,3 @@ DS.workspace = {
   hostIsLocal: () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname),
   shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
 };
-
-/* Host action for the browser tab's url rows (drawn by the legacy layers):
-   a real url opens in the system browser, anything else is copied. */
-wsOpenUrl = function (u) {
-  if (/^https?:\/\//.test(u)) { window.open(u, '_blank', 'noopener'); return; }
-  navigator.clipboard.writeText(String(u)).then(
-    () => toast(T('gui.ws.copy_path')),
-    () => toast(String(u))
-  );
-};

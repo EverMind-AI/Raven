@@ -11,5 +11,5 @@
 DS.browser ??= {
   embedded: false,
   urls: () => WS.urls,
-  openUrl: (u) => wsOpenUrl(u),
+  openUrl: (u) => toast(`demo：正式版会用系统浏览器打开 ${u}`),
 };

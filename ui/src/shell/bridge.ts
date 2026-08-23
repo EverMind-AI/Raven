@@ -139,7 +139,6 @@ export interface Shell {
      state. */
   setIsOpen?(): boolean
   sessionCount?(): number
-  openUrl?(url: string): void
   look?: { get(): LookState; set(patch: Partial<LookState>): void }
   ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
 }
