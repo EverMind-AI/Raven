@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 
 import * as composer from './features/composer/mount'
 import * as approve from './features/composer/approve'
+import * as clarify from './features/composer/clarify'
 import * as sheets from './features/composer/sheets'
 import * as dag from './features/dag/graph'
 import * as dagNodes from './features/dag/nodes'
@@ -348,11 +349,12 @@ window.RavenIslands = {
     sheetDropClass: sheets.dropClass,
     sheetsSync: sheets.sync,
     sheetsForget: sheets.forget,
-    /* The rack's first tenant to move in here. Beside the rack rather than
-       a global of its own: the layers that raise one already reach for
-       these six names, and an approval is the seventh thing they do to the
-       same rack. */
+    /* The rack's tenants. Beside the rack rather than globals of their own:
+       the layers that raise one already reach for these six names, and a
+       question is one more thing they do to the same rack. Neither speaks to
+       the server -- the caller keeps the transport and passes the answer on. */
     approveSheet: approve.open,
+    clarifySheet: clarify.open,
   },
   /* The transcript island: the conversation area's renderer. The legacy
      shims (demo/060, demo/070, demo/080) and the live turn machine
