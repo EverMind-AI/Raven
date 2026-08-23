@@ -15,6 +15,8 @@ import { cronExprHuman, cronWhen } from './features/cron/humanize'
 import * as cron from './features/cron/store'
 import { ModelPickerApp } from './features/model/ModelPicker'
 import * as modelPicker from './features/model/store'
+import { OnboardApp } from './features/onboard/OnboardPage'
+import * as onboard from './features/onboard/store'
 import { MemoryApp } from './features/memory/MemoryPage'
 import * as memory from './features/memory/store'
 import { PlugApp } from './features/plugins/PluginsPage'
@@ -258,6 +260,9 @@ window.RavenIslands = {
     open: settings.open,
     redraw: settings.redraw,
   },
+  onboard: {
+    open: onboard.open,
+  },
 }
 
 /* The transcript's link handler lives with the island now; it arms itself
@@ -288,6 +293,9 @@ chips.install()
 const pickHost = document.createElement('div')
 document.body.appendChild(pickHost)
 createRoot(pickHost).render(<ModelPickerApp />)
+
+const onboardHost = document.getElementById('onb')
+if (onboardHost) createRoot(onboardHost).render(<OnboardApp />)
 
 const host = document.getElementById('cronBody')
 if (host) createRoot(host).render(<CronApp />)
