@@ -20,7 +20,7 @@ def test_cron_delivered_event_pydantic_validates() -> None:
     """``CronDeliveredEvent`` SHALL be a member of the ``TurnEvent``
     discriminated union with payload {job_id, name, text, fired_at}.
     """
-    from raven.tui_rpc.models import CronDeliveredEvent
+    from raven.rpc.models import CronDeliveredEvent
 
     event = CronDeliveredEvent(
         type="cron.delivered",
@@ -44,7 +44,7 @@ def test_cron_delivered_event_in_turn_event_union() -> None:
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronDeliveredEvent, TurnEvent
+    from raven.rpc.models import CronDeliveredEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(
@@ -142,7 +142,7 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 
     wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy)
 
-    job = SimpleNamespace(id="j7", name="standup")
+    job = SimpleNamespace(id="j7", name="standup", payload=SimpleNamespace(channel=None))
     await wrapped(job)
 
     emitter_spy.emit.assert_awaited_once()
@@ -155,8 +155,38 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 
     # No reply read back: base runs (side-effects) but nothing is fanned out.
     emitter_spy.emit.reset_mock()
-    silent = SimpleNamespace(id="j8", name="silent")
+    silent = SimpleNamespace(id="j8", name="silent", payload=SimpleNamespace(channel=None))
     await wrapped(silent)
+    emitter_spy.emit.assert_not_awaited()
+
+
+async def test_cron_callback_spine_fans_out_only_tui_jobs(emitter_spy: MagicMock) -> None:
+    """On the gateway (default_channel is an IM/web surface) the fan-out SHALL
+    follow the job's resolved channel: a tui job echoes to the page sessions, a
+    channel-addressed job is already delivered by the hub on its own channel
+    and SHALL NOT be echoed a second time."""
+    from types import SimpleNamespace
+
+    from raven.cli.tui_commands import _build_cron_callback_spine
+
+    async def base_on_cron(job):
+        return "reminder body"
+
+    wrapped = _build_cron_callback_spine(base_on_cron, emitter_spy, default_channel="cli")
+
+    tui_job = SimpleNamespace(id="j1", name="page", payload=SimpleNamespace(channel="tui"))
+    await wrapped(tui_job)
+    emitter_spy.emit.assert_awaited_once()
+
+    emitter_spy.emit.reset_mock()
+    feishu_job = SimpleNamespace(id="j2", name="im", payload=SimpleNamespace(channel="feishu"))
+    assert await wrapped(feishu_job) == "reminder body"  # delivery itself untouched
+    emitter_spy.emit.assert_not_awaited()
+
+    # No channel on the payload resolves to the host's default -- not tui on
+    # the gateway, so no fan-out there either.
+    unaddressed = SimpleNamespace(id="j3", name="plain", payload=SimpleNamespace(channel=None))
+    await wrapped(unaddressed)
     emitter_spy.emit.assert_not_awaited()
 
 
@@ -168,7 +198,7 @@ async def test_cron_callback_spine_fans_out_reply(emitter_spy: MagicMock) -> Non
 def test_cron_missed_event_pydantic_validates() -> None:
     """``CronMissedEvent`` SHALL be a member of the ``TurnEvent`` discriminated
     union with payload {count, items: [{name, scheduled_at, message}]}."""
-    from raven.tui_rpc.models import CronMissedEvent
+    from raven.rpc.models import CronMissedEvent
 
     event = CronMissedEvent(
         type="cron.missed",
@@ -190,7 +220,7 @@ def test_cron_missed_event_pydantic_validates() -> None:
 def test_cron_missed_event_in_turn_event_union() -> None:
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronMissedEvent, TurnEvent
+    from raven.rpc.models import CronMissedEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(
@@ -256,3 +286,62 @@ async def test_fanout_cron_missed_no_session_queues_startup_event() -> None:
         "scheduled_at": "2025-06-04T08:00:00+00:00",
         "message": "吃药",
     }
+
+
+def test_every_host_that_starts_cron_surfaces_the_startup_drops() -> None:
+    """A reminder dropped at startup has to be told to whoever is listening.
+
+    Discovered rather than listed: any file that starts a cron service is held to
+    the property. The earlier version of this test named two files and passed
+    while a third host violated it, which is the kind of green that reads as
+    covered when it is not.
+
+    ``EXEMPT`` is the honest half. ``gateway_commands.py`` starts a cron service
+    partitioned over the enabled IM channels, so a past-due WhatsApp one-shot
+    lands in *its* drops and nothing surfaces them -- it wires
+    ``on_missed_foreign``, which is the opposite set (``list_missed_foreign_oneshots``
+    skips every job the runner owns). Whether a host with no attached client
+    should surface them at all is a design question, so it is written down here
+    rather than silently passing.
+
+    Structural on purpose, and worth being clear about the limit: this asserts
+    the call is present after ``start()``, not that it runs. It would pass with
+    the block under ``if False`` or with the guard inverted. The behaviour of
+    ``_fanout_cron_missed`` itself is covered above; what this catches is a new
+    serve path that forgets to call it, which is the regression that already
+    happened once.
+    """
+    from pathlib import Path
+
+    # host -> why it does not surface its own drops
+    EXEMPT = {
+        "cli/gateway_commands.py": (
+            "cron is partitioned over the enabled IM channels here and the host has "
+            "no attached client; it surfaces other partitions' misses via "
+            "on_missed_foreign instead. Its own drops are an open design question."
+        ),
+    }
+
+    root = Path(__file__).resolve().parents[1] / "raven"
+    starters = []
+    for path in sorted(root.rglob("*.py")):
+        src = path.read_text(encoding="utf-8")
+        marker = next(
+            (m for m in ("await agent_loop.cron_service.start()", "await cron.start()") if m in src),
+            None,
+        )
+        if marker is None:
+            continue
+        starters.append((path.relative_to(root).as_posix(), src, marker))
+
+    assert starters, "no cron start site found -- the markers this test greps for have moved"
+
+    for rel, src, marker in starters:
+        if rel in EXEMPT:
+            continue
+        tail = src[src.index(marker) :]
+        assert "last_startup_drops" in tail, f"{rel} starts cron without reading last_startup_drops"
+        assert "_fanout_cron_missed" in tail, f"{rel} reads the drops without fanning them out"
+
+    stale = sorted(set(EXEMPT) - {rel for rel, _, _ in starters})
+    assert not stale, f"EXEMPT names a file that no longer starts cron: {stale}"

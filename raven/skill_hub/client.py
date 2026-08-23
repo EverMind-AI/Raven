@@ -24,26 +24,18 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, quote_plus, urlencode
+from urllib.parse import quote
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
-_MAX_QUERY_STRING_BYTES = 2048
-"""Hard cap on the whole query string of a catalog search.
-
-The hub is fronted by a load balancer that answers ``403 Forbidden`` -- not
-``414`` -- once the query string passes this many bytes, and ``q`` carries a
-retrieval query that can be as long as a user's whole message. Measured against
-the deployed hub: 2048 bytes are served, 2049 are refused. Without the cap a
-long query does not search on a prefix, it loses discovery outright.
-"""
-# Defensive limits for untrusted zip extraction.
-_MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
-_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
-_ALLOWED_SUFFIXES = {
+# Defensive limits for untrusted zip extraction. Public because the skillhub RPC
+# install path unpacks the same archives and must not drift to a laxer policy.
+MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
+MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
+ALLOWED_SUFFIXES = {
     # docs / data / config
     ".md",
     ".txt",
@@ -89,30 +81,6 @@ class SkillHubError(RuntimeError):
     """Hub returned a non-ok envelope or a malformed/unsafe payload."""
 
 
-def _fit_encoded(text: str, budget: int) -> str:
-    """The longest prefix of ``text`` whose URL encoding fits ``budget`` bytes.
-
-    Measured in encoded width rather than characters because the two diverge by
-    up to 9x: a CJK character is three UTF-8 bytes and each becomes a three-byte
-    ``%XX`` escape, so a character cap sized for ASCII still overruns, and one
-    sized for CJK discards most of an ASCII query that would have fit. Cutting
-    per character also keeps the result valid UTF-8, which slicing the encoded
-    form would not.
-    """
-    if budget <= 0:
-        return ""
-    if len(quote_plus(text)) <= budget:
-        return text
-    kept: list[str] = []
-    used = 0
-    for ch in text:
-        used += len(quote_plus(ch))
-        if used > budget:
-            break
-        kept.append(ch)
-    return "".join(kept)
-
-
 class SkillHubClient:
     def __init__(
         self,
@@ -129,11 +97,26 @@ class SkillHubClient:
         self._source = source
         self._cache_dir = cache_dir or (Path.home() / ".raven" / "skills" / "hub")
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout_s))
+        self._timeout = httpx.Timeout(timeout_s)
+        self._client = client or httpx.AsyncClient(timeout=self._timeout)
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _http(self) -> httpx.AsyncClient:
+        """The transport, rebuilt if a previous ``aclose`` retired it.
+
+        One instance is shared by the router's Hub source and the read_skill /
+        use_skill tools, and ``AgentLoop.close_executor`` closes it on any turn
+        that raises -- which the loop then recovers from. Without this the
+        holders keep a permanently closed transport and every later Hub call
+        fails for the life of the process. An injected client belongs to its
+        owner, so it is never replaced.
+        """
+        if self._owns_client and self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
 
     def _headers(self) -> dict[str, str]:
         h = {"X-Request-ID": uuid.uuid4().hex}
@@ -165,24 +148,13 @@ class SkillHubClient:
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}
+        if q:
+            params["q"] = q
         if category:
             params["category"] = category
         if sort:
             params["sort"] = sort
-        # ``q`` last so the budget it gets is what the other params leave over.
-        if q:
-            budget = _MAX_QUERY_STRING_BYTES - len(urlencode(params)) - len("&q=")
-            fitted = _fit_encoded(q, budget)
-            if fitted != q:
-                logger.debug(
-                    "hub search query trimmed to fit the %d-byte query-string cap (%d of %d characters kept)",
-                    _MAX_QUERY_STRING_BYTES,
-                    len(fitted),
-                    len(q),
-                )
-            if fitted:
-                params["q"] = fitted
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills",
             params=params,
             headers=self._headers(),
@@ -203,7 +175,7 @@ class SkillHubClient:
 
     # ── Read body (skill_md) — no download ──────────────────────────
     async def get(self, skill_id: str) -> dict[str, Any]:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}",
             headers=self._headers(),
         )
@@ -212,7 +184,7 @@ class SkillHubClient:
 
     # ── Bundle (zip with scripts/assets) ────────────────────────────
     async def download(self, skill_id: str) -> bytes:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{self._id_segment(skill_id)}/download",
             params={"source": self._source},
             headers=self._headers(),
@@ -290,17 +262,23 @@ class SkillHubClient:
                 # entry would be wrongly rejected as unsafe.
                 if not target.is_relative_to(dest.resolve()):
                     raise SkillHubError(f"unsafe zip path: {name!r}")
-                if Path(name).suffix.lower() not in _ALLOWED_SUFFIXES:
+                if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
                     logger.warning("skipping disallowed file in skill zip: %r", name)
                     continue
-                if info.file_size > _MAX_ZIP_ENTRY_BYTES:
+                if info.file_size > MAX_ZIP_ENTRY_BYTES:
                     logger.warning("skipping oversized file in skill zip: %r", name)
                     continue
-                if total + info.file_size > _MAX_ZIP_TOTAL_BYTES:
+                if total + info.file_size > MAX_ZIP_TOTAL_BYTES:
                     raise SkillHubError("zip uncompressed total too large")
                 total += info.file_size
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(zf.read(info))
 
 
-__all__ = ["SkillHubClient", "SkillHubError"]
+__all__ = [
+    "ALLOWED_SUFFIXES",
+    "MAX_ZIP_ENTRY_BYTES",
+    "MAX_ZIP_TOTAL_BYTES",
+    "SkillHubClient",
+    "SkillHubError",
+]

@@ -74,30 +74,8 @@ class ContextConfig(_Base):
     fast_path_threshold: float = 0.60
     """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
 
-    curator_model: str | None = None
-    """Model for the Curator agent loop (Slow Path). Unset means the Curator
-    runs on the model of the conversation it is curating.
-
-    Worth setting, and worth setting to something small: one slow-path pass is
-    a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
-    housekeeping rather than an answer, and unset means a long conversation
-    pays conversation-model prices for it. Pair it with ``curator_provider``:
-    a model id alone does not say which credential serves it, and a model id
-    without a key of its own is not a configured subsystem -- the Curator
-    falls back to the conversation rather than send that id on the
-    conversation's key."""
-
-    curator_provider: str | None = None
-    """Which configured provider serves ``curator_model``.
-
-    Set this whenever the id alone is ambiguous, which is most of the time
-    once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
-    and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
-    credentials and different bills, and only you know which was meant.
-
-    Unset, the pin goes to your configured gateway if you have one -- it serves
-    whatever id it is handed -- and only without a gateway is the vendor derived
-    from the id. Neither is a guess you should rely on."""
+    curator_model: str = "gemini-2.5-flash"
+    """Model used by the Curator agent loop (Slow Path). Kept small & fast."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -110,6 +88,24 @@ class ContextConfig(_Base):
 
     protect_first_n: int = 3
     """Number of head exchanges always preserved in context."""
+
+    pinned_skill_ids: list[str] = Field(default_factory=lambda: ["local/subagent-dag-orchestration"])
+    """Skills whose fetched body is pinned into every later context window.
+
+    A skill body arrives as a ``use_skill`` / ``read_skill`` tool result, which
+    is an ordinary history message: only the first ``protect_first_n`` exchanges
+    are protected, so a body read mid-session is dropped like any other old one.
+    For instruction material that is usually fine -- re-fetch it. It is not fine
+    when a tool's own description says "unless the guide is already in your
+    context": the agent cannot observe whether it still is, so it either
+    re-fetches every turn or builds from the memory of a body that is gone.
+
+    Pinning keeps that fetch (the assistant tool_call and its results) in every
+    later window of the session, at the cost of those tokens of history budget.
+    Only for bodies whose absence is silently wrong; the default is the sub-agent
+    DAG guide, whose wiring rules the tool description cannot restate in full.
+    Re-fetching the same id supersedes the earlier pin, so one body is never
+    pinned twice. Set to ``[]`` to disable."""
 
     archive_dir: str = "memory/.curator/archive"
     """Relative path under workspace for lossless message archives."""
@@ -690,12 +686,13 @@ class SmartRoutingConfig(_Base):
     """SmartRouter configuration."""
 
     enabled: bool = False
-    tiers: dict[str, list[str]] = Field(default_factory=dict)
-    """Which models each tier may route to. Empty out of the box: the table
-    this replaced named six models across three vendors, for users who may
-    hold no key for any of them, and routing has no meaning without models to
-    choose between -- so enabling this means listing your own."""
-
+    tiers: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "light": ["gemini-2.5-flash", "claude-haiku-4-5"],
+            "medium": ["claude-sonnet-4-6", "gpt-4.1-mini"],
+            "heavy": ["claude-opus-4-6", "gpt-4.1"],
+        }
+    )
     default_tier: Literal["light", "medium", "heavy"] = "heavy"
     """Fallback tier when routing is uncertain — conservative default."""
 
@@ -707,8 +704,7 @@ class ToolResultLifecycleConfig(_Base):
     full_retention_turns: int = 3
     summary_retention_turns: int = 10
     placeholder_text: str = "[Tool result archived — retrievable via Curator]"
-    summary_model: str | None = None
-    """Unset means the conversation's own model. See ``curator_model``."""
+    summary_model: str = "gemini-2.5-flash"
 
 
 class TokenWiseConfig(_Base):
@@ -767,22 +763,25 @@ class EverOSConfig(_Base):
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
     # budget for supporting_cases scales with this number.
-    max_skills_top_k: int = 5
+    # Bounds live here rather than on the writers: the web RPC is one of three
+    # ways in (onboard/CLI and a hand-edited config.json are the others), and
+    # only a schema constraint covers all of them.
+    max_skills_top_k: int = Field(default=5, ge=1)
     # Confidence floor: skills falling below this after a downward
     # adjustment are soft-deleted on the spot.
-    retire_confidence: float = 0.1
+    retire_confidence: float = Field(default=0.1, ge=0.0, le=1.0)
     # Skip the skill_extractor LLM call when ``case.quality_score`` is
     # below this floor. Low-quality distillations tend to produce noisy
     # / contradictory skills more often than reusable ones; the case is
     # still persisted (useful for retrieval / audit).
-    min_quality_for_skill_extract: float = 0.2
+    min_quality_for_skill_extract: float = Field(default=0.2, ge=0.0, le=1.0)
     # 3-tier value gate placed before case extraction (in _flush_segment).
     # Only segments that pass at least one tier are extracted:
     #   Tier 1 (fast-pass): has_user_feedback AND >=2 user messages in segment
     #   Tier 2 (fast-pass): total tool_calls > complex_task_tool_call_threshold
     #   Tier 3 (cheap LLM): detect_llm asked whether trajectory is worth
     #                        learning from; false → skip, true → extract
-    complex_task_tool_call_threshold: int = 20
+    complex_task_tool_call_threshold: int = Field(default=20, ge=0)
 
 
 class LocalDirConfig(_Base):
@@ -826,6 +825,20 @@ class SkillForgeConfig(_Base):
     enabled: bool = True
     """Master switch (R8: default True). Activates the SkillForge
     retrieval/injection pipeline."""
+
+    discovery: Literal["pull", "push"] = "pull"
+    """How retrieved skills reach the model.
+
+    ``"pull"`` (default): a per-turn scent menu (a few name+description
+    lines from the same three-source router) rides the user envelope, and
+    the model fetches bodies itself via ``find_skill`` / ``read_skill``.
+    No per-turn rewriter/gate LLM calls; the system prefix carries no
+    retrieved-skill bytes.
+
+    ``"push"``: the pre-existing pipeline (rewriter -> router -> gate ->
+    selected bodies rendered into the system prefix). Kept for
+    deployments whose main model under-uses tools.
+    """
 
     blocklist: list[str] = Field(default_factory=list)
     """Skill names refused everywhere (config key ``skillForge.blocklist``):
@@ -1002,18 +1015,7 @@ class SkillForgeConfig(_Base):
 
     llm_gate_model: str | None = None
     """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model).
-
-    Pair it with ``llm_gate_provider``: an id alone does not say which
-    credential serves it."""
-
-    llm_gate_provider: str | None = None
-    """Which configured provider serves ``llm_gate_model``.
-
-    Same rule as ``context.curator_provider``: set it when the id alone is
-    ambiguous (a gateway serving another vendor's model). Unset, a configured
-    gateway takes the pin and only without one is the vendor derived from the
-    id."""
+    provider's default chat model (typically the agent's main model)."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic
@@ -1051,7 +1053,7 @@ class SkillForgeConfig(_Base):
     rewrites — e.g. ``"claude-opus-4-6"``."""
 
     # --- Detect / extraction gating (wired into everos) ---
-    detect_model: str | None = None
+    detect_model: str = "gemini-2.5-flash"
     """LLM used for the cheap per-turn classification work — today that's
     the everos boundary detector (multi-turn task split). A
     smaller / faster model than ``evolve_model`` is intentional: boundary
@@ -1255,8 +1257,11 @@ class SkillForgeRouterConfig(_Base):
     a same-named skill across sources into one slot; ``"qualified_id"``
     keeps them as separate entries (useful for telemetry experiments)."""
 
-    top_k: int = 5
-    """Final top-K returned from ``SkillForgeRouter.select``."""
+    top_k: int = 2
+    """Final top-K returned from ``SkillForgeRouter.select``. Also the no-gate
+    injection size: each hit is rendered in full into the system prefix, so
+    this defaults to match the gate's ``max_select`` rather than widening the
+    prompt whenever the gate happens to be unwired."""
 
     hub: HubSourceConfig = Field(default_factory=HubSourceConfig)
 

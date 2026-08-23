@@ -216,25 +216,31 @@ class LocalSkillCatalog:
         """Full SKILL.md content, or ``None`` if absent."""
         return self._registry.get_body(name)
 
+    # Truncation priority for the always-set, lowest number survives first.
+    # Explicit because sorting on the source *label* is alphabetical, which is
+    # a different order that only looks right by accident: ``builtin`` happens
+    # to sort ahead of ``external``, but so does ``external`` ahead of
+    # ``workspace``, so a user's own always-skill was the first thing dropped.
+    _ALWAYS_SOURCE_RANK: dict[str, int] = {"builtin": 0, "workspace": 1, "external": 2}
+    _ALWAYS_SOURCE_RANK_OTHER = 3
+
     def get_always_skills(self) -> list[SkillMeta]:
         """Skills flagged ``always: true`` whose requirements are met.
 
-        R3: truncation order is by local_dirs list order (which maps to
-        source priority in the registry) + alphabetical within each
-        source. WARN lists dropped skill names.
+        Truncation to ``always_max`` keeps ``builtin`` first (shipped skills
+        describe the runtime's own tools -- dropping one leaves a tool nobody
+        told the agent how to use), then ``workspace`` (the user's own pool),
+        then ``external``, then any mirror source alphabetically; within a
+        source, by name. WARN lists dropped skill names.
         """
         if getattr(self._config, "disable_always", False):
             return []
-        # Registry list_all already returns skills ordered by layer
-        # iteration (workspace → extra_dirs in order → builtin), and
-        # within each layer by discovery order.  Sort stably by
-        # (source priority, name) so truncation is predictable.
         all_always = [
             m
             for m in self._registry.list_all()
             if m.always and not self._is_blocked(m.name) and self._registry.check_available(m.name, source=m.source)
         ]
-        all_always.sort(key=lambda m: (m.source, m.name))
+        all_always.sort(key=self._always_sort_key)
         cap = int(getattr(self._config, "always_max", 5) or 5)
         if len(all_always) > cap:
             kept = all_always[:cap]
@@ -247,6 +253,13 @@ class LocalSkillCatalog:
             )
             return kept
         return all_always
+
+    @classmethod
+    def _always_sort_key(cls, meta: SkillMeta) -> tuple[int, str, str]:
+        """``(source rank, source, name)`` -- stable and independent of scan order."""
+        source = meta.source or ""
+        rank = cls._ALWAYS_SOURCE_RANK.get(source, cls._ALWAYS_SOURCE_RANK_OTHER)
+        return (rank, source, meta.name)
 
     def load_skills_for_context(
         self,
@@ -385,6 +398,62 @@ class LocalSkillCatalog:
             if max_inject and len(parts) >= max_inject:
                 break
         return "\n\n---\n\n".join(parts) if parts else ""
+
+    def build_skill_digest(self, skills: "list[SkillMeta]") -> str:
+        """Render skills as digest entries — description, not body.
+
+        The counterpart to :meth:`load_skills_for_context` for skills that
+        declare ``inject: description``: the agent learns the skill exists
+        and what it is for, and fetches the body when it decides to act on
+        it. That fetch route is the whole contract — a description-mode
+        skill is excluded from BM25 routing (it is ``always``), so nothing
+        else will ever surface its content, and the named tool has to be one
+        that registers wherever the registry does.
+
+        ``read_skill`` leads, not the path: it reads the body out of the
+        registry, so it works under ``restrictToWorkspace``, where a builtin
+        skill's on-disk path (inside the installed package, never inside the
+        workspace) is refused by the filesystem tools. The path follows as a
+        second route — still the right one for ``exec`` on bundled scripts.
+        ``use_skill`` is the wrong verb for this: it materializes a bundle,
+        which a body-only fetch does not need.
+        """
+        parts: list[str] = []
+        for m in skills:
+            entry = f"### Skill: {m.name}\n\n{m.description}\n"
+            hint = f'\n**Full instructions**: call `read_skill("local/{m.name}")` to load the body'
+            path_obj = getattr(m, "path", None)
+            path_str = str(path_obj) if path_obj is not None else ""
+            if path_obj is not None and not path_str.startswith("sqlite:") and path_obj.exists():
+                hint += f", or read `{path_str}` directly"
+            entry += hint + " before acting on this skill.\n"
+            parts.append(entry)
+        return "\n\n---\n\n".join(parts) if parts else ""
+
+    def load_always_block(
+        self,
+        skills: "list[SkillMeta]",
+        max_inject: int | None = None,
+    ) -> str:
+        """Render the ``# Active Skills`` body from a mixed always-set.
+
+        Splits on each skill's ``inject`` mode: ``description`` skills get
+        a digest entry, the rest keep the full-body rendering. ``max_inject``
+        caps only the full bodies — a digest entry costs a few dozen tokens
+        and exists precisely to stay resident, so capping it would hide the
+        very skill it advertises.
+        """
+        digest_metas = [m for m in skills if getattr(m, "inject", "full") == "description"]
+        full_metas = [m for m in skills if getattr(m, "inject", "full") != "description"]
+        parts = [
+            block
+            for block in (
+                self.build_skill_digest(digest_metas),
+                self.load_skills_for_context(full_metas, max_inject=max_inject),
+            )
+            if block
+        ]
+        return "\n\n---\n\n".join(parts)
 
     def get_skill_metadata(self, name: str) -> dict | None:
         """Top-level frontmatter dict, or ``None`` if absent."""

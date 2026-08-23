@@ -48,6 +48,21 @@ MALFORMED_DIRECT_URL_METADATA = [
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the upgrade marker out of the developer's own agent home.
+
+    Both handoff paths write one before spawning, and their failure paths
+    delete one. Unisolated, running this file writes a marker into the real
+    ~/.raven that makes a genuine `raven serve` refuse to start for the next
+    two minutes -- and, worse, deletes the marker of an upgrade that is
+    actually in flight, disarming the guard it exists to arm.
+    """
+    home = tmp_path / "agent-home"
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    return home
+
+
 def _release_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "tag_name": "v0.1.4",
@@ -637,10 +652,19 @@ def _stub_constraints_urlretrieve(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(urllib.request, "urlretrieve", Mock(side_effect=OSError("no network")))
 
 
-def _load_upgrade_helper() -> object:
+def _load_upgrade_helper_namespace() -> dict[str, object]:
     namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
     exec(upgrade_commands._UPGRADE_HELPER_SOURCE, namespace)
-    return namespace["main"]
+    return namespace
+
+
+def _load_upgrade_helper() -> object:
+    return _load_upgrade_helper_namespace()["main"]
+
+
+# Read from the helper rather than restated, so raising the bound does not need
+# an edit in two places to stay asserted.
+_PARENT_EXIT_TIMEOUT_S = _load_upgrade_helper_namespace()["PARENT_EXIT_TIMEOUT_S"]
 
 
 def test_upgrade_helper_bootstrap_runs_in_isolated_python() -> None:
@@ -671,7 +695,7 @@ def test_upgrade_helper_stops_after_channel_install_succeeds(
 
     assert status == 0
     run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],
+        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
         check=False,
     )
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in capsys.readouterr().out
@@ -681,16 +705,26 @@ def test_upgrade_helper_warns_when_base_fallback_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=0)])
+    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
+    # Both shapes are tried for the channel requirement before the base wheel is
+    # reached: a cheap install that failed says nothing about whether the
+    # environment can be rebuilt whole.
     assert run.call_args_list == [
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
+            {"check": False},
+        ),
         ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
-        ((["/usr/bin/uv", "tool", "install", "--force", WHEEL_URL],), {"check": False}),
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", WHEEL_URL],),
+            {"check": False},
+        ),
     ]
     captured = capsys.readouterr()
     assert "Channel dependencies failed to install" in captured.err
@@ -702,7 +736,7 @@ def test_upgrade_helper_returns_final_uv_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=23)])
+    run = Mock(side_effect=[Mock(returncode=9)] * 3 + [Mock(returncode=23)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
@@ -752,7 +786,8 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
             "/usr/bin/uv",
             "tool",
             "install",
-            "--force",
+            "--reinstall-package",
+            "raven",
             "-c",
             constraints_path,
             f"raven[channels] @ {WHEEL_URL}",
@@ -775,7 +810,7 @@ def test_upgrade_helper_skips_constraints_when_download_fails(
 
     assert status == 0
     run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],
+        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
         check=False,
     )
     assert "upgrading without version pinning" in capsys.readouterr().err
@@ -819,6 +854,83 @@ def test_upgrade_helper_stops_when_parent_wait_fails(
     run.assert_not_called()
 
 
+RELAUNCH = json.dumps(["/home/u/.local/bin/raven", "serve", "--port", "18792"])
+
+
+def _helper_with_relaunch(monkeypatch: pytest.MonkeyPatch) -> tuple[object, Mock]:
+    popen = Mock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+    return helper_main, popen
+
+
+def test_upgrade_helper_restarts_the_surface_when_uv_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=3)))
+    helper_main, popen = _helper_with_relaunch(monkeypatch)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    # The install failed, but the process it replaced is already gone -- so the
+    # surface still has to come back, on the old version.
+    assert status == 3
+    popen.assert_called_once()
+    assert popen.call_args.args[0] == json.loads(RELAUNCH)
+
+
+def test_upgrade_helper_restarts_the_surface_when_uv_cannot_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(side_effect=OSError("uv is gone")))
+    helper_main, popen = _helper_with_relaunch(monkeypatch)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    popen.assert_called_once()
+
+
+def test_upgrade_helper_reports_a_failed_restart_after_a_good_install(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    assert "spawn denied" in capsys.readouterr().err
+
+
+def test_parent_wait_outlasts_a_slow_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A `raven serve` teardown routinely runs past half a minute, and the bound
+    # used to be 30s -- so this asserts the helper is still waiting at a point
+    # where it used to have given up and abandoned the upgrade.
+    namespace = _load_upgrade_helper_namespace()
+    clock = iter([0.0, *(float(t) for t in range(1, 400))])
+    alive_until = 120.0
+    now = [0.0]
+
+    def monotonic() -> float:
+        now[0] = next(clock)
+        return now[0]
+
+    def kill(pid: int, signal: int) -> None:
+        if now[0] >= alive_until:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(namespace["time"], "monotonic", monotonic)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
+    monkeypatch.setattr(namespace["os"], "kill", kill)
+
+    assert namespace["wait_for_parent_posix"](4321) == 0
+
+
 def _mock_windows_process_api(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -847,13 +959,13 @@ def test_upgrade_helper_waits_on_parent_process_handle(
         handle=1234,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
 
     status = wait_for_parent(4321)
 
     assert status == 0
     open_process.assert_called_once_with(0x00100000, False, 4321)
-    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    wait_for_single_object.assert_called_once_with(1234, _PARENT_EXIT_TIMEOUT_S * 1000)
     close_handle.assert_called_once_with(1234)
     assert open_process.restype is ctypes.c_void_p
     assert wait_for_single_object.argtypes[0] is ctypes.c_void_p
@@ -869,7 +981,7 @@ def test_upgrade_helper_treats_missing_parent_as_already_exited(
         error=87,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
 
     status = wait_for_parent(4321)
 
@@ -890,12 +1002,12 @@ def test_upgrade_helper_closes_parent_handle_when_wait_fails(
         wait_status=wait_status,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
 
     status = wait_for_parent(4321)
 
     assert status == 1
-    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    wait_for_single_object.assert_called_once_with(1234, _PARENT_EXIT_TIMEOUT_S * 1000)
     close_handle.assert_called_once_with(1234)
 
 
@@ -908,13 +1020,57 @@ def test_upgrade_helper_rejects_parent_open_errors(
         error=5,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
 
     status = wait_for_parent(4321)
 
     assert status == 1
     wait_for_single_object.assert_not_called()
     close_handle.assert_not_called()
+
+
+def test_upgrade_helper_polls_parent_pid_on_posix() -> None:
+    """POSIX has no waitable handle for a non-child process, so the helper polls
+    ``os.kill(pid, 0)`` until it raises. Exercised directly because the platform
+    split means the Windows tests above never reach this branch."""
+    helper_main = _load_upgrade_helper()
+    wait_for_parent_posix = helper_main.__globals__["wait_for_parent_posix"]
+    os_module = helper_main.__globals__["os"]
+
+    calls: list[int] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        calls.append(pid)
+        if len(calls) >= 3:
+            raise ProcessLookupError
+        return None
+
+    original = os_module.kill
+    os_module.kill = fake_kill
+    try:
+        assert wait_for_parent_posix(4321) == 0
+    finally:
+        os_module.kill = original
+
+    assert calls == [4321, 4321, 4321]
+
+
+def test_upgrade_helper_treats_recycled_parent_pid_as_exited() -> None:
+    """A pid that now belongs to someone else raises PermissionError; the parent
+    is gone either way, so the helper proceeds instead of timing out."""
+    helper_main = _load_upgrade_helper()
+    wait_for_parent_posix = helper_main.__globals__["wait_for_parent_posix"]
+    os_module = helper_main.__globals__["os"]
+
+    def fake_kill(pid: int, sig: int) -> None:
+        raise PermissionError
+
+    original = os_module.kill
+    os_module.kill = fake_kill
+    try:
+        assert wait_for_parent_posix(4321) == 0
+    finally:
+        os_module.kill = original
 
 
 def test_handoff_replaces_process_with_isolated_base_python(
@@ -1296,3 +1452,166 @@ def test_upgrade_reports_malformed_installation_metadata(
     assert "Unable to upgrade Raven" in result.stdout
     assert "official installer" in output
     assert "Traceback" not in result.stdout
+
+
+class TestTheUpgradeMarker:
+    """The window between "the old environment is gone" and "the new one is
+    written" is invisible from outside, and a supervisor respawning the process
+    the upgrade just stopped lands inside it. The marker is what makes that
+    window something a starting process can see."""
+
+    @pytest.fixture
+    def marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        path = tmp_path / "upgrade.json"
+        monkeypatch.setenv("RAVEN_UPGRADE_MARKER", str(path))
+        return path
+
+    def _helper(self) -> object:
+        return _load_upgrade_helper()
+
+    def test_the_helper_claims_the_marker_with_its_own_pid(self, marker: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a pid, a reader cannot tell an install that is running from
+        one whose helper was killed -- and those need opposite answers."""
+        seen: list[dict[str, object]] = []
+
+        def run(_command, **_kwargs):
+            seen.append(json.loads(marker.read_text(encoding="utf-8")))
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        marker.write_text(json.dumps({"started_at": 1.0, "to_version": "0.1.4"}), encoding="utf-8")
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+        assert seen[0]["pid"] == os.getpid()
+        assert seen[0]["to_version"] == "0.1.4"
+
+    def test_the_helper_releases_the_marker_when_it_is_done(
+        self, marker: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+
+        self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+        assert not marker.exists()
+
+    def test_a_failed_install_releases_it_too(self, marker: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A marker left behind by a failed upgrade would lock every later start
+        out of an installation that is merely old, not broken."""
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=3)))
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 3
+        assert not marker.exists()
+
+    def test_it_is_released_before_the_surface_is_relaunched(
+        self, marker: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ordering, not tidiness: the relaunched process reads this file, and
+        would sit out an upgrade that had already finished."""
+        marker_at_relaunch: list[bool] = []
+
+        def popen(_argv, **_kwargs):
+            marker_at_relaunch.append(marker.exists())
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+        helper_main = self._helper()
+        helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+        helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+        assert marker_at_relaunch == [False]
+
+    def test_a_helper_with_no_marker_handed_to_it_still_installs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The CLI path predates the marker and may run without one."""
+        monkeypatch.delenv("RAVEN_UPGRADE_MARKER", raising=False)
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+
+
+class TestSpawningLeavesTheMarker:
+    @pytest.fixture
+    def plan(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
+        uv = tmp_path / "uv"
+        uv.write_text("", encoding="utf-8")
+        uv.chmod(0o755)
+        monkeypatch.setattr(upgrade_commands.shutil, "which", lambda _name: str(uv))
+        monkeypatch.setattr(upgrade_commands, "_external_executable", lambda value, *, label: Path(str(value)))
+        return upgrade_commands.UpgradePlan(
+            current_version="0.1.3",
+            release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL),
+            target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=tmp_path / "bin"),
+        )
+
+    def test_the_marker_exists_before_the_helper_is_started(
+        self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It has to: the caller lets go of its port before the helper runs its
+        first instruction, and that gap is when the respawn happens."""
+        at_spawn: list[bool] = []
+        handed: list[str] = []
+
+        def popen(_argv, env=None, **_kwargs):
+            at_spawn.append((isolated_raven_home / "upgrade.json").exists())
+            handed.append(env["RAVEN_UPGRADE_MARKER"])
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert at_spawn == [True]
+        assert handed == [str(isolated_raven_home / "upgrade.json")]
+
+    def test_a_helper_that_never_started_leaves_no_marker(
+        self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+
+        with pytest.raises(upgrade_commands.UpgradeError):
+            upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert not (isolated_raven_home / "upgrade.json").exists()
+
+
+def test_upgrade_helper_rebuilds_the_environment_when_the_cheap_shape_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--reinstall-package raven` replaces raven's wheel and leaves the ~150
+    dependencies alone, which is both faster and what keeps their bytecode. The
+    failure it reports and `--force` rescues is a stale entry on the executable
+    name -- "Executable already exists: raven (use `--force` to overwrite)" --
+    which is what a helper killed part way through leaves behind. A cheap
+    install that failed says nothing about whether the environment can still be
+    rebuilt whole, so the whole shape is always tried second."""
+    run = Mock(side_effect=[Mock(returncode=2), Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert run.call_args_list == [
+        (
+            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
+            {"check": False},
+        ),
+        ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
+    ]
+
+
+def test_upgrade_helper_does_not_rebuild_when_the_cheap_shape_worked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: a successful cheap install must not be followed by the
+    teardown it exists to avoid."""
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert not any("--force" in call.args[0] for call in run.call_args_list)

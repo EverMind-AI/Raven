@@ -1,0 +1,73 @@
+id: dev-01
+role: 软件工程师 + side project creator
+persona_name: Alex
+timezone: Asia/Shanghai
+language: zh-CN
+anchor_date: "2026-05-01"                # 模拟起始日期（周五）
+wake_hours: [8, 24]                      # 8 点醒，0 点睡
+communication_style: |
+  简短直接，技术细节多，爱用 emoji（🐛 🚀 🧠 😅）。
+  debug 卡住时会连续发消息吐槽；顺利时几天不主动说话。
+  中文为主，偶尔英文技术术语不翻译。
+
+weekly_rhythm:
+  mon_fri: |
+    8:30 起床，9:30-18:30 公司（正职，无法频繁开小差）。
+    午休 12:00-13:00 偶尔聊点非工作话题。
+    19:00-22:00 side project（一个 AI 工具的 CLI），是和 Raven
+    最高频互动的时间段。
+    22:00-24:00 放松或继续改代码；睡前偶尔想到事发条备忘。
+  sat: |
+    起床较晚（9:30），跑步 10 公里（慢跑 + 记录），下午在咖啡店写 blog / 读书。
+    晚上看个剧或 side project 轻度推进。
+  sun: |
+    睡懒觉（10:30 起），家人时间，和父母视频。下午慢悠悠写 blog。
+    21:00 后开始思考下周计划 / 准备 side project 发布。
+
+goals:
+  - "2026-05-15 side project v1.0 发布（MVP：CLI + 核心流）"
+  - "5 月中旬 blog 更新 3 篇：side project 设计 / qwen 本地部署 / macOS 小技巧"
+  - "每周 3-4 次跑步，累计 120km（目前腿有点酸，得留意）"
+  - "6/1 之前把女朋友生日（5/25）礼物想清楚并下单"
+  - "读完《Designing Data-Intensive Applications》最后三章"
+
+quirks:
+  - 'deadline 临近会焦虑，开始分不清"值得做的事"和"看起来在做事"的事'
+  - '发现新 debug 线索时会连续 3-5 条短消息连发'
+  - '周日晚上会列 next-week TODO，写完再睡'
+  - '对无效提醒反感，曾在饭局用手表 dismiss 过通知'
+  - '跑步后会问 agent 能量补给建议'
+
+# Per-persona DND windows.  v4 dismisses observed:
+# - 5/9 07:45 (Sat morning), 5/23 07:45 (Sat morning) — sleep-in.
+# Persona explicitly states "周末非紧急不打扰" — formalize as 7-10:30 quiet
+# (30min trailing buffer so Planner doesn't dump at 10:00).
+policy_overrides:
+  do_not_disturb_windows:
+    - {start_hour: 0, end_hour: 10, start_minute: 0, end_minute: 30, weekdays: [5,6], why: "weekend sleep-in + buffer"}
+
+initial_memory_md: |
+  # Long-term Memory
+
+  ## User Information
+  - 姓名: Alex
+  - 职业: 软件工程师（上海，全职 Python / TS）
+  - 女朋友: 周晓棠，生日 5/25
+  - 家庭: 父母在杭州
+
+  ## Preferences
+  - 中文为主，技术术语英文
+  - 简短 + emoji
+  - 周末非紧急不打扰
+
+  ## Project Context
+  - side project "clawtrack"：面向开发者的 CLI 任务追踪工具，5/15 发布 v1.0
+  - Blog 计划：5 月更新 3 篇（clawtrack 设计 / qwen 本地部署 / macOS 小技巧）
+  - 跑步目标：5 月累计 120km
+
+  ## Proactivity Preferences
+  - quiet_hours: 00:30-07:00
+
+  ## Important Notes
+  - 5/25 女朋友生日，礼物 6/1 前下单
+  - 《Designing Data-Intensive Applications》还剩 3 章

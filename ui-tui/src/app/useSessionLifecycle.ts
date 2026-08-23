@@ -25,6 +25,8 @@ import { introMsg, toTranscriptMessages } from '../domain/messages.js'
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { resetDirectChat } from './directChatStore.js'
+import { resetFolds } from './foldStore.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -130,6 +132,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     setVoiceRecording(false)
     setVoiceProcessing(false)
     patchUiState({ bgTasks: new Set(), info: null, sid: null, usage: ZERO })
+    // Instances, their transcripts and the active target all belong to the
+    // session being left; carrying them over would show the new session chips
+    // it never used. The folds go with them: they are keyed by view and by
+    // message, and both of those die with the session, so a set left behind only
+    // grows for as long as the process lives.
+    resetDirectChat()
+    resetFolds()
     setHistoryItems([])
     setLastUserMsg('')
     setStickyPrompt('')

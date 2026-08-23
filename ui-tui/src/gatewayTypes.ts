@@ -22,7 +22,16 @@ export interface GatewayCompletionItem {
 
 export interface GatewayTranscriptMessage {
   context?: string
+  duration_ms?: number
   name?: string
+  /**
+   * Present on the user entry of a turn the runtime opened, naming what opened
+   * it. Absent means a person typed it. A marked row's text is internal prose --
+   * a sub-agent's announce carries an untrusted fence, an instance handle and an
+   * instruction not to repeat either to the user -- so a reader must not draw it
+   * as the user's own words.
+   */
+  origin?: string
   role: 'assistant' | 'system' | 'tool' | 'user'
   text?: string
 }
@@ -102,16 +111,10 @@ export interface ConfigGetValueResponse {
 
 export interface ConfigSetResponse {
   applied?: boolean
-  // Does the asking conversation now run this model? A default-scoped switch
-  // moves the sessions that never chose one, so the scope alone cannot answer
-  // it and a client that guesses paints a model the conversation is not on.
-  applies_to_session?: boolean
   credential_warning?: string
   history_reset?: boolean
   info?: SessionInfo
   previous?: null | string
-  scope?: 'default' | 'session'
-  session_id?: string
   value?: string
   warning?: string
 }
@@ -385,8 +388,17 @@ export interface ModelEndpointsResponse {
 // ── MCP ──────────────────────────────────────────────────────────────
 
 export interface ReloadMcpResponse {
-  status?: string
+  ok?: boolean
+  /** Which line to print. `confirm_required` means nothing was reconnected and
+   *  the caller has to re-send with `confirm`; `noop` means there was nothing
+   *  to do, or no live agent to do it to -- `message` says which. */
+  status?: 'confirm_required' | 'noop' | 'reloaded'
   message?: string
+  /** Server records touched. `tools_changed` is the one to act on: it says the
+   *  model-facing tool list moved, which costs this conversation its cached
+   *  prompt prefix. */
+  reloaded?: number
+  tools_changed?: boolean
 }
 
 export interface ReloadEnvResponse {
@@ -552,17 +564,7 @@ export type GatewayEvent =
       type: 'tool.complete'
     }
   | {
-      payload: {
-        batch?: { header?: string; question: string }[]
-        choices: string[] | null
-        header?: string
-        index?: number
-        question: string
-        recommended?: string
-        request_id: string
-        timeout_s?: number
-        total?: number
-      }
+      payload: { choices: string[] | null; question: string; request_id: string }
       session_id?: string
       type: 'clarify.request'
     }
@@ -590,7 +592,11 @@ export type GatewayEvent =
     }
   | { payload: { request_id: string }; session_id?: string; type: 'sudo.request' }
   | { payload: { env_var: string; prompt: string; request_id: string }; session_id?: string; type: 'secret.request' }
-  | { payload: { default: boolean; prompt: string; request_id: string }; session_id?: string; type: 'confirm.request' }
+  | {
+      payload: { conversation_id?: string; default: boolean; prompt: string; request_id: string }
+      session_id?: string
+      type: 'confirm.request'
+    }
   | { payload: { task_id: string; text: string }; session_id?: string; type: 'background.complete' }
   | {
       payload: { fired_at: string; job_id: string; name: string; text: string }

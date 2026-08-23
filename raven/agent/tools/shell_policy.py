@@ -47,6 +47,42 @@ _WRAPPER_OPTIONS_WITH_VALUE = {
         }
     ),
 }
+# Programs whose own arguments are another command to run. These are not
+# wrappers in the `_unwrap_command_wrappers` sense -- `xargs rm` runs `rm` once
+# per input line rather than becoming it -- but the command they carry has to
+# be classified, or `xargs rm -rf` and `timeout 5 rm -rf` land on the opposite
+# side of the policy from the bare `rm -rf` they are.
+_COMMAND_RUNNERS: dict[str, frozenset[str]] = {
+    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "setsid": frozenset(),
+    "stdbuf": frozenset({"-e", "--error", "-i", "--input", "-o", "--output"}),
+    "time": frozenset({"-f", "--format", "-o", "--output"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "xargs": frozenset(
+        {
+            "-a",
+            "--arg-file",
+            "-d",
+            "--delimiter",
+            "-E",
+            "-I",
+            "-i",
+            "--replace",
+            "-L",
+            "-l",
+            "--max-lines",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-s",
+            "--max-chars",
+        }
+    ),
+}
+# `timeout` alone takes a positional before the command it runs.
+_TIMEOUT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 _COMMAND_BOUNDARIES = frozenset(";&|\n(){}`")
 _SHELL_COMMAND_WRAPPERS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
@@ -108,6 +144,35 @@ def _embedded_shell_command(segment: list[str]) -> str | None:
     return None
 
 
+def _runner_inner_command(segment: list[str]) -> str | None:
+    """Return the command a recognized command-runner was handed, if any.
+
+    Option values are consumed so the command position is found rather than
+    guessed; an unrecognized option shape ends the scan, which leaves a token
+    that is not an executable in front and matches nothing.
+    """
+
+    if not segment:
+        return None
+    options_with_value = _COMMAND_RUNNERS.get(PurePath(segment[0]).name)
+    if options_with_value is None:
+        return None
+    tokens = segment[1:]
+    while tokens and tokens[0].startswith("-") and tokens[0] != "-":
+        option = tokens.pop(0)
+        if option == "--":
+            break
+        # A value attached to its option (`-n5`, `--max-args=5`) is already
+        # consumed; only a separate one has to be stepped over.
+        if "=" in option or (not option.startswith("--") and len(option) > 2):
+            continue
+        if option in options_with_value and tokens:
+            tokens.pop(0)
+    if PurePath(segment[0]).name == "timeout" and tokens and _TIMEOUT_DURATION.fullmatch(tokens[0]):
+        tokens = tokens[1:]
+    return shlex.join(tokens) if tokens else None
+
+
 def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
     """Recognize direct file-deletion commands after wrapper normalization."""
 
@@ -136,13 +201,77 @@ def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
                     and _matches_delete_command(embedded_exec, _depth=_depth + 1)
                 ):
                     return True
-        embedded = _embedded_shell_command(segment)
-        if (
-            embedded is not None
-            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
-            and _matches_delete_command(embedded, _depth=_depth + 1)
-        ):
+        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
+            if (
+                nested is not None
+                and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+                and _matches_delete_command(nested, _depth=_depth + 1)
+            ):
+                return True
+    return False
+
+
+def _is_recursive_delete(argv: list[str]) -> bool:
+    """True when an ``rm`` argv carries a recursive flag.
+
+    ``rm -rf`` walks a tree it was never shown; ``rm -f a.py b.json`` removes
+    exactly the files it names. Only the first is unconditional, which is why
+    the flags are read from tokens rather than matched in the raw string: a
+    regexp anchored right after ``rm`` misses ``rm -f -r`` and a looser one
+    matches the ``-f`` that belongs to a different family entirely.
+    """
+
+    for arg in argv[1:]:
+        if arg == "--":
+            return False
+        if arg in {"--recursive", "--dir", "-d"}:
             return True
+        if arg.startswith("--") or not arg.startswith("-"):
+            continue
+        if "r" in arg[1:] or "R" in arg[1:]:
+            return True
+    return False
+
+
+def _matches_recursive_delete(command: str, *, _depth: int = 0) -> bool:
+    """Recognize recursive deletion, the one delete no approval can rescue.
+
+    Reach has to match `_matches_delete_command` exactly. Anything this misses
+    that the other catches is not merely unclassified: it is downgraded from a
+    refusal into a prompt, and the reader is asked to approve the one command
+    the policy exists to refuse.
+    """
+
+    for segment in _command_segments(command):
+        segment = _unwrap_command_wrappers(segment)
+        if not segment:
+            continue
+        executable = PurePath(segment[0]).name
+        if executable == "rm" and _is_recursive_delete(segment):
+            return True
+        if executable == "find":
+            for index, token in enumerate(segment[1:], start=1):
+                if token not in {"-exec", "-execdir"}:
+                    continue
+                executed = _unwrap_command_wrappers(segment[index + 1 :])
+                if not executed:
+                    continue
+                if PurePath(executed[0]).name == "rm" and _is_recursive_delete(executed):
+                    return True
+                embedded_exec = _embedded_shell_command(executed)
+                if (
+                    embedded_exec is not None
+                    and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+                    and _matches_recursive_delete(embedded_exec, _depth=_depth + 1)
+                ):
+                    return True
+        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
+            if (
+                nested is not None
+                and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+                and _matches_recursive_delete(nested, _depth=_depth + 1)
+            ):
+                return True
     return False
 
 
@@ -220,6 +349,8 @@ class ShellCommandPolicy:
         if any(pattern.search(command) for pattern in self._deny_patterns):
             return CommandDecision.HARD_DENY
         try:
+            if _matches_recursive_delete(command):
+                return CommandDecision.HARD_DENY
             if _matches_system_power_command(command):
                 return CommandDecision.HARD_DENY
             if any(matcher(command) for _, matcher in self._approval_matchers):

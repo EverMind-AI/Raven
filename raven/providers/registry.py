@@ -246,7 +246,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         supports_prompt_caching=True,
-        default_model="openrouter/anthropic/claude-sonnet-4-5",
+        default_model="openrouter/anthropic/claude-sonnet-5",
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",

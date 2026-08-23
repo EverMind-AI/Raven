@@ -320,6 +320,16 @@ function formatDuration(ms) {
   return `${mins}m ${secs}s`;
 }
 
+function sessionOrigin(session) {
+  /* Which front end produced the session, then the channel it shares -- the
+     terminal and the served page both run on `tui`, so the channel alone reads
+     the same for either. Collapsed to one label wherever they agree, which is
+     every gateway channel. */
+  const channel = session.channelId || 'local';
+  const surface = session.surface || channel;
+  return surface === channel ? channel : `${surface} · ${channel}`;
+}
+
 function shortId(value, len = 12) {
   if (!value) return '-';
   const text = String(value);
@@ -1610,7 +1620,7 @@ function renderSessionList() {
       </div>
       <div class="session-title-row">
         <div class="session-id">${escapeHtml(shortId(session.sessionId, 18))}</div>
-        <div class="session-channel">${escapeHtml(session.channelId || 'local')}</div>
+        <div class="session-channel">${escapeHtml(sessionOrigin(session))}</div>
       </div>
       <div class="session-meta">
         <div>${escapeHtml(t('session.startedAt', { time: formatTime(session.startedAt) }))}</div>

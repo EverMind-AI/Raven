@@ -6,8 +6,10 @@ Ported from the pre-integrate-everos
 
 The gate runs after :class:`SkillForgeRouter` fan-out + RRF: it sees
 the candidate name + description + a short body excerpt and asks an LLM
-to plan, filter against the agent's available tools, and pick at most
-``max_select`` skills. Empty result is a valid "inject nothing"
+to plan, filter against the agent's available tools and against the
+sub-agents it can delegate to, and pick at most ``max_select`` skills.
+Both filters are supplied per call and each renders its own block only
+when it was given one. Empty result is a valid "inject nothing"
 decision. Infra failures (parse error, timeout, provider error) fall
 back to ``candidates[:legacy_top_k]`` rather than [] so a broken gate
 never silently empties the ``# Skills`` block.
@@ -24,7 +26,6 @@ import time
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
-from raven.providers.binding import ModelBinding, active_binding
 from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
@@ -54,58 +55,28 @@ class LLMGateFilter:
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 8192,
-        pin: "ModelBinding | None" = None,
     ) -> None:
-        self._fallback_provider = provider
+        self._provider = provider
         self._max_select = max_select
         self._legacy_top_k = legacy_top_k
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
-        # A pinned model paired with its own credential. Built by the caller
-        # from ``skill_forge.llm_gate_model``; None when unset or when that
-        # vendor has no credentials, in which case the gate follows the turn.
-        self._pin = pin
-        self._pin_warned = False
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
-        """Move the out-of-turn fallback.
+        """Adopt the provider a live ``/model`` switch just built.
 
-        Which model the gate runs on inside a turn is decided per call by
-        ``_binding``, so a session switching models needs nothing here. This
-        is only for the paths that filter skills outside a turn.
+        Unset, ``_model`` follows whatever the new provider defaults to.
+
+        Set, it is a pin, and this leaves it pinned -- which is what a
+        restart on the new model would produce, since the gate is built
+        with the agent's provider and the pin regardless of which vendor
+        the pin names. Note that a pin is only a model id: the credential
+        comes from the provider, so a pin naming a vendor the provider does
+        not serve was already broken at boot, and stays broken here.
         """
-        self._fallback_provider = provider
-
-    def _binding(self) -> tuple["LLMProvider", str | None]:
-        """Its own pinned pair if it has one, else the turn's model.
-
-        Unpinned is the common case and the configured intent: the gate reads
-        the same model the conversation is on, whichever session that is. A
-        pin that named a vendor with no credentials never became a pair, so
-        it is reported once and then ignored rather than sent on the turn's
-        key -- that combination 401s every call and is swallowed by the top-N
-        fallback below, which is how it stayed invisible.
-        """
-        if self._model and self._pin is None and not self._pin_warned:
-            self._pin_warned = True
-            log.warning(
-                "skill_forge.llm_gate_model=%r has no usable credentials of its own; "
-                "the gate follows the conversation's model instead",
-                self._model,
-            )
-        if self._pin is not None:
-            return self._pin.provider, self._pin.model
-        turn = active_binding()
-        if turn is not None:
-            return turn.provider, turn.model
-        # Outside a turn: the provider it was built with, and no model at all,
-        # which is what tells that provider to use its own default.
-        # Never ``self._model``: an unpaired pin sent on this provider's key
-        # is the mis-pairing the pool exists to prevent. No model at all tells
-        # the provider to use its own default, which is what an unpinned gate
-        # gets anyway.
-        return self._fallback_provider, None
+        del model
+        self._provider = provider
 
     @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
@@ -113,18 +84,18 @@ class LLMGateFilter:
         task: str,
         candidates: list[RouterHit],
         available_tools: list[str] | None = None,
+        available_subagents: str | None = None,
     ) -> list[RouterHit]:
         if not candidates:
             return []
         catalog, by_id = self._build_catalog(candidates)
-        prompt = self._build_prompt(task, catalog, available_tools)
-        gate_provider, gate_model = self._binding()
+        prompt = self._build_prompt(task, catalog, available_tools, available_subagents)
 
         try:
             resp = await asyncio.wait_for(
-                gate_provider.chat_with_retry(
+                self._provider.chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
-                    model=gate_model,
+                    model=self._model or None,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 ),
@@ -190,6 +161,7 @@ class LLMGateFilter:
         task: str,
         catalog: str,
         available_tools: list[str] | None,
+        available_subagents: str | None = None,
     ) -> str:
         # Verbatim port of the pre-integrate-everos
         # ``SkillService._llm_gate_filter`` prompt. The ONLY semantic
@@ -228,24 +200,60 @@ class LLMGateFilter:
                 "strategies, verification workflows, "
                 "search-result interpretation).\n\n"
             )
+        subagents_block = ""
+        delegate_step = ""
+        plan_delegation = ""
+        if available_subagents:
+            subagents_block = (
+                "# Delegable Sub-Agents\n\n"
+                f"The agent can hand a task to one of these specialist "
+                f"sub-agents, or split it across several of them as a graph: "
+                f"{available_subagents}.\n\n"
+                "**Hard rule**: a skill is NOT relevant if what it does is "
+                "already covered by a listed sub-agent. That work gets "
+                "delegated rather than performed inline, so such a skill "
+                "spends context on a procedure nobody will run and invites "
+                "the agent to do the sub-agent's job worse. Drop it however "
+                "topically on point it is.\n\n"
+                "**Only include** a skill that no listed sub-agent covers, or "
+                "one that shapes how the agent runs its own turn (planning, "
+                "verification, output conventions) rather than carrying out "
+                "the delegable task itself. Producing, structuring or "
+                "formatting a delegable task's deliverable is part of that "
+                "task, not a separate turn-shaping concern: a skill kept only "
+                "to organise such output is still covered, and keeping it "
+                '"in case it adds value" is the mistake this rule exists to '
+                "prevent.\n\n"
+            )
+            delegate_step = (
+                ' Then ask "is this skill already covered by one of the sub-agents above?" If yes, drop it too.'
+            )
+            # Step 1 decided the plan before the overlap check in step 2 ever
+            # ran, and its only prompt was which tools to call -- so the gate
+            # planned the work inline and the skill was then relevant to that
+            # plan. Delegation has to be a candidate while the plan is still
+            # being formed. Conditional for the same reason the block is: with
+            # no roster, "the sub-agents above" names nothing.
+            plan_delegation = " -- including whether one or several of the sub-agents above should carry it --"
         return (
             "You are a skill selector for an autonomous agent.\n\n"
             f"# Task\n\n{task}\n\n"
             f"{tools_block}"
+            f"{subagents_block}"
             f"# Candidate Skills\n\n{catalog}\n\n"
             "# Instructions\n\n"
-            "1. **Plan**: briefly think about what the task requires "
+            f"1. **Plan**: briefly think about what the task requires{plan_delegation} "
             "and which sequence of available-tool calls would achieve it.\n"
             "2. **Filter**: for EACH candidate skill, ask "
             "\"can the agent execute this skill's workflow using only the "
             'available tools above?" If no, drop it — no matter how '
-            "topically relevant.\n"
+            f"topically relevant.{delegate_step}\n"
             "3. **Match**: among the survivors, a skill is relevant ONLY "
             "if it provides a procedure or strategy directly useful for "
             "a core part of your plan. Vague topical overlap is not enough.\n"
             f"4. **Decide**: select AT MOST {self._max_select} skill(s). "
-            "If no skill survives both the tool check and the relevance "
-            "check, you MUST return an empty list. Selecting an "
+            "If no skill survives every check above, you MUST return an "
+            "empty list. Selecting an "
             "irrelevant or unexecutable skill is strictly worse than "
             "selecting none.\n\n"
             "Return ONLY a JSON object on a single line:\n"

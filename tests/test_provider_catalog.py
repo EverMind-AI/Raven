@@ -131,6 +131,23 @@ def test_seeded_provider_default_model_in_shortlist(slug: str) -> None:
     assert default in common_models_for(slug)
 
 
+def test_no_shortlist_omits_its_own_providers_default_model() -> None:
+    """Derived from the registry, so a new provider is covered without editing a list.
+
+    The list above pins which providers must be seeded at all; this pins the
+    consistency of every provider that is. A default_model absent from its own
+    non-empty shortlist means the picker recommends an id it does not offer --
+    which is how OpenRouter kept pointing at claude-sonnet-4-5 after the
+    shortlist moved to claude-sonnet-5.
+    """
+    drifted = {
+        spec.name: spec.default_model
+        for spec in PROVIDERS
+        if spec.default_model and (shortlist := common_models_for(spec.name)) and spec.default_model not in shortlist
+    }
+    assert not drifted
+
+
 def _concrete_provider_subclasses() -> set[type]:
     """All non-abstract LLMProvider subclasses defined in raven.providers."""
     # Import each backend module so its subclass is registered on LLMProvider.
@@ -158,7 +175,7 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_six_concrete_backend_classes() -> None:
+def test_exactly_seven_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.endpoint_rotor import EndpointRotorProvider
@@ -166,6 +183,7 @@ def test_exactly_six_concrete_backend_classes() -> None:
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
     from raven.providers.per_model_provider import PerModelProvider
+    from raven.providers.resolving_provider import ResolvingProvider
 
     expected = {
         LiteLLMProvider,
@@ -173,6 +191,7 @@ def test_exactly_six_concrete_backend_classes() -> None:
         OpenAICodexProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
+        ResolvingProvider,
         # Multi-endpoint rotation/failover wrapper: a real backend in dispatch
         # terms -- make_provider returns it for a section that resolves to
         # more than one endpoint.

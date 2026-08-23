@@ -604,7 +604,7 @@ demoted to `APPEND`.
 The `ask_user` tool (`raven/agent/tools/ask_user.py`) pauses a turn to ask the
 user a structured question and awaits the reply. It hands the turn's
 conversation_id and prompt to a `QuestionBroker`
-(`raven/tui_rpc/question_broker.py`), which emits a `clarify.request`
+(`raven/rpc/question_broker.py`), which emits a `clarify.request`
 notification and blocks (on a future keyed by conversation_id) until an answer
 arrives, with a fail-safe default so the loop always gets a string back.
 `clarify.request` / `clarify.respond` is the ui-tui frontend's existing
@@ -613,7 +613,7 @@ multi-choice prompt contract (ClarifyPrompt), which the broker reuses.
 The answer reaches the broker by two routes:
 
 - TUI: the frontend renders the ClarifyPrompt and answers with a
-  `clarify.respond` RPC, handled in `raven/tui_rpc/methods/question.py`,
+  `clarify.respond` RPC, handled in `raven/rpc/methods/question.py`,
   which calls `broker.reply(...)`.
 - Channel: the broker renders the question as an outbound Text to the
   conversation's channel; the gateway inbound dispatch, on the next message for a
@@ -631,15 +631,7 @@ leave a free slot; only four conversations blocked at once exhaust the pool.
 The default timeout bounds the worst case, so a forgotten question cannot wedge
 the gateway indefinitely.
 
-The `clarify.request` wire payload carries `{question, choices, header,
-recommended, timeout_s, index, total, batch}`. `header` is a short chip label,
-`recommended` names the option the agent would pick, and `index` / `total` /
-`batch` place the question in its call so a surface can show the whole set and
-its progress while still collecting one answer at a time. ClarifyPrompt renders
-a single-select prompt, marks the recommended option, counts the budget down,
-and takes a free-form answer or a note alongside a selection; multi-select is
-not offered.
-
-One `ask_user` call shares one budget (`tools.ask_user.timeout`, 600s by
-default) across every question in it, so the paragraph above holds for a batch
-too -- a three-question call cannot hold a lane for three timeouts.
+The `ask_user` tool schema accepts `multiple` / `custom` per question, but the
+`clarify.request` wire payload carries only `{question, choices}`, so the
+frontend ClarifyPrompt renders a single-select prompt — multi-select and
+free-form answers degrade to a single choice for now.

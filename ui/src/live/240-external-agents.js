@@ -1,0 +1,507 @@
+/* -- external agents: the rpc source ---------------------------------
+   `subagents.*` is one surface shared with the TUI and the web UI: the rows,
+   the install grouping and the write path all live server-side, so this layer
+   only maps a row into what the page draws and sends the mutation back. The
+   xa island (ui/src/features/xa/) owns the renderer and every flag it reads;
+   installing onto the seam replaces the fixture source before the first paint.
+
+   The list is re-fetched after every mutation rather than patched locally: the
+   handler recomputes `group`, `enabled` and the probe verdict together, and a
+   client that guesses any one of them is how the page starts disagreeing with
+   the config on disk. `probe: false` on that follow-up call skips the
+   availability check, which can cost up to ten seconds per entry and would only
+   re-measure what the write just changed. */
+function xaRowOf(r) {
+  return {
+    name: r.name,
+    preset: r.preset,
+    kind: r.kind || 'cli',
+    configured: !!r.configured,
+    /* Raven's own agents. On the table whether or not config mentions them, so
+       they are `configured: false` yet not something to install -- the page needs
+       both facts to avoid offering a Connect button for a loop already running. */
+    builtin: !!r.builtin,
+    /* The Raven builds this install shipped, discovered under `subagents/`.
+       Same shape of problem as `builtin` and the same reason it has to be
+       carried explicitly: `configured: false` with nothing to install, so the
+       page needs the flag to keep a Connect button off a row that has no preset
+       to connect from. This mapper is a whitelist -- a field it does not name is
+       a field the island never sees. */
+    vendored: !!r.vendored,
+    /* A build of this folder's venv is in flight. Carried because the row is the
+       only place the page learns it: `subagents.build` returns the moment the
+       build starts, so the button's own promise resolving proves nothing about
+       whether it finished. */
+    building: !!r.building,
+    enabled: !!r.enabled,
+    probe_status: r.probe_status || 'unknown',
+    upgrade_to: r.upgrade_to || null,
+    probe_detail: r.probe_detail || '',
+    has_api_key: !!r.has_api_key,
+    description: r.description || '',
+    last_test_ok: r.last_test_ok,
+    last_test_detail: r.last_test_detail || '',
+    last_test_at_ms: r.last_test_at_ms || null,
+    test_running: !!r.test_running,
+  };
+}
+
+/* What the last fetch reported, kept here rather than read back off the page:
+   the carry-over below is a fact about this transport (a probe-less list says
+   "unknown" for every row), so the source answers it from its own memory
+   instead of reaching into the array the page is rendering. */
+let xaSeen = new Map();
+
+async function xaFetch(probe) {
+  const res = await rpc.call('subagents.list', { probe: !!probe });
+  /* A probe-less list reports every row as "unknown", which would blank the
+     health line of a row that was ready a second ago -- connecting an agent
+     would look like it broke it. The verdict cannot have changed by writing
+     config, so the last known one is carried over. */
+  const rows = (res.rows || []).map((r) => {
+    const row = xaRowOf(r);
+    const prev = xaSeen.get(row.name);
+    if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
+      row.probe_status = prev.probe_status;
+      row.probe_detail = prev.probe_detail;
+    }
+    return row;
+  });
+  xaSeen = new Map(rows.map((r) => [r.name, r]));
+  return rows;
+}
+
+DS.xa = {
+  load: (probe) => xaFetch(!!probe),
+  act: async (op, row, args) => {
+    const a = args || {};
+    if (op === 'connect') {
+      /* Only name / description / key travel: every execution field comes from
+         the preset server-side. A page that could post a command line would make
+         "which agent is this" unanswerable. */
+      await rpc.call('subagents.add', {
+        preset: row.preset || row.name,
+        name: a.new_name || undefined,
+        description: a.description || undefined,
+        api_key: a.api_key || undefined,
+      });
+    } else if (op === 'update') {
+      await rpc.call('subagents.update', {
+        name: row.name,
+        new_name: a.new_name && a.new_name !== row.name ? a.new_name : undefined,
+        description: a.description,
+        api_key: a.api_key || undefined,
+      });
+    } else if (op === 'toggle') {
+      await rpc.call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
+    } else if (op === 'remove') {
+      await rpc.call('subagents.remove', { name: row.name });
+    } else if (op === 'upgrade') {
+      /* There is no "change the transport" write: `subagents.update` touches name,
+         description and key only, on purpose. So the switch is a remove plus an add
+         from the preset, which is also what makes it visible in config as one
+         entry replaced rather than an entry mutated underneath its session handles. */
+      await rpc.call('subagents.remove', { name: row.name });
+      await rpc.call('subagents.add', {
+        preset: row.preset || row.name,
+        name: row.name,
+        description: row.description || undefined,
+      });
+    } else if (op === 'build') {
+      /* Returns as soon as the build is under way, not when it is done: it is a
+         few hundred MB of downloads. The row's `building` flag is what says it is
+         still going, and the store polls the list while any row carries it. */
+      await rpc.call('subagents.build', { name: row.name });
+    } else if (op === 'test_cancel') {
+      await rpc.call('subagents.test_cancel', { name: row.name });
+    } else if (op === 'test') {
+      /* The call runs the agent for real and does not return until it answers.
+         The page marks the row running and redraws before handing over, so the
+         button does not look dead for the length of a model turn. */
+      const res = await rpc.call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
+      if (!res.ok && res.detail && !res.cancelled) toast(`${row.name}: ${res.detail}`);
+      /* probe:true here, unlike every other mutation: a test is the one write that
+         changes the probe verdict. An acp test records the capability snapshot the
+         probe reads, so carrying the old "not recorded yet" over would leave the
+         row telling the user to run the test they just ran. */
+      return xaFetch(true);
+    }
+    return xaFetch(false);
+  },
+};
+
+/* ── the dag sheet: what a `run_subagent_dag` call is orchestrating ────────
+   The transcript only ever shows this call as one tool row with a clamped
+   result, and the three `dag.*` events that describe the graph arrived here and
+   were dropped on the floor. They are the whole picture of the work, so they get
+   the same place the clarify sheet gets: above the composer, on the turn being
+   worked on rather than buried in the scrollback. */
+const DAGS = new Map();  // session key -> the graph that conversation is running
+const dagFor = (key) => DAGS.get(key || sheetSession()) || null;
+
+/* Geometry, the two graph walkers and the two summary lines live in the bundle
+   (ui/src/features/dag/graph.ts), where they are reachable from a test. Aliased
+   rather than called through the long name at each site: this file reads the
+   same as it did, and the names are the ones the renderer below already used. */
+const { W: DAG_W, H: DAG_H } = RavenIslands.dag;
+const dagLayout = (nodes) => RavenIslands.dag.layout(nodes);
+const dagGist = (d) => RavenIslands.dag.gist(d);
+const dagSummary = (d) => RavenIslands.dag.summary(d);
+const dagTook = (n) => RavenIslands.dag.took(n, Date.now());
+
+/* The longest prefix every id shares, cut back to a separator so a label never
+   starts mid-word. Empty for fewer than two ids, for ids that share nothing, and
+   for a prefix that would leave a label empty -- in each of those the ids are
+   already telling them apart. */
+function dagSharedPrefix(ids) {
+  if (ids.length < 2) return '';
+  let n = 0;
+  while (n < ids[0].length && ids.every((s) => s[n] === ids[0][n])) n += 1;
+  const head = ids[0].slice(0, n);
+  const cut = Math.max(head.lastIndexOf('-'), head.lastIndexOf('_'));
+  if (cut < 0) return '';
+  const prefix = head.slice(0, cut + 1);
+  return ids.every((s) => s.length > prefix.length) ? prefix : '';
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs, cls) {
+  const e = document.createElementNS(SVG_NS, tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, String(v)));
+  if (cls) e.setAttribute('class', cls);
+  return e;
+}
+
+/* The one mark a node wears, and the whole of how status is drawn. It used to be
+   the box's own stroke colour plus a pulse of the entire node's opacity: with
+   nothing but colour to go by, a reader had to already know the palette, and a
+   node fading in and out as a whole read as an error rather than as work. Colour
+   stays, quietly, on the border; this is what a reader actually looks at.
+
+   Running is the same three bars the turn's own row and a sub-agent row wear
+   (workGlyphSvg), which is the point -- one glyph for work in progress, whatever
+   is doing the work. */
+function dagMark(status, cx, cy) {
+  if (status === 'running') return workGlyphSvg(cx - 5, cy + 4);
+  /* The paths come from the bundle (features/dag/graph.ts) so the sheet and the
+     transcript's own card draw one alphabet: they were two copies of these four
+     shapes, free to drift into two vocabularies for one set of facts. Centre
+     relative, hence the translate. */
+  const mark = RavenIslands.dag.MARKS[status];
+  if (mark) return svgEl('path', { d: mark.d, transform: `translate(${cx} ${cy})` }, 'mk ' + mark.cls);
+  return svgEl('circle', { cx, cy, r: 3.6 }, 'mk wait');
+}
+
+function dagSvg(d) {
+  const nodes = d.order.map((id) => d.nodes.get(id)).filter(Boolean);
+  const { at, width, height } = dagLayout(nodes);
+  const svg = svgEl('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
+
+  /* Edges first so a box always sits on top of the line reaching it. An edge out
+     of a node that has not finished is drawn faint: what has actually flowed
+     through the graph so far is the thing a reader is trying to see. */
+  nodes.forEach((n) => {
+    (n.depends_on || []).forEach((pid) => {
+      const a = at.get(pid);
+      const b = at.get(n.id);
+      if (!a || !b) return;
+      const x1 = a.x + DAG_W;
+      const y1 = a.y + DAG_H / 2;
+      const x2 = b.x - 5;
+      const y2 = b.y + DAG_H / 2;
+      const mid = (x1 + x2) / 2;
+      const done = (d.nodes.get(pid) || {}).status === 'completed';
+      // Which node this edge leaves, so a later status change can darken it in
+      // place instead of costing the graph a redraw.
+      svg.appendChild(svgEl(
+        'path',
+        { d: `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`, 'data-from': pid },
+        'edge' + (done ? ' flowed' : ''),
+      ));
+      // The head, drawn separately: a marker-end would inherit the path's own
+      // stroke width and end up heavier than the line it caps.
+      svg.appendChild(svgEl(
+        'path',
+        { d: `M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`, 'data-from': pid },
+        'tip' + (done ? ' flowed' : ''),
+      ));
+    });
+  });
+
+  d.els = new Map();
+  const sel = RavenIslands.subagents.sel();
+  const held = new Map();
+  nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1); });
+  const shared = new Set([...held.entries()].filter(([, c]) => c > 1).map(([h]) => h));
+  nodes.forEach((n) => {
+    const p = at.get(n.id);
+    const g = svgEl('g', { transform: `translate(${p.x} ${p.y})`, role: 'button', tabindex: '0' }, 'nd');
+    g.dataset.st = n.status || 'pending';
+    g.dataset.node = n.id;
+    if (sel && sel.run_id === d.run_id && sel.node === n.id) g.dataset.sel = '1';
+    g.appendChild(svgEl('rect', { width: DAG_W, height: DAG_H, rx: 9 }));
+    const mark = dagMark(n.status, 17, DAG_H / 2);
+    g.appendChild(mark);
+    const id = svgEl('text', { x: 31, y: 19 }, 'id');
+    id.textContent = n.id;
+    const ag = svgEl('text', { x: 31, y: 32 }, 'ag');
+    /* The handle earns its place only when it is shared: what it tells a reader
+       is "these steps continue one session". A handle held by a single node is
+       minted, one per node, and reads as a mangled copy of the id right above
+       it -- noise in the line whose whole job is saying who is doing this. The
+       title below still carries it, for the one node being pointed at. */
+    ag.textContent = n.subagent + (shared.has(n.instance) ? ' @' + n.instance : '');
+    // Always present, even while empty: the clock below writes into it every
+    // second, and a node that starts running must not have to be redrawn to
+    // grow somewhere to put its time.
+    const tm = svgEl('text', { x: DAG_W - 11, y: 19, 'text-anchor': 'end' }, 'tm');
+    tm.textContent = dagTook(n);
+    g.append(id, ag, tm);
+    d.els.set(n.id, { g, tm, mark });
+    const open = () => dagOpenNode(d.run_id, n);
+    g.onclick = open;
+    g.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    // The graph is a map, not a table: what a node is and who is running it are
+    // in the box, and how long is on the title for the one being pointed at.
+    const title = svgEl('title');
+    title.textContent = `${n.id} · ${n.subagent}${n.instance ? ' @' + n.instance : ''}`;
+    g.appendChild(title);
+    svg.appendChild(g);
+  });
+  return svg;
+}
+
+/* ── the clock on a running node ──────────────────────────────────────────
+   Only two events ever arrive for a node: it started, and it ended. Between
+   them nothing is sent, so a number drawn once sat frozen for exactly the
+   interval a reader is watching it for -- a node that took four minutes showed
+   "1.0s" for all four of them and then jumped.
+
+   One interval for the whole panel, holding no state of its own: it re-reads the
+   graph each second and stops itself as soon as nothing is running, so a
+   finished run leaves no timer behind. */
+let dagTicker = null;
+
+function dagStopClock() {
+  if (dagTicker) { clearInterval(dagTicker); dagTicker = null; }
+}
+
+function dagStartClock(d) {
+  dagStopClock();
+  const anyRunning = () => [...d.nodes.values()].some((n) => n.status === 'running');
+  if (!anyRunning()) return;
+  dagTicker = setInterval(() => {
+    if (!anyRunning()) { dagStopClock(); return; }
+    d.nodes.forEach((n) => {
+      if (n.status !== 'running') return;
+      const slot = d.els && d.els.get(n.id);
+      if (slot) slot.tm.textContent = dagTook(n);
+    });
+  }, 1000);
+}
+
+function drawDag() {
+  const key = sheetSession();
+  sheetDropClass('dsheet', key);
+  dagStopClock();
+  const d = dagFor(key);
+  if (!d) return;
+
+  const sheet = mk('div', 'dsheet');
+  sheet.setAttribute('role', 'group');
+  sheet.setAttribute('aria-label', T('gui.dag.aria'));
+  sheet.dataset.fold = String(!!d.folded);
+
+  const head = mk('div', 'hd');
+  head.appendChild(mk('span', 'ttl', T('gui.dag.title')));
+  const gist = mk('div', d.done ? 'sum' : 'gist', d.done ? dagSummary(d) : dagGist(d));
+  head.appendChild(gist);
+  d.gist = gist;
+
+  const fold = mk('button', 'ic tipdn');
+  fold.appendChild(ico('M6.5 10 12 15.5 17.5 10', 'cv'));
+  const setFold = (v) => {
+    d.folded = v;
+    sheet.dataset.fold = String(v);
+    const lb = T(v ? 'gui.dag.unfold' : 'gui.dag.fold');
+    fold.dataset.tip = lb;
+    fold.setAttribute('aria-label', lb);
+  };
+  fold.onclick = () => setFold(!d.folded);
+  /* The one writer of the fold, so an in-place update folds through the same
+     three writes the button does rather than setting the flag and leaving the
+     sheet showing the opposite. */
+  d.setFold = setFold;
+
+  const x = mk('button', 'ic tipdn');
+  x.appendChild(ico('M7 7l10 10M17 7 7 17'));
+  x.dataset.tip = T('gui.dag.close');
+  x.setAttribute('aria-label', T('gui.dag.close'));
+  x.onclick = () => { DAGS.delete(key); drawDag(); };
+
+  head.append(fold, x);
+  sheet.appendChild(head);
+  setFold(!!d.folded);
+
+  const canvas = mk('div', 'canvas');
+  canvas.appendChild(dagSvg(d));
+  sheet.appendChild(canvas);
+
+  sheetAdd(sheet, key);
+  /* Text can only be measured once it is rendered, so the id fit runs after
+     the sheet is in the document: a long node id used to run under the clock
+     in its own corner. The clock's column is reserved whether or not a time
+     is showing yet -- a node that starts running must not need a re-fit. */
+  const idEls = [...sheet.querySelectorAll('.nd .id')];
+  const max = DAG_W - 31 - 40;
+  /* A playbook namespaces every node id with its own name and run tag, so the
+     first twenty-odd characters are identical across the graph -- and cutting
+     from the tail removed the only part that told the nodes apart, leaving
+     three boxes all reading the same. Dropping the prefix they all share is
+     what makes them legible, and it is decided for the whole graph at once so
+     the labels stay comparable: applied per node, one would keep its namespace
+     while its neighbour lost it.
+
+     Only when something actually overflows. An id that fits is shown as its
+     author wrote it. */
+  if (idEls.some((el) => el.getComputedTextLength() > max)) {
+    const prefix = dagSharedPrefix(idEls.map((el) => el.textContent));
+    if (prefix) idEls.forEach((el) => { el.textContent = el.textContent.slice(prefix.length); });
+  }
+  idEls.forEach((el) => {
+    let s = el.textContent;
+    while (s.length > 1 && el.getComputedTextLength() > max) {
+      s = s.slice(0, -1);
+      el.textContent = s + '…';
+    }
+  });
+  d.sheet = sheet;
+  dagStartClock(d);
+}
+
+/* ── keeping a drawn sheet current, without drawing it again ──────────────
+   Every `dag.*` event used to land on drawDag, which drops the sheet and builds
+   a new one: a five-node run rebuilt it twelve times, and each rebuild slid it
+   back in from the bottom, reset the canvas scroll on a graph wider than the
+   pane, and dropped whatever the reader had focused. Nothing about a node
+   update needs a new sheet -- the layout is fixed at run_started, since the
+   server sends the whole graph before any node runs, and only colours, marks,
+   times and the one-line gist move after that. So they move, and the sheet
+   stays where it is. Falls back to a full draw when there is no live sheet to
+   touch (first event, or a reader who closed and reopened the page). */
+const dagLive = (d) => !!(d && d.sheet && d.els && document.body.contains(d.sheet));
+
+function dagTouch(d) {
+  if (!dagLive(d)) { drawDag(); return; }
+  if (d.setFold && d.sheet.dataset.fold !== String(!!d.folded)) d.setFold(!!d.folded);
+  if (d.gist) {
+    d.gist.className = d.done ? 'sum' : 'gist';
+    d.gist.textContent = d.done ? dagSummary(d) : dagGist(d);
+  }
+  d.nodes.forEach((n) => {
+    const slot = d.els.get(n.id);
+    if (!slot) return;
+    const st = n.status || 'pending';
+    if (slot.g.dataset.st !== st) {
+      slot.g.dataset.st = st;
+      const next = dagMark(n.status, 17, DAG_H / 2);
+      slot.mark.replaceWith(next);
+      slot.mark = next;
+    }
+    slot.tm.textContent = dagTook(n);
+  });
+  /* Edges darken as their source completes, and that is a class on a path
+     rather than a shape, so it can be reapplied without a relayout. */
+  const done = new Set();
+  d.nodes.forEach((n) => { if (n.status === 'completed') done.add(n.id); });
+  d.sheet.querySelectorAll('.edge, .tip').forEach((el) => {
+    const from = el.dataset.from;
+    if (from) el.classList.toggle('flowed', done.has(from));
+  });
+  dagStartClock(d);
+}
+
+/* The selection is one attribute on one node; moving it does not need the
+   graph rebuilt around it. */
+function dagSelect(d) {
+  if (!dagLive(d)) return;
+  const sel = RavenIslands.subagents.sel();
+  d.els.forEach((slot, id) => {
+    const on = sel && sel.run_id === d.run_id && sel.node === id;
+    if (on) slot.g.dataset.sel = '1';
+    else delete slot.g.dataset.sel;
+  });
+}
+
+/* A node opens where a sub-agent's work already lives, rather than growing a
+   second transcript view inside the sheet: same panel, same renderer, and the
+   sheet stays the map rather than becoming the territory. */
+function dagOpenNode(runId, n) {
+  RavenIslands.subagents.openDagNode(runId, n);
+  if (!wsOpen) setWs(true);
+  wsPick('agents');
+  drawWs();
+  /* The sheet marks the node whose transcript is open. Moving one attribute,
+     not rebuilding the graph: every click used to drop the sheet and animate a
+     new one in, so picking a second node to compare against the first meant
+     watching the first one leave. */
+  dagSelect(dagFor());
+}
+/* The trail's dag card opens a node through the same reader. Installed on the
+   transcript source rather than into a page binding the fixture layer declared:
+   the island asks its source for these three, and this is the layer that can
+   answer. Assigned as fields, the way live/060-parked.js and
+   live/190-session-actions.js add theirs -- the source object itself was built
+   back in live/040-history.js. */
+DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId });
+
+/* Per-node status for a card whose events are long gone: `dag.get` reads the
+   run back off disk, reconciled against the registry, so a graph reopened from
+   history shows what actually happened rather than a row of pending dots. */
+/* The rows as the server sends them, unreduced. They used to be mapped down to
+   four fields here, which is why a card restored from history could never show a
+   dependency, a prompt template or an input -- a field this mapper did not name
+   was a field the card could not have. The shape the card wants is decided by the
+   adapter that reads it (ui/src/features/dag/nodes.ts), not by this seam. */
+DS.transcript.dagRows = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
+  .then((r) => (r && r.run && r.run.files) || []);
+
+/* "View in workspace" on a spawn row: open the panel on the run's own record,
+   not just on the list. The list may not have caught the new run yet, so a
+   couple of short retries cover the gap between the call and its row. */
+DS.transcript.openSpawn = (agent, label) => {
+  setWs(true, 'agents');
+  const match = () => RavenIslands.subagents.rows().find((x) => x.kind !== 'dag'
+    && (!label || plainTitle(x.label) === plainTitle(label))
+    && (!agent || (x.agent || 'raven') === (agent || 'raven')));
+  const attempt = (n) => {
+    const it = match();
+    if (it) { RavenIslands.subagents.openRow(it); return; }
+    if (n >= 4) return;
+    RavenIslands.subagents.refresh(true);
+    setTimeout(() => attempt(n + 1), 700);
+  };
+  attempt(0);
+};
+
+/* Dev-only hook, beside __clarify and __approve and for the same reason: the
+   graph is only reachable by configuring third-party sub-agents and spending a
+   multi-agent run, which is too long a loop to design a layout in.
+   `window.__dag()` feeds the same three events the server sends. */
+window.__dag = (ev) => onEvent(ev && ev.type ? ev : {
+  type: 'dag.run_started',
+  payload: {
+    run_id: '20260812T120000Z-deadbeef',
+    nodes: [
+      { id: 'survey', subagent: 'Researcher', depends_on: [] },
+      { id: 'read_a', subagent: 'Researcher', depends_on: ['survey'] },
+      { id: 'read_b', subagent: 'Coder', depends_on: ['survey'] },
+      { id: 'read_c', subagent: 'Coder', instance: 'w2', depends_on: ['survey'] },
+      { id: 'merge', subagent: 'Writer', depends_on: ['read_a', 'read_b', 'read_c'] },
+      { id: 'review', subagent: 'Critic', depends_on: ['merge'] },
+    ],
+  },
+});
+
+})();

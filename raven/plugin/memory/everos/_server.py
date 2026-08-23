@@ -26,6 +26,11 @@ from raven.utils.portable_lock import LockTimeoutError, file_lock
 
 _POLL_INTERVAL = 0.5
 
+_API_PROBE_PATH = "/api/v2/memory/search"
+"""One route off the prefix the backend client uses (see ``backend.py``). Kept
+beside the client's own constant in spirit: if that prefix ever moves, this is
+the other place that has to move with it, or the handshake stops handshaking."""
+
 
 DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
 
@@ -77,6 +82,27 @@ def _probe_health(base_url: str) -> bool:
     turn a refused connection into a pass.
     """
     return probe_health(base_url) is ProbeResult.OK
+
+
+def _speaks_our_api(base_url: str) -> bool:
+    """Whether the server on ``base_url`` serves the prefix our client uses.
+
+    ``/health`` answers on every EverOS version, so it proves the port is alive
+    and nothing more. An older server passes it and then 404s every call the
+    client makes -- which is silent: a store failure is swallowed per turn, so
+    the pairing can run for days looking healthy while nothing is written and
+    nothing is recalled.
+
+    Probed with a deliberately empty body: a served route rejects that with 422
+    (or 400), a missing one answers 404. Either way no memory is written.
+    """
+    import httpx
+
+    try:
+        r = httpx.post(f"{base_url}{_API_PROBE_PATH}", json={}, timeout=3.0)
+    except Exception:  # noqa: BLE001 — an unreachable server is handled by the health probe
+        return False
+    return r.status_code != 404
 
 
 def _lock_path() -> Path:
@@ -722,8 +748,16 @@ async def ensure_everos_server(
     for.
     """
     if await asyncio.to_thread(_probe_health, base_url):
-        logger.info("everos server already running at {}", base_url)
-        return None
+        if await asyncio.to_thread(_speaks_our_api, base_url):
+            logger.info("everos server already running at {}", base_url)
+            return None
+        # Alive, ours by address, and unable to serve us. Adopting it is what
+        # makes the failure silent, so refuse instead and say which port.
+        raise RuntimeError(
+            f"an EverOS server is running at {base_url} but does not serve "
+            f"{_API_PROBE_PATH}, so it is too old for this raven. Stop it and let "
+            f"raven start its own, or upgrade that server to match."
+        )
 
     # Only on the spawn path: a server that answers /health has already built
     # its LLM client, so its credentials are proven by the probe above.

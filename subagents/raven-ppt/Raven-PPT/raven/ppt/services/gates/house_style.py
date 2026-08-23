@@ -1,0 +1,180 @@
+"""Whether the deck was actually built inside the template it was given.
+
+Nothing checked this. A user handed over their house style, `ppt_template` bound
+it, the build directory got `PPT_TEMPLATE`, the tool description explained how to
+open it -- and an author that wrote `Presentation()` instead produced a white deck
+on a default canvas in Calibri, which published clean. Every instruction in that
+chain was prose, and the one guarantee that could have caught it did not exist.
+
+Read off the theme's colour scheme, because that is the part a template cannot
+lose and a default cannot fake: `Presentation()` carries Office's own scheme, and
+any template worth binding has replaced it. Comparing masters or layout names
+would not do -- a template can ship one master called "Office Theme" like everyone
+else -- and comparing the canvas would not either, since an author that sets
+13.333in by hand gets that right while getting everything else wrong.
+
+Blocking, and in the same group as the language check rather than with the layout
+warnings. A deck in somebody else's colours is not a deck the user asked for, and
+it is not answerable by rearranging a page: the fix is one line at the top of the
+program.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from raven.ppt.contracts import Audience, Finding, Severity
+
+# How many differing colours the message shows. Enough to recognise which deck is
+# which; a full twelve-slot diff is a table nobody reads to decide a one-line fix.
+_SHOWN = 3
+
+
+def house_style_findings(pptx_path: Path, template: Path | None) -> list[Finding]:
+    """One finding when the deck's theme is not the bound template's."""
+    if template is None or not Path(template).is_file():
+        return []
+    wanted = _scheme(Path(template))
+    if not wanted:
+        # A template with no colour scheme cannot be checked against, and saying
+        # nothing is the honest answer -- refusing here would refuse a deck for a
+        # property of the user's own file.
+        return []
+    built = _scheme(Path(pptx_path))
+    if not built or built == wanted:
+        return []
+    differing = [
+        f"{slot} is {built.get(slot, 'unset')} and the template's is {value}"
+        for slot, value in wanted.items()
+        if built.get(slot) != value
+    ]
+    return [
+        Finding(
+            kind="house_style",
+            severity=Severity.BLOCKING,
+            audience=Audience.AUTHOR,
+            message=(
+                f"this deck's theme is not {Path(template).name}'s, so it was not built inside the template "
+                f"the user gave: {'; '.join(differing[:_SHOWN])}. Open the deck with "
+                "`Presentation(os.environ['PPT_TEMPLATE'])` rather than `Presentation()` -- every page added "
+                "to it then inherits the master, the theme and the canvas"
+            ),
+            detail={"differing": len(differing), "template": Path(template).name},
+        )
+    ]
+
+
+def _scheme(path: Path) -> dict[str, str]:
+    """The theme's colour scheme by slot, or {} when there is none to read."""
+    try:
+        from pptx import Presentation
+
+        from raven.ppt.services.template.inventory import _theme_colours, _theme_root
+    except ImportError:  # pragma: no cover - python-pptx ships with the extra
+        return {}
+    try:
+        presentation = Presentation(str(path))
+    except Exception:  # noqa: BLE001 -- a file that will not open is not comparable
+        return {}
+    return dict(_theme_colours(_theme_root(presentation)))
+
+
+# How far a page's title row may sit from the template's own before a reader sees two
+# grids. A tenth of an inch is the nudge a designer makes; a quarter is a different
+# decision, and the deck that produced this had its titles at 0.04in from the left edge
+# against the template's 0.72in, with a 9.92in box where the template's is 11.88in --
+# which is also why two of those titles painted off the page.
+TITLE_DRIFT_IN = 0.2
+TITLE_WIDTH_DRIFT_IN = 0.6
+
+
+def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object | None = None) -> list[Finding]:
+    """Content pages whose title row is not where the template puts one.
+
+    The one element every page of a deck shares. `type_drift` measures the sizes and
+    this measures the place: a deck whose titles start at three different left edges
+    reads as three decks, and a title box narrower than the template's is what sends
+    copy off the canvas when wrapping is off.
+
+    Only the pages the deck composed. A cloned page carries the template's own title row
+    by construction -- the closing page of one deck puts its title mid-page, which is the
+    template's design and was this check's first false positive. Which pages those are
+    comes from the outline, where the author named a prototype and `prototype_kept`
+    already checked the promise; geometry alone recognised two of the four.
+    """
+    if prototypes is None or not Path(prototypes).is_file():
+        return []
+    from raven.ppt.services.measure.geometry import EMU_PER_INCH, iter_shapes, open_deck
+    from raven.ppt.services.template.house import house_style
+    from raven.ppt.services.template.menu import menu, roles
+
+    house = house_style(Path(prototypes))
+    if house is None or house.title is None or house.title.pages < 2:
+        return []  # no row the template itself agrees on, so nothing to hold a page to
+    wanted = house.title.box
+    promised = {
+        page.page for page in getattr(outline, "pages", ()) or () if getattr(page, "prototype", None) is not None
+    }
+    cloned = promised or _cloned_pages(pptx_path, Path(prototypes), roles(menu(Path(prototypes))))
+    findings: list[Finding] = []
+    presentation = open_deck(pptx_path)
+    band = (presentation.slide_height or 0) / EMU_PER_INCH * 0.35
+    for number, slide in enumerate(presentation.slides, start=1):
+        if number in cloned:
+            continue
+        rows = [
+            shape
+            for shape in iter_shapes(slide.shapes)
+            if getattr(shape, "has_text_frame", False)
+            and shape.top is not None
+            and shape.text_frame.text.strip()
+            and shape.top / EMU_PER_INCH <= band
+        ]
+        if not rows:
+            continue
+        title = min(rows, key=lambda shape: (shape.top, -(shape.width or 0)))
+        left, top = title.left / EMU_PER_INCH, title.top / EMU_PER_INCH
+        width = (title.width or 0) / EMU_PER_INCH
+        off = max(abs(left - wanted[0]), abs(top - wanted[1]))
+        narrow = wanted[2] - width
+        if off <= TITLE_DRIFT_IN and narrow <= TITLE_WIDTH_DRIFT_IN:
+            continue
+        findings.append(
+            Finding(
+                kind="title_row",
+                severity=Severity.WARNING,
+                page=number,
+                audience=Audience.DESIGNER,
+                message=(
+                    f"this page's title sits at ({left:.2f}, {top:.2f}) {width:.2f}in wide and the template puts "
+                    f"its own at ({wanted[0]:.2f}, {wanted[1]:.2f}) {wanted[2]:.2f}in, on {house.title.pages} of "
+                    f"its pages. Put the title in that box: it is the one element every page of the deck shares, "
+                    f"and a box narrower than the template's is what sends a long title off the canvas"
+                ),
+                detail={"at": [round(left, 2), round(top, 2), round(width, 2)], "house": list(wanted)},
+            )
+        )
+    return findings
+
+
+def _cloned_pages(pptx_path: Path, prototypes: Path, named: dict[str, int]) -> set[int]:
+    """Pages built on one of the template's structural pages, which own their title row."""
+    from raven.ppt.services.measure.adherence import FROM_PROTOTYPE, MIN_SHAPES, _matches, _pages
+
+    if not named:
+        return set()
+    shipped = _pages(prototypes)
+    cloned: set[int] = set()
+    for number, shapes in _pages(pptx_path).items():
+        # Half the page's shapes and at least four of them. The loose version -- a fifth
+        # of them, any count -- called a two-shape page cloned because one of its two
+        # shapes was the layout's own title placeholder, which sits exactly where the
+        # template's title row does. That is the page this check is for.
+        if len(shapes) < MIN_SHAPES:
+            continue
+        for page in named.values():
+            boxes = shipped.get(page) or set()
+            if boxes and sum(1 for box in shapes if _matches(box, boxes)) / len(shapes) >= FROM_PROTOTYPE:
+                cloned.add(number)
+                break
+    return cloned

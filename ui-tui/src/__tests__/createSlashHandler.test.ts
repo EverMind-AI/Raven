@@ -44,38 +44,14 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/status')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('session.status', { session_id: 'sid-abc' })
+    expect(rpc).toHaveBeenCalledWith('session.status', { session_id: 'sid-abc' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.page).toHaveBeenCalledWith('Raven TUI Status', 'Status')
     })
   })
 
-  it('refuses a model id with no provider, and says how to name one', async () => {
-    // An id alone does not name a credential: `openrouter` serving
-    // `anthropic/claude-haiku-4-5` and `anthropic` serving `claude-haiku-4-5`
-    // are both real and cost different money. Guessing is what this removes.
-    patchUiState({ sid: 'sid-abc' })
-
-    const ctx = buildCtx()
-
-    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
-    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-    expect(ctx.transcript.sys).toHaveBeenCalledWith(
-      '/model needs a provider. Run /model to pick one, or: /model <provider> x-model'
-    )
-  })
-
-  it('refuses a prefixed id too: a prefix is routing syntax, not a credential', async () => {
-    patchUiState({ sid: 'sid-abc' })
-
-    const ctx = buildCtx()
-
-    expect(createSlashHandler(ctx)('/model openrouter/anthropic/claude-opus-4-5')).toBe(true)
-    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-  })
-
-  it('takes the two-word form as provider then model', async () => {
+  it('sends a bare /model switch with no provider param', async () => {
     patchUiState({ sid: 'sid-abc' })
 
     const ctx = buildCtx({
@@ -85,158 +61,12 @@ describe('createSlashHandler', () => {
       }
     })
 
-    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
+    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
-      provider: 'openrouter',
       session_id: 'sid-abc',
-      scope: 'session',
       value: 'x-model'
     })
-  })
-
-  it('applies the same rule to --default', async () => {
-    patchUiState({ sid: 'sid-abc' })
-
-    const ctx = buildCtx()
-
-    expect(createSlashHandler(ctx)('/model some-model --default')).toBe(true)
-    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-    // Both spellings keep the flag: this assertion used to pin the version that
-    // dropped it, so following our own advice quietly downgraded the scope.
-    expect(ctx.transcript.sys).toHaveBeenCalledWith(
-      '/model needs a provider. Run /model --default to pick one, or: /model <provider> some-model --default'
-    )
-  })
-
-  it('sends scope default and leaves the status bar alone when the session kept its own model', async () => {
-    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
-
-    const ctx = buildCtx({
-      gateway: {
-        ...buildGateway(),
-        rpc: vi.fn(() =>
-          Promise.resolve({
-            applied: true,
-            previous: null,
-            value: 'new-default',
-            scope: 'default',
-            applies_to_session: false
-          })
-        )
-      }
-    })
-
-    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
-      key: 'model',
-      provider: 'openrouter',
-      session_id: 'sid-abc',
-      scope: 'default',
-      value: 'new-default'
-    })
-    await Promise.resolve()
-    await Promise.resolve()
-    // This conversation chose its own model, so painting the new default into
-    // the status bar would show a model it is not on.
-    expect(getUiState().info?.model).toBe('session-model')
-  })
-
-  it('updates the status bar for /model --default when the session was following the default', async () => {
-    // The common case: a fresh conversation that never switched reads the
-    // default, so a default-scoped switch moves it immediately. Leaving the bar
-    // alone here showed the old model for the life of the session, because the
-    // bar is only refreshed on session.create / session.resume.
-    patchUiState({ sid: 'sid-abc', info: { model: 'old-default', skills: {}, tools: {} } })
-
-    const ctx = buildCtx({
-      gateway: {
-        ...buildGateway(),
-        rpc: vi.fn(() =>
-          Promise.resolve({
-            applied: true,
-            previous: null,
-            value: 'new-default',
-            scope: 'default',
-            applies_to_session: true
-          })
-        )
-      }
-    })
-
-    expect(createSlashHandler(ctx)('/model openrouter new-default --default')).toBe(true)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(getUiState().info?.model).toBe('new-default')
-  })
-
-  it('reports an unapplied switch as an error and leaves the status bar alone', async () => {
-    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
-
-    const ctx = buildCtx({
-      gateway: {
-        ...buildGateway(),
-        rpc: vi.fn(() => Promise.resolve({ applied: false, previous: null, value: 'x-model' }))
-      }
-    })
-
-    expect(createSlashHandler(ctx)('/model openrouter x-model')).toBe(true)
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(ctx.transcript.sys).toHaveBeenCalledWith('error: model switch was not applied: x-model')
-    expect(getUiState().info?.model).toBe('session-model')
-  })
-
-  it('strips --default from any position and opens the picker when nothing is left', async () => {
-    patchUiState({ sid: 'sid-abc' })
-
-    const ctx = buildCtx({
-      gateway: {
-        ...buildGateway(),
-        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'leading' }))
-      }
-    })
-
-    expect(createSlashHandler(ctx)('/model --default openrouter leading')).toBe(true)
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
-      'config.set',
-      expect.objectContaining({ value: 'leading', scope: 'default' })
-    )
-
-    const picker = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
-    expect(createSlashHandler(picker)('/model --default')).toBe(true)
-    expect(picker.gateway.rpc).not.toHaveBeenCalled()
-  })
-
-  it('carries --default into the picker it opens', () => {
-    // Dropped here, the picker's selection was a session-scoped switch while
-    // looking like it had changed the default. `useMainApp.onModelSelect` reads
-    // this value back to append the flag.
-    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
-
-    expect(createSlashHandler(ctx)('/model --default')).toBe(true)
-    expect(getOverlayState().modelPicker).toBe('default')
-
-    resetOverlayState()
-    expect(createSlashHandler(ctx)('/model')).toBe(true)
-    expect(getOverlayState().modelPicker).toBe(true)
-  })
-
-  it('keeps --default in the refusal it tells the user to follow', () => {
-    // The refusal is advice, and advice that silently downgrades the scope is
-    // worse than no advice: the user follows it and is told the switch worked.
-    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
-
-    expect(createSlashHandler(ctx)('/model gpt-4.1 --default')).toBe(true)
-    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
-
-    const said = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
-    expect(said).toContain('/model <provider> gpt-4.1 --default')
-
-    const plain = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
-    expect(createSlashHandler(plain)('/model gpt-4.1')).toBe(true)
-    const plainSaid = (plain.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
-    expect(plainSaid).not.toContain('--default')
   })
 
   it('parses a --provider suffix into a structured provider param', async () => {
@@ -254,7 +84,6 @@ describe('createSlashHandler', () => {
       key: 'model',
       provider: 'openrouter',
       session_id: 'sid-abc',
-      scope: 'session',
       value: 'claude-sonnet-4.6'
     })
   })
@@ -314,10 +143,7 @@ describe('createSlashHandler', () => {
 
     expect(createSlashHandler(ctx)('/skills install foo')).toBe(true)
     expect(getOverlayState().skillsHub).toBe(false)
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'install',
-      query: 'foo'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', { action: 'install', query: 'foo' }, { quiet: true })
   })
 
   it('routes /skills inspect <name> to skills.manage', () => {
@@ -359,6 +185,75 @@ describe('createSlashHandler', () => {
       command: 'skills check',
       session_id: null
     })
+  })
+
+  it('opens the subagents overlay with no argument', () => {
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/subagents')).toBe(true)
+    expect(getOverlayState().subagentsHub).toBe(true)
+  })
+
+  it('routes /subagents add <preset> [name] to subagents.add', () => {
+    const rpc = vi.fn(() => Promise.resolve({ added: true, name: 'Builder' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents add opencode Builder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode', name: 'Builder' }, { quiet: true })
+    expect(getOverlayState().subagentsHub).toBe(false)
+  })
+
+  it('routes /subagents on <name> to subagents.toggle', () => {
+    const rpc = vi.fn(() => Promise.resolve({ enabled: true }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents on Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Coder' }, { quiet: true })
+  })
+
+  it('routes /subagents off <name> to subagents.toggle with enabled false', () => {
+    const rpc = vi.fn(() => Promise.resolve({ enabled: false }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents off Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Coder' }, { quiet: true })
+  })
+
+  it('routes /subagents test <name> to subagents.test', () => {
+    const rpc = vi.fn(() => Promise.resolve({ cancelled: false, detail: 'ok', elapsed_ms: 1, ok: true }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents test Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.test', { name: 'Coder', source: 'config' }, { quiet: true })
+  })
+
+  it('supports a multi-word agent name after on/off/test', () => {
+    // Agent names may contain spaces ("General Agent"); only the first token is
+    // the subcommand, the rest is the name.
+    const rpc = vi.fn(() => Promise.resolve({ enabled: false }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents off General Agent')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'General Agent' }, { quiet: true })
+  })
+
+  it('matches the subcommand case-insensitively while leaving the name untouched', () => {
+    const rpc = vi.fn(() => Promise.resolve({ added: true, name: 'opencode' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents ADD opencode')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode' }, { quiet: true })
+  })
+
+  it('prints a usage line for an unrecognized subcommand without opening the overlay or calling the gateway', () => {
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/subagents bogus')).toBe(true)
+    expect(getOverlayState().subagentsHub).toBe(false)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      'usage: /subagents [add <preset> [name] | on <name> | off <name> | test <name>]'
+    )
   })
 
   it('passes /new <title> through to the session lifecycle', () => {
@@ -466,10 +361,11 @@ describe('createSlashHandler', () => {
       subagents: 'expanded',
       activity: 'expanded'
     })
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
-      key: 'details_mode',
-      value: 'expanded'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      { key: 'details_mode', value: 'expanded' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details: expanded')
   })
 
@@ -478,10 +374,11 @@ describe('createSlashHandler', () => {
 
     expect(createSlashHandler(ctx)('/details activity hidden')).toBe(true)
     expect(getUiState().sections.activity).toBe('hidden')
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
-      key: 'details_mode.activity',
-      value: 'hidden'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      { key: 'details_mode.activity', value: 'hidden' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details activity: hidden')
   })
 
@@ -492,10 +389,11 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/details tools reset')
     expect(getUiState().sections.tools).toBeUndefined()
-    expect(ctx.gateway.rpc).toHaveBeenLastCalledWith('config.set', {
-      key: 'details_mode.tools',
-      value: ''
-    })
+    expect(ctx.gateway.rpc).toHaveBeenLastCalledWith(
+      'config.set',
+      { key: 'details_mode.tools', value: '' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details tools: reset')
   })
 
@@ -515,21 +413,29 @@ describe('createSlashHandler', () => {
     expect(ctx.transcript.sys).toHaveBeenNthCalledWith(3, 'MCP tool: /tools enable github:create_issue')
   })
 
+  // The fourth column is the rpc-helper option bag. A command that installs
+  // its own `.catch` must pass `{quiet: true}`, or the helper reports the
+  // failure into the transcript itself and that handler never runs.
   it.each([
-    ['/browser status', 'browser.manage', { action: 'status', session_id: null }],
-    ['/browser connect', 'browser.manage', { action: 'connect', session_id: null, url: 'http://127.0.0.1:9222' }],
-    ['/reload-mcp', 'reload.mcp', { session_id: null }],
-    ['/reload', 'reload.env', {}],
-    ['/stop', 'process.stop', {}],
-    ['/fast status', 'config.get', { key: 'fast', session_id: null }],
-    ['/busy status', 'config.get', { key: 'busy' }],
-    ['/indicator', 'config.get', { key: 'indicator' }]
-  ])('routes %s through native RPC (no slash worker)', (command, method, params) => {
+    ['/browser status', 'browser.manage', { action: 'status', session_id: null }, undefined],
+    [
+      '/browser connect',
+      'browser.manage',
+      { action: 'connect', session_id: null, url: 'http://127.0.0.1:9222' },
+      undefined
+    ],
+    ['/reload-mcp', 'reload.mcp', { session_id: null }, undefined],
+    ['/reload', 'reload.env', {}, { quiet: true }],
+    ['/stop', 'process.stop', {}, { quiet: true }],
+    ['/fast status', 'config.get', { key: 'fast', session_id: null }, { quiet: true }],
+    ['/busy status', 'config.get', { key: 'busy' }, { quiet: true }],
+    ['/indicator', 'config.get', { key: 'indicator' }, undefined]
+  ])('routes %s through native RPC (no slash worker)', (command, method, params, opts) => {
     const rpc = vi.fn(() => Promise.resolve({}))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)(command)).toBe(true)
-    expect(rpc).toHaveBeenCalledWith(method, params)
+    expect(rpc).toHaveBeenCalledWith(method, params, ...(opts ? [opts] : []))
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
   })
 
@@ -851,7 +757,7 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/title my title')
 
-    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc', title: 'my title' })
+    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc', title: 'my title' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('session title set: my title')
@@ -865,7 +771,7 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/title')
 
-    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc' })
+    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('title: demo title')

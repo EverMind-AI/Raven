@@ -196,7 +196,7 @@ def test_onboard_help_lists_all_flags() -> None:
         "--skip-sandbox",
         "--skip-channel",
         "--skip-memory",
-        "--skip-deep-research",
+        "--skip-subagents",
         "--skip-import",
         "--non-interactive",
         "--yes",
@@ -655,7 +655,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
@@ -791,25 +791,22 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker, every id carrying the provider's route prefix,
-    # with the provider's own recommended default at the head when the catalog
-    # does not already carry it. It used to be the schema default that led here,
-    # because the bootstrap wrote every default into the config and the wizard
-    # read it back as "the current model" -- a value nobody had chosen, offered
-    # as though somebody had.
+    # Catalog feeds the picker, every id carrying the provider's route prefix.
+    # The schema's pre-existing default (``anthropic/claude-opus-4-5``) is one of
+    # them rather than a fourth entry: while bare and prefixed spellings coexisted
+    # the same model appeared twice, once in each form.
     assert captured_choices["choices"] == [
-        "anthropic/claude-sonnet-5",
         "anthropic/claude-haiku-4-5",
         "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
     ]
-    assert captured_choices["default"] == "anthropic/claude-sonnet-5"
+    assert captured_choices["default"] == "anthropic/claude-opus-4-5"
     # The pick made it into config, carrying the route prefix. The user may type
     # a bare id -- autocomplete accepts free text -- and a bare id is routed by
     # keyword and fallback rather than to the provider just configured, so the
@@ -2331,7 +2328,7 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
     monkeypatch.setattr(onboard_channels, "_step3_channel", _s3)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
@@ -2360,7 +2357,7 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
@@ -2407,7 +2404,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     # Should complete (not raise typer.Exit) — steps 2/3/4 ran.
@@ -2442,7 +2439,7 @@ def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_subagents", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
@@ -2751,33 +2748,33 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
     assert "skip" in _ph_text(encrypt_ph)  # optional field: skip hint
 
 
-# --------------------------------------------------------------------------- step 5 (deep_research)
+# --------------------------------------------------------------------------- step 5 (sub-agents)
 
 
 def test_total_steps_is_six() -> None:
-    # deep_research (step 5) + import (step 6) bumped the wizard from 4 to 6;
+    # sub-agents (step 5) + import (step 6) bumped the wizard from 4 to 6;
     # the progress dots + "Step n/N" header derive from this constant.
     assert onboard_commands._TOTAL_STEPS == 6
 
 
 def test_step5_skip_or_non_interactive_never_configures(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Both the --skip-deep-research and non-interactive paths must return without
-    # entering the interactive configure flow (which would hit questionary/network).
-    import raven.cli.deep_research_commands as drc
+    # Both the --skip-subagents and non-interactive paths must return without
+    # entering the interactive configure flow (which would hit questionary/disk).
+    import raven.cli.subagent_setup as setup
 
     calls: list = []
-    monkeypatch.setattr(drc, "configure_deep_research", lambda **k: calls.append(k))
-    assert onboard_commands._step5_deep_research(skip=True, non_interactive=False, warnings=[]) is None
-    assert onboard_commands._step5_deep_research(skip=False, non_interactive=True, warnings=[]) is None
+    monkeypatch.setattr(setup, "configure_subagents", lambda **k: calls.append(k))
+    assert onboard_commands._step5_subagents(skip=True, non_interactive=False, warnings=[]) is None
+    assert onboard_commands._step5_subagents(skip=False, non_interactive=True, warnings=[]) is None
     assert calls == []
 
 
 def test_step5_interactive_delegates_to_shared_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    import raven.cli.deep_research_commands as drc
+    import raven.cli.subagent_setup as setup
 
     seen: dict = {}
-    monkeypatch.setattr(drc, "configure_deep_research", lambda **k: seen.update(k) or True)
-    onboard_commands._step5_deep_research(skip=False, non_interactive=False, warnings=["w"])
+    monkeypatch.setattr(setup, "configure_subagents", lambda **k: seen.update(k) or 0)
+    onboard_commands._step5_subagents(skip=False, non_interactive=False, warnings=["w"])
     assert seen.get("non_interactive") is False and seen.get("warnings") == ["w"]
 
 
@@ -4150,7 +4147,7 @@ def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> N
     re-deriving it.
     """
     from raven.providers.registry import CRED_ENDPOINT, CRED_LOCAL, PROVIDERS, credential_kind
-    from raven.tui_rpc.methods.model import _build_provider_entry
+    from raven.rpc.methods.model import _build_provider_entry
 
     for spec in PROVIDERS:
         entry = _build_provider_entry(spec.name, current_provider=None)

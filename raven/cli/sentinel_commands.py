@@ -139,7 +139,7 @@ def sentinel_disable():
 
 @sentinel_app.command("tick")
 def sentinel_tick(
-    workspace: str = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Agent home directory"),
     dry_run: bool = typer.Option(
         True,
         "--dry-run/--live",
@@ -300,7 +300,7 @@ def sentinel_ticks(
     from_iso: str = typer.Option(..., "--from", help="ISO-8601 start time (first tick fires AT this time)"),
     to_iso: str = typer.Option(..., "--to", help="ISO-8601 end time (last tick fires AT or BEFORE this time)"),
     interval_seconds: int = typer.Option(1800, "--interval-seconds", help="Step between ticks (default 30 min)"),
-    workspace: str = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+    workspace: str = typer.Option(None, "--workspace", "-w", help="Agent home directory"),
     config: str | None = typer.Option(
         None,
         "--config",
@@ -714,8 +714,8 @@ def sentinel_discover_now(
         "--workspace",
         "-w",
         help=(
-            "Override workspace path. Only effective with --inproc "
-            "(the file-trigger path delegates to the gateway's workspace)."
+            "Agent home directory. Only effective with --inproc "
+            "(the file-trigger path delegates to the gateway's agent home)."
         ),
     ),
     fake_now: str | None = typer.Option(
@@ -986,7 +986,7 @@ def sentinel_attention(
         None,
         "--workspace",
         "-w",
-        help="Override workspace path (defaults to active).",
+        help="Agent home directory (defaults to active).",
     ),
 ):
     """Show ``user_memory/attention.md`` — all sections or a single one.
@@ -1038,7 +1038,7 @@ def sentinel_behaviors(
         None,
         "--workspace",
         "-w",
-        help="Override workspace path.",
+        help="Agent home directory.",
     ),
 ):
     """Show ``user_memory/behaviors.md`` events with optional filtering.
@@ -1110,7 +1110,7 @@ def sentinel_behaviors_rebuild(
         None,
         "--workspace",
         "-w",
-        help="Override workspace path.",
+        help="Agent home directory.",
     ),
 ):
     """Force a behaviors.md extraction pass, bypassing idle + cooldown gates.

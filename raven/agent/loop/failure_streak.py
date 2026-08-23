@@ -50,7 +50,11 @@ def failure_class(model_text: str) -> str:
         return "invalid_arguments"
     if "invalid parameters" in low:
         return "schema"
-    if "not found" in low:
+    if "not found" in low or "is not available" in low:
+        # Both spellings of a name that did not resolve. ``ToolRegistry``
+        # answers a miss with "is not available", because it cannot tell a
+        # hallucinated name from a tool whose MCP server was unloaded mid-turn
+        # and will not accuse the model of either.
         return "not_found"
     if "permission" in low or "denied" in low:
         return "denied"
@@ -81,7 +85,7 @@ def is_hard_tool_failure(result: object) -> bool:
     return s.lstrip().startswith("Error") or "error:" in low[:80]
 
 
-def loop_break_nudge(tool: str, n: int, failure: str = "other") -> str:
+def loop_break_nudge(tool: str, n: int, failure: str = "other", *, suggest_find_skill: bool = False) -> str:
     """Injected when the same tool fails deterministically N times running, so
     the model stops repeating a dead approach instead of adapting.
 
@@ -104,9 +108,15 @@ def loop_break_nudge(tool: str, n: int, failure: str = "other") -> str:
             "two causes it is has not been established. Change both: send a substantially "
             "smaller payload, and check the argument shape against the tool's schema."
         )
+    hint = (
+        " If an established method for this kind of task may exist, call "
+        "find_skill('<task keywords>') once before the next attempt."
+        if suggest_find_skill
+        else ""
+    )
     return (
         f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
         "Stop repeating it. The error text above names the actual cause -- read it "
         "and change approach: a different tool, command, or strategy. Do not call it "
-        "again unchanged."
+        f"again unchanged.{hint}"
     )

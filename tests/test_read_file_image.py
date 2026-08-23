@@ -772,14 +772,11 @@ def test_capability_cache_is_keyed_by_model() -> None:
     """The loop is a long-lived singleton taking a per-call model, so a verdict
     learned for one model must not answer for another."""
     from raven.agent.loop.main import AgentLoop
-    from raven.providers.binding import ModelBinding
     from raven.providers.litellm_provider import LiteLLMProvider
 
     loop = object.__new__(AgentLoop)
-    # The pair, not one half of it: ``provider``/``model`` are read-only views
-    # onto whichever binding is current.
-    loop._default_binding = ModelBinding(object.__new__(LiteLLMProvider), "claude-opus-4-5")
-    loop._session_bindings = {}
+    loop.provider = object.__new__(LiteLLMProvider)
+    loop.model = "claude-opus-4-5"
     loop._image_tool_result_ok = {}
 
     assert loop._supports_image_tool_result("claude-opus-4-5") is True
@@ -1457,13 +1454,10 @@ def test_the_loop_hands_the_verdict_to_the_context_engine(monkeypatch) -> None:
     """`can_see_images` is decided in the loop and consumed three layers down.
     Nothing else asserts the hand-off, so dropping it would be silent."""
     from raven.agent.loop.main import AgentLoop
-    from raven.providers.binding import ModelBinding
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    # The model is the binding's now, so a bare loop gets one the same way a
-    # real one does: through the default binding it falls back to.
-    loop._default_binding = ModelBinding(object(), "some/model")
+    loop.model = "some/model"
     monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: False)
     monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: "understand_media")
 
@@ -1502,12 +1496,11 @@ def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeyp
     whole fix: without it the two halves of one turn disagree and nothing fails.
     """
     from raven.agent.loop.main import AgentLoop
-    from raven.providers.binding import ModelBinding
 
     asked: list[str | None] = []
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    loop._default_binding = ModelBinding(object(), "configured/model")
+    loop.model = "configured/model"
     monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: asked.append(m) or True)
     monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: None)
 
@@ -1950,11 +1943,11 @@ def test_a_cold_verdict_is_not_cached_for_the_life_of_the_loop(monkeypatch) -> N
     remembered."""
     from raven.agent.loop.main import AgentLoop
     from raven.providers import rates as pricing
-    from raven.providers.binding import ModelBinding
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}
-    loop._default_binding = ModelBinding(None, "deepseek/deepseek-v4-pro")
+    loop.model = "deepseek/deepseek-v4-pro"
+    loop.provider = None
 
     monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
     monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
@@ -1975,7 +1968,7 @@ def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
     tokens, so the schema is where an absurd one is refused."""
     import pydantic
 
-    from raven.tui_rpc.models import TurnSendParams
+    from raven.rpc.models import TurnSendParams
 
     ok = TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 64)
     assert len(ok.media) == 64

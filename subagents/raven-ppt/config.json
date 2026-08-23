@@ -1,0 +1,64 @@
+{
+  "language": "en",
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-sonnet-5",
+      "provider": "custom",
+      "maxTokens": 16384,
+      "contextWindowTokens": 131072,
+      "llmCallTimeout": 600,
+      "maxToolIterations": 240,
+      "maxConcurrentSubagents": 2
+    }
+  },
+  "providers": {
+    "custom": {
+      "apiBase": "https://openrouter.ai/api/v1",
+      "models": [
+        "anthropic/claude-sonnet-5"
+      ],
+      "protocol": "chat",
+      "toolMediaMode": "synthetic"
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": true,
+    "sandbox": {
+      "backend": "none"
+    },
+    "render": {
+      "enabled": true,
+      "backend": "direct",
+      "defaultPreviewCount": 6,
+      "maxPreviewCount": 12,
+      "timeoutSeconds": 240
+    },
+    "web": {
+      "search": {
+        "maxResults": 5
+      }
+    },
+    "disabledTools": [
+      "image_generate",
+      "text_to_speech",
+      "video_generate",
+      "deep_research"
+    ]
+  },
+  "context": {
+    "curator_model": ""
+  },
+  "memory": {
+    "backend": "everos",
+    "userId": "raven-ppt",
+    "agentId": "raven-ppt",
+    "memoryTopK": 5
+  },
+  "plugins": {
+    "config": {
+      "everos-memory": {
+        "base_url": "http://localhost:18791"
+      }
+    }
+  }
+}
