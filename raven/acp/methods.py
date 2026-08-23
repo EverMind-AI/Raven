@@ -299,12 +299,15 @@ class AcpMethods:
         if result.get("session_id") != session_id:
             raise AcpMethodError(protocol.RESOURCE_NOT_FOUND, "unknown session", {"sessionId": session_id})
 
+        # The working directory comes from the client, not from what was stored:
+        # a project moves, and the session's turns have to run where the editor
+        # has it open now. Bound before the branch and not inside it, because it
+        # is just as true of the second load as of the first -- and it is this
+        # metadata, not ``AcpSession.cwd``, that ``WorkdirResolver`` reads when a
+        # tool decides where to run.
+        self._bind_workdir(session_id, cwd)
         session = self._translator.get(session_id)
         if session is None:
-            # The working directory comes from the client, not from what was
-            # stored: a project moves, and the session's turns have to run where
-            # the editor has it open now.
-            self._bind_workdir(session_id, cwd)
             session = AcpSession(
                 session_id=session_id,
                 session_key=session_id,
@@ -445,7 +448,7 @@ class AcpMethods:
             ) from exc
         try:
             try:
-                await self._call(
+                accepted = await self._call(
                     "turn.send",
                     {"session_key": session.session_key, "content": text, "media": media},
                 )
@@ -457,6 +460,12 @@ class AcpMethods:
                 # ran.
                 self._say(session, f"The turn could not start: {exc.message}")
                 return {"stopReason": "end_turn"}
+            # Which turn is this prompt's. The stream also carries turns the
+            # runtime submitted, and without this their endings answer this
+            # request -- the client is told the turn is over before its own turn
+            # starts. ``turn.send`` is the only place that knows.
+            if isinstance(accepted, dict):
+                self._translator.accept_turn(session.session_id, str(accepted.get("turn_id") or ""))
             stop = await future
         finally:
             self._translator.end_turn(session.session_id)

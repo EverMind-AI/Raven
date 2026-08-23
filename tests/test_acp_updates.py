@@ -16,12 +16,14 @@ decides whether that is the protocol.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from raven.acp.tool_kinds import MAX_LOCATIONS, locations, title_for, tool_kind
 from raven.acp.updates import (
     KNOWN_EVENT_TYPES,
+    MAX_DEFERRED_ENDINGS,
     MAX_MEDIA_ITEMS,
     MAX_RESULT_PREVIEW,
     SIDE_CHANNEL_METHODS,
@@ -581,6 +583,7 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
 
         await translator.send_frame(_event("message.complete", turn_id="t"))
 
@@ -590,8 +593,9 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
 
-        await translator.send_frame(_event("notice", kind="action_blocked", detail="no"))
+        await translator.send_frame(_event("notice", kind="action_blocked", detail="no", turn_id="t"))
         await translator.send_frame(_event("message.complete", turn_id="t"))
 
         assert await future == "refusal"
@@ -984,6 +988,10 @@ class TestTerminationIsExactlyOnce:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+        # The representative payloads carry ``turn_id: "t"``, so the turn this
+        # prompt owns has to be that one. Without it the sweep would measure the
+        # hold for an unattributable ending, not whether the event terminates.
+        translator.accept_turn("acp:s1", "t")
 
         await translator.send_frame(_event(event_type, **self.PAYLOADS[event_type]))
 
@@ -1002,6 +1010,7 @@ class TestTerminationIsExactlyOnce:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
 
         for _ in range(3):
             await translator.send_frame(_event(event_type, **self.PAYLOADS[event_type]))
@@ -1118,6 +1127,9 @@ class TestTheRealOutletPath:
     async def test_a_turn_completion_resolves_the_prompt_through_the_real_emitter(self):
         written, translator, emitter, outlet = await self._wire()
         future = translator.begin_turn("acp:s1")
+        # What ``session/prompt`` does with the id ``turn.send`` gives back. The
+        # emitter below completes ``turn-1``, so this is the turn that answers.
+        translator.accept_turn("acp:s1", "turn-1")
         try:
             await outlet.send_stream_chunk("chat", "acp:s1", "answer")
             await outlet.emit_complete("acp:s1", "turn-1", {"cost_usd": 0.01})
@@ -1152,6 +1164,7 @@ class TestTheRealOutletPath:
 
         written, translator, emitter, outlet = await self._wire()
         future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "turn-1")
         try:
             await outlet.deliver(
                 Notice(kind=NoticeKind.ACTION_BLOCKED, detail="policy refused", conversation_id="acp:s1")
@@ -1372,3 +1385,219 @@ class TestTheFileChangePayload:
 
         assert self._payload(FileChange(path="/w/a.py", after=after, before=None)) is not None
         assert self._payload(FileChange(path="/w/a.py", after=after, before="z" * 20)) is None
+
+
+class TestTheLiveTranslationPathRedactsWhatItPublishes:
+    """A credential in a tool's command line reached the editor verbatim.
+
+    ``redact`` existed and was tested, but nothing on this path called it: the
+    title came straight out of ``title_for`` and the preview straight out of
+    ``result_preview``. The compatibility matrix said these surfaces were
+    redacted, so the document and the code disagreed and the document was the
+    one being believed. An editor persists its transcript, so this is not a
+    momentary exposure.
+
+    The cases below drive ``translate`` itself rather than ``redact``, because a
+    passing test of the redactor is exactly what the gap hid behind.
+    """
+
+    SECRET = "sk-ant-api03-AAAABBBBCCCCDDDD"
+
+    def test_a_credential_in_a_command_line_does_not_reach_the_title(self) -> None:
+        event = {
+            "type": "tool.start",
+            "payload": {
+                "tool_call_id": "call-1",
+                "name": "exec",
+                "arguments": {"command": f'curl -H "Authorization: Bearer {self.SECRET}" https://api.example.com'},
+            },
+        }
+
+        (update,) = translate(event, cwd="/w").updates
+
+        assert self.SECRET not in update["title"]
+        assert "curl" in update["title"], "the row still has to be readable, so the shape survives"
+
+    def test_a_credential_in_a_result_preview_does_not_reach_the_client(self) -> None:
+        event = {
+            "type": "tool.complete",
+            "payload": {
+                "tool_call_id": "call-1",
+                "name": "read_file",
+                "result_preview": f"ANTHROPIC_API_KEY={self.SECRET}\n",
+            },
+        }
+
+        (update,) = translate(event).updates
+
+        published = json.dumps(update)
+        assert self.SECRET not in published
+        assert "ANTHROPIC_API_KEY" in published, "redacting the label too leaves a row nobody can act on"
+
+    def test_a_credential_in_an_error_message_does_not_reach_the_client(self) -> None:
+        """Not in the review, same defect. The matrix claims an error's surviving
+        text is redacted, and this path published it as message content."""
+        event = {"type": "error", "payload": {"message": f"request rejected for token {self.SECRET}"}}
+
+        (update,) = translate(event).updates
+
+        assert self.SECRET not in json.dumps(update)
+
+    def test_a_credential_in_a_blocked_notice_does_not_reach_the_client(self) -> None:
+        """Same again: the runtime's refusal detail quotes what was refused, and
+        what was refused is often the command line."""
+        event = {
+            "type": "notice",
+            "payload": {"kind": "action_blocked", "detail": f"blocked: curl -u user:{self.SECRET} https://x"},
+        }
+
+        (update,) = translate(event).updates
+
+        assert self.SECRET not in json.dumps(update)
+
+    def test_the_scan_happens_before_the_preview_is_cut(self) -> None:
+        """Order matters and the wrong order still passes a naive test. Cutting
+        first can slice a credential so that the pattern no longer matches, and
+        then the head of it is published as ordinary text."""
+        filler = "x" * (MAX_RESULT_PREVIEW - 10)
+        event = {
+            "type": "tool.complete",
+            "payload": {"tool_call_id": "c", "name": "exec", "result_preview": filler + self.SECRET},
+        }
+
+        (update,) = translate(event).updates
+
+        # ``sk-ant-api`` is what survives if the cut lands mid-credential:
+        # ``redact("token sk-ant-api")`` returns it unchanged, because a sliced
+        # credential no longer matches the pattern that would have caught it.
+        # Redacting first replaces the whole token, so the head is gone too.
+        assert "sk-ant-api" not in json.dumps(update), "a sliced credential is still a leaked credential"
+
+
+class TestOnlyTheTurnThisPromptStartedCanSettleIt:
+    """A prompt was settled by whatever terminal event came past first.
+
+    One session's subscription also carries turns the runtime submitted -- cron
+    is the one in production, and ``rpc/spine.py`` handles such a turn ending
+    while a client's turn is still queued behind it. Settlement read no
+    ``turn_id``, so that foreign ending answered the client's ``session/prompt``:
+    the editor is told the turn is over before its own turn starts, and the real
+    output then arrives after the request it belonged to has ended.
+
+    ``turn.send`` returns the id of the turn it accepted, which is the only
+    reliable answer to "which turn is mine", so that is what settlement is keyed
+    on. The ordering wrinkle is real and tested below: ``message.start`` is
+    emitted inside ``turn.send`` before it returns, so events can arrive before
+    the id is known.
+    """
+
+    async def test_a_foreign_turns_ending_does_not_answer_this_prompt(self):
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+
+        await translator.send_frame(_event("message.complete", turn_id="runtime-turn"))
+
+        assert not future.done(), "a cron turn ending is not this prompt's answer"
+
+        await translator.send_frame(_event("message.complete", turn_id="mine"))
+
+        assert await future == "end_turn"
+
+    async def test_a_foreign_refusal_does_not_latch_onto_this_turn(self):
+        """The latch is the same defect one step earlier: a refusal recorded from
+        another turn changes the stop reason this prompt eventually reports."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+
+        await translator.send_frame(_event("notice", kind="action_blocked", detail="no", turn_id="runtime-turn"))
+        await translator.send_frame(_event("message.complete", turn_id="mine"))
+
+        assert await future == "end_turn", "the refusal belonged to another turn"
+
+    async def test_an_ending_that_arrives_before_the_id_is_known_still_answers(self):
+        """``turn.send`` emits ``message.start`` before it returns, so a turn can
+        finish before the caller learns its id. Dropping that ending would hang
+        the prompt, which is worse than the bug being fixed."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+
+        await translator.send_frame(_event("message.complete", turn_id="mine"))
+        assert not future.done(), "nothing can be attributed yet"
+
+        translator.accept_turn("acp:s1", "mine")
+
+        assert await future == "end_turn"
+
+    async def test_a_foreign_ending_held_from_before_the_id_is_never_applied(self):
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+
+        await translator.send_frame(_event("message.complete", turn_id="runtime-turn"))
+        translator.accept_turn("acp:s1", "mine")
+
+        assert not future.done()
+
+        await translator.send_frame(_event("message.complete", turn_id="mine"))
+
+        assert await future == "end_turn"
+
+    async def test_an_ending_with_no_turn_id_still_answers(self):
+        """An emitter that does not know the turn id leaves the field empty. That
+        cannot be attributed either way, and refusing to settle would hang a
+        prompt over a shape that predates this correlation."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+
+        await translator.send_frame(_event("message.complete"))
+
+        assert await future == "end_turn"
+
+    async def test_an_event_that_is_not_a_mapping_carries_no_turn(self):
+        """``send_frame`` does not vet the event body, and ``translate`` returns
+        nothing for a non-mapping rather than raising. The correlation has to be
+        just as incurious, or a malformed frame becomes an exception inside the
+        emitter's coalesce task."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+
+        await translator.send_frame(
+            {"jsonrpc": "2.0", "method": "event", "params": {"subscription_id": "sub-1", "event": "not a mapping"}}
+        )
+        await translator.send_frame(
+            {"jsonrpc": "2.0", "method": "event", "params": {"subscription_id": "sub-1", "event": {"payload": 7}}}
+        )
+
+        assert not future.done(), "neither frame says anything about any turn"
+
+    def test_accepting_a_turn_for_a_session_with_none_open_is_a_no_op(self):
+        """``session/prompt`` calls this after ``turn.send`` answers, and the turn
+        can already be gone by then -- a cancel, or the connection closing."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+
+        translator.accept_turn("acp:s1", "mine")
+        translator.accept_turn("acp:nope", "mine")
+
+    async def test_the_held_endings_do_not_grow_without_bound(self):
+        """The hold exists for one narrow window. A stream of foreign turns must
+        not turn it into a leak that lives as long as the connection."""
+        translator = UpdateTranslator(emit=lambda f: None)
+        translator.add(_session())
+        translator.begin_turn("acp:s1")
+
+        for index in range(200):
+            await translator.send_frame(_event("message.complete", turn_id=f"other-{index}"))
+
+        session = translator.get("acp:s1")
+        assert session is not None and session.turn is not None
+        assert len(session.turn.deferred) <= MAX_DEFERRED_ENDINGS

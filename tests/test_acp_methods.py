@@ -461,6 +461,35 @@ class TestSessionLoad:
         assert rig.translator.get("acp:old").cwd == str(rig.tmp_path / "b")
         assert sum(1 for name, _ in rig.stack.calls if name == "turn.subscribe") == 1
 
+    async def test_reloading_a_live_session_rebinds_the_engine_too(self, rig):
+        """Two things carry the directory and only one was being updated.
+
+        ``AcpSession.cwd`` is what the translator reports and what replayed
+        locations are resolved against. ``metadata["workdir"]`` is what
+        ``WorkdirResolver`` reads, and therefore where the tools actually run.
+        Setting only the first leaves the agent editing the tree the session was
+        first opened in while the client and every location it is shown say the
+        session moved -- which is how a turn edits the wrong project.
+
+        The neighbouring test asserts the cwd and the subscription; it passed
+        throughout, because the field it checks was never the one that decided
+        where a command ran.
+        """
+        rig.stack.stored["acp:old"] = []
+        await rig.handshake()
+        first = rig.tmp_path / "acp-old"
+        moved = rig.tmp_path / "acp-moved"
+
+        await rig.call("session/load", {"sessionId": "acp:old", "cwd": str(first), "mcpServers": []})
+        assert rig.engine.sessions.get_or_create("acp:old").metadata["workdir"] == str(first)
+
+        await rig.call("session/load", {"sessionId": "acp:old", "cwd": str(moved), "mcpServers": []})
+
+        assert rig.translator.get("acp:old").cwd == str(moved)
+        assert rig.engine.sessions.get_or_create("acp:old").metadata["workdir"] == str(moved), (
+            "the tools run where the metadata says, not where the translator says"
+        )
+
     async def test_the_same_refusals_as_a_fresh_session_apply(self, rig):
         await rig.handshake()
         rig.stack.stored["acp:old"] = []

@@ -227,18 +227,124 @@ def _iter_argv(command: str, *, _depth: int = 0) -> Iterator[list[str]]:
             yield from _iter_argv(nested, _depth=_depth + 1)
 
 
+# Global options that take their value as the next word, per executable. Only
+# options certain to take one are listed, and the asymmetry is the point: an
+# option missing from this table leaves its value among the words, which
+# over-reads by one and can only make a caller ask about more than it must,
+# while listing a boolean flag by mistake would consume the verb itself and let
+# the command through. When unsure, leave it out. Options that carry their value
+# attached (``--git-dir=X``, ``terraform -chdir=DIR``) need no entry.
+_GLOBAL_OPTIONS_WITH_VALUE: dict[str, frozenset[str]] = {
+    "git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}),
+    "gh": frozenset({"-R", "--repo", "--hostname"}),
+    "glab": frozenset({"-R", "--repo", "--host"}),
+    "npm": frozenset({"-C", "--prefix", "-w", "--workspace", "--registry", "--userconfig", "--globalconfig"}),
+    "pnpm": frozenset({"-C", "--dir", "-F", "--filter"}),
+    "yarn": frozenset({"--cwd"}),
+    "bun": frozenset({"--cwd"}),
+    "docker": frozenset({"-H", "--host", "-c", "--context", "--config", "-l", "--log-level"}),
+    "podman": frozenset({"--connection", "--root", "--runtime", "--url"}),
+    "kubectl": frozenset(
+        {
+            "-n",
+            "--namespace",
+            "--context",
+            "--cluster",
+            "--kubeconfig",
+            "--user",
+            "-s",
+            "--server",
+            "--as",
+            "--token",
+            "--request-timeout",
+        }
+    ),
+    "helm": frozenset({"-n", "--namespace", "--kube-context", "--kubeconfig"}),
+    "aws": frozenset(
+        {
+            "--profile",
+            "--region",
+            "--endpoint-url",
+            "--output",
+            "--color",
+            "--ca-bundle",
+            "--cli-read-timeout",
+            "--cli-connect-timeout",
+        }
+    ),
+    "gcloud": frozenset(
+        {
+            "--project",
+            "--account",
+            "--configuration",
+            "--billing-project",
+            "--impersonate-service-account",
+            "--verbosity",
+            "--format",
+        }
+    ),
+    "cargo": frozenset({"-Z", "--manifest-path", "--config", "--color"}),
+    "pip": frozenset(
+        {
+            "-i",
+            "--index-url",
+            "--extra-index-url",
+            "--cache-dir",
+            "--log",
+            "--proxy",
+            "--timeout",
+            "--retries",
+            "--python",
+        }
+    ),
+    "pip3": frozenset(
+        {
+            "-i",
+            "--index-url",
+            "--extra-index-url",
+            "--cache-dir",
+            "--log",
+            "--proxy",
+            "--timeout",
+            "--retries",
+            "--python",
+        }
+    ),
+    "uv": frozenset({"-p", "--python", "--directory", "--project", "--cache-dir", "--config-file", "--color"}),
+    "pipx": frozenset({"--python"}),
+    "poetry": frozenset({"-C", "--directory", "--project"}),
+    "systemctl": frozenset({"-H", "--host", "-M", "--machine", "-t", "--type"}),
+}
+
+
 def _subcommands(argv: list[str], count: int = 2) -> list[str]:
     """The first few non-option words after the executable.
 
-    ``git -C /repo push`` and ``git push`` have to read the same, so option
-    values are not consumed -- they are simply skipped along with the options,
-    which over-reads by at most one word and never under-reads. Good enough to
-    tell a subcommand from a flag, which is all any caller here needs.
+    An option's value is consumed when the executable is known to take one
+    there. Skipping the option but not its value counted the value as one of the
+    words being looked for, so the budget ran out before the verb:
+    ``git --git-dir X --work-tree Y push`` read as the two paths and never saw
+    ``push`` -- an ALLOW for the command that bare ``git push`` prompts about.
+    ``aws --profile p --region r s3 cp`` lost ``s3`` the same way.
+
+    ``git -C /repo push`` and ``git push`` still have to read the same, which is
+    what the table delivers exactly rather than by over-reading. See
+    :data:`_GLOBAL_OPTIONS_WITH_VALUE` for why an incomplete table is the safe
+    kind of incomplete.
     """
 
+    options_with_value = _GLOBAL_OPTIONS_WITH_VALUE.get(PurePath(argv[0]).name, frozenset())
     words: list[str] = []
-    for word in argv[1:]:
+    rest = list(argv[1:])
+    while rest:
+        word = rest.pop(0)
+        if word == "--":
+            # Everything after it is an argument, so there is no subcommand left
+            # to find. Continuing would collect operands as candidate verbs.
+            break
         if word.startswith("-"):
+            if "=" not in word and word in options_with_value and rest:
+                rest.pop(0)
             continue
         words.append(word)
         if len(words) >= count:

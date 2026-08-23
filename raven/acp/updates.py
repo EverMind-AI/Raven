@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any
 from urllib.parse import quote
@@ -35,6 +35,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from raven.acp import protocol
+from raven.acp.redact import redact
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
 
 # Every event type ``TuiOutlet``, the spine sink, the DAG bridge and the cron
@@ -96,6 +97,12 @@ _CANCELLED_REASON = "cancelled_by_client"
 # already truncates and sets ``truncated``; this is the backstop for a tool that
 # does not, so one runaway result cannot become a multi-megabyte frame.
 MAX_RESULT_PREVIEW = 64 * 1024
+
+# Terminal events held while a turn's own id is still unknown. The window is one
+# RPC round trip wide (``turn.send`` emits ``message.start`` before it returns),
+# so a handful is generous; the cap is here because the alternative is a dict
+# that grows for the life of a connection whenever the runtime is busy.
+MAX_DEFERRED_ENDINGS = 8
 
 
 @dataclass(frozen=True)
@@ -351,7 +358,12 @@ def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | 
     update: dict[str, Any] = {
         "sessionUpdate": "tool_call",
         "toolCallId": str(payload.get("tool_call_id") or ""),
-        "title": title_for(name if isinstance(name, str) else None, arguments, payload.get("display")),
+        # Redacted here and not at the emit site: this is the last point before
+        # the bytes leave for a client that persists its transcript, and the
+        # title is built from the tool's arguments, which for exec is the whole
+        # command line. ``redact`` is idempotent, so a caller that already
+        # scrubbed loses nothing by this second pass.
+        "title": redact(title_for(name if isinstance(name, str) else None, arguments, payload.get("display"))),
         "kind": tool_kind(name if isinstance(name, str) else None),
         "status": "in_progress",
     }
@@ -388,8 +400,16 @@ def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> d
     }
     content: list[dict[str, Any]] = []
     if isinstance(preview, str) and preview:
-        text = preview[:MAX_RESULT_PREVIEW]
-        if payload.get("truncated") or len(preview) > MAX_RESULT_PREVIEW:
+        # Scanned before it is cut, and the order is the whole point: cutting
+        # first can slice a credential so that it no longer matches the pattern
+        # that would have caught it -- ``redact("token sk-ant-api")`` returns it
+        # unchanged -- and then the head of it is published as ordinary text.
+        # The scan cap in :mod:`raven.acp.redact` is four times this one, so a
+        # preview of any length that reaches here is scanned whole or truncated
+        # by that module with a notice of its own.
+        scanned = redact(preview)
+        text = scanned[:MAX_RESULT_PREVIEW]
+        if payload.get("truncated") or len(scanned) > MAX_RESULT_PREVIEW:
             text += "\n[truncated]"
         content.append({"type": "content", "content": {"type": "text", "text": text}})
     if (change := _diff_block(payload.get("file_change"))) is not None:
@@ -428,6 +448,22 @@ def _diff_block(change: Any) -> dict[str, Any] | None:
     return {"type": "diff", **diff}
 
 
+def _event_turn_id(event: Any) -> str:
+    """The turn an event belongs to, or ``""`` when the emitter did not say.
+
+    An empty answer is not treated as a mismatch anywhere: an emitter that does
+    not know the turn id predates this correlation, and refusing to settle on it
+    would hang a prompt rather than protect one.
+    """
+    if not isinstance(event, dict):
+        return ""
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    turn_id = payload.get("turn_id")
+    return turn_id if isinstance(turn_id, str) else ""
+
+
 def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     """A runtime notice. Only ``action_blocked`` reaches the wire at all.
 
@@ -439,7 +475,9 @@ def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     if payload.get("kind") != "action_blocked":
         return Translated()
     detail = payload.get("detail")
-    text = detail if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
+    # A refusal quotes what was refused, and what was refused is often a command
+    # line. Same publishing surface as the title, same treatment.
+    text = redact(detail) if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
     return Translated(updates=(_text_chunk("agent_message_chunk", text, meta),), latch="refusal")
 
 
@@ -457,7 +495,7 @@ def _error(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
         return Translated(stop="cancelled")
     message = payload.get("message")
     detail = payload.get("detail")
-    parts = [str(part) for part in (message, detail) if isinstance(part, str) and part.strip()]
+    parts = [redact(str(part)) for part in (message, detail) if isinstance(part, str) and part.strip()]
     text = " ".join(parts) if parts else "The turn failed."
     code = payload.get("code")
     if isinstance(code, int):
@@ -479,6 +517,11 @@ class _Turn:
 
     future: asyncio.Future[str]
     latched: str | None = None
+    # The turn ``turn.send`` accepted for this prompt. ``None`` until it answers,
+    # which is why ``deferred`` exists: this session's stream also carries turns
+    # the runtime submitted, and their endings must not answer this prompt.
+    turn_id: str | None = None
+    deferred: dict[str, str] = field(default_factory=dict)
 
     def settle(self, stop: str) -> bool:
         """Resolve the prompt once, and report whether this call was the one.
@@ -589,6 +632,23 @@ class UpdateTranslator:
             session.turn.settle("cancelled")
         return future
 
+    def accept_turn(self, session_id: str, turn_id: str) -> None:
+        """Record which turn ``turn.send`` accepted for the open prompt.
+
+        Anything held from before this point is resolved here: an ending that
+        belongs to this turn settles it now, and the rest are dropped, because
+        they belonged to turns this prompt never asked for.
+        """
+        session = self._by_session_id.get(session_id)
+        if session is None or session.turn is None:
+            return
+        turn = session.turn
+        turn.turn_id = turn_id or None
+        held = turn.deferred.pop(turn_id, None) if turn_id else None
+        turn.deferred.clear()
+        if held is not None:
+            turn.settle(held)
+
     def close(self) -> None:
         """Latch the connection shut and answer everything still waiting.
 
@@ -663,10 +723,26 @@ class UpdateTranslator:
         turn = session.turn
         if turn is None:
             return
+        # Updates above go out for the whole session -- a client showing what the
+        # runtime is doing in its workspace is information, not a bug. Turn
+        # bookkeeping is different: it answers one request, so it is keyed on the
+        # turn this prompt actually started.
+        event_turn_id = _event_turn_id(event)
+        if turn.turn_id is not None and event_turn_id and event_turn_id != turn.turn_id:
+            self._drop(f"{event.get('type') if isinstance(event, dict) else 'event'}/<another turn>")
+            return
         if result.latch and turn.latched is None:
             turn.latched = result.latch
-        if result.stop:
-            turn.settle(result.stop)
+        if not result.stop:
+            return
+        if turn.turn_id is None and event_turn_id:
+            # The id is not known yet, so this cannot be attributed. Held rather
+            # than applied or dropped: applying it is the defect, and dropping it
+            # would hang a prompt whose turn finished inside that window.
+            if len(turn.deferred) < MAX_DEFERRED_ENDINGS:
+                turn.deferred.setdefault(event_turn_id, result.stop)
+            return
+        turn.settle(result.stop)
 
     def _drop(self, what: str) -> None:
         self.dropped[what] = self.dropped.get(what, 0) + 1
@@ -679,6 +755,7 @@ class UpdateTranslator:
 
 __all__ = [
     "KNOWN_EVENT_TYPES",
+    "MAX_DEFERRED_ENDINGS",
     "MAX_MEDIA_ITEMS",
     "MAX_RESULT_PREVIEW",
     "SIDE_CHANNEL_METHODS",

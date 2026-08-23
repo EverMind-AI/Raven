@@ -126,12 +126,23 @@ build is validated against it.
 An ACP payload is rendered in an editor and often kept in its transcript, so a
 tool title, a permission prompt and an error message are publishing surfaces.
 
+Every row below names the surface as it behaves in the live translator, not as
+the redactor behaves in isolation. That distinction is not pedantic: the first
+version of this table described a redactor that the publishing path never
+called, so the document was right about the module and wrong about the wire.
+
 | Channel | Handling |
 |---|---|
 | A command line in a prompt title | Redacted (14 patterns, capture group only, so the shape survives and the row stays readable). |
+| A `tool_call` title on the wire | Redacted in `_tool_call`, which is the last point before the frame leaves. |
+| A `tool_call_update` result preview | Redacted **before** the 64 KiB cut, so a credential that straddles the cut cannot leave its head behind as ordinary text. |
+| A terminating error's message and detail | Redacted. |
+| A blocked action's notice detail | Redacted; a refusal quotes what was refused, which is often the command line. |
 | A tool's arguments | Not sent at all -- see `rawInput` above. |
 | An internal error's `data` | The traceback tail is stripped (twelve lines of absolute paths, sometimes of argument values) and whatever survives is redacted. |
 | An `mcpServers` `env` dict | Refused with the field. |
+| A `Diff` block's `oldText` / `newText` | **Not redacted**, deliberately. The client draws or applies this content, so a redacted diff is a wrong diff -- it would show and could write `[redacted]` into the file. A diff of a credential file therefore publishes it. Recorded rather than fixed because the fix is to not send diffs for such files, which needs a rule about which files those are. |
+| Model and reasoning text | Not redacted. It is the answer the person asked for, and a redactor cannot tell a quoted secret from a discussion of one. |
 | **What is not caught** | A high-entropy string with no label and no vendor prefix. It is indistinguishable from a hash, a build id or a commit sha, and redacting those would break every row that legitimately shows one. This is not a secret scanner; containment is the sandbox's job. |
 
 ## Filesystem and terminal

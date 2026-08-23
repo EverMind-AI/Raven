@@ -610,3 +610,63 @@ async def test_the_tool_refuses_a_deny_pattern_at_its_own_exit(tmp_path) -> None
 
     assert "Error" in str(result)
     assert executor.commands == []
+
+
+class TestAGlobalOptionValueIsNotASubcommand:
+    """The gap that let a hand-written command through the boundary added here.
+
+    ``_subcommands`` skipped options but not their values, so a value was counted
+    as one of the words it was looking for and the budget ran out before the
+    verb. ``git --git-dir X --work-tree Y push`` therefore read as the two paths
+    and never saw ``push``: an ALLOW for the exact command that bare ``git push``
+    prompts about. Nothing below is adversarial -- every shape is one a person
+    types, and two of them (``aws --profile``, ``git --git-dir``) are the normal
+    way to drive those tools from outside their own tree.
+    """
+
+    @pytest.fixture
+    def asking(self) -> ShellCommandPolicy:
+        from raven.agent.tools.shell_policy import EXTERNAL_EFFECT_MATCHERS
+
+        policy = ShellCommandPolicy(deny_patterns=[])
+        for name, matcher in EXTERNAL_EFFECT_MATCHERS:
+            policy.register_approval_matcher(name, matcher)
+        return policy
+
+    @pytest.mark.parametrize(
+        ("command", "family"),
+        [
+            ("git --git-dir /tmp/repo/.git --work-tree /tmp/repo push origin main", "publish_command"),
+            ("git -C /repo --no-pager push", "publish_command"),
+            ("aws --profile prod --region us-east-1 s3 cp ./x s3://bucket/x", "publish_command"),
+            ("kubectl --namespace kube-system --context prod apply -f x.yaml", "publish_command"),
+            ("gh --repo owner/name pr create --fill", "publish_command"),
+            ("docker --host tcp://build:2375 push registry/image", "publish_command"),
+            ("npm --prefix /srv/app install lodash", "install_command"),
+            ("git --git-dir /tmp/r/.git reset --hard HEAD~1", "destructive_vcs_command"),
+        ],
+    )
+    def test_the_verb_is_found_past_its_global_options(
+        self, asking: ShellCommandPolicy, command: str, family: str
+    ) -> None:
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) == family
+
+    def test_an_attached_value_consumes_nothing_extra(self, asking: ShellCommandPolicy) -> None:
+        """``--git-dir=X`` carries its value in the same word. Consuming a
+        following token for it would eat the verb instead of the value, which is
+        the same bug pointing the other way."""
+        assert asking.approval_reason("git --git-dir=/tmp/r/.git push") == "publish_command"
+
+    def test_a_double_dash_ends_the_options(self, asking: ShellCommandPolicy) -> None:
+        """After ``--`` a word that looks like an option is an argument, so the
+        table must not keep consuming past it."""
+        assert asking.approval_reason("git -C /repo push -- --not-an-option") == "publish_command"
+
+    def test_an_unknown_option_over_reads_rather_than_under_reads(self, asking: ShellCommandPolicy) -> None:
+        """No table lists every option of every tool. An unconsumed value becomes
+        a candidate word, which can only make the policy ask about more than it
+        must -- the direction a security boundary is allowed to fail in. This one
+        passes before the fix too; it is here to pin the fallback, because the
+        obvious "consume the next token after any option" would break it."""
+        assert asking.evaluate("git --future-flag somevalue push") is CommandDecision.REQUIRE_APPROVAL
