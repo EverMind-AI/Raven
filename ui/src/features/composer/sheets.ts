@@ -28,7 +28,7 @@
  * leaves for good is the rack's job, through the teardown below.
  */
 
-import { verb } from '../../shell/bridge'
+import { current } from '../../shell/session'
 import { dockLift } from './store'
 
 const SHEETS = new Map<string, Set<HTMLElement>>()
@@ -47,16 +47,13 @@ const SHEETS = new Map<string, Set<HTMLElement>>()
    collectable. */
 const TEARDOWN = new WeakMap<HTMLElement, () => void>()
 
-/* A draft is not a session yet -- the page's `cur` is null until the first
+/* A draft is not a session yet -- the session pointer is null until the first
    message lands -- but a question can be asked during its first turn, so it
    needs a key of its own rather than sharing one with every other draft-less
    state.
-   `sessionKey` rather than a reach for `cur`: the page owns which conversation
-   is open, and it is asked through the verb it already publishes for this.
-   Insisted on rather than defaulted, because a rack that silently filed every
-   sheet under one key would put another conversation's question back over the
-   composer -- which is the bug this whole module exists to prevent. */
-export const session = (): string => verb('sessionKey')() || '(draft)'
+   The page session module owns which conversation is open; the draft gets a
+   stable rack key rather than sharing one with every state lacking an id. */
+export const session = (): string => current() || '(draft)'
 
 const rack = (): HTMLElement => document.querySelector<HTMLElement>('#sheetRack') || document.body
 

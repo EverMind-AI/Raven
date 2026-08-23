@@ -3,10 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { open } from './approve'
 import { _resetForTests, forget, session, sync } from './sheets'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
-
-let openSession: string | null = 'a'
 
 function wire(): void {
   const shell: Shell = {
@@ -15,7 +14,6 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    sessionKey: () => openSession as string,
   }
   window.RavenShell = shell
   document.body.innerHTML =
@@ -32,12 +30,14 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): void => {
 }
 
 beforeEach(() => {
-  openSession = 'a'
+  sessionReset()
+  setCurrent('a')
   _resetForTests()
   wire()
 })
 
 afterEach(() => {
+  sessionReset()
   delete window.RavenShell
   document.body.innerHTML = ''
 })
@@ -57,13 +57,13 @@ describe('the approval sheet', () => {
      that asked shows nothing pending while its turn stays paused on the server
      waiting for the answer. */
   it('files the request under the conversation named by the caller', () => {
-    openSession = 'b'
+    setCurrent('b')
     open('rm -rf build/', () => {}, () => {}, 'a')
 
     /* Nothing over the composer the reader is actually looking at. */
     expect(sheets().length).toBe(0)
 
-    openSession = 'a'
+    setCurrent('a')
     sync()
     expect(sheets().length).toBe(1)
     expect(sheets()[0]!.dataset.sess).toBe('a')
@@ -71,7 +71,7 @@ describe('the approval sheet', () => {
   })
 
   it('docks where the reader is when the caller names no conversation', () => {
-    openSession = 'b'
+    setCurrent('b')
     open('rm -rf build/')
     expect(sheets()[0]!.dataset.sess).toBe('b')
   })
@@ -81,7 +81,7 @@ describe('the approval sheet', () => {
      and must not be answerable off the keyboard of the reader looking at B. */
   it('scopes replacement and the keyboard to the conversation that asked', () => {
     const said: string[] = []
-    openSession = 'b'
+    setCurrent('b')
     open('B asks', () => said.push('B-allow'), () => said.push('B-deny'))
     open('A asks', () => said.push('A-allow'), () => said.push('A-deny'), 'a')
 
@@ -91,7 +91,7 @@ describe('the approval sheet', () => {
     key('1')
     expect(said).toEqual(['B-allow'])
 
-    openSession = 'a'
+    setCurrent('a')
     sync()
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')
     key('1')
@@ -106,11 +106,11 @@ describe('the approval sheet', () => {
      answer no UI can give any more. */
   it('registers the withdrawal handle under the conversation that asked', () => {
     const said: string[] = []
-    openSession = 'b'
+    setCurrent('b')
     open('A asks', () => said.push('A-allow'), () => said.push('A-deny'), 'a')
     open('B asks', () => said.push('B-allow'), () => said.push('B-deny'))
 
-    openSession = 'a'
+    setCurrent('a')
     sync()
     expect(sheets().length).toBe(1)
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')
@@ -175,13 +175,13 @@ describe('the approval sheet', () => {
   it('ignores the keyboard while its conversation is not the open one', () => {
     const said: string[] = []
     open('a', () => said.push('allow'), () => said.push('deny'))
-    openSession = 'b'
+    setCurrent('b')
     sync()
     key('1')
     key('Escape')
     expect(said).toEqual([])
     /* And it is still answerable when the reader comes back. */
-    openSession = 'a'
+    setCurrent('a')
     sync()
     key('1')
     expect(said).toEqual(['allow'])
@@ -205,12 +205,12 @@ describe('the approval sheet', () => {
   it("leaves another conversation's pending question alone", () => {
     const said: string[] = []
     open('A asks', () => said.push('A-allow'), () => said.push('A-deny'))
-    openSession = 'b'
+    setCurrent('b')
     sync()
     open('B asks', () => said.push('B-allow'), () => said.push('B-deny'))
     expect(rack().querySelector('.what')!.textContent).toBe('B asks')
 
-    openSession = 'a'
+    setCurrent('a')
     sync()
     expect(sheets().length).toBe(1)
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')

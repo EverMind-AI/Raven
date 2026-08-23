@@ -1,5 +1,6 @@
 import { ds, shell } from '../../shell/bridge'
 import { mark as navMark } from '../../shell/navfly'
+import { setCurrent } from '../../shell/session'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -10,9 +11,9 @@ import type { RailSnapshot, RailSource, SessRow } from './types'
  * lives in a plain store the shims can call, and the component subscribes.
  *
  * Unlike the page islands this store owns no rows: the session list stays
- * in the shared SESS/cur globals, which the transcript, turn, schedule and
- * settings layers all write in place. Each draw pulls a fresh snapshot
- * through DS.sessions instead of keeping a copy that could go stale.
+ * in the shared SESS array and session pointer, which the transcript, turn,
+ * schedule and settings layers all write in place. Each draw pulls a fresh
+ * snapshot through DS.sessions instead of keeping a copy that could go stale.
  */
 
 export interface RailState {
@@ -264,7 +265,7 @@ export function remove(s: SessRow): void {
   if (st.cur === s.id) {
     const nx = st.rows[0]
     if (nx) {
-      sh.setCur?.(nx.id)
+      setCurrent(nx.id)
       sh.openSession?.(nx)
     }
   }

@@ -4,10 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { open as approveOpen } from './approve'
 import { open } from './clarify'
 import { _resetForTests, forget, sync } from './sheets'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
-
-let openSession: string | null = 'a'
 
 function wire(): void {
   const shell: Shell = {
@@ -16,7 +15,6 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    sessionKey: () => openSession as string,
   }
   window.RavenShell = shell
   document.body.innerHTML =
@@ -39,12 +37,14 @@ const type = (v: string): void => {
 }
 
 beforeEach(() => {
-  openSession = 'a'
+  sessionReset()
+  setCurrent('a')
   _resetForTests()
   wire()
 })
 
 afterEach(() => {
+  sessionReset()
   delete window.RavenShell
   document.body.innerHTML = ''
 })
@@ -72,7 +72,7 @@ describe('the clarify sheet', () => {
   it('files the sheet under the conversation the server named', () => {
     open({ question: 'q', conversation_id: 'b' }, () => {})
     expect(sheets()).toEqual([])
-    openSession = 'b'
+    setCurrent('b')
     sync()
     expect(sheets().length).toBe(1)
     expect(sheets()[0]!.dataset.sess).toBe('b')
@@ -159,7 +159,7 @@ describe('the clarify sheet', () => {
     const said: string[] = []
     open({ question: 'q', choices: ['one'] }, (a) => said.push(a))
     field().blur()
-    openSession = 'b'
+    setCurrent('b')
     sync()
     key('1')
     expect(said).toEqual([])

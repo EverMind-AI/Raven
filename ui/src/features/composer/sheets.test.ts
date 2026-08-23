@@ -2,11 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { _resetForTests, add, dropClass, forget, remove, session, sync } from './sheets'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
-
-/* The page's open conversation, which the rack asks for rather than keeps. */
-let open: string | null = null
 
 function wire(): void {
   const shell: Shell = {
@@ -15,7 +13,6 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    sessionKey: () => open as string,
   }
   window.RavenShell = shell
   /* `.chat` and `.dock` because dockLift measures them; without both it returns
@@ -34,12 +31,14 @@ const rack = (): HTMLElement => document.getElementById('sheetRack')!
 const mounted = (): string[] => [...rack().children].map((n) => (n as HTMLElement).dataset.sess as string)
 
 beforeEach(() => {
-  open = 'a'
+  sessionReset()
+  setCurrent('a')
   _resetForTests()
   wire()
 })
 
 afterEach(() => {
+  sessionReset()
   delete window.RavenShell
   document.body.innerHTML = ''
 })
@@ -53,7 +52,7 @@ describe('the sheet rack', () => {
   })
 
   it('keys a sheet raised during a draft, rather than sharing one key', () => {
-    open = null
+    setCurrent(null)
     add(sheet())
     expect(mounted()).toEqual(['(draft)'])
     /* And the draft's key is its own: a second draft-less page state must not
@@ -84,21 +83,21 @@ describe('the sheet rack', () => {
     s.appendChild(field)
     field.value = 'half typed'
 
-    open = 'b'
+    setCurrent('b')
     sync()
     expect(mounted()).toEqual([])
     expect(s.isConnected).toBe(false)
 
-    open = 'a'
+    setCurrent('a')
     sync()
     expect(rack().firstChild).toBe(s)
     expect((s.firstChild as HTMLInputElement).value).toBe('half typed')
   })
 
   it('mounts a sheet raised while the reader was away', () => {
-    open = 'b'
+    setCurrent('b')
     add(sheet(), 'a')
-    open = 'a'
+    setCurrent('a')
     sync()
     expect(mounted()).toEqual(['a'])
   })
@@ -113,7 +112,7 @@ describe('the sheet rack', () => {
     dropClass('csheet')
     expect([...rack().children].map((n) => (n as HTMLElement).className)).toEqual(['dagsheet'])
     /* The other conversation still has its pending question. */
-    open = 'b'
+    setCurrent('b')
     sync()
     expect(mounted()).toEqual(['b'])
   })
@@ -123,7 +122,7 @@ describe('the sheet rack', () => {
     add(sheet(), 'b')
     forget('a')
     expect(mounted()).toEqual([])
-    open = 'b'
+    setCurrent('b')
     sync()
     expect(mounted()).toEqual(['b'])
     forget('b')
@@ -131,10 +130,10 @@ describe('the sheet rack', () => {
     /* Unmounting is not forgetting. Leaving the bucket behind would let the
        next sync put a deleted conversation's question back on screen, and the
        assertion above cannot tell the two apart on its own. */
-    open = 'a'
+    setCurrent('a')
     sync()
     expect(mounted()).toEqual([])
-    open = 'b'
+    setCurrent('b')
     sync()
     expect(mounted()).toEqual([])
   })
@@ -203,14 +202,6 @@ describe('the sheet rack', () => {
     clear()
     remove(s)
     expect(lifted()).toBe(true)
-  })
-
-  /* The rack asks the page which conversation is open. A page that has not
-     wired that verb is a broken page, and the alternative -- filing everything
-     under one key -- is exactly the bug this module exists to prevent. */
-  it('refuses to guess the conversation when the page has not wired one', () => {
-    window.RavenShell = { ...window.RavenShell!, sessionKey: undefined }
-    expect(() => add(sheet())).toThrow('RavenShell.sessionKey is not wired')
   })
 
   /* The takedown a tenant registers on the way in. What makes it the rack's

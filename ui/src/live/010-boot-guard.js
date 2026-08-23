@@ -37,7 +37,7 @@ window.__liveBoot = 1;
    runs. In live mode none of it may reach the eye: clear it synchronously (same
    task as the demo paint, so nothing mock survives to the first frame) and hold
    the session rail on skeleton rows until the real list lands. */
-SESS = []; cur = null;
+SESS = []; sessionSet(null);
 SKILLS.length = 0; PLUGINS.length = 0; CRONS.length = 0;
 $('#stage').innerHTML = '';
 $('#flash').textContent = '';
@@ -51,4 +51,3 @@ let listReady = false;
   };
   drawList();
 }
-

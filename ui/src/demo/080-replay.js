@@ -70,7 +70,7 @@ function replay(run, instant) {
       RavenIslands.transcript.artifacts(WS.turn);
       busy = false; use = run.use;
       setCtx(((run.use && run.use.in) || 0) + ((run.use && run.use.out) || 0), 200000);
-      const s = sess(cur);
+      const s = sess(sessionCurrent());
       if (s) { s.last = run.key === 'gtm' ? '抓取了官网，出了对比表' : '3 runs, 0 failures'; s.status = null; }
       drawMeter(); goState(); drawList();
       const nx = queueShift();

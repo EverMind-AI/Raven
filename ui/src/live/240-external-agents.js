@@ -164,7 +164,7 @@ DS.transcript.openDagNode = (runId, nodeId) => dagOpenNode(runId, { id: nodeId }
    dependency, a prompt template or an input -- a field this mapper did not name
    was a field the card could not have. The shape the card wants is decided by the
    adapter that reads it (ui/src/features/dag/nodes.ts), not by this seam. */
-DS.transcript.dagRows = (runId) => rpc.call('dag.get', { run_id: runId, session_key: cur })
+DS.transcript.dagRows = (runId) => rpc.call('dag.get', { run_id: runId, session_key: sessionCurrent() })
   .then((r) => (r && r.run && r.run.files) || []);
 
 /* "View in workspace" on a spawn row: open the panel on the run's own record,

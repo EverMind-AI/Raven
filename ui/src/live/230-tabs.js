@@ -24,8 +24,8 @@ DS.agents = {
   /* A call is addressed by conversation and call, not by call alone: its
      record lives inside that conversation's own directory. A dag node is
      addressed by (run, node), reconciled server-side against the registry. */
-  context: (id) => rpc.call('subagent.context', { id, session_id: cur }),
-  node: (runId, node) => rpc.call('dag.node', { run_id: runId, node, session_key: cur })
+  context: (id) => rpc.call('subagent.context', { id, session_id: sessionCurrent() }),
+  node: (runId, node) => rpc.call('dag.node', { run_id: runId, node, session_key: sessionCurrent() })
     .then((r) => (r && r.node) || {}),
   absent: () => !rpcHas('subagent'),
   /* The stateful handles. Scoped to the open session like everything else here,
@@ -41,15 +41,15 @@ DS.agents = {
   /* Addressed by (agent, handle) inside the open session: a handle is unique
      per agent, not globally, so both halves travel. */
   instanceHistory: (agent, handle) =>
-    rpc.call('subagents.instance.history', { session_key: cur, agent, handle }).then((r) => r || {}),
+    rpc.call('subagents.instance.history', { session_key: sessionCurrent(), agent, handle }).then((r) => r || {}),
   instanceForget: (agent, handle) =>
-    rpc.call('subagents.instance.forget', { session_key: cur, agent, handle }).then(() => undefined),
+    rpc.call('subagents.instance.forget', { session_key: sessionCurrent(), agent, handle }).then(() => undefined),
   /* A turn addressed to one instance rather than to the conversation: the same
      `turn.send` the composer uses, with a `target`. An instance's turn runs on
      its own lane, so it is concurrent with the main agent's and with every other
      instance's, and is refused only by *that* instance still answering. */
   instanceSend: (agent, handle, text) =>
-    rpc.call('turn.send', { session_key: cur, content: text, target: { agent, handle } })
+    rpc.call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle } })
       .then(() => undefined),
   /* The heartbeat, forwarded rather than acted on: a run in flight has to
      move on screen without being reopened, and every judgement about what

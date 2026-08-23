@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { _resetForTests as rackReset, sync as rackSync } from '../composer/sheets'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { forget, run, start, sync, touch, _resetForTests } from './mount'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
 import type { DagRun } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-let openSession: string | null = 'a'
 const opened: Array<[string, string]> = []
 
 function wire(): void {
@@ -21,7 +21,6 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    sessionKey: () => openSession as string,
     /* The clock renders through the page's own duration wording. */
     dur: (ms) => `${Math.round(ms / 1000)}s`,
   }
@@ -57,7 +56,8 @@ const rack = (): HTMLElement => document.getElementById('sheetRack')!
 const sheets = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.dsheet')]
 
 beforeEach(() => {
-  openSession = 'a'
+  sessionReset()
+  setCurrent('a')
   opened.length = 0
   _resetForTests()
   subReset()
@@ -66,6 +66,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  sessionReset()
   delete window.RavenShell
   delete window.DS
   document.body.innerHTML = ''
@@ -187,12 +188,12 @@ describe('the dag sheet', () => {
     act(() => { start('a', d) })
     expect(vi.getTimerCount()).toBeGreaterThan(0)
 
-    openSession = 'b'
+    setCurrent('b')
     act(() => { rackSync(); sync() })
     expect(sheets()).toEqual([])
     expect(vi.getTimerCount()).toBe(0)
 
-    openSession = 'a'
+    setCurrent('a')
     act(() => { rackSync(); sync() })
     expect(sheets()).toHaveLength(1)
     expect(vi.getTimerCount()).toBeGreaterThan(0)
@@ -248,7 +249,7 @@ describe('the dag sheet', () => {
      keeps another conversation's from sitting over the composer. */
   it('files a graph raised for another conversation without mounting it', () => {
     vi.useFakeTimers()
-    openSession = 'b'
+    setCurrent('b')
     const d = graph('r1')
     d.nodes.get('one')!.status = 'running'
     d.nodes.get('one')!.started_at = Date.now()

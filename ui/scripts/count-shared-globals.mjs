@@ -95,9 +95,9 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const EXPECTED = 10
+const EXPECTED = 9
 const EXPECTED_HELD = 5
-const EXPECTED_VERBS = 59
+const EXPECTED_VERBS = 57
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
 const read = (dir) =>

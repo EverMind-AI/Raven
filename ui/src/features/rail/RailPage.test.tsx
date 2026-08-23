@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RailApp } from './RailPage'
 import * as store from './store'
+import {
+  _resetForTests as sessionReset,
+  current as sessionCurrent,
+  onChange,
+  setCurrent,
+} from '../../shell/session'
 
 import type { MenuItem, Shell, ToastAction } from '../../shell/bridge'
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -45,16 +51,18 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: id => calls.push(['showPage', id]),
     drawList: () => store.draw(),
-    setCur: id => {
-      state.cur = id
-      calls.push(['setCur', id])
-    },
     openSession: s => calls.push(['openSession', (s as SessRow).id]),
     dropDraft: id => calls.push(['dropDraft', id]),
     openCron: () => calls.push(['openCron', null]),
     navState: () => ({ pages: [], btnOf: () => undefined })
   }
   window.RavenShell = fakeShell
+  sessionReset()
+  setCurrent(state.cur)
+  onChange((id) => {
+    state.cur = id
+    store.draw()
+  })
   /* Only the read, so every case below exercises the island's OWN behaviour --
      which is what an offline page gets. The cases that need a page with
      somewhere to write install the verbs themselves. */
@@ -114,6 +122,7 @@ const rowItems = (host: HTMLElement, title: string): Array<MenuItem | '-'> =>
 
 afterEach(() => {
   cleanup()
+  sessionReset()
   found.term = ''
 })
 
@@ -274,7 +283,7 @@ describe('rail island', () => {
       rowByTitle(host, 'second task').click()
     })
     expect(h.calls).toContainEqual(['showPage', null])
-    expect(h.calls).toContainEqual(['setCur', 'b'])
+    expect(sessionCurrent()).toBe('b')
     expect(h.calls).toContainEqual(['openSession', 'b'])
     expect(rowByTitle(host, 'second task').getAttribute('aria-current')).toBe('true')
     h.calls.length = 0
@@ -366,7 +375,7 @@ describe('rail island', () => {
     const del = rowItems(host, 'second task').find(x => x !== '-' && x.bad) as MenuItem
     act(() => del.fn())
     expect(h.calls).toContainEqual(['dropDraft', 'b'])
-    expect(h.calls).toContainEqual(['setCur', 'a'])
+    expect(sessionCurrent()).toBe('a')
     expect(h.calls).toContainEqual(['openSession', 'a'])
     expect(screen.queryByText('second task')).toBeNull()
     const undo = h.toasts.find(x => x.action)!

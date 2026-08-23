@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as mount_ from './mount'
 import { SubagentsApp } from './SubagentsPage'
 import * as store from './store'
+import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow } from './types'
@@ -27,7 +28,6 @@ function wire(source: AgentsSource): void {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     wsShows: (tab) => tab === 'agents',
-    sessionKey: () => 's1',
     dur: (ms) => `${Math.round(ms / 1000)}s`,
     plainTitle: (s) => s.replace(/^\p{Extended_Pictographic}+\s*/u, ''),
     agentStagePaint: (box, ctx, opts) => {
@@ -36,6 +36,8 @@ function wire(source: AgentsSource): void {
     },
   }
   window.RavenShell = fakeShell
+  sessionReset()
+  setCurrent('s1')
   window.DS = { agents: source }
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'
@@ -82,6 +84,7 @@ afterEach(() => {
   })
   cleanup()
   store._resetForTests()
+  sessionReset()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })

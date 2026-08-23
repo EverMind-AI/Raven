@@ -60,9 +60,9 @@ DS.transcript ??= {
   clean: (t) => String(t == null ? '' : t).trim(),
   okOf: () => true,
   branch: (text) => {
-    const s = { id: 'n' + Date.now(), title: (sess(cur) ? sess(cur).title : '新任务') + ' 的分支',
+    const s = { id: 'n' + Date.now(), title: (sess(sessionCurrent()) ? sess(sessionCurrent()).title : '新任务') + ' 的分支',
       last: '从上一轮回复分叉', when: '刚刚', run: null };
-    SESS.unshift(s); cur = s.id; drawList(); openSession(s); toast('已分叉出新会话');
+    SESS.unshift(s); sessionSet(s.id); drawList(); openSession(s); toast('已分叉出新会话');
   },
   /* dagRows, openDagNode and openSpawn are deliberately absent. The cards in
      the trail open real things only with a host behind them, and the island

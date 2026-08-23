@@ -63,7 +63,6 @@ export interface Shell {
   wsView?(): WsPanelView
   wsState?(): unknown
   wsPick?(tab: string): void
-  sessionKey?(): string
   dur?(ms: number): string
   plainTitle?(s: string): string
   /* The transcript bridge: draws a delegated run's record into a stage box
@@ -103,7 +102,6 @@ export interface Shell {
      instead of acting locally. What is done TO a session -- delete, rename,
      pin, delete-everything -- left this bridge for DS.sessions. */
   drawList?(): void
-  setCur?(id: string | null): void
   openSession?(s: unknown): void
   dropDraft?(id: string): void
   openCron?(): void
