@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { RailApp } from './RailPage'
@@ -43,16 +43,16 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     toast: (text, action) => toasts.push({ text, action }),
     menuAt: (_x, _y, items) => menus.push(items),
     confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => calls.push(['showPage', id]),
+    showPage: id => calls.push(['showPage', id]),
     drawList: () => store.draw(),
-    setCur: (id) => {
+    setCur: id => {
       state.cur = id
       calls.push(['setCur', id])
     },
-    openSession: (s) => calls.push(['openSession', (s as SessRow).id]),
-    dropDraft: (id) => calls.push(['dropDraft', id]),
+    openSession: s => calls.push(['openSession', (s as SessRow).id]),
+    dropDraft: id => calls.push(['dropDraft', id]),
     openCron: () => calls.push(['openCron', null]),
-    navState: () => ({ pages: [], btnOf: () => undefined }),
+    navState: () => ({ pages: [], btnOf: () => undefined })
   }
   window.RavenShell = fakeShell
   /* Only the read, so every case below exercises the island's OWN behaviour --
@@ -64,7 +64,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
     '<button id="plugBtn"></button><button id="memBtn"></button><button id="moreBtn"></button>' +
     '<div id="moreFly" data-open="false"></div>' +
-    PAGES.map((p) => `<div id="${p}" data-open="false"></div>`).join('') +
+    PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
   return { state, calls, menus, toasts }
 }
@@ -78,15 +78,23 @@ const src = (): RailSource => window.DS!.sessions as RailSource
    hands over an empty one, which is the whole page shut. */
 const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'cronPage']
 const BTN_OF: Record<string, string> = {
-  capsPage: 'skillBtn', xaPage: 'moreBtn', connPage: 'moreBtn', memPage: 'memBtn', cronPage: 'moreBtn',
+  capsPage: 'skillBtn',
+  xaPage: 'moreBtn',
+  connPage: 'moreBtn',
+  memPage: 'memBtn',
+  cronPage: 'moreBtn'
 }
 
 function navUp(open: string): void {
   window.RavenShell!.navState = () => ({
-    pages: PAGES, btnOf: (p) => BTN_OF[p], morePages: ['xaPage', 'connPage', 'cronPage'],
+    pages: PAGES,
+    btnOf: p => BTN_OF[p],
+    morePages: ['xaPage', 'connPage', 'cronPage']
   })
   document.querySelector<HTMLElement>('.app')!.dataset.page = 'on'
-  PAGES.forEach((p) => { document.getElementById(p)!.dataset.open = String(p === open) })
+  PAGES.forEach(p => {
+    document.getElementById(p)!.dataset.open = String(p === open)
+  })
 }
 
 const current = (id: string): string | null => document.getElementById(id)!.getAttribute('aria-current')
@@ -99,7 +107,10 @@ function mount(): HTMLElement {
 }
 
 const rowByTitle = (host: HTMLElement, title: string): HTMLElement =>
-  [...host.querySelectorAll<HTMLElement>('.sess')].find((r) => r.querySelector('.t')?.textContent === title)!
+  [...host.querySelectorAll<HTMLElement>('.sess')].find(r => r.querySelector('.t')?.textContent === title)!
+
+const rowItems = (host: HTMLElement, title: string): Array<MenuItem | '-'> =>
+  (rowByTitle(host, title) as HTMLElement & { _ctx: () => Array<MenuItem | '-'> })._ctx()
 
 afterEach(() => {
   cleanup()
@@ -112,18 +123,18 @@ describe('rail island', () => {
     const saved = row({ id: 'saved', persisted: true })
     const pendingResult = store.reconcileRows([pending], [saved], 'pending')
     expect(pendingResult.currentMissing).toBe(false)
-    expect(pendingResult.rows.map((x) => x.id)).toEqual(['pending', 'saved'])
+    expect(pendingResult.rows.map(x => x.id)).toEqual(['pending', 'saved'])
 
     const deletedResult = store.reconcileRows([row({ id: 'gone', persisted: true })], [saved], 'gone')
     expect(deletedResult.currentMissing).toBe(true)
-    expect(deletedResult.rows.map((x) => x.id)).toEqual(['saved'])
+    expect(deletedResult.rows.map(x => x.id)).toEqual(['saved'])
   })
 
   it('retains client-only completion state without reviving stale pin data', () => {
     const [next] = store.reconcileRows(
       [row({ id: 'a', pin: true, persisted: true, status: 'done' })],
       [row({ id: 'a', pin: false, persisted: true })],
-      'a',
+      'a'
     ).rows
     expect(next?.status).toBe('done')
     expect(next?.pin).toBe(false)
@@ -139,7 +150,12 @@ describe('rail island', () => {
 
   it('renders the groups and the rows, titles stripped of leading emoji', () => {
     install({
-      rows: [row(), row({ id: 'p', title: 'pinned one', pin: true }), row({ id: 'k', title: 'daily digest', from: 'cron' }), row({ id: 'e', title: '🚀 Ship it' })],
+      rows: [
+        row(),
+        row({ id: 'p', title: 'pinned one', pin: true }),
+        row({ id: 'k', title: 'daily digest', from: 'cron' }),
+        row({ id: 'e', title: '🚀 Ship it' })
+      ]
     })
     const host = mount()
     expect(screen.getByText('gui.rail.pinned')).toBeTruthy()
@@ -167,7 +183,14 @@ describe('rail island', () => {
   })
 
   it('shows the running tail on the busy current row and clears it after', () => {
-    const h = install({ rows: [row(), row({ id: 'd', title: 'done one', status: 'done' }), row({ id: 'x', title: 'broken one', status: 'err' })], busy: true })
+    const h = install({
+      rows: [
+        row(),
+        row({ id: 'd', title: 'done one', status: 'done' }),
+        row({ id: 'x', title: 'broken one', status: 'err' })
+      ],
+      busy: true
+    })
     const host = mount()
     const run = rowByTitle(host, 'GTM research').querySelector('.w')!
     expect(run.getAttribute('data-sig')).toBe('run')
@@ -213,8 +236,8 @@ describe('rail island', () => {
       sessions: {
         snapshot: () => {
           throw new Error('gone')
-        },
-      },
+        }
+      }
     }
     act(() => store.draw())
     expect(host.querySelectorAll('.sess').length).toBe(1)
@@ -259,22 +282,18 @@ describe('rail island', () => {
       rowByTitle(host, 'second task').click()
     })
     expect(h.calls).toContainEqual(['showPage', null])
-    expect(h.calls.find((c) => c[0] === 'openSession')).toBeUndefined()
+    expect(h.calls.find(c => c[0] === 'openSession')).toBeUndefined()
   })
 
-  it('pins through the row menu, optimistically and persisted', () => {
+  it('pins through the hover shortcut, optimistically and persisted', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     const pins: Array<[string, boolean]> = []
     src().pin = (id: string, pinned: boolean) => pins.push([id, pinned])
     const host = mount()
-    act(() => {
-      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
-    })
-    const pin = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.pin') as MenuItem
-    act(() => pin.fn())
+    act(() => rowByTitle(host, 'second task').querySelector<HTMLButtonElement>('.quick-pin')!.click())
     expect(h.state.rows[1]!.pin).toBe(true)
     expect(pins).toEqual([['b', true]])
-    expect(h.toasts.map((x) => x.text)).toContain('gui.pinned_ok')
+    expect(h.toasts.map(x => x.text)).toContain('gui.pinned_ok')
     expect(screen.getByText('gui.rail.pinned')).toBeTruthy()
   })
 
@@ -283,12 +302,48 @@ describe('rail island', () => {
   it('pins with no source verb at all', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     const host = mount()
-    act(() => {
-      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
-    })
-    const pin = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.pin') as MenuItem
-    expect(() => act(() => pin.fn())).not.toThrow()
+    expect(() =>
+      act(() => rowByTitle(host, 'second task').querySelector<HTMLButtonElement>('.quick-pin')!.click())
+    ).not.toThrow()
     expect(h.state.rows[1]!.pin).toBe(true)
+  })
+
+  it('archives through the hover shortcut and restores the local row on undo', () => {
+    const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const host = mount()
+    const archive = rowByTitle(host, 'second task').querySelectorAll<HTMLButtonElement>('.quick button')[1]!
+    act(() => archive.click())
+    expect(host.querySelectorAll('.sess')).toHaveLength(1)
+    const undo = h.toasts.find(x => x.action)!
+    expect(undo.text).toBe('gui.sess.archived {"title":"second task"}')
+    expect(undo.action!.label).toBe('gui.undo')
+    act(() => undo.action!.fn())
+    expect(screen.getByText('second task')).toBeTruthy()
+  })
+
+  it('hands archive navigation to a source that can persist it', () => {
+    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const archived: string[] = []
+    src().archive = s => archived.push(s.id)
+    const host = mount()
+    const archive = rowByTitle(host, 'second task').querySelectorAll<HTMLButtonElement>('.quick button')[1]!
+    act(() => archive.click())
+    expect(archived).toEqual(['b'])
+    expect(screen.getByText('second task')).toBeTruthy()
+  })
+
+  it('renames a session inline on double click', () => {
+    install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+    const renamed: Array<[string, string]> = []
+    src().renamed = (id, title) => renamed.push([id, title])
+    const host = mount()
+    fireEvent.doubleClick(rowByTitle(host, 'second task'))
+    const input = host.querySelector<HTMLInputElement>('input.ren')!
+    fireEvent.change(input, { target: { value: 'renamed inline' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renamed).toEqual([['b', 'renamed inline']])
+    expect(rowByTitle(host, 'renamed inline')).toBeTruthy()
+    expect(document.getElementById('title')!.textContent).toBe('renamed inline')
   })
 
   /* A source that can delete gets the whole action, and the island does none
@@ -298,29 +353,23 @@ describe('rail island', () => {
     const gone: string[] = []
     src().remove = (s: SessRow) => gone.push(s.id)
     const host = mount()
-    act(() => {
-      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
-    })
-    act(() => (h.menus[0]!.find((x) => x !== '-' && x.bad) as MenuItem).fn())
+    act(() => (rowItems(host, 'second task').find(x => x !== '-' && x.bad) as MenuItem).fn())
     expect(gone).toEqual(['b'])
     expect(screen.getByText('second task')).toBeTruthy()
-    expect(h.toasts.find((x) => x.action)).toBeUndefined()
-    expect(h.calls.find((c) => c[0] === 'dropDraft')).toBeUndefined()
+    expect(h.toasts.find(x => x.action)).toBeUndefined()
+    expect(h.calls.find(c => c[0] === 'dropDraft')).toBeUndefined()
   })
 
   it('deletes locally when no source can, and restores on undo', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
     const host = mount()
-    act(() => {
-      rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
-    })
-    const del = h.menus[0]!.find((x) => x !== '-' && x.bad) as MenuItem
+    const del = rowItems(host, 'second task').find(x => x !== '-' && x.bad) as MenuItem
     act(() => del.fn())
     expect(h.calls).toContainEqual(['dropDraft', 'b'])
     expect(h.calls).toContainEqual(['setCur', 'a'])
     expect(h.calls).toContainEqual(['openSession', 'a'])
     expect(screen.queryByText('second task')).toBeNull()
-    const undo = h.toasts.find((x) => x.action)!
+    const undo = h.toasts.find(x => x.action)!
     expect(undo.text).toBe('gui.sess.deleted_x {"title":"second task"}')
     act(() => undo.action!.fn())
     expect(screen.getByText('second task')).toBeTruthy()
@@ -334,10 +383,7 @@ describe('rail island', () => {
   describe('renaming the current session', () => {
     function edit(h: Harness): HTMLInputElement {
       const host = mount()
-      act(() => {
-        rowByTitle(host, 'second task').querySelector<HTMLElement>('.more')!.click()
-      })
-      const it_ = h.menus[0]!.find((x) => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
+      const it_ = rowItems(host, 'second task').find(x => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
       act(() => it_.fn())
       return document.querySelector<HTMLInputElement>('input.titin')!
     }
@@ -402,16 +448,16 @@ describe('rail island', () => {
   it('folds a group on its eyebrow and unfolds it again', () => {
     install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     const host = mount()
-    const grp = [...host.querySelectorAll<HTMLElement>('.grp')].find((g) => g.textContent!.includes('gui.rail.recent'))!
+    const grp = [...host.querySelectorAll<HTMLElement>('.grp')].find(g => g.textContent!.includes('gui.rail.recent'))!
     act(() => grp.click())
     expect(host.querySelector('.sess')).toBeNull()
     expect(
       [...host.querySelectorAll<HTMLElement>('.grp')]
-        .find((g) => g.textContent!.includes('gui.rail.recent'))!
-        .getAttribute('aria-expanded'),
+        .find(g => g.textContent!.includes('gui.rail.recent'))!
+        .getAttribute('aria-expanded')
     ).toBe('false')
     act(() => {
-      ;[...host.querySelectorAll<HTMLElement>('.grp')].find((g) => g.textContent!.includes('gui.rail.recent'))!.click()
+      ;[...host.querySelectorAll<HTMLElement>('.grp')].find(g => g.textContent!.includes('gui.rail.recent'))!.click()
     })
     expect(host.querySelectorAll('.sess').length).toBe(2)
   })
@@ -442,7 +488,7 @@ describe('rail island', () => {
     navUp('cronPage')
     fly.dataset.open = 'true'
     act(() => store.markNew())
-    const rows = [...fly.querySelectorAll('.mrow')].map((b) => b.getAttribute('aria-current'))
+    const rows = [...fly.querySelectorAll('.mrow')].map(b => b.getAttribute('aria-current'))
     /* morePages is [xa, conn, cron]: the third row is the page that is up. */
     expect(rows).toEqual(['false', 'false', 'true'])
     expect(current('moreBtn')).toBe('false')

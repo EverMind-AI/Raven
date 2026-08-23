@@ -1629,6 +1629,32 @@ export interface SessionPinResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionArchiveParams".
+ */
+export interface SessionArchiveParams {
+  /**
+   * Full session_key.
+   */
+  session_id: string;
+  /**
+   * True hides the session from session.list; False restores it.
+   */
+  archived: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionArchiveResult".
+ */
+export interface SessionArchiveResult {
+  archived: boolean;
+  session_key: string;
+  /**
+   * True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save.
+   */
+  pending: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionClearParams".
  */
 export interface SessionClearParams {

@@ -287,6 +287,19 @@ async function leaveDeletedSession(sessionId) {
   startDraft();
 }
 
+async function leaveArchivedSession(sessionId) {
+  const transition = RavenIslands.rail.removeRow(SESS, cur, sessionId);
+  SESS = transition.rows;
+  if (transition.kind === 'unchanged') { drawList(); return; }
+  if (transition.kind === 'open') {
+    cur = transition.next.id;
+    await openSession(transition.next);
+    return;
+  }
+  $('#ta').value = '';
+  startDraft();
+}
+
 DS.sessions.remove = function (s) {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
     try {
@@ -296,6 +309,32 @@ DS.sessions.remove = function (s) {
       toast(T('gui.sess.deleted_x', { title: s.title }));
     } catch (e) { toast(`删除失败：${e.message || e}`); }
   });
+};
+
+DS.sessions.archive = async function (s) {
+  try {
+    const at = SESS.findIndex(row => row.id === s.id);
+    const result = await rpc.call('session.archive', { session_id: s.id, archived: true });
+    if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`);
+    await leaveArchivedSession(s.id);
+    toast(T('gui.sess.archived', { title: s.title }), {
+      label: T('gui.undo'),
+      fn: async () => {
+        try {
+          const restored = await rpc.call('session.archive', { session_id: s.id, archived: false });
+          if (restored.archived || restored.session_key !== s.id) {
+            throw new Error(`session ${s.id} was not restored`);
+          }
+          if (!SESS.some(row => row.id === s.id)) SESS.splice(Math.max(0, Math.min(at, SESS.length)), 0, s);
+          drawList();
+        } catch (e) {
+          toast(T('gui.sess.restore_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+        }
+      }
+    });
+  } catch (e) {
+    toast(T('gui.sess.archive_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
+  }
 };
 
 $('#newBtn').onclick = () => { showPage(null); startDraft(); };

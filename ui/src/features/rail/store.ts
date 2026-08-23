@@ -42,28 +42,28 @@ export const source = (): RailSource => ds<RailSource>('sessions')
 export function reconcileRows(
   previous: SessRow[],
   incoming: SessRow[],
-  currentId: string | null,
+  currentId: string | null
 ): { currentMissing: boolean; rows: SessRow[] } {
-  const oldById = new Map(previous.map((row) => [row.id, row]))
+  const oldById = new Map(previous.map(row => [row.id, row]))
   for (const row of incoming) {
     const old = oldById.get(row.id)
     if (old?.status) row.status = old.status
   }
   const current = currentId ? oldById.get(currentId) : undefined
-  const currentListed = !!currentId && incoming.some((row) => row.id === currentId)
+  const currentListed = !!currentId && incoming.some(row => row.id === currentId)
   if (current && !current.persisted && !currentListed) incoming.unshift(current)
   return {
     currentMissing: !!current?.persisted && !currentListed,
-    rows: incoming,
+    rows: incoming
   }
 }
 
 export function removeSessionRow(
   rows: SessRow[],
   currentId: string | null,
-  deletedId: string,
+  deletedId: string
 ): { kind: 'draft' | 'open' | 'unchanged'; next?: SessRow; rows: SessRow[] } {
-  const remaining = rows.filter((row) => row.id !== deletedId)
+  const remaining = rows.filter(row => row.id !== deletedId)
   if (currentId !== deletedId) return { kind: 'unchanged', rows: remaining }
   const next = remaining[0]
   return next ? { kind: 'open', next, rows: remaining } : { kind: 'draft', rows: remaining }
@@ -86,7 +86,7 @@ const grpFold = new Set<string>(
     } catch {
       return []
     }
-  })(),
+  })()
 )
 const saveGrpFold = (): void => {
   try {
@@ -154,7 +154,7 @@ export function markNew(): void {
   const app = document.querySelector<HTMLElement>('.app')
   const pageUp =
     app && app.dataset.page === 'on'
-      ? nav.pages.find((p) => {
+      ? nav.pages.find(p => {
           const n = el(p)
           return !!n && n.dataset.open === 'true'
         }) || null
@@ -193,6 +193,48 @@ export function pin(id: string, pinned: boolean): void {
   }
 }
 
+export function renameRow(s: SessRow, title: string): void {
+  if (title === s.title) return
+  s.title = title
+  if (curId() === s.id) {
+    const heading = document.getElementById('title')
+    if (heading) heading.textContent = plainTitle(title)
+  }
+  try {
+    source().renamed?.(s.id, title)
+  } catch {
+    /* no source, nowhere to put it */
+  }
+  shell().drawList?.()
+}
+
+export function archive(s: SessRow): void {
+  let via: RailSource['archive']
+  try {
+    via = source().archive
+  } catch {
+    /* nothing installed: hiding the local row is the whole behaviour */
+  }
+  if (via) {
+    via(s)
+    return
+  }
+  const rows = source().snapshot().rows
+  const at = rows.indexOf(s)
+  const index = rows.findIndex(row => row.id === s.id)
+  if (index >= 0) rows.splice(index, 1)
+  const sh = shell()
+  sh.drawList?.()
+  sh.toast(sh.T('gui.sess.archived', { title: s.title }), {
+    label: sh.T('gui.undo'),
+    fn: () => {
+      const current = source().snapshot().rows
+      if (!current.some(row => row.id === s.id)) current.splice(Math.max(0, Math.min(at, current.length)), 0, s)
+      sh.drawList?.()
+    }
+  })
+}
+
 /* Deleting a session. A source that can delete one does it -- the live page
    has a confirmation to ask and a pile of per-session state to forget, none of
    which belongs to the rail. Without one, this is the whole behaviour: splice
@@ -215,7 +257,7 @@ export function remove(s: SessRow): void {
   const rows = source().snapshot().rows
   const at = rows.indexOf(s)
   sh.dropDraft?.(s.id)
-  const i = rows.findIndex((x) => x.id === s.id)
+  const i = rows.findIndex(x => x.id === s.id)
   if (i >= 0) rows.splice(i, 1)
   undoBin = { s, at }
   const st = source().snapshot()
@@ -234,7 +276,7 @@ export function remove(s: SessRow): void {
       source().snapshot().rows.splice(bin.at, 0, bin.s)
       undoBin = null
       sh.drawList?.()
-    },
+    }
   })
 }
 
@@ -252,7 +294,7 @@ export function rename(): void {
   } catch {
     return
   }
-  const s = snap.rows.find((x) => x.id === snap.cur)
+  const s = snap.rows.find(x => x.id === snap.cur)
   if (!s) return
   const inp = document.createElement('input')
   inp.className = 'titin'
@@ -280,7 +322,7 @@ export function rename(): void {
     shell().drawList?.()
   }
   inp.onblur = () => finish(true)
-  inp.onkeydown = (e) => {
+  inp.onkeydown = e => {
     if (e.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter') {
       e.preventDefault()

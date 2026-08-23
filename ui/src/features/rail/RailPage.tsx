@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
 import * as store from './store'
@@ -6,13 +6,24 @@ import { plainTitle } from './title'
 
 import type { MenuItem } from '../../shell/bridge'
 import type { SessRow } from './types'
-import type { JSX, KeyboardEvent } from 'react'
+import type { JSX, KeyboardEvent, MouseEvent } from 'react'
 import { term as findTerm } from '../../shell/find'
 
 /* The row's context/⋯ menu. Moving to a session still leaves through the
    shell by name (setCur, openSession, drawList are page state this island does
-   not own); the three actions ON a session go through the source instead, so
+   not own); the actions ON a session go through the source instead, so
    what happens is whatever the installed source can actually do. */
+function togglePin(s: SessRow): void {
+  s.pin = !s.pin
+  shell().drawList?.()
+  shell().toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
+  store.pin(s.id, !!s.pin)
+}
+
+function archiveSession(s: SessRow): void {
+  store.archive(s)
+}
+
 function sessItems(s: SessRow): Array<MenuItem | '-'> {
   const sh = shell()
   return [
@@ -31,24 +42,15 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
           sh.openSession?.(s)
         }
         store.rename()
-      },
+      }
     },
     {
       label: t(s.pin ? 'gui.sess.unpin' : 'gui.sess.pin'),
-      fn: () => {
-        s.pin = !s.pin
-        sh.drawList?.()
-        sh.toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
-        /* Optimistic: the row moved already; a source that can keep the flag
-           persists it. The demo has no server and installs no pin, so this is
-           where it ends there. Read here rather than when the menu is built:
-           source() throws when nothing is installed, and building a menu must
-           not be the thing that raises. */
-        store.pin(s.id, !!s.pin)
-      },
+      fn: () => togglePin(s)
     },
+    { label: t('gui.sess.archive'), fn: () => archiveSession(s) },
     '-',
-    { label: t('gui.sess.delete'), bad: true, fn: () => store.remove(s) },
+    { label: t('gui.sess.delete'), bad: true, fn: () => store.remove(s) }
   ]
 }
 
@@ -60,6 +62,15 @@ const enterOrSpace = (fn: () => void) => (e: KeyboardEvent) => {
 }
 
 function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }): JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [draftTitle, setDraftTitle] = useState(s.title)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const finishing = useRef(false)
+  useEffect(() => {
+    if (!editing) return
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [editing])
   const live = s.id === cur && busy ? 'run' : s.status
   // run/done speak from the tail slot instead (see .sess .sig); err and que
   // stay a leading dot -- they are conditions of the session, not of a turn
@@ -69,6 +80,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
   // is visibility:hidden, so name it for a reader who gets the row as text.
   const label = tail ? t(tail === 'run' ? 'gui.sess.running' : 'gui.sess.finished') : undefined
   const go = (): void => {
+    if (editing) return
     const sh = shell()
     sh.showPage(null)
     let now: string | null = cur
@@ -83,6 +95,20 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
       sh.openSession?.(s)
     }
   }
+  const beginEdit = (e: MouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    finishing.current = false
+    setDraftTitle(s.title)
+    setEditing(true)
+  }
+  const finishEdit = (commit: boolean): void => {
+    if (finishing.current) return
+    finishing.current = true
+    const title = draftTitle.trim()
+    setEditing(false)
+    if (commit && title) store.renameRow(s, title)
+  }
   return (
     <div
       className="sess"
@@ -90,14 +116,38 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
       tabIndex={0}
       aria-current={s.id === cur}
       onClick={go}
-      onKeyDown={enterOrSpace(go)}
-      ref={(el) => {
+      onDoubleClick={beginEdit}
+      onKeyDown={editing ? undefined : enterOrSpace(go)}
+      ref={el => {
         if (el) (el as HTMLElement & { _ctx?: () => Array<MenuItem | '-'> })._ctx = () => sessItems(s)
       }}
     >
       <div className="t">
         {live && !tail ? <span className={'dot ' + live} /> : null}
-        <span>{plainTitle(s.title)}</span>
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="ren"
+            aria-label={t('gui.sess.rename')}
+            value={draftTitle}
+            onChange={e => setDraftTitle(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onDoubleClick={e => e.stopPropagation()}
+            onBlur={() => finishEdit(true)}
+            onKeyDown={e => {
+              if (e.nativeEvent.isComposing) return
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                finishEdit(true)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                finishEdit(false)
+              }
+            }}
+          />
+        ) : (
+          <span>{plainTitle(s.title)}</span>
+        )}
       </div>
       {/* The stamp is always rendered -- it is what gives the tail its width.
           A marker hides the text in place rather than replacing the element,
@@ -106,17 +156,32 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
         <span className="wt">{s.when}</span>
         {tail ? <i /> : null}
       </span>
-      <button
-        className="more"
-        aria-label={t('gui.cron.menu_aria', { name: plainTitle(s.title) })}
-        onClick={(e) => {
-          e.stopPropagation()
-          const r = e.currentTarget.getBoundingClientRect()
-          shell().menuAt(r.right, r.bottom + 4, sessItems(s))
-        }}
-      >
-        ⋯
-      </button>
+      <div className="quick" onDoubleClick={e => e.stopPropagation()}>
+        <button
+          className="quick-pin"
+          data-active={s.pin || undefined}
+          aria-label={t(s.pin ? 'gui.sess.unpin' : 'gui.sess.pin')}
+          onClick={e => {
+            e.stopPropagation()
+            togglePin(s)
+          }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m14.5 4.5 5 5-3 2.5v3l-2 2-3-3-5 5-1.5-1.5 5-5-3-3 2-2h3z" />
+          </svg>
+        </button>
+        <button
+          aria-label={t('gui.sess.archive')}
+          onClick={e => {
+            e.stopPropagation()
+            archiveSession(s)
+          }}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 8h14v11H5zM4 4h16v4H4zm5 8h6" />
+          </svg>
+        </button>
+      </div>
     </div>
   )
 }
@@ -132,7 +197,7 @@ function Group({
   gid,
   always,
   cur,
-  busy,
+  busy
 }: {
   label: string
   items: SessRow[]
@@ -171,7 +236,7 @@ function Group({
         {action ? (
           <button
             className="grp-go"
-            onClick={(e) => {
+            onClick={e => {
               e.stopPropagation()
               action()
             }}
@@ -184,7 +249,7 @@ function Group({
         <div className="grp-empty">{t('gui.rail.none')}</div>
       ) : (
         <>
-          {shown.map((s) => (
+          {shown.map(s => (
             <Row key={s.id} s={s} cur={cur} busy={busy} />
           ))}
           {cap && items.length > cap ? (
@@ -204,7 +269,7 @@ export function RailApp(): JSX.Element | null {
     /* The live boot's skeleton rows, exactly the shapes the boot guard drew. */
     return (
       <>
-        {[0, 1, 2, 3, 4, 5].map((i) => (
+        {[0, 1, 2, 3, 4, 5].map(i => (
           <div key={i} className="sess skel">
             <span className="sk" style={{ width: `${52 + ((i * 17) % 30)}%`, height: '11px' }} />
             <span className="sk" style={{ width: '28px', height: '9px' }} />
@@ -228,7 +293,7 @@ export function RailApp(): JSX.Element | null {
     return (
       <>
         <span className="lab">{t('gui.rail.search_hits', { n: rows.length })}</span>
-        {rows.map((x) => (
+        {rows.map(x => (
           <Row key={x.id} s={x} cur={snap.cur} busy={snap.busy} />
         ))}
       </>
@@ -237,13 +302,13 @@ export function RailApp(): JSX.Element | null {
 
   // Straight through, in the order SESS already holds: newest last activity
   // first, which is the same value each row's clock shows.
-  const rest = rows.filter((x) => !x.pin && x.from !== 'cron')
+  const rest = rows.filter(x => !x.pin && x.from !== 'cron')
   return (
     <>
-      <Group label={t('gui.rail.pinned')} items={rows.filter((x) => x.pin)} gid="pin" cur={snap.cur} busy={snap.busy} />
+      <Group label={t('gui.rail.pinned')} items={rows.filter(x => x.pin)} gid="pin" cur={snap.cur} busy={snap.busy} />
       <Group
         label={t('gui.rail.from_cron')}
-        items={rows.filter((x) => !x.pin && x.from === 'cron')}
+        items={rows.filter(x => !x.pin && x.from === 'cron')}
         action={() => shell().openCron?.()}
         cap={3}
         gid="cron"

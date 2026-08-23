@@ -359,17 +359,34 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .sess[aria-current="true"] .w { color: var(--muted); }
-/* Hover changes colour and nothing else: the row keeps its title clipped and
-   its time in place, so the list never reflows under the cursor. The row menu
-   is on right-click (and on keyboard focus, for a11y). */
-.sess .more {
-  flex: none; position: absolute; right: 8px; opacity: 0; pointer-events: none;
-  color: var(--muted); padding: 1px 5px; border-radius: 5px; line-height: 1;
-  background: var(--raised);
+/* The two common actions replace the timestamp in place on hover, keeping the
+   row width stable while making pin and archive one-click operations. */
+.sess .quick {
+  display: flex; align-items: center; gap: 3px; position: absolute; right: 9px;
+  opacity: 0; pointer-events: none;
 }
-.sess .more:focus-visible { opacity: 1; pointer-events: auto; }
+.sess:hover .quick, .sess .quick:focus-within { opacity: 1; pointer-events: auto; }
+.sess:hover .w, .sess:focus-within .w { display: none; }
+.sess:hover .t, .sess:focus-within .t { padding-right: 48px; }
+.sess .quick button {
+  display: grid; place-items: center; position: relative; width: 21px; height: 21px; border-radius: 5px;
+  color: var(--muted);
+}
+.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--text); background: var(--line-soft); }
+.sess .quick button::after {
+  content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 5px);
+  z-index: 2; opacity: 0; transform: translate(-50%, 2px); pointer-events: none;
+  padding: 3px 6px; border-radius: 5px; background: var(--text); color: var(--ink);
+  font-size: 10px; font-weight: 400; line-height: 1.25; white-space: nowrap;
+  transition: opacity .08s ease .12s, transform .08s ease .12s;
+}
+.sess .quick button:hover::after, .sess .quick button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.sess .quick button[data-active] { color: var(--amber); }
+.sess .quick svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sess:has(.ren) .quick { display: none; }
+.sess:has(.ren) .t { padding-right: 0; }
 .sess .ren {
-  grid-column: 1 / -1; background: var(--ink); border: 1px solid var(--muted);
+  min-width: 0; background: var(--ink); border: 1px solid var(--muted);
   border-radius: 5px; padding: 3px 6px; font-size: 13px; outline: 0; width: 100%;
 }
 

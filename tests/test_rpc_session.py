@@ -30,6 +30,7 @@ from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (
     register_session_methods,
+    session_archive,
     session_branch,
     session_close,
     session_create,
@@ -892,6 +893,23 @@ async def test_session_most_recent_returns_session_key(tmp_path: Path, monkeypat
     assert result["session_id"] == "tui:20260610_100000_recent1"
 
 
+async def test_session_most_recent_skips_archived_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """session.most_recent does not auto-resume a session hidden by archiving."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    archived = mgr.get_or_create("tui:20260610_110000_archived")
+    archived.add_message("user", "hide this")
+    archived.metadata["archived"] = True
+    mgr.save(archived)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_most_recent({})
+    assert result["session_id"] is None
+
+
 async def test_session_most_recent_returns_null_when_no_sessions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1000,6 +1018,30 @@ async def test_session_pin_persists_and_shows_up_in_the_list(tmp_path: Path, mon
     assert reloaded is not None and "pinned" not in reloaded.metadata
 
 
+async def test_session_archive_persists_and_filters_the_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_100000_archive1"
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hide this session")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    result = await session_archive({"session_id": session_key, "archived": True})
+    assert result == {"archived": True, "session_key": session_key, "pending": False}
+    assert await session_list({}) == {"sessions": []}
+
+    reloaded = SessionManager(tmp_path).peek(session_key)
+    assert reloaded is not None and reloaded.metadata.get("archived") is True
+
+    result = await session_archive({"session_id": session_key, "archived": False})
+    assert result == {"archived": False, "session_key": session_key, "pending": False}
+    assert [row["id"] for row in (await session_list({}))["sessions"]] == [session_key]
+
+
 async def test_session_title_missing_session_id_returns_early(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1049,6 +1091,32 @@ async def test_session_list_via_dispatcher(tmp_path: Path, monkeypatch: pytest.M
     resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "session.list", "params": {}})
     assert "error" not in resp, f"session.list dispatch failed: {resp}"
     assert "sessions" in resp["result"]
+
+
+async def test_session_archive_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session_key = "tui:20260610_100000_archive2"
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "archive through dispatcher")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    dispatcher = Dispatcher()
+    register_session_methods(dispatcher)
+    response = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session.archive",
+            "params": {"session_id": session_key, "archived": True},
+        }
+    )
+    assert "error" not in response
+    assert response["result"] == {"archived": True, "session_key": session_key, "pending": False}
 
 
 async def test_session_delete_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

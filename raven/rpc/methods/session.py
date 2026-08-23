@@ -10,6 +10,7 @@ fresh-minted key with empty messages for an unknown or absent id.
 ``session.most_recent`` wraps find_most_recent_chat_id("tui").
 ``session.title`` sets or gets the title field in session metadata (lazy —
 title persists on the next save that writes metadata).
+``session.archive`` hides or restores a session through persisted metadata.
 
 Wire shape for session.create/resume: the ``info`` field is the init bundle
 consumed by ``ui-tui/src/components/branding.tsx`` (SessionPanel). Requires
@@ -555,7 +556,9 @@ async def session_list(
     if not isinstance(channels, list) or not channels:
         channels = ["tui"]
     channels = list(dict.fromkeys(channel for channel in channels if isinstance(channel, str) and channel))
-    entries = mgr.list_sessions(channels=channels)
+    entries = [
+        entry for entry in mgr.list_sessions(channels=channels) if not (entry.get("metadata") or {}).get("archived")
+    ]
     entries.sort(key=lambda x: x.get("last_message_at") or x.get("updated_at") or "", reverse=True)
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
@@ -606,7 +609,7 @@ async def session_most_recent(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = _manager_for(agent_loop, config)
-    chat_id = mgr.find_most_recent_chat_id("tui", this_project_only=True)
+    chat_id = mgr.find_most_recent_chat_id("tui", this_project_only=True, include_archived=False)
     session_id = f"tui:{chat_id}" if chat_id else None
     return {"session_id": session_id}
 
@@ -689,6 +692,34 @@ async def session_pin(
             return {"pinned": pinned, "session_key": session_key, "pending": True}
         return {"pinned": pinned, "session_key": session_key, "pending": False}
     return {"pinned": pinned, "session_key": session_key, "pending": True}
+
+
+async def session_archive(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.archive`` — hide or restore a session in ``session.list``."""
+    session_key = params.get("session_id", "")
+    archived = bool(params.get("archived"))
+    if not session_key:
+        return {"archived": archived, "session_key": "", "pending": False}
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    mgr = _manager_for(agent_loop, config)
+    session = mgr.get_or_create(session_key)
+    if archived:
+        session.metadata["archived"] = True
+    else:
+        session.metadata.pop("archived", None)
+    if mgr.exists(session_key):
+        try:
+            mgr.save(session)
+        except Exception:
+            logger.warning("session.archive: failed to persist archive state for {}", session_key)
+            return {"archived": archived, "session_key": session_key, "pending": True}
+        return {"archived": archived, "session_key": session_key, "pending": False}
+    return {"archived": archived, "session_key": session_key, "pending": True}
 
 
 async def session_clear(
@@ -966,6 +997,9 @@ def register_session_methods(
     async def _pin(params: dict) -> dict:
         return await session_pin(params, agent_loop_factory=agent_loop_factory)
 
+    async def _archive(params: dict) -> dict:
+        return await session_archive(params, agent_loop_factory=agent_loop_factory)
+
     async def _clear(params: dict) -> dict:
         return await session_clear(params, agent_loop_factory=agent_loop_factory)
 
@@ -989,6 +1023,7 @@ def register_session_methods(
     dispatcher.register("session.most_recent", _most_recent)
     dispatcher.register("session.title", _title)
     dispatcher.register("session.pin", _pin)
+    dispatcher.register("session.archive", _archive)
     dispatcher.register("session.clear", _clear)
     dispatcher.register("session.undo", _undo)
     dispatcher.register("session.compress", _compress)
@@ -1005,6 +1040,7 @@ __all__ = [
     "session_delete",
     "session_most_recent",
     "session_pin",
+    "session_archive",
     "session_title",
     "session_clear",
     "session_undo",
