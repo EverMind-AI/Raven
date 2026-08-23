@@ -89,19 +89,6 @@ function dropDraft(id) {
   draftsWrite(all);
 }
 
-/* ══ toasts ═══════════════════════════════════════════════════════ */
-function toast(text, action) {
-  const t = mk('div', 'toast');
-  t.appendChild(mk('span', 't', text));
-  if (action) {
-    const b = mk('button', null, action.label);
-    b.onclick = () => { action.fn(); t.remove(); };
-    t.appendChild(b);
-  }
-  $('#toasts').appendChild(t);
-  setTimeout(() => t.remove(), action ? 5200 : 2600);
-}
-
 /* ══ confirm dialog ═══════════════════════════════════════════════ */
 let cfFn = null;
 function confirmAsk(title, body, label, fn) {
@@ -179,23 +166,9 @@ document.addEventListener('contextmenu', (e) => {
   }
 });
 
-function menuAt(x, y, items) {
-  const m = $('#menu'); m.innerHTML = '';
-  items.forEach((it) => {
-    if (it === '-') { m.appendChild(mk('hr')); return; }
-    const b = mk('button', it.bad ? 'bad' : null, it.label);
-    b.onclick = () => { m.dataset.open = 'false'; it.fn(); };
-    m.appendChild(b);
-  });
-  m.dataset.open = 'true';
-  const r = m.getBoundingClientRect();
-  m.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
-  m.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
-}
 /* The 更多 group is rail navigation, not a popover: it folds on its own
    toggle only, never on an outside click. */
 document.addEventListener('pointerdown', (e) => {
-  if (!e.target.closest('#menu')) $('#menu').dataset.open = 'false';
   if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
 }, true);
 
