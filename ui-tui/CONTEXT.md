@@ -62,11 +62,11 @@ actually run, adding one from a preset, enabling, testing and deleting; opened w
 not-installed entry at the foot of the roster, which opens a list of its own. An un-added
 preset there is read-only, since there is nothing to configure until the binary exists; a
 configured agent whose binary went missing keeps every action, so a broken one can still
-be edited or removed. Only cli rows are filed that way - an openai row is placed on
-whether it was saved, so a preset needing just an api key stays directly addable. It edits
-`~/.raven/config.json` and hot-applies the result, so it changes what the model may
-dispatch to. Not to be confused with the Agents Overlay, which shows live delegation state
-and writes nothing.
+be edited or removed. Every kind that launches a command is filed that way - `cli` and
+`acp` alike - while an openai row is placed on whether it was saved, so a preset needing
+just an api key stays directly addable. It edits `~/.raven/config.json` and hot-applies
+the result, so it changes what the model may dispatch to. Not to be confused with the
+Agents Overlay, which shows live delegation state and writes nothing.
 
 **Direct Chat** (`ui-tui/src/app/directChatStore.ts`):
 The mode in which the chat view is taken over by one sub-agent instance's own

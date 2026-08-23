@@ -34,10 +34,11 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * sizes in `flat`'s order (installed, then not-installed, then presets),
  * which both the selection math and the section headers key off.
  *
- * `uninstalled` is a cli-only section, keyed on `group` rather than on whether
- * an entry was saved: a cli row with no binary belongs there whether or not it
- * was configured, because nothing can make it run from this overlay and
- * offering it under presets only invites a failed add.
+ * `uninstalled` is keyed on `group` rather than on whether an entry was saved:
+ * a row whose launch command is not on PATH belongs there whether or not it was
+ * configured, because nothing can make it run from this overlay and offering it
+ * under presets only invites a failed add. It holds both of the kinds that have
+ * a command to find -- `cli` and `acp`.
  *
  * A `builtin` row is raven's own in-process agent. It is `configured: false`
  * (not writing a row is how "use the package's default" is spelled) and it is
@@ -60,7 +61,8 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  */
 export function flattenSubagentRows(rows: SubagentRow[]): FlattenedSubagentRows {
   // A built-in agent is this process; an openai row always has an endpoint to
-  // reach. So only a cli row can be missing the thing it runs.
+  // reach. Every other kind launches a command that may not be there, so the
+  // test is the probe-derived `group`, not the kind.
   const isBuiltin = (r: SubagentRow) => r.kind === 'builtin'
   const hasSomethingToRun = (r: SubagentRow) => isBuiltin(r) || r.kind === 'openai' || r.group === 'installed'
   const installed = rows.filter(r => (r.configured || isBuiltin(r)) && hasSomethingToRun(r))
@@ -90,14 +92,18 @@ export interface FlattenedSubagentRows {
  *  shown, everything else (enabled, test_running, last_test_*, ...) comes
  *  from the fresh response.
  *
- *  `group` needs the same treatment, but only for a `cli` row: the backend
- *  derives a cli row's group from `probe_status`, so `probe: false` legitimately
- *  reports every cli row as `uninstalled` -- carrying the prior group forward
- *  keeps an installed agent from visibly relocating to NOT INSTALLED on every
- *  mutation. An `openai` row's group is derived from whether a key is set,
- *  which needs no probe and is always fresh -- carrying the prior group
- *  forward there would keep it reading uninstalled right after the user
- *  pastes a key, so it always takes the fresh value.
+ *  `group` needs the same treatment, for every kind whose group the backend
+ *  derives from `probe_status` -- which is every kind it does not derive some
+ *  other way. `probe: false` legitimately reports all of those as
+ *  `uninstalled`, and carrying the prior group forward keeps an installed
+ *  agent from visibly relocating to NOT INSTALLED on every mutation. The two
+ *  exceptions take the fresh value because it is never stale: an `openai`
+ *  row's group comes from whether a key is set, so carrying it forward would
+ *  keep the row reading uninstalled right after the user pastes a key, and a
+ *  `builtin` row's group is a constant. Keyed on that split rather than on
+ *  the probe-derived kinds by name, so a kind added to `_group`'s fallthrough
+ *  branch is covered here the day it lands -- naming them is what let `acp`
+ *  relocate three configured agents on every toggle.
  *
  *  `renamed` covers `subagents.update` with a `new_name`: the fresh row is
  *  keyed by the new name, which has no prior entry, so the caller (the only
@@ -119,8 +125,9 @@ export function mergeProbeColumns(
     }
 
     const probed = { ...row, probe_detail: prior.probe_detail, probe_status: prior.probe_status }
+    const groupFromProbe = row.kind !== 'openai' && row.kind !== 'builtin'
 
-    return row.kind === 'cli' && row.probe_status === 'unknown' ? { ...probed, group: prior.group } : probed
+    return groupFromProbe && row.probe_status === 'unknown' ? { ...probed, group: prior.group } : probed
   })
 }
 

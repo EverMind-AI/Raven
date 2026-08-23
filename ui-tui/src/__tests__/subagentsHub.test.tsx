@@ -182,6 +182,27 @@ const OPENAI_CONFIGURED_ROW: SubagentRow = {
   test_running: false
 }
 
+// A configured kind: 'acp' row, probed ready -- the live shape of every
+// preset reached over ACP (claude_code, codex, opencode). Its group is
+// probe-derived exactly like a cli row's, which is what the merge rule and
+// the section rules both have to hold for.
+const ACP_ROW: SubagentRow = {
+  configured: true,
+  description: 'claude code over acp',
+  enabled: true,
+  group: 'installed',
+  has_api_key: false,
+  kind: 'acp',
+  last_test_at_ms: undefined,
+  last_test_detail: undefined,
+  last_test_ok: undefined,
+  name: 'AcpCoder',
+  preset: 'claude_code',
+  probe_detail: 'installed at /usr/bin/claude',
+  probe_status: 'ready',
+  test_running: false
+}
+
 interface Harness {
   // frame()'s `output` is an append-only concatenation of every byte ink
   // ever wrote (ink's cell-diffing can skip re-emitting a cell whose content
@@ -777,6 +798,36 @@ describe('SubagentsHub', () => {
           : { rows: [{ ...CODER_ROW, group: 'uninstalled', probe_detail: '', probe_status: 'unknown' }] }
       },
       rows: [CODER_ROW]
+    })
+    await waitForFrame(h, 'INSTALLED')
+
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+    await delay(90)
+
+    const frame = h.frame()
+    expect(frame).toContain('INSTALLED')
+    expect(frame).not.toContain('NOT INSTALLED')
+
+    h.unmount()
+  })
+
+  // The same regression at the consumer rather than at the merge: the section
+  // an acp row lands in is what the user actually sees move, and it is reached
+  // through `flattenSubagentRows`, which is the only reader of `group`. The
+  // cli case above and the merge-level cases below both pass while this one
+  // fails, which is exactly how the acp kind slipped through.
+  it('an acp row does not relocate to NOT INSTALLED after a mutation refresh reports it as unknown/uninstalled', async () => {
+    let listCalls = 0
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : { rows: [{ ...ACP_ROW, group: 'uninstalled', probe_detail: '', probe_status: 'unknown' }] }
+      },
+      rows: [ACP_ROW]
     })
     await waitForFrame(h, 'INSTALLED')
 
@@ -1452,6 +1503,20 @@ describe('mergeProbeColumns', () => {
 
     expect(merged?.probe_status).toBe('ready')
     expect(merged?.probe_detail).toBe(CODER_ROW.probe_detail)
+    expect(merged?.group).toBe('installed')
+  })
+
+  // Regression: the carry-forward was keyed on `kind === 'cli'`, but the
+  // backend derives an acp row's group from the probe too (`_group` sends
+  // every kind but builtin/openai down that branch). So a probe:false
+  // refresh reported every configured acp agent as uninstalled and the
+  // roster relocated it to NOT INSTALLED on any toggle.
+  it('carries the prior group forward for an acp row too, whose group is probe-derived as well', () => {
+    const prior: SubagentRow = { ...ACP_ROW, group: 'installed', probe_status: 'ready' }
+    const fresh: SubagentRow = { ...ACP_ROW, group: 'uninstalled', probe_detail: '', probe_status: 'unknown' }
+
+    const [merged] = mergeProbeColumns([prior], [fresh])
+
     expect(merged?.group).toBe('installed')
   })
 
