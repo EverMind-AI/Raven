@@ -57,7 +57,13 @@ export function toInstanceCtx(turns: DirectTurn[] | undefined, status?: string):
     messages: rows.map((r) => ({
       role: r.role,
       text: r.content,
-      timestamp: r.at_ms,
+      /* Only a clock that exists. `at_ms` is 0 for a row nothing stamped -- a
+         step read off a transport's own transcript, or the question of a turn
+         still running -- and 0 is a perfectly valid instant, so handing it over
+         printed "1970-01-01 08:00" under the message. Left out, `stamp` gets
+         undefined, reads it as an invalid date and prints nothing, which is
+         what "nobody recorded when" should look like. */
+      ...(r.at_ms > 0 ? { timestamp: r.at_ms } : {}),
       ...(r.tool_call_id ? { tool_call_id: r.tool_call_id } : {}),
       ...(r.reasoning_content ? { reasoning_content: r.reasoning_content } : {}),
       ...(r.tool_calls

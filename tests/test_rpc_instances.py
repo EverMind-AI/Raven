@@ -1138,3 +1138,44 @@ async def test_forgetting_a_lone_spawn_is_unchanged(_isolated_registry: Any) -> 
 
     assert await instances_forget({"session_key": "s1", "agent": "hermes", "handle": "lone"}) == {"removed": True}
     assert _isolated_registry.list_instances("s1") == []
+
+
+async def test_the_question_of_a_running_turn_is_dated(tmp_path: Path) -> None:
+    """A reader watching a turn sees the question before the turn lands, and it
+    has to carry a clock: unstamped, ``_ms_of`` reports 0 -- a valid instant --
+    and the page dated a question just asked to 1970-01-01. The run's own start
+    is the one instant that is true and does not move between polls."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h"), prompt="在吗") as run:
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["content"] for t in out["turns"]] == ["在吗"]
+    assert out["turns"][0]["at_ms"] == run.started_at_ms
+
+
+async def test_a_running_turns_steps_are_left_unstamped(tmp_path: Path) -> None:
+    """The start is the turn's, not each step's. A transport publishes its
+    transcript with no clock on the rows, and inventing one per row would move
+    on every poll -- so they carry none and the client draws none."""
+    from raven.agent.subagent import activity
+
+    session_dir = tmp_path / "sessions" / "s1"
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+
+    with activity.collecting(instance=("s1", "A", "h"), prompt="在吗"):
+        activity.note_transcript([{"role": "assistant", "content": "", "reasoning_content": "想一下"}])
+        out = await instances_history(
+            {"session_key": "s1", "agent": "A", "handle": "h"},
+            agent_loop_factory=_factory(_FakeLoop(manager)),
+        )
+
+    assert [t["at_ms"] > 0 for t in out["turns"]] == [True, False]
