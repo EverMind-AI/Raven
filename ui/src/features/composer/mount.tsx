@@ -84,6 +84,12 @@ export function drawQueue(): void {
   store.drawQueue()
 }
 
+export const queuePush = (text: string): void => store.queuePush(text)
+export const queueShift = (): string | undefined => store.queueShift()
+export const queueClear = (): void => store.queueClear()
+export const queueSnapshot = (): string[] => store.queueSnapshot()
+export const queueRestore = (items: string[]): void => store.queueRestore(items)
+
 export function drawMeter(): void {
   ensure()
   store.drawMeter()

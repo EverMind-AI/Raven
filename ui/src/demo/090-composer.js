@@ -10,7 +10,6 @@
 const ta = $('#ta');
 
 function goState() { RavenIslands.composer.goPaint(); }
-function drawQ() { RavenIslands.composer.drawQueue(); }
 function drawMeter() { RavenIslands.composer.drawMeter(); }
 function taFit() { RavenIslands.composer.fitField(); }
 function dockLift() { RavenIslands.composer.dockLift(); }
@@ -35,14 +34,12 @@ const SLASH = [
     }) }
 ];
 
-/* The fixture half of DS.composer. `busy` and `queue` are closures over the
-   page globals the turn machine owns, never snapshots -- the island reads them
-   at paint time exactly as the renderer it replaces did. Live mode installs
-   its own meter wording and the upload transport over this. */
+/* The fixture half of DS.composer. `busy` is a closure over the page global
+   the turn machine owns, never a snapshot. Live mode installs its own meter
+   wording and the upload transport over this. */
 DS.composer ??= {
   busy: () => busy,
   cancellable: () => busyCancellable,
-  queue: () => q,
   meter: () => (busy ? T('gui.meter.running')
     : use ? T('gui.meter.usage', { calls: use.calls, in: (use.in / 1000).toFixed(1), out: (use.out / 1000).toFixed(1) })
     : ''),
@@ -55,7 +52,7 @@ DS.composer ??= {
 const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.test(s) ? RUNS.fix : RUNS.gtm;
 
 function send(text) {
-  if (busy) { q.push(text); drawQ(); toast('已排队，本轮结束后发出'); return; }
+  if (busy) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
   busy = true; use = null;

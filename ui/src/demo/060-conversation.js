@@ -5,13 +5,13 @@ function openSession(s) {
   // row goes back to carrying its timestamp.
   if (s.status === 'done') s.status = null;
   markNewCurrent();
-  stop_(); busy = false; q = []; use = null;
+  stop_(); busy = false; queueClear(); use = null;
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);
   $('#stage').innerHTML = '';
   $('#flash').textContent = '';
-  drawQ(); drawMeter(); goState(); drawBanner();
+  drawMeter(); goState(); drawBanner();
   if (s.run) {
     const r = RUNS[s.run];
     use = r.use;
@@ -102,4 +102,3 @@ function noteRow(label, detail, opts) {
   return RavenIslands.transcript.note(label, detail,
     { quiet: !!o.quiet, retry: typeof o.retry === 'function' ? o.retry : null });
 }
-

@@ -267,7 +267,8 @@ function finishTurn(usage) {
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || live.say.trim().slice(0, 80));
   resetTurnState();
   drawMeter(); goState(); drawList(); down();
-  if (q.length) { const nx = q.shift(); drawQ(); liveSend(nx); }
+  const nx = queueShift();
+  if (nx !== undefined) liveSend(nx);
 }
 
 /* The session's title IS the user's first message (first line, capped) — set

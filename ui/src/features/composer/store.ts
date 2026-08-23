@@ -8,14 +8,15 @@ import type { Shell } from '../../shell/bridge'
  * drains into `send`, a session switch resets everything), so the state lives
  * here where the shims can reach it and the views subscribe.
  *
- * What is NOT here: `busy`, `q`, `use`. Those are page globals many files
- * write, read back through DS.composer at paint time -- the same rule the rail
- * and the transcript follow. What the island owns outright is the staged
- * attachments, the palette's selection, and the live turn row's clock.
+ * What is NOT here: `busy` and `use`. Those remain page globals the turn
+ * machine writes and DS.composer exposes at paint time. The queue is composer
+ * state: every path that adds, drains, clears, parks, or restores it goes
+ * through this store, so queue ownership and queue rendering cannot diverge.
  */
 
 export interface ComposerState {
   atts: Attachment[]
+  queue: string[]
   /* The queue row being edited, by index, or null. The text itself stays in
      the uncontrolled input until it is committed, exactly as before: a store
      write per keystroke would repaint the row the reader is typing in. */
@@ -33,7 +34,8 @@ export interface ComposerState {
 }
 
 const initial: ComposerState = {
-  atts: [], editing: null, slashOpen: false, slashRows: [], slashSel: 0, live: false, tick: 0, v: 0,
+  atts: [], queue: [], editing: null, slashOpen: false, slashRows: [], slashSel: 0,
+  live: false, tick: 0, v: 0,
 }
 
 let state: ComposerState = { ...initial }
@@ -174,7 +176,28 @@ export function wheeled(up: boolean): void {
 
 /* ── the queue ────────────────────────────────────────────────────────── */
 
-export const queue = (): string[] => source().queue()
+export const queue = (): string[] => state.queue
+
+export function queuePush(text: string): void {
+  set({ queue: [...state.queue, text], editing: null })
+}
+
+export function queueShift(): string | undefined {
+  if (!state.queue.length) return undefined
+  const [first, ...rest] = state.queue
+  set({ queue: rest, editing: null })
+  return first
+}
+
+export function queueClear(): void {
+  set({ queue: [], editing: null })
+}
+
+export const queueSnapshot = (): string[] => [...state.queue]
+
+export function queueRestore(items: string[]): void {
+  set({ queue: [...items], editing: null })
+}
 
 export function drawQueue(): void {
   set({ editing: null })
@@ -185,9 +208,9 @@ export function editRow(i: number): void {
 }
 
 export function commitRow(i: number, text: string): void {
-  const q = queue()
-  if (text.trim()) q[i] = text.trim()
-  set({ editing: null })
+  const next = [...state.queue]
+  if (text.trim()) next[i] = text.trim()
+  set({ queue: next, editing: null })
 }
 
 export function cancelRow(): void {
@@ -195,8 +218,7 @@ export function cancelRow(): void {
 }
 
 export function removeRow(i: number): void {
-  queue().splice(i, 1)
-  set({ editing: null })
+  set({ queue: state.queue.filter((_, n) => n !== i), editing: null })
 }
 
 /* ── the meter and the live turn row ──────────────────────────────────── */

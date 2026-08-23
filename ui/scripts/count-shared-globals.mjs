@@ -34,8 +34,8 @@
 //      four live files and were not counted.
 //   2. Only the FIRST assignment on a line was read. live/060-parked.js:59 is
 //      `busy = pk.busy; use = pk.use; tl = pk.tl; raw = pk.raw; lastRun =
-//      pk.lastRun; q = pk.q;` -- six writes, one seen. All six are counted now,
-//      the last two only because of hole 5.
+//      pk.lastRun; q = pk.q;` -- six writes, one seen. All six were counted
+//      once fixed; `q` has since moved into the composer store.
 //   3. Deleting a demo declaration removed a live write from the count while
 //      the write stayed. That is case (b): `drawBanner` lost its declaration
 //      when the banner moved into the island bundle, and live/120-settings.js
@@ -84,8 +84,8 @@
 // inside a function is not, and reading the layer as one string let one file's
 // local silence another file's write to a demo global of the same name. `q`
 // (live/070-notify.js) and `raw` (live/090-extensions.js) are locals that were
-// hiding the writes to the demo's `q` and `raw` at live/060-parked.js:59, which
-// is the very line hole 2 is about. Per-file is still coarser than lexical
+// hiding the writes to the demo's `q` and `raw` at the old parked-turn restore,
+// which is the very line hole 2 was about. Per-file is still coarser than lexical
 // scope -- two functions in one file share a namespace here -- so it is a floor
 // on the true number, not the true number.
 //
@@ -95,8 +95,8 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const EXPECTED = 11
-const EXPECTED_HELD = 6
+const EXPECTED = 10
+const EXPECTED_HELD = 5
 const EXPECTED_VERBS = 59
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')

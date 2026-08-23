@@ -1,5 +1,5 @@
 /* ══ app state ════════════════════════════════════════════════════ */
-let cur = 'a', busy = false, timers = [], q = [], use = null;
+let cur = 'a', busy = false, timers = [], use = null;
 /* Whether the busy turn can be stopped by the reader. A USER turn can
    (turn.send registered its handle); a runtime turn -- a delegated result
    re-entering -- cannot, because turn.cancel only resolves handles turn.send
@@ -114,7 +114,8 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    parts are an IIFE nested in this script, and the four of them that raise or
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-  approveSheet, clarifySheet } = RavenIslands.composer;
+  approveSheet, clarifySheet, drawQueue: queueDraw, queuePush, queueShift,
+  queueClear, queueSnapshot, queueRestore } = RavenIslands.composer;
 /* Bound at the shared top level because the live parts run in the IIFE nested
    below it. The writers themselves stay in the modern bundle. */
 const { failureBar, bootError, upShade } = RavenIslands.chrome;
