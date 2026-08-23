@@ -167,7 +167,9 @@ export function history(messages: HistoryMessage[]): void {
   store.history(mainLane(), messages)
 }
 
-export function delivered(p: { label: string; isDag: boolean; err: boolean; open: () => void }): void {
+export function delivered(p: {
+  label: string; isDag: boolean; err: boolean; open: () => void; body?: string
+}): void {
   store.delivered(mainLane(), p)
 }
 

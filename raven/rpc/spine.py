@@ -229,6 +229,31 @@ class RpcOutlet:
         # when the caller wired none (every turn is then the main agent's).
         self._direct_targets = direct_targets if direct_targets is not None else {}
 
+    async def emit_boundary(
+        self,
+        conversation_id: str | None,
+        turn_id: str,
+        delegated: dict[str, str] | None = None,
+        content: str | None = None,
+    ) -> None:
+        """A turn the runtime opened has begun: the client's live bookkeeping
+        boundary, and the delivery row that belongs at this moment.
+
+        ``message.start`` is owned by ``turn.send``, so the spine emits this
+        instead for a SUBAGENT turn -- one wire event, one meaning: the turn
+        counter advances here, the client enters the busy state (this turn is
+        running, so a queued send must wait), and the delivery row is drawn --
+        this is the moment the delegated result is actually visible, not the
+        moment it was submitted. A stored delegated user entry draws the same
+        row on replay, so the two views stay in step."""
+        cid = self._subscription(conversation_id)
+        if cid:
+            payload = {"turn_id": turn_id}
+            if delegated:
+                payload["delegated"] = {**delegated, **({"content": content} if content else {})}
+            payload = self._tagged(payload, cid)
+            await self._emitter.emit(cid, {"type": "turn.started", "payload": payload})
+
     @staticmethod
     def _subscription(conversation_id: str | None) -> str | None:
         """The subscription an event on this lane belongs to.
@@ -452,7 +477,20 @@ def _make_rpc_sink(
                 )
             return
         if isinstance(event, TurnStarted):
-            # message.start is emitted by turn.send (it owns the turn_id).
+            if event.origin is Origin.SUBAGENT and event.delegated:
+                # A turn the runtime opened (a delegated result re-entering the
+                # conversation) gets NO message.start -- that event belongs to
+                # turn.send. The delegated identity is the gate: another
+                # SUBAGENT shape, deep research's deliver_text turn, persists
+                # only an assistant entry -- no user entry opens this turn on
+                # reload, so emitting a live boundary here would advance the
+                # workspace counter in a way the stored history does not. But the client's live bookkeeping advances one
+                # workspace turn per user message, and a stored delegated entry
+                # counts as one on replay; without a live boundary the two stop
+                # agreeing, and the files a delegated reaction writes land under
+                # its parent's turn. This event is that boundary: it advances
+                # the counter without drawing anything.
+                await outlet.emit_boundary(event.conversation_id, event.turn_id, event.delegated, event.content)
             return
         await hub.dispatch(event)
 

@@ -924,10 +924,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    like a tool row (this is plumbing, not an answer), but distinct from one --
    the return arrow and the amber-tinted name say something came BACK, and the
    reply right under it is that something retold. */
-.sdlv {
-  display: flex; align-items: center; gap: 7px; min-width: 0;
-  margin: 10px 0 2px; font-size: 11.5px; color: var(--faint);
-}
+.sdlv { margin: 10px 0 2px; min-width: 0; font-size: 11.5px; color: var(--faint); }
+.sdlv .sdhd { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--amber); }
 .sdlv .nm {
   font-family: var(--mono); font-size: 11px; color: var(--muted);
@@ -938,6 +936,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sdlv.err .ic { stroke: var(--clay); }
 .sdlv.err .tx { color: var(--clay); }
+/* What came back, folded. It is the sub-agent's words, not Raven's, so it is
+   set apart from the answer below it by a rule rather than a card: a card would
+   compete with the retelling the reader is meant to read first. */
+.sdlv .sdcv {
+  display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto;
+  color: var(--faint); padding: 1px 5px; border-radius: 6px; cursor: pointer;
+}
+.sdlv .sdcv:hover { color: var(--muted); background: var(--surface); }
+.sdlv .sdcv .lb { font-family: var(--mono); font-size: 10.5px; }
+.sdlv .sdcv .cv { width: 11px; height: 11px; transition: transform .15s; }
+.sdlv.open .sdcv .cv { transform: rotate(90deg); }
+.sdlv .sdbd {
+  margin: 6px 0 4px; padding: 0 0 0 11px; border-left: 1px solid var(--line);
+  min-width: 0; overflow-x: auto;
+}
+.sdlv .sdbd .prose { font-size: 13px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
 
 /* ── the turn's products ──────────────────────────────────────────────
    The closing line of a turn that wrote files: one tile per file, showing

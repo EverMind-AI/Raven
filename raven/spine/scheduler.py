@@ -383,7 +383,15 @@ class Lane:
         outcome: TurnOutcome | None = None
         try:
             async with self._pools.for_request(req):
-                await self._sink(TurnStarted(conversation_id=self._conversation_id, turn_id=turn_id))
+                await self._sink(
+                    TurnStarted(
+                        origin=req.origin,
+                        delegated=req.delegated,
+                        content=req.text,
+                        conversation_id=self._conversation_id,
+                        turn_id=turn_id,
+                    )
+                )
                 run_start = time.monotonic()
                 outcome = await self._runner.run(req, self._make_emit(req), drain)
         except asyncio.CancelledError:

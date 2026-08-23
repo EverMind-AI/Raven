@@ -214,6 +214,7 @@ export interface TranscriptMessage {
    * Present on the user entry of a turn the runtime opened, naming what opened it (`subagent`, `cron`, `sentinel`, `heartbeat`). Absent means a person typed it. Same rule as `notice`, one role over: the model reads `text`, a reader must not -- a sub-agent's announce carries an untrusted fence, an instance handle and an instruction not to repeat either to the user, and a cron reminder carries how to word the reply.
    */
   origin?: string;
+  delegated?: TranscriptDelegated;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -252,6 +253,21 @@ export interface TranscriptNotice {
    */
   kind: string;
   detail?: string;
+}
+/**
+ * Which delegated run re-entered the conversation at this entry. The same identity `subagent.delivered` carries, so a replayed transcript and a live stream draw the same row from the same fields.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TranscriptDelegated".
+ */
+export interface TranscriptDelegated {
+  kind: 'spawn' | 'dag';
+  label: string;
+  status: 'ok' | 'error';
+  /**
+   * Set for kind=dag, so a client can open the run.
+   */
+  run_id?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1065,6 +1081,32 @@ export interface CommandsCatalogResponse {
   warning?: string;
 }
 /**
+ * A turn the runtime opened (a delegated result re-entering the conversation) has begun. `turn.send` owns `message.start`, and the spine suppresses it for these turns, so this event is the client's only live signal that a new turn started. It advances the client's live turn bookkeeping (the workspace record's turn number, which the artifact bar reads), enters the busy state, and -- when `delegated` is present -- carries the delivery identity AND the injected text, so the delivery row is drawn at the moment the result is actually visible (its turn started), not when it was submitted. A stored delegated user entry draws the same row on replay, which is what keeps the two views in step.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TurnStartedEvent".
+ */
+export interface TurnStartedEvent {
+  type: 'turn.started';
+  payload: {
+    turn_id: string;
+    delegated?: {
+      kind: 'spawn' | 'dag';
+      label: string;
+      status: 'ok' | 'error';
+      run_id?: string;
+      /**
+       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
+       */
+      content?: string;
+    };
+    target?: {
+      instance: string;
+      handle: string;
+    };
+  };
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "MessageStartEvent".
  */
@@ -1234,7 +1276,7 @@ export interface CronMissedEvent {
   };
 }
 /**
- * A delegated run's result re-entered its conversation here. The injection itself is invisible on the wire -- the next frame a client sees is an assistant turn nobody visibly asked. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back.
+ * A delegated run's result re-entered its conversation here. Emitted just after the result is submitted to the main loop, so a client can mark the seam where the sub-agent's answer came back. The turn it opens is submitted through the spine, which emits no `message.start`, so this event is the only live signal that it happened -- and a client REPLAYING the session later reads the same identity off the stored user entry's `delegated` field, which is what keeps the two views agreeing.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SubagentDeliveredEvent".
@@ -1252,6 +1294,10 @@ export interface SubagentDeliveredEvent {
      * Set for kind=dag, so a client can open the run.
      */
     run_id?: string;
+    /**
+     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     */
+    content?: string;
   };
 }
 /**

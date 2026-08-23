@@ -890,8 +890,14 @@ Result:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls."""
 
         assert self._submit is not None
-        self._inject(announce_content, origin)
-        self._emit_delivered(origin, {"kind": "spawn", "label": label, "status": status})
+        mark = {"kind": "spawn", "label": label, "status": status}
+        self._inject(announce_content, origin, mark)
+        # `content` is the text that was injected, verbatim. A client draws the
+        # reader-facing part of it by dropping everything outside the untrusted
+        # fence -- and a client REPLAYING this turn later reads the same string
+        # from the stored entry, so both run one rule over one input and cannot
+        # disagree about what was delivered.
+        self._emit_delivered(origin, {**mark, "content": announce_content})
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
     async def announce_dag_result(self, run_id: str, summary: str, origin: dict[str, str]) -> None:
@@ -915,13 +921,15 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep techn
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
-        self._inject(wrap_untrusted(summary, source="subagent"), origin)
+        injected = wrap_untrusted(summary, source="subagent")
+        mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
+        self._inject(injected, origin, mark)
         # The graph's own tally names the outcome; "ok" here only means the run
         # came back at all, and the marker's job is placement, not verdict.
-        self._emit_delivered(origin, {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id})
+        self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] announced result to {}", run_id, origin["session_key"])
 
-    def _inject(self, content: str, origin: dict[str, str]) -> None:
+    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> None:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
         The spine path routes by conversation (= originating session) with
@@ -942,6 +950,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Keep techn
                 ),
                 text=content,
                 conversation=origin["session_key"],
+                delegated=delegated,
             )
         )
 

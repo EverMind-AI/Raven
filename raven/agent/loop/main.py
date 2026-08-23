@@ -269,6 +269,16 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
+# Marks the stored user entry of a turn that is a delegated result coming back,
+# not something a person sent. Renamed to ``delegated`` at the save gate for the
+# same reason ``_notice`` is: the private spelling keeps it out of the provider
+# payload, the plain one is what session.resume puts on the wire. Without it a
+# reload has no way to tell this entry from a question and draws it as one --
+# prompt-injection fence and all -- while a client watching live draws the
+# delivery row. Unlike ``_attached_image`` this entry IS persisted: the model
+# reads the result on its next turn. Only the reader must not read it as prose.
+_DELEGATED_KEY = "_delegated"
+
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
@@ -3695,6 +3705,10 @@ class AgentLoop:
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
+        # The assembled list ends with THIS turn's user message, which is the
+        # entry the mark belongs on.
+        if req.delegated and initial_messages:
+            initial_messages[-1][_DELEGATED_KEY] = dict(req.delegated)
         # The stream buffers exist so a turn that dies mid-answer still has the
         # text that was already on the reader's screen: the loop only appends an
         # assistant message once the provider call returns, so a cancel in the
@@ -3956,6 +3970,13 @@ class AgentLoop:
                 continue  # skip empty assistant messages — they poison session context
             if turn_origin := entry.pop(_ORIGIN_KEY, None):
                 entry["origin"] = turn_origin
+            if delegated := entry.pop(_DELEGATED_KEY, None):
+                # Same rename as the origin below, for the same reason: without
+                # it a reload draws a delegated result as a question the user
+                # asked, fence and all. The origin says WHO opened the turn;
+                # the delegated identity says WHICH run came back, so the two
+                # coexist.
+                entry["delegated"] = delegated
             if notice := entry.pop(_NOTICE_KEY, None):
                 # Same rename as the diff below, for the same reason. Without
                 # it a reload draws this runtime prose as the model's answer,

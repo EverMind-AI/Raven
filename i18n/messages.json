@@ -499,6 +499,14 @@
       "en": "finished; its result just joined this conversation",
       "zh": "已完成，结果已注入本轮对话"
     },
+    "gui.deleg.body": {
+      "en": "what came back",
+      "zh": "交付内容"
+    },
+    "gui.deleg.body_aria": {
+      "en": "Show what the delegated run delivered",
+      "zh": "展开子智能体交付的内容"
+    },
     "gui.deleg.delivered_err": {
       "en": "failed; the error just joined this conversation",
       "zh": "运行失败，失败详情已注入本轮对话"

@@ -367,8 +367,59 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
   } satisfies QaData)
 }
 
-export function delivered(lane: Lane, p: { label: string; isDag: boolean; err: boolean; open: () => void }): void {
-  push(lane, { v: 0, id: nextId(), kind: 'sdlv', ...p } satisfies DeliveredData)
+/* What a delegated result looks like to a reader: the text from INSIDE the
+   untrusted fence, and nothing else.
+
+   One rule, and it is the fence's own contract rather than a guess about the
+   prose around it. A spawn's injection wraps the result in framing the model
+   was given ("Task: ...", "Summarize this naturally...") and that framing sits
+   OUTSIDE the fence, so it drops out; a dag's injection is the fence and
+   nothing else, so all of it stays. The live path runs this over the event's
+   `content` and the replay path over the stored entry's `text` -- the same
+   string in both cases, which is why the two views cannot disagree about what
+   was delivered.
+
+   No markers at all means nothing was fenced (wrap_untrusted returns blank
+   content unchanged): fall back to every line that is not a marker, which is
+   what the tool-preview cleaner does with the same input. */
+export function delivered(lane: Lane, p: {
+  label: string; isDag: boolean; err: boolean; open: () => void; body?: string
+}): void {
+  push(lane, {
+    v: 0, id: nextId(), kind: 'sdlv',
+    label: p.label, isDag: p.isDag, err: p.err, open: p.open,
+    body: defence(p.body || ''), shown: false,
+  } satisfies DeliveredData)
+}
+
+const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+const FENCE_CLOSE = /^\s*\[END UNTRUSTED ([^ #]+) #([^ ]+) /
+
+/* A forged close marker must not end the fence. wrap_untrusted tags both ends
+   with a per-call nonce for exactly that reason: the fence ends only at the
+   line whose source AND nonce match the opening line's. Anything else --
+   including a close-shaped line with a different tag -- is content, and if the
+   genuine close never appears the whole rest is content too. */
+export function defence(text: string): string {
+  const lines = String(text || '').split('\n')
+  const start = lines.findIndex((l) => FENCE_OPEN.test(l))
+  if (start < 0) {
+    return lines.filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
+  }
+  const m = FENCE_OPEN.exec(lines[start] || '')
+  const tag = m ? `${m[1]} #${m[2]}` : null
+  const rest = lines.slice(start + 1)
+  let end = -1
+  if (tag) {
+    const close = new RegExp(`^\\s*\\[END UNTRUSTED ${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`)
+    end = rest.findIndex((l) => close.test(l))
+  }
+  return (end < 0 ? rest : rest.slice(0, end)).join('\n').trim()
+}
+
+export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
+  seg.shown = !seg.shown
+  bump(lane, seg)
 }
 
 /* The turn's products, as its closing line. Appended once the turn is over and
@@ -1001,17 +1052,43 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
      products. */
   const closeProducts = (): void => { artifacts(lane, turnNo) }
   messages.forEach((m, i) => {
-    if (m.role === 'user' && m.origin) {
-      /* A turn the runtime opened, not a person typing. Its text is internal:
-         a sub-agent's announce carries an untrusted fence, the instance handle
-         and an instruction not to repeat either to the user; a cron reminder
-         carries how to word the reply. Drawn as the delivered row a live view
-         already shows for the same event, which also restores that row on a
-         reload -- it is pushed by `subagent.delivered` and so was absent from
-         every replayed transcript. */
+    if (m.role === 'user' && (m.origin || m.delegated)) {
+      /* A user entry the RUNTIME wrote, not a person typing. Two shapes:
+         - `delegated` (a sub-agent / dag result re-entering): the full
+           delivery identity. It opens a turn like a question does -- the turn
+           bookkeeping below is the same -- and the row a live client draws
+           from the boundary is drawn here off the same identity, so the two
+           views agree.
+         - `origin` alone (a cron reminder, a sentinel notice, a sub-agent
+           announce an older server wrote): no identity to draw, so the row is
+           the quiet marker that a live view showed, and no workspace turn
+           opens -- that bookkeeping belongs to the delegated shape. */
       sealTools()
-      foldClose(msOf(m.timestamp))
-      delivered(lane, { label: m.origin, isDag: false, err: false, open: () => {} })
+      closeTurn(msOf(m.timestamp))
+      const d = m.delegated
+      if (d) {
+        /* Close the PARENT's products before opening this turn -- the same
+           moment a plain question would, so the two branches agree about
+           which turn a file belongs to. */
+        closeProducts()
+        turnNo += 1
+        turnAt = msOf(m.timestamp)
+        const isDag = d.kind === 'dag'
+        delivered(lane, {
+          label: String(d.label || ''),
+          isDag,
+          err: d.status === 'error',
+          body: m.text || '',
+          open: () => {
+            const src = source()
+            if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
+            else src.openSpawn?.('', String(d.label || ''))
+          },
+        })
+      } else {
+        foldClose(msOf(m.timestamp))
+        delivered(lane, { label: String(m.origin || ''), isDag: false, err: false, open: () => {} })
+      }
       return
     }
     if (m.role === 'user' && m.text && m.text.trim()) {

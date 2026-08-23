@@ -70,6 +70,15 @@ class TurnRequest:
     # conversation). Runs through the lane so the session write stays serialized;
     # the model never sees it, so it cannot be rewritten. See AgentLoop.run_turn.
     deliver_text: str | None = None
+    # What re-entered the conversation here, when this turn is a delegated
+    # result coming back rather than something a person sent. Carried so the
+    # STORED user entry can be marked: a reader replaying the session has no
+    # other way to tell a re-injection from a question, and drew it as one --
+    # prompt-injection fence and all -- while a client watching live drew the
+    # delivery row instead. Shape: ``{"kind": "spawn"|"dag", "label": ...,
+    # "status": ..., "run_id": ...}``, the same identity the
+    # ``subagent.delivered`` event carries.
+    delegated: dict[str, str] | None = None
     # Direct sub-agent delivery: when set to ``(agent, handle)`` the turn skips
     # the model and runs against that instance instead, streaming its reply back
     # to this conversation. Runs on that instance's own lane (``direct_lane``),

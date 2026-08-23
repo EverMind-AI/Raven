@@ -82,7 +82,7 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
 export function goPaint(): void {
   const b = el<HTMLButtonElement>('go')
   if (!b) return
-  if (source().busy()) {
+  if (source().busy() && source().cancellable()) {
     b.disabled = false
     b.classList.add('halt')
     b.innerHTML = ICON_STOP
@@ -431,7 +431,11 @@ export function fireSend(): void {
 }
 
 export function goClick(): void {
-  if (source().busy()) source().stop()
+  if (source().busy() && source().cancellable()) source().stop()
+  /* A busy turn that cannot be cancelled is still a live turn: the Send
+     action stays functional and QUEUES the message, exactly what Enter does
+     and what the button says it does. An inert click that neither sends nor
+     queues would be a lie the label makes. */
   else fireSend()
 }
 
