@@ -31,6 +31,21 @@ overlay-store kind.
 The UI element rendering one transcript row in the chat view.
 _Avoid_: "chat stream" for the UI — chat stream is the data feed it renders
 
+**Prompt Block** (`ui-tui/src/components/messageLine.tsx`):
+The person's own message, drawn on a filled background with the prompt chevron in its
+gutter. A wrapped prompt stays one rectangle rather than one per line. Two padding rows
+sit inside the fill, drawn at every color tier so `estimatedMsgHeight` can reserve a row
+count without reading the terminal's capability; the fill itself is skipped below 256
+colors, where nothing sits between black and brightBlack, and the chevron carries the row
+alone.
+
+**Cover** (`ui-tui/src/components/branding.tsx`):
+The opening screen — wordmark above the session panel — which lives in the transcript as
+its first row rather than as a view of its own, so the late `session.info` event has a row
+to patch itself onto. It stands until the conversation starts; startup notices and slash
+output are not a turn and leave it up.
+_Avoid_: "banner" for the whole thing — the banner is only the wordmark inside it.
+
 **Status Bar**:
 The status rule at the top or bottom of the layout, rendered by the `StatusRule` component;
 placement is set by `StatusBarMode` (`top` | `bottom` | `off`).

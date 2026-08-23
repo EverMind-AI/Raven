@@ -10,6 +10,16 @@ import { buildToolTrailLine, fmtK } from '../lib/text.js'
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
+// The intro row is the opening cover -- wordmark plus session panel, 35 rows of
+// it -- and it stays in `historyItems` because the late `session.info` event
+// patches itself onto that row. Only the chat view drops it, and only once a
+// turn has happened: startup notices and slash output are not a conversation,
+// so a box that warns about its credentials on boot still gets its cover.
+export const hideIntroAfterFirstTurn = (items: Msg[]): Msg[] =>
+  items[0]?.kind === 'intro' && items.some(msg => msg.role === 'assistant' || msg.role === 'user')
+    ? items.slice(1)
+    : items
+
 export const imageTokenMeta = (info?: ImageMeta | null) => {
   const { width, height, token_estimate: t } = info ?? {}
 

@@ -434,6 +434,29 @@ describe('resolveTheme', () => {
     expect(resolveTheme('dark', 1).color.accent).toBe('ansi:yellowBright')
   })
 
+  it('gives the prompt block a shade the plain transcript ground does not have', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    for (const scheme of ['dark', 'light'] as const) {
+      for (const tier of [2, 3] as const) {
+        const { completionBg, userBg } = resolveTheme(scheme, tier).color
+
+        expect(userBg).not.toBe(completionBg)
+      }
+    }
+  })
+
+  it('fills a background only where the tier has shades to fill with', async () => {
+    for (const [level, fills] of [['0', false], ['1', false], ['2', true], ['3', true]] as const) {
+      vi.stubEnv('HERMES_TUI_LEVEL', level)
+      vi.resetModules()
+
+      const { canFillBackground } = await import('../theme.js')
+
+      expect(canFillBackground()).toBe(fills)
+    }
+  })
+
   it('keeps the same color-role shape across every tier', async () => {
     const { resolveTheme, DARK_THEME } = await importThemeWithCleanEnv()
     const roles = Object.keys(DARK_THEME.color).sort()

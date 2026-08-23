@@ -22,6 +22,7 @@ import {
   isPasteBackedText,
   stripAnsi
 } from '../lib/text.js'
+import { canFillBackground } from '../theme.js'
 import { EpisodeMessage } from './episodeView.js'
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
@@ -192,6 +193,13 @@ export const MessageLine = memo(function MessageLine({
   // against the prose around it.
   const isDiffSegment = msg.kind === 'diff'
 
+  // The person's own prompt rides in a filled block, so it reads as an inserted
+  // card rather than one more line of transcript. The padding is unconditional
+  // and the fill is not: at tier 1 there is no shade between black and
+  // brightBlack to fill with, and estimatedMsgHeight would have to learn the
+  // terminal's color tier to keep the row count honest if the padding moved too.
+  const isUser = msg.role === 'user'
+
   return (
     <Box
       flexDirection="column"
@@ -213,7 +221,10 @@ export const MessageLine = memo(function MessageLine({
         </Box>
       )}
 
-      <Box>
+      <Box
+        paddingY={isUser ? 1 : 0}
+        {...(isUser && canFillBackground() && { backgroundColor: t.color.userBg })}
+      >
         <NoSelect flexShrink={0} fromLeftEdge width={gutterWidth}>
           <Text bold={msg.role === 'user'} color={prefix}>
             {glyph}{' '}

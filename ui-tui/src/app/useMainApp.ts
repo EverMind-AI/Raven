@@ -19,7 +19,7 @@ import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 import { STARTUP_RESUME_ID } from '../config/env.js'
 import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
-import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
+import { attachedImageNotice, hideIntroAfterFirstTurn, imageTokenMeta } from '../domain/messages.js'
 import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
@@ -264,9 +264,21 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     return next
   }, [])
 
+  // What the chat view shows, as opposed to what the session holds. The cover is
+  // transcript row 0 rather than a view of its own, so it has to be dropped here
+  // once a turn exists; `historyItems` keeps it, because the late session.info
+  // event patches itself onto that row and /export and the slash handlers read
+  // the session's own list, not whatever is on screen.
+  //
+  // Both the rows and the layout's copy come from this one array: appLayout
+  // compares `row.index` against indices it derives from `transcript.historyItems`,
+  // so filtering one and not the other moves the turn separator and the todo
+  // panel onto the wrong rows.
+  const visibleItems = useMemo(() => hideIntroAfterFirstTurn(historyItems), [historyItems])
+
   const virtualRows = useMemo<TranscriptRow[]>(
-    () => historyItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
-    [historyItems, messageId]
+    () => visibleItems.map((msg, index) => ({ index, key: messageId(msg), msg })),
+    [messageId, visibleItems]
   )
 
   const detailsLayoutKey = useMemo(() => {
@@ -978,8 +990,8 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const appTranscript = useMemo(
-    () => ({ historyItems, scrollRef, virtualHistory, virtualRows }),
-    [historyItems, virtualHistory, virtualRows]
+    () => ({ historyItems: visibleItems, scrollRef, virtualHistory, virtualRows }),
+    [virtualHistory, virtualRows, visibleItems]
   )
 
   return { appActions, appComposer, appProgress, appStatus, appTranscript, gateway }
