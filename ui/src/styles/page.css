@@ -812,56 +812,58 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* ── the dag card's own graph and node detail ─────────────────────────
    The strip of chips this replaces held four fields per node and had nowhere to
    put the rest: not the dependencies that make it a graph, and not the template
-   and inputs that say what each step was asked. So the card draws the graph, at
-   the same geometry the sheet above the composer uses (features/dag/graph.ts,
-   the CARD dims) and with the same status marks -- one alphabet for this domain,
-   whichever surface is drawing it. */
-.dagc .canvas { margin-top: 11px; overflow-x: auto; max-height: 260px; overflow-y: auto; }
-.dagc .canvas > svg { display: block; margin: 0 auto; }
-.dagc .gnd { cursor: pointer; outline: none; }
-.dagc .gnd rect {
+   and inputs that say what each step was asked. The card and sheet now use the
+   same renderer with surface-sized geometry -- one alphabet for this domain,
+   whichever place is showing it. */
+.dtl.dlg.dagc .bd { max-height: none; overflow: visible; }
+.dagc .canvas { margin-top: 11px; overflow: visible; max-height: none; }
+.dagc .canvas > svg { display: block; width: 100%; height: auto; margin: 0 auto; }
+.daggraph { --dag-id-size: 12px; --dag-meta-size: 9.5px; }
+.dagc .daggraph { --dag-id-size: 11px; --dag-meta-size: 9px; }
+.daggraph .dagcap {
+  color: var(--faint); font: 10.5px var(--mono); text-align: right; margin-bottom: 5px;
+}
+.daggraph .nd { cursor: pointer; outline: none; }
+.daggraph .nd rect {
   fill: var(--surface); stroke: var(--line-soft); stroke-width: 1;
   transition: fill .13s ease, stroke .13s ease;
 }
-.dagc .gnd:hover rect { fill: var(--raised); stroke: var(--line); }
+.daggraph .nd:hover rect { fill: var(--raised); stroke: var(--line); }
 /* Selected is the node whose detail is open below. The keyboard focus wears the
    same hairline: there is one way to say "this one", not a UA ring pretending to
    be a second. */
-.dagc .gnd:focus-visible rect,
-.dagc .gnd[data-sel="1"] rect { stroke: var(--amber); stroke-width: 1.2; }
-.dagc .gnd[data-sel="1"] rect { fill: color-mix(in oklab, var(--amber) 6%, var(--surface)); }
-.dagc .gnd .id { font-size: 11px; fill: var(--text); font-weight: 600; font-family: var(--mono); }
-.dagc .gnd .ag { font-size: 9px; fill: var(--faint); font-family: var(--mono); }
-.dagc .gnd .tm {
-  font-size: 9px; fill: var(--faint); font-family: var(--mono);
+.daggraph .nd:focus-visible rect,
+.daggraph .nd[data-sel="1"] rect { stroke: var(--amber); stroke-width: 1.2; }
+.daggraph .nd[data-sel="1"] rect { fill: color-mix(in oklab, var(--amber) 6%, var(--surface)); }
+.daggraph .nd .id {
+  font-size: var(--dag-id-size); fill: var(--text); font-weight: 600; font-family: var(--mono);
+}
+.daggraph .nd .ag { font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono); }
+.daggraph .nd .tm {
+  font-size: var(--dag-meta-size); fill: var(--faint); font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
-.dagc .gnd[data-st="pending"] .id { fill: var(--muted); }
-.dagc .gnd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
-.dagc .gnd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
-.dagc .gnd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
-.dagc .gnd[data-st="skipped"] rect,
-.dagc .gnd[data-st="interrupted"] rect { stroke-dasharray: 3 3; }
-.dagc .gnd[data-st="skipped"], .dagc .gnd[data-st="interrupted"] { opacity: .55; }
-.dagc .mk { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.dagc .mk.wait { stroke: var(--faint); stroke-width: 1.3; }
-.dagc .mk.ok { stroke: var(--moss); }
-.dagc .mk.bad { stroke: var(--clay); }
-.dagc .mk.skip { stroke: var(--faint); }
-/* The same three bars the turn's own row wears: one glyph for work in progress,
-   whatever is doing the work. */
-.dagc .bars rect { fill: var(--amber); stroke: none; }
-.dagc .bars rect:nth-child(1) { animation: breathe 1.5s ease-in-out infinite; }
-.dagc .bars rect:nth-child(2) { animation: breathe 1.5s ease-in-out .18s infinite; }
-.dagc .bars rect:nth-child(3) { animation: breathe 1.5s ease-in-out .36s infinite; }
+.daggraph .nd .workv { color: var(--amber); }
+.daggraph .nd[data-st="pending"] .id { fill: var(--muted); }
+.daggraph .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
+.daggraph .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
+.daggraph .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
+.daggraph .nd[data-st="skipped"] rect,
+.daggraph .nd[data-st="interrupted"] rect { stroke-dasharray: 3 3; }
+.daggraph .nd[data-st="skipped"], .daggraph .nd[data-st="interrupted"] { opacity: .55; }
+.daggraph .mk { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.daggraph .mk.wait { stroke: var(--faint); stroke-width: 1.3; }
+.daggraph .mk.ok { stroke: var(--moss); }
+.daggraph .mk.bad { stroke: var(--clay); }
+.daggraph .mk.skip { stroke: var(--faint); }
 /* An edge out of a node that has not finished is drawn faint: what has actually
    flowed through the graph is what a reader is looking for. */
-.dagc .edge { stroke: var(--line-soft); stroke-width: 1.2; fill: none; }
-.dagc .tip {
+.daggraph .edge { stroke: var(--line-soft); stroke-width: 1.2; fill: none; }
+.daggraph .tip {
   stroke: var(--line-soft); stroke-width: 1.2; fill: none;
   stroke-linecap: round; stroke-linejoin: round;
 }
-.dagc .edge.flowed, .dagc .tip.flowed { stroke: var(--line); }
+.daggraph .edge.flowed, .daggraph .tip.flowed { stroke: var(--line); }
 
 /* One node's request. Below the graph rather than beside it: the card lives in a
    744px reading column, and a two-pane layout inside it leaves neither pane wide
@@ -911,9 +913,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dagc .tpl.clip { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .dagc .more { font: inherit; font-size: 10.5px; background: none; border: 0; padding: 2px 0 0; color: var(--faint); cursor: pointer; }
 .dagc .more:hover { color: var(--amber); }
-@media (prefers-reduced-motion: reduce) {
-  .dagc .bars rect { animation: none; }
-}
 
 /* The task line doubles as the door to the run's transcript: underlined on
    hover, like the link it behaves as, and never before -- a grid whose every
@@ -3593,53 +3592,6 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    Scoped to .canvas -- the header's own buttons are svg too, and centring those
    moved the fold and close controls into the middle of the title row. */
 .dsheet .canvas > svg { display: block; margin: 0 auto; }
-/* One node. The box is a button because it is one: it opens that node's own
-   transcript in the workspace panel. */
-.dsheet .nd { cursor: pointer; outline: none; }
-.dsheet .nd rect { fill: var(--surface); stroke: var(--line-soft); stroke-width: 1;
-  transition: fill .13s ease, stroke .13s ease; }
-.dsheet .nd:hover rect { fill: var(--raised); stroke: var(--line); }
-/* Selected is the node whose transcript is open in the panel: a hairline of
-   the accent and the faintest amber wash, not a band around the box. The
-   keyboard focus wears the same hairline -- there is one way to say "this
-   one", not a heavy UA ring pretending to be a second one. */
-.dsheet .nd:focus-visible rect,
-.dsheet .nd[data-sel="1"] rect { stroke: var(--amber); stroke-width: 1.2; }
-.dsheet .nd[data-sel="1"] rect { fill: color-mix(in oklab, var(--amber) 6%, var(--surface)); }
-.dsheet .nd .id { font-size: 12px; fill: var(--text); font-weight: 600; }
-.dsheet .nd .ag { font-size: 9.5px; fill: var(--faint); font-family: var(--mono); }
-.dsheet .nd .tm { font-size: 9.5px; fill: var(--faint); font-family: var(--mono);
-  font-variant-numeric: tabular-nums; }
-
-/* Status: a mark inside the box, and a quiet tint on its border. The border
-   alone meant a reader had to know the palette to read the graph, and the whole
-   node used to pulse its opacity while running -- which reads as a warning, not
-   as work. Geometry never shifts either way: only the mark and the tint change,
-   so a reader tracking a run is not re-finding the boxes each time. */
-.dsheet .nd .mk { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.dsheet .nd .mk.wait { fill: none; stroke: var(--faint); stroke-width: 1.3; }
-.dsheet .nd .mk.ok { stroke: var(--moss); }
-.dsheet .nd .mk.bad { stroke: var(--clay); }
-.dsheet .nd .mk.skip { stroke: var(--faint); }
-.dsheet .nd .workv { color: var(--amber); }
-.dsheet .nd[data-st="pending"] .id { fill: var(--muted); }
-.dsheet .nd[data-st="running"] rect { stroke: var(--amber); stroke-width: 1.5; }
-.dsheet .nd[data-st="completed"] rect { stroke: color-mix(in oklab, var(--moss) 45%, var(--line)); }
-.dsheet .nd[data-st="failed"] rect { stroke: var(--clay); stroke-width: 1.5; }
-.dsheet .nd[data-st="skipped"] rect,
-.dsheet .nd[data-st="interrupted"] rect { stroke-dasharray: 3 3; }
-.dsheet .nd[data-st="skipped"], .dsheet .nd[data-st="interrupted"] { opacity: .55; }
-
-/* An edge out of a node that has not finished is drawn faint: what has actually
-   flowed through the graph so far is what a reader is looking for, and drawing
-   every dependency at one weight hid it. */
-.dsheet .edge { stroke: var(--line-soft); stroke-width: 1.2; fill: none; }
-.dsheet .tip { stroke: var(--line-soft); stroke-width: 1.2; fill: none;
-  stroke-linecap: round; stroke-linejoin: round; }
-.dsheet .edge.flowed, .dsheet .tip.flowed { stroke: var(--line); }
-/* Same-instance nodes run in order because they share one upstream session; the
-   edge that carries that is not a dependency, so it is not drawn like one. */
-.dsheet .edge.inst { stroke-dasharray: 4 3; }
 .dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 1; min-width: 0; }
 
 .veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
