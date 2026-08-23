@@ -103,7 +103,7 @@ openSession = async function (s) {
     // With `cur` settled: hand this conversation back the sheets it was raised
     // with, and take away the ones the last conversation was still holding.
     sheetsSync();
-    drawDag();
+    RavenIslands.dag.sync();
     live.subId = subBySession[s.id] || null;
     restoreTurn(pk);
     if (!live.subId) await subscribe(s.id);
@@ -114,7 +114,7 @@ openSession = async function (s) {
     if (r.session_id && r.session_id !== s.id) { s.id = r.session_id; if (cur !== s.id) cur = s.id; }
     cur = s.id;
     sheetsSync();
-    drawDag();
+    RavenIslands.dag.sync();
     /* resume hands back the canonical id, so the row rendered from the listed
        id no longer matches `cur` -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
@@ -274,7 +274,7 @@ async function leaveDeletedSession(sessionId) {
   parkedTurns.delete(sessionId);
   forgetSubscription(sessionId);
   sheetsForget(sessionId);
-  DAGS.delete(sessionId);
+  RavenIslands.dag.forget(sessionId);
   const transition = RavenIslands.rail.removeRow(SESS, cur, sessionId);
   SESS = transition.rows;
   if (transition.kind === 'unchanged') { drawList(); return; }

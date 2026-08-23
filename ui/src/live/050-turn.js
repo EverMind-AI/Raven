@@ -186,29 +186,29 @@ function onEvent(ev) {
        as well, so "what a node is" had two definitions that only happened to
        agree. */
     const started = RavenIslands.dag.fromStarted(p);
-    DAGS.set(sheetSession(), {
+    const key = sheetSession();
+    RavenIslands.dag.start(key, {
       run_id: p.run_id,
-      session: sheetSession(),
+      session: key,
       order: started.map((n) => n.id),
       nodes: new Map(started.map((n) => [n.id, n])),
       summary: null, done: false, folded: false,
     });
-    drawDag();
   } else if (ev.type === 'dag.node_updated') {
     dagFlowFeed(ev.type, p);
-    const d = dagFor();
+    const d = RavenIslands.dag.run(sheetSession());
     if (d && d.run_id === p.run_id) {
       const n = d.nodes.get(p.node);
       if (n) {
         n.status = p.status;
         n.started_at = p.started_at || n.started_at;
         n.ended_at = p.ended_at || n.ended_at;
-        dagTouch(d);
+        RavenIslands.dag.touch();
       }
     }
   } else if (ev.type === 'dag.run_completed') {
     dagFlowFeed(ev.type, p);
-    const d = dagFor();
+    const d = RavenIslands.dag.run(sheetSession());
     if (d && d.run_id === p.run_id) {
       /* Each file's status is the run's own last word on that node. */
       (p.files || []).forEach((f) => {
@@ -219,7 +219,7 @@ function onEvent(ev) {
       d.dir = p.dir || null;
       d.done = true;
       d.folded = true;
-      dagTouch(d);
+      RavenIslands.dag.touch();
     }
   }
 }
@@ -237,7 +237,7 @@ DS.composer.meter = () => '';
 DS.transcript.openDagRun = function (runId) {
   const id = String(runId || '');
   if (id) {
-    const d = dagFor();
+    const d = RavenIslands.dag.run(sheetSession());
     const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
     if (last) { dagOpenNode(id, { id: last }); return; }
   }
