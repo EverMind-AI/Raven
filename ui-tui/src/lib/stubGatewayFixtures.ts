@@ -33,10 +33,12 @@ export const STUB_SESSION_INFO: SessionInfo = {
 
 export const STUB_SESSION_LIST_ITEM: SessionListItem = {
   id: MOCK_SESSION_ID,
+  last_message_preview: 'I am a stub.',
   message_count: 3,
   preview: 'hello / I am a stub.',
   started_at: MOCK_STARTED_AT,
-  title: 'Mock Session'
+  title: 'Mock Session',
+  updated_at: MOCK_STARTED_AT
 }
 
 export const STUB_SESSION_LIST: SessionListResponse = {

@@ -1,6 +1,6 @@
 /* ---- session list ------------------------------------------------ */
 const DAY = 86400000;
-/* A row's stamp says when the session last answered, so it always carries a
+/* A row's stamp says when its visible conversation last changed, so it carries a
    clock -- a bare date cannot tell two of yesterday's sessions apart. The year
    only appears once it is not this one; inside the current year it is noise. */
 /* A clock only earns its place on today's rows: further back, the day is what
@@ -34,9 +34,8 @@ async function loadCronNames() {
 }
 
 function rowFrom(it) {
-  /* Last activity, not creation: the list is ordered by when a session last
-     answered, so labelling rows with their birthday put the clock and the
-     order in disagreement. */
+  /* Conversation activity, not creation: human messages, assistant replies,
+     and runtime-injected visible content all move the row by the same clock. */
   const at = it.updated_at || it.started_at || 0;
   const when = whenLabel(at);
   const cron = it.source === 'cron';
@@ -53,18 +52,23 @@ function rowFrom(it) {
     id: it.id,
     title: (cron && cronNames[jobId]) || it.title || prev.slice(0, 24)
       || T('gui.sess.fallback_title', { id: String(it.id).split(':').pop().slice(0, 15) }),
-    last: it.preview ? it.preview.slice(0, 60) : T('gui.sess.n_messages', { n: it.message_count }),
+    last: (it.last_message_preview || it.preview)
+      ? (it.last_message_preview || it.preview).slice(0, 60)
+      : T('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
-    pin: !!it.pinned,
+    pin: !!it.pinned, persisted: true,
   };
 }
 
-/* The rail clock tracks the LATEST message regardless of author: sending
-   stamps the row right away, and the finished reply stamps it again. The
-   re-sort keeps the list order agreeing with the clocks it shows. */
-function touchSession(id) {
+const rowPreview = (text) => String(text || '').trim().split('\n')[0].trim().slice(0, 60);
+
+/* "Recent" means the latest visible conversation change. Human sends stamp
+   immediately; completions stamp again when their visible result arrives. */
+function touchSession(id, preview) {
   const s = sess(id);
   if (!s) return;
+  const last = rowPreview(preview);
+  if (last) s.last = last;
   s.at = Math.floor(Date.now() / 1000);
   s.when = whenLabel(s.at);
   SESS.sort((a, b) => (b.at || 0) - (a.at || 0));
@@ -77,10 +81,6 @@ async function loadSessions() {
   await loadCronNames();
   const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
   SESS = (r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0));
-  if (!SESS.length) {
-    SESS = [{ id: 'tui:default', title: T('gui.new_task'), last: T('gui.sess.not_started'),
-      when: T('gui.sess.just_now'), run: null, live: true }];
-  }
 }
 
 /* Tool results arrive wrapped in prompt-injection guards
@@ -104,4 +104,3 @@ function okOf(name, preview) {
   if (name === 'understand_media' && preview.includes('[could not understand:')) return false;
   return true;
 }
-

@@ -176,7 +176,7 @@ function liveSend(text) {
   };
   if (!draft) {
     turnOwner = cur;
-    touchSession(cur);
+    touchSession(cur, text);
     titleFromFirstMessage(text);
     rpc.call('turn.send', { session_key: cur, content: text, ...mediaOf(text) }).catch(failed);
     return;
@@ -184,8 +184,8 @@ function liveSend(text) {
   // The draft becomes a real session here, on its first message.
   (async () => {
     const r = await rpc.call('session.create', {});
-    const s = { id: r.session_id, title: T('gui.new_task'), last: T('gui.sess.not_started'),
-      when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true };
+    const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
+      when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
     SESS.unshift(s); cur = s.id; draft = false;
     turnOwner = cur;
     // The composer was owned by 'new' until this point; keep later keystrokes
@@ -260,19 +260,39 @@ DS.composer.stop = function () {
 /* Deleting for real. Installed on the session source rather than replacing the
    rail's local name: the island asks the source whether there is anywhere to
    delete from, and here there is. */
+function forgetSubscription(sessionId) {
+  const subId = subBySession[sessionId];
+  if (!subId) return;
+  delete subBySession[sessionId];
+  delete subSession[subId];
+  if (live.subId === subId) live.subId = null;
+  rpc.call('turn.unsubscribe', { subscription_id: subId }).catch(() => {});
+}
+
+async function leaveDeletedSession(sessionId) {
+  dropDraft(sessionId);
+  parkedTurns.delete(sessionId);
+  forgetSubscription(sessionId);
+  sheetsForget(sessionId);
+  DAGS.delete(sessionId);
+  const transition = RavenIslands.rail.removeRow(SESS, cur, sessionId);
+  SESS = transition.rows;
+  if (transition.kind === 'unchanged') { drawList(); return; }
+  if (transition.kind === 'open') {
+    cur = transition.next.id;
+    await openSession(transition.next);
+    return;
+  }
+  $('#ta').value = '';
+  startDraft();
+}
+
 DS.sessions.remove = function (s) {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
     try {
-      await rpc.call('session.delete', { session_id: s.id });
-      dropDraft(s.id);
-      parkedTurns.delete(s.id);
-      // A deleted conversation's pending question has nothing left to answer,
-      // and its graph nothing left to describe.
-      sheetsForget(s.id);
-      DAGS.delete(s.id);
-      SESS = SESS.filter((x) => x.id !== s.id);
-      if (cur === s.id && SESS[0]) { cur = SESS[0].id; openSession(SESS[0]); }
-      drawList();
+      const r = await rpc.call('session.delete', { session_id: s.id });
+      if (r.deleted !== s.id) throw new Error(`session ${s.id} no longer exists`);
+      await leaveDeletedSession(s.id);
       toast(T('gui.sess.deleted_x', { title: s.title }));
     } catch (e) { toast(`删除失败：${e.message || e}`); }
   });
@@ -288,4 +308,3 @@ $('#newBtn').onclick = () => { showPage(null); startDraft(); };
 DS.sessions.renamed = (id, title) => {
   rpc.call('session.title', { session_id: id, title }).catch(() => {});
 };
-

@@ -475,19 +475,16 @@ def _fill_resumed_context(info: dict[str, Any], session: Any) -> None:
 def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
     """Convert a list_sessions entry to the SessionListItem wire shape.
 
-    The TS SessionListItem (gatewayTypes.ts:130) requires:
-      id, message_count, preview, started_at (unix timestamp), title.
-    started_at maps from created_at ISO string; preview is always empty in
-    v0.1 — metadata carries no message content, and the TS picker falls back
-    to title or "(untitled)".
+    The generated SessionListItem contract requires the identity, preview,
+    timing, title, count, and pin fields returned below.
+    ``preview`` is the first user message, retained as the identity fallback
+    for untitled sessions. ``last_message_preview`` is the latest readable
+    user or assistant text and backs the browser rail's secondary line.
 
-    ``updated_at`` rides along beside it: the list is already ordered by last
-    activity, so a row that shows when the session was *created* is ordered by
-    one clock and labelled with another. It is the newest message's own stamp --
-    i.e. when the model last finished answering -- because the metadata record's
-    updated_at only moves when a save writes metadata and can lag the transcript
-    by a turn. Falls back through the metadata stamp to started_at, so a row
-    always has a time.
+    ``updated_at`` is the latest readable conversational message stamp. User,
+    assistant, runtime-origin, and delegated entries all move the picker because
+    each adds visible Session content; tool/system records do not. It falls back
+    through metadata to creation time for old sessions.
     """
     key = info.get("key", "")
 
@@ -507,9 +504,10 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
         "message_count": info.get("message_count", 0),
         # The user's first message: what an untitled session gets titled with.
         "preview": info.get("first_user_message", ""),
+        "last_message_preview": info.get("last_message_preview", ""),
         "source": key.partition(":")[0] or "tui",
         "started_at": started_at,
-        "updated_at": _ts(info.get("last_user_message_at")) or _ts(info.get("updated_at")) or started_at,
+        "updated_at": _ts(info.get("last_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
         "pinned": bool(meta.get("pinned")),
     }
@@ -520,7 +518,7 @@ async def session_list(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> dict:
-    """``session.list`` — list sessions sorted by updated_at desc.
+    """``session.list`` — list sessions by latest conversational activity.
 
     ``channels`` (optional list of channel names) picks which session
     channels to include; it defaults to ["tui"] so existing pickers are
@@ -536,11 +534,9 @@ async def session_list(
     channels = params.get("channels")
     if not isinstance(channels, list) or not channels:
         channels = ["tui"]
-    entries: list[dict] = []
-    for channel in channels:
-        if isinstance(channel, str) and channel:
-            entries.extend(mgr.list_sessions(channel=channel))
-    entries.sort(key=lambda x: x.get("last_user_message_at") or x.get("updated_at") or "", reverse=True)
+    channels = list(dict.fromkeys(channel for channel in channels if isinstance(channel, str) and channel))
+    entries = mgr.list_sessions(channels=channels)
+    entries.sort(key=lambda x: x.get("last_message_at") or x.get("updated_at") or "", reverse=True)
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
         entries = entries[:limit]
@@ -561,6 +557,11 @@ async def session_delete(
     session_key = params.get("session_id", "")
     removed = False
     if session_key:
+        if turn_module.is_session_busy(session_key):
+            raise TurnInProgressError(
+                f"session {session_key!r} has an active turn; interrupt it before deleting",
+                data={"session_key": session_key},
+            )
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         config = load_config()
         mgr = _manager_for(agent_loop, config)

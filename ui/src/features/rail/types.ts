@@ -14,6 +14,7 @@ export interface SessRow {
   job?: string
   run?: string | null
   live?: boolean
+  persisted?: boolean
   status?: string | null
 }
 

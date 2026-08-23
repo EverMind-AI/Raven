@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from raven.session.manager import Session, SessionManager, new_chat_id
 
 
@@ -539,6 +541,23 @@ def test_list_sessions_channel_filter(tmp_path: Path):
     tui_sessions = mgr.list_sessions(channel="tui")
     keys = {info["key"] for info in tui_sessions}
     assert keys == {"tui:ch01", "tui:ch03"}
+
+
+def test_list_sessions_multi_channel_filter(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:a", "cron:b", "cli:c"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", key)
+        mgr.save(session)
+
+    assert {info["key"] for info in mgr.list_sessions(channels={"tui", "cron"})} == {"tui:a", "cron:b"}
+
+
+def test_list_sessions_rejects_two_filter_modes(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        mgr.list_sessions(channel="tui", channels={"tui"})
 
 
 def test_list_sessions_no_channel_returns_all(tmp_path: Path):

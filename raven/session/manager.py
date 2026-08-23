@@ -3,6 +3,7 @@
 import copy
 import json
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -361,7 +362,7 @@ class SessionManager:
         else:
             candidates = self.sessions_dir.glob("*/*.jsonl")
         for p in candidates:
-            meta, count, _last, _first = self._scan_file(p)
+            meta, count, _last, _first, _preview = self._scan_file(p)
             if meta is None:
                 continue
             key_val = meta.get("key", "")
@@ -394,29 +395,34 @@ class SessionManager:
         return best_chat_id if best_chat_id is not None else best_empty_chat_id
 
     @staticmethod
-    def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int, str, str]:
+    def _scan_file(path: Path) -> tuple[dict[str, Any] | None, int, str, str, str]:
         """Single pass over a session file: return (last metadata record,
         message line count, last user message timestamp, first user message
-        text).
+        text, latest conversational preview).
 
         One metadata record is appended per save, so the last reflects
         current state. Message lines are counted without keeping them in
         memory.
 
-        The timestamp tracked is the newest ``user`` message, not the newest
-        message of any role: a session is placed in the list by when its owner
-        last spoke to it, so a long tail of assistant and tool records must not
-        move it. The metadata record's ``updated_at`` cannot serve either -- it
-        only moves when a save writes metadata, which can lag the tail of the
-        transcript by a whole turn.
+        The timestamp tracked is the newest readable conversational message:
+        ``user`` or ``assistant``. Runtime-origin and delegated entries are
+        deliberately included because they add visible content to a Session
+        even when nobody typed at that moment. Tool and system records do not
+        move the picker on their own. The metadata record's ``updated_at``
+        cannot serve either -- it only moves when a save writes metadata and
+        can lag the transcript by a whole turn.
 
         The first user message is what session pickers title an untitled
         session with, so its text (flattened to one line, capped) rides along.
+        The latest non-empty user or assistant message is a separate display
+        preview: identity and recent content have different lifecycles and must
+        not be overloaded into one field.
         """
         meta: dict[str, Any] | None = None
         count = 0
         last_ts = ""
         first_user = ""
+        latest_preview = ""
         try:
             with path.open(encoding="utf-8") as f:
                 for line in f:
@@ -431,15 +437,21 @@ class SessionManager:
                         meta = data
                     else:
                         count += 1
-                        if isinstance(data, dict) and data.get("role") == "user":
-                            ts = data.get("timestamp")
-                            if isinstance(ts, str) and ts > last_ts:
-                                last_ts = ts
-                            if not first_user:
-                                first_user = _message_text(data.get("content"))
+                        if isinstance(data, dict):
+                            role = data.get("role")
+                            if role in {"user", "assistant"}:
+                                text = _message_text(data.get("content"))
+                                if text:
+                                    latest_preview = text
+                                ts = data.get("timestamp")
+                                if isinstance(ts, str) and ts > last_ts:
+                                    last_ts = ts
+                            if role == "user":
+                                if not first_user:
+                                    first_user = _message_text(data.get("content"))
         except OSError:
-            return None, 0, "", ""
-        return meta, count, last_ts, first_user
+            return None, 0, "", "", ""
+        return meta, count, last_ts, first_user, latest_preview
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -670,56 +682,70 @@ class SessionManager:
                 return False
         return True
 
-    def list_sessions(self, channel: str | None = None) -> list[dict[str, Any]]:
-        """List sessions, optionally filtered by channel.
+    def list_sessions(
+        self,
+        channel: str | None = None,
+        *,
+        channels: Collection[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List sessions, optionally filtered by one or several channels.
 
-        Each entry carries: key, created_at, updated_at, last_user_message_at,
-        path, message_count. Sorted by when the user last spoke to the session
-        (falling back to the metadata stamp) descending. Each file is read in a
-        single pass.
+        Each entry carries: key, created_at, updated_at, last_message_at,
+        path, message_count, first_user_message, last_message_preview. Ordered
+        by the metadata ``updated_at`` stamp descending. Each file is read in a
+        single pass, including when several channels are requested.
 
         Subagent transcripts are stored as sessions so they can be read with the
         same machinery, but they are steps inside somebody else's turn rather
         than conversations -- listing them would bury the real ones. Ask for the
-        channel by name to get them.
+        channel by name to get them. ``channel`` preserves the original
+        single-channel API; ``channels`` is the multi-channel picker path and
+        cannot be combined with it.
         """
+        if channel is not None and channels is not None:
+            raise ValueError("channel and channels are mutually exclusive")
+        selected_channels = set(channels) if channels is not None else None
         sessions = []
 
         for path in self.sessions_dir.glob("*/*.jsonl"):
-            data, message_count, last_ts, first_user = self._scan_file(path)
+            data, message_count, last_ts, first_user, latest_preview = self._scan_file(path)
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
+            key_channel = key.partition(":")[0]
             # Filter on the key, not the parent directory: under project
             # grouping the directory is a slugged launch path, so it no longer
             # names the channel. That applies to the subagent exclusion too --
             # keyed off the directory it would quietly stop excluding anything
             # the moment a session landed under a slugged group instead.
-            if channel is None and key.partition(":")[0] == SUBAGENT_CHANNEL:
+            if channel is None and selected_channels is None and key_channel == SUBAGENT_CHANNEL:
                 continue
-            if channel is not None and key.partition(":")[0] != channel:
+            if channel is not None and key_channel != channel:
+                continue
+            if selected_channels is not None and key_channel not in selected_channels:
                 continue
             sessions.append(
                 {
                     "key": key,
                     "created_at": data.get("created_at"),
                     "updated_at": data.get("updated_at"),
-                    # When the user last spoke to this session, which is what
-                    # "recent" means to them; the metadata stamp can lag it.
-                    "last_user_message_at": last_ts,
+                    # The newest visible conversation entry. Runtime-origin
+                    # and delegated rows count because they change the Session.
+                    "last_message_at": last_ts,
                     "path": str(path),
                     "message_count": message_count,
                     "metadata": data.get("metadata", {}),
                     "first_user_message": first_user,
+                    "last_message_preview": latest_preview,
                 }
             )
 
-        # Ordered by ``updated_at``, unchanged. ``last_user_message_at`` is
+        # Ordered by ``updated_at``, unchanged. ``last_message_at`` is
         # carried on each entry but deliberately not sorted on here: three
         # callers take ``[0]`` off this list to decide *where a message gets
         # delivered* -- the gateway's heartbeat target, the sentinel's nudge
         # target, and `raven sessions list`, whose table renders ``updated_at``
         # in its own Updated column. Re-ordering for a picker's benefit would
-        # silently re-route those. A surface that wants "when the user last
-        # spoke" sorts on the field itself; ``session.list`` does.
+        # silently re-route those. A surface that wants latest conversational
+        # activity sorts on the field itself; ``session.list`` does.
         return sorted(sessions, key=lambda x: x.get("updated_at") or "", reverse=True)

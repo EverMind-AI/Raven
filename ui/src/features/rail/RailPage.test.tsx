@@ -107,6 +107,36 @@ afterEach(() => {
 })
 
 describe('rail island', () => {
+  it('keeps only an unsaved current row when a refresh cannot list it yet', () => {
+    const pending = row({ id: 'pending', persisted: false, status: 'run' })
+    const saved = row({ id: 'saved', persisted: true })
+    const pendingResult = store.reconcileRows([pending], [saved], 'pending')
+    expect(pendingResult.currentMissing).toBe(false)
+    expect(pendingResult.rows.map((x) => x.id)).toEqual(['pending', 'saved'])
+
+    const deletedResult = store.reconcileRows([row({ id: 'gone', persisted: true })], [saved], 'gone')
+    expect(deletedResult.currentMissing).toBe(true)
+    expect(deletedResult.rows.map((x) => x.id)).toEqual(['saved'])
+  })
+
+  it('retains client-only completion state without reviving stale pin data', () => {
+    const [next] = store.reconcileRows(
+      [row({ id: 'a', pin: true, persisted: true, status: 'done' })],
+      [row({ id: 'a', pin: false, persisted: true })],
+      'a',
+    ).rows
+    expect(next?.status).toBe('done')
+    expect(next?.pin).toBe(false)
+  })
+
+  it('describes the complete state transition after deleting a session', () => {
+    const a = row({ id: 'a' })
+    const b = row({ id: 'b' })
+    expect(store.removeSessionRow([a, b], 'a', 'b')).toEqual({ kind: 'unchanged', rows: [a] })
+    expect(store.removeSessionRow([a, b], 'b', 'b')).toEqual({ kind: 'open', next: a, rows: [a] })
+    expect(store.removeSessionRow([b], 'b', 'b')).toEqual({ kind: 'draft', rows: [] })
+  })
+
   it('renders the groups and the rows, titles stripped of leading emoji', () => {
     install({
       rows: [row(), row({ id: 'p', title: 'pinned one', pin: true }), row({ id: 'k', title: 'daily digest', from: 'cron' }), row({ id: 'e', title: '🚀 Ship it' })],

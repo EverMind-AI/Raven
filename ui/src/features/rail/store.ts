@@ -39,6 +39,36 @@ function set(patch: Partial<RailState>): void {
 
 export const source = (): RailSource => ds<RailSource>('sessions')
 
+export function reconcileRows(
+  previous: SessRow[],
+  incoming: SessRow[],
+  currentId: string | null,
+): { currentMissing: boolean; rows: SessRow[] } {
+  const oldById = new Map(previous.map((row) => [row.id, row]))
+  for (const row of incoming) {
+    const old = oldById.get(row.id)
+    if (old?.status) row.status = old.status
+  }
+  const current = currentId ? oldById.get(currentId) : undefined
+  const currentListed = !!currentId && incoming.some((row) => row.id === currentId)
+  if (current && !current.persisted && !currentListed) incoming.unshift(current)
+  return {
+    currentMissing: !!current?.persisted && !currentListed,
+    rows: incoming,
+  }
+}
+
+export function removeSessionRow(
+  rows: SessRow[],
+  currentId: string | null,
+  deletedId: string,
+): { kind: 'draft' | 'open' | 'unchanged'; next?: SessRow; rows: SessRow[] } {
+  const remaining = rows.filter((row) => row.id !== deletedId)
+  if (currentId !== deletedId) return { kind: 'unchanged', rows: remaining }
+  const next = remaining[0]
+  return next ? { kind: 'open', next, rows: remaining } : { kind: 'draft', rows: remaining }
+}
+
 const curId = (): string | null => {
   try {
     return source().snapshot().cur
