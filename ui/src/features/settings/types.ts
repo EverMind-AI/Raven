@@ -100,6 +100,7 @@ export interface SettingsSource {
   usage(): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   model(): string
+  checkUpdate(btn: HTMLButtonElement): void | Promise<void>
   pickModel?(anchor: HTMLElement, after: () => void): void
   /* The language pick. On the source rather than the shell because what a flip
      MEANS differs between the modes -- live persists it through config.language,

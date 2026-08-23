@@ -608,7 +608,7 @@ function AboutPage(): JSX.Element {
             Raven
             <span className="ver">{ver || '--'}</span>
           </div>
-          <button className="mini ghost" onClick={(e) => sh.checkUpdate?.(e.currentTarget)}>
+          <button className="mini ghost" onClick={(e) => store.checkUpdate(e.currentTarget)}>
             {t('gui.set.check_update')}
           </button>
         </div>

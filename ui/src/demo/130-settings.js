@@ -23,10 +23,6 @@ window.sTab = 'usage';
 // and the About card both render this as "--" rather than as a guess.
 let APP_VERSION = null;
 
-/* Real writes that only the live layer can perform. The demo keeps a local
-   effect so the shell stays explorable; live.js swaps in the RPC. */
-let checkUpdate = () => notLive();
-
 /* Wiping the list is a session operation, so it goes on the session source
    rather than staying a name the live layer overwrites. It has to live in this
    layer either way: the list and the current session are page bindings, and an
@@ -165,5 +161,6 @@ DS.settings ??= {
   usage: async () => null,
   provider: async () => { throw { notLive: true }; },
   model: () => model,
+  checkUpdate: () => notLive(),
   setLang: (v) => langPickDemo(v),
 };
