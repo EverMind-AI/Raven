@@ -257,10 +257,10 @@ export function relToWorkspace(p: string): string | null {
 
 let fileSeq = 0
 
-export function showFile(p: string): void {
+export function showFile(p: string, downloadPath?: string): void {
   const ws = shared()
   ws.file = {
-    path: String(p), kind: fileKind(p), raw: false, text: null,
+    path: String(p), ...(downloadPath ? { downloadPath } : {}), kind: fileKind(p), raw: false, text: null,
     err: null, size: null, loading: false, seq: ++fileSeq,
   }
   verb('showWorkspace')('file')
@@ -271,6 +271,12 @@ export function showFile(p: string): void {
 export function openPath(p: string): void {
   const src = source()
   if (src.canBrowse) showFile(p)
+  else src.openPath?.(p)
+}
+
+export function openDelivery(p: string, downloadPath: string): void {
+  const src = source()
+  if (src.canBrowse) showFile(p, downloadPath)
   else src.openPath?.(p)
 }
 

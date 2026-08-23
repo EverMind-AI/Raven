@@ -181,6 +181,22 @@ describe('workspace island', () => {
     expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
   })
 
+  it('carries a delivered file download into the real viewer', async () => {
+    const state = install(emptyWs(), {
+      canBrowse: true,
+      list: async () => ({ root: '/repo', entries: [] }),
+    })
+    await mount()
+    await act(async () => {
+      store.openDelivery('/repo/deck.pptx', '/files/download?token=deck')
+    })
+    expect(state.ws.file).toMatchObject({
+      path: '/repo/deck.pptx',
+      downloadPath: '/files/download?token=deck',
+    })
+    expect(state.shellCalls).toContainEqual(['showWorkspace', 'file'])
+  })
+
   /* A kind the page cannot render: the note offers the host's own application
      for it. Both actions run where the GATEWAY runs, which is why the offer is
      conditional -- see the withheld case below. */
@@ -266,7 +282,10 @@ describe('workspace island', () => {
      somebody else would have to close. */
   it('withholds the offer when the gateway is not this desktop', async () => {
     install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: {
+        path: '/repo/deck.pptx', downloadPath: '/files/download?token=deck', kind: 'bin',
+        raw: false, text: null, err: null, size: 9, loading: false,
+      },
     }), {
       canBrowse: true,
       list: async () => ({ root: '/repo', entries: [] }),
@@ -276,6 +295,8 @@ describe('workspace island', () => {
     await mount()
     expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
     expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
+    expect(screen.getByText('gui.ws.download').closest('a')?.getAttribute('href'))
+      .toBe('/files/download?token=deck')
     /* And copying the path, which needs no host at all, stays. */
     expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
   })

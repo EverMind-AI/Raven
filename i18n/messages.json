@@ -4879,6 +4879,10 @@
       "en": "Expand",
       "zh": "展开"
     },
+    "gui.ws.download": {
+      "en": "Download",
+      "zh": "下载"
+    },
     "gui.ws.expand_lines": {
       "en": "show {n} more",
       "zh": "展开 {n} 行"

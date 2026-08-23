@@ -574,6 +574,20 @@ describe("the turn's delivered files and file changes", () => {
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
   })
 
+  it('opens a delivered file through the workspace panel', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'deliver it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['final.pdf']) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    act(() => { (($('.atile .hit')) as HTMLElement).click() })
+    expect(opened).toEqual(['/w/final.pdf'])
+  })
+
   it('restores a delivery from stored tool metadata after a reload', () => {
     vi.stubGlobal('fetch', () => new Promise(() => {}))
     act(() => {
