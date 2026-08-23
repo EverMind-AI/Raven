@@ -36,7 +36,7 @@ import json
 import shutil
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from raven.trajectory.redact import KnownSecret, RedactionReport, redact_bundle
@@ -49,8 +49,6 @@ from raven.trajectory.replay import (
 )
 
 _SYSTEM_PLACEHOLDER = "<system prompt: not compared>"
-
-_ARTIFACTS_DIR = "artifacts"
 
 _SPAN_ATTR_KEYS = (
     "attempt.id",
@@ -65,7 +63,14 @@ _SPAN_ATTR_KEYS = (
 
 _PAYLOAD_KEYS = {
     "llm.input.artifact_path": ("model", "messages", "tools"),
-    "llm.output.artifact_path": ("content", "tool_calls", "finish_reason", "usage", "reasoning_content"),
+    "llm.output.artifact_path": (
+        "content",
+        "tool_calls",
+        "finish_reason",
+        "usage",
+        "reasoning_content",
+        "thinking_blocks",
+    ),
     "tool.input.artifact_path": ("name", "params"),
     "tool.output.artifact_path": ("result",),
     "turn.input.artifact_path": ("content", "channel", "chat_id"),
@@ -159,29 +164,6 @@ def _check_replayable(recording) -> None:
         raise ValueError("bundle is not fully replayable, refusing to minimize: " + "; ".join(problems))
 
 
-def _validated_ref(bundle_dir: Path, ref: str) -> Path | None:
-    """The bundle file a span's artifact reference names, traversal-checked.
-
-    ``None`` for an absolute reference (a source already missing at pack time
-    keeps its original absolute path — a dangling ref, not an error). Anything
-    that would leave the bundle's ``artifacts/`` directory — ``..``/``.``
-    segments, a path outside ``artifacts/``, or a symlink resolving out of the
-    bundle — raises: references come from span records (mintable through
-    recorded data), and an escaping one would both read a foreign file into
-    the cassette and write outside the staging tree.
-    """
-    rel = PurePosixPath(ref)
-    if rel.is_absolute():
-        return None
-    escapes = ValueError(f"artifact reference {ref!r} escapes the bundle's {_ARTIFACTS_DIR}/ directory")
-    if rel.parts[:1] != (_ARTIFACTS_DIR,) or any(part in ("..", ".") for part in rel.parts):
-        raise escapes
-    source = bundle_dir / ref
-    if source.exists() and not source.resolve().is_relative_to(bundle_dir.resolve()):
-        raise escapes
-    return source
-
-
 def _check_dest_replaceable(dest_dir: Path) -> None:
     """Refuse a destination the swap-in step must not delete.
 
@@ -267,8 +249,6 @@ def minimize_bundle(
                 if value is None or value == "":
                     continue
                 if key in _PAYLOAD_KEYS:
-                    if _validated_ref(bundle_dir, value) is None:
-                        continue
                     payload = _load_artifact(bundle_dir, value)
                     if payload is None:
                         # A dangling reference the replayability check
@@ -281,7 +261,7 @@ def minimize_bundle(
                         target = minimized / value
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_text(
-                            json.dumps(_strip_payload(payload, key), ensure_ascii=False), encoding="utf-8"
+                            json.dumps(_strip_payload(payload, key), ensure_ascii=False) + "\n", encoding="utf-8"
                         )
                         written.add(value)
                 out_attrs[key] = value

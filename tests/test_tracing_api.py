@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -283,6 +284,7 @@ def test_standard_span_required_attributes(trace_dir):
         usage = None
         finish_reason = "stop"
         reasoning_content = None
+        thinking_blocks = [{"type": "thinking", "thinking": "structured"}]
 
     with trace.span("llm.call") as s:
         semconv.llm_call(s, {"self": None, "messages": [], "tools": None, "model": "openrouter/x"}, _Resp(), None)
@@ -292,6 +294,8 @@ def test_standard_span_required_attributes(trace_dir):
     assert by["llm.call"]["attributes"]["llm.provider"]
     assert by["llm.call"]["attributes"]["llm.model"]
     assert by["tool.call"]["attributes"]["tool.name"] == "grep"
+    output_path = Path(by["llm.call"]["attributes"]["llm.output.artifact_path"])
+    assert json.loads(output_path.read_text(encoding="utf-8"))["thinking_blocks"] == _Resp.thinking_blocks
 
 
 def test_tracing_disabled_is_passthrough(monkeypatch):

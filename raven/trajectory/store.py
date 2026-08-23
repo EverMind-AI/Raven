@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from raven.tracing import config as tracing_config
-from raven.utils.atomic_io import atomic_replace
+from raven.utils.atomic_io import atomic_update
 
 _PINS_FILE = "pins.json"
 
@@ -49,25 +49,45 @@ def pins(state_dir: Path | None = None) -> dict[str, dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+def _parse_pins(text: str | None) -> dict[str, dict[str, Any]]:
+    if text is None:
+        return {}
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _dump_pins(registry: dict[str, dict[str, Any]]) -> str:
+    return json.dumps(registry, ensure_ascii=False, indent=2) + "\n"
+
+
 def pin(id_: str, *, reason: str = "", state_dir: Path | None = None) -> None:
     """Protect an attempt/trace id from any future purge. Idempotent."""
     if not id_:
         raise ValueError("id is required")
-    current = pins(state_dir)
-    current[id_] = {"reason": reason, "ts": datetime.now(timezone.utc).isoformat()}
     path = _pins_path(state_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_replace(path, json.dumps(current, ensure_ascii=False, indent=2) + "\n")
+
+    def update(text: str | None) -> tuple[str, None]:
+        current = _parse_pins(text)
+        current[id_] = {"reason": reason, "ts": datetime.now(timezone.utc).isoformat()}
+        return _dump_pins(current), None
+
+    atomic_update(path, update)
 
 
 def unpin(id_: str, state_dir: Path | None = None) -> bool:
     """Remove a pin. Returns whether it existed."""
-    current = pins(state_dir)
-    if id_ not in current:
-        return False
-    del current[id_]
-    atomic_replace(_pins_path(state_dir), json.dumps(current, ensure_ascii=False, indent=2) + "\n")
-    return True
+
+    def update(text: str | None) -> tuple[str | None, bool]:
+        current = _parse_pins(text)
+        if id_ not in current:
+            return None, False
+        del current[id_]
+        return _dump_pins(current), True
+
+    return atomic_update(_pins_path(state_dir), update)
 
 
 def is_pinned(span: dict[str, Any], state_dir: Path | None = None, *, _pins: dict | None = None) -> bool:

@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 
 import pytest
 
 from raven.trajectory import store as tstore
 from raven.trajectory import verdict as tverdict
+
+
+def _pin_after_barrier(state_dir, id_, barrier):
+    barrier.wait()
+    tstore.pin(id_, state_dir=state_dir)
+
+
+def _unpin_after_barrier(state_dir, id_, barrier):
+    barrier.wait()
+    if not tstore.unpin(id_, state_dir):
+        raise AssertionError(f"missing pin {id_}")
 
 
 def _write_log(path, spans):
@@ -79,6 +91,36 @@ class TestPins:
 
     def test_corrupt_registry_reads_empty(self, tmp_path):
         (tmp_path / "pins.json").write_text("{broken", encoding="utf-8")
+        assert tstore.pins(tmp_path) == {}
+
+    def test_concurrent_processes_do_not_lose_pin_updates(self, tmp_path):
+        ctx = multiprocessing.get_context("spawn")
+        ids = [f"att-{index}" for index in range(8)]
+        barrier = ctx.Barrier(len(ids))
+        processes = [ctx.Process(target=_pin_after_barrier, args=(tmp_path, id_, barrier)) for id_ in ids]
+
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(15)
+
+        assert all(process.exitcode == 0 for process in processes)
+        assert set(tstore.pins(tmp_path)) == set(ids)
+
+    def test_concurrent_processes_do_not_lose_unpin_updates(self, tmp_path):
+        ctx = multiprocessing.get_context("spawn")
+        ids = [f"att-{index}" for index in range(8)]
+        for id_ in ids:
+            tstore.pin(id_, state_dir=tmp_path)
+        barrier = ctx.Barrier(len(ids))
+        processes = [ctx.Process(target=_unpin_after_barrier, args=(tmp_path, id_, barrier)) for id_ in ids]
+
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(15)
+
+        assert all(process.exitcode == 0 for process in processes)
         assert tstore.pins(tmp_path) == {}
 
 

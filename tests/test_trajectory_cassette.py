@@ -63,6 +63,7 @@ def _llm_output(content: str = "done") -> dict:
         "tool_calls": [],
         "usage": {"prompt_tokens": 3},
         "reasoning_content": None,
+        "thinking_blocks": [{"type": "thinking", "thinking": "keep this"}],
         "provider_request_id": "req-123",
     }
 
@@ -151,6 +152,7 @@ async def test_minimize_keeps_only_the_replay_surface(tmp_path) -> None:
     assert cassette.llm_calls[0].output == {
         k: v for k, v in original.llm_calls[0].output.items() if k != "provider_request_id"
     }
+    assert cassette.llm_calls[0].output["thinking_blocks"] == [{"type": "thinking", "thinking": "keep this"}]
     assert cassette.tool_calls[0].result == original.tool_calls[0].result
     assert [t.content for t in cassette.turns] == ["go"]
     assert cassette.turns[0].session_key == "cli:cassette-test"

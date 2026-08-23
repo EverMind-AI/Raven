@@ -111,6 +111,7 @@ def _llm_output(content=None, tool_calls=(), finish_reason="stop", **extra) -> d
         "finish_reason": finish_reason,
         "tool_calls": list(tool_calls),
         "reasoning_content": extra.get("reasoning_content"),
+        "thinking_blocks": extra.get("thinking_blocks"),
         "usage": extra.get("usage") or {},
     }
 
@@ -162,6 +163,47 @@ async def test_load_recording_orders_dedupes_and_covers_skill_reads(tmp_path) ->
 async def test_load_recording_rejects_non_bundle(tmp_path) -> None:
     with pytest.raises(ValueError, match="not a trajectory bundle"):
         load_recording(tmp_path)
+
+
+async def test_load_recording_rejects_traversal_before_reading_external_file(tmp_path, monkeypatch) -> None:
+    bundle = _make_bundle(tmp_path, turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}])
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"content": "host secret"}), encoding="utf-8")
+    spans = [json.loads(line) for line in (bundle / "spans.jsonl").read_text().splitlines()]
+    for span in spans:
+        if span["spanId"] == "turn-0":
+            span["attributes"]["turn.input.artifact_path"] = "../outside.json"
+    (bundle / "spans.jsonl").write_text("".join(json.dumps(span) + "\n" for span in spans), encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def guarded_read_text(path, *args, **kwargs):
+        if path.resolve() == outside.resolve():
+            pytest.fail("load_recording read a file outside the bundle")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    with pytest.raises(ValueError, match="escapes the bundle"):
+        load_recording(bundle)
+
+
+async def test_load_recording_rejects_symlinked_artifact_before_read(tmp_path, monkeypatch) -> None:
+    bundle = _make_bundle(tmp_path, turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}])
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"content": "host secret"}), encoding="utf-8")
+    artifact = bundle / "artifacts" / "turn-in-0.json"
+    artifact.unlink()
+    artifact.symlink_to(outside)
+    original_read_text = Path.read_text
+
+    def guarded_read_text(path, *args, **kwargs):
+        if path.resolve() == outside.resolve():
+            pytest.fail("load_recording followed an artifact symlink outside the bundle")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    with pytest.raises(ValueError, match="escapes the bundle"):
+        load_recording(bundle)
 
 
 # ── normalization + comparison ─────────────────────────────────────────
@@ -227,6 +269,26 @@ async def test_compare_reports_the_first_mismatching_field() -> None:
     assert (mismatch.expected, mismatch.actual) == (["t1"], [])
 
 
+async def test_compare_preserves_assistant_thinking_blocks() -> None:
+    recorded = {
+        "model": "stub",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "thinking_blocks": [{"type": "thinking", "thinking": "recorded"}],
+            }
+        ],
+        "tools": [],
+    }
+    live = [{"role": "assistant", "content": None, "thinking_blocks": [{"type": "thinking", "thinking": "live"}]}]
+
+    mismatch = compare_llm_request(recorded, live, [], "stub")
+
+    assert mismatch is not None
+    assert mismatch.field == "messages[0]"
+
+
 # ── ReplayProvider ─────────────────────────────────────────────────────
 
 
@@ -240,6 +302,7 @@ async def test_provider_feeds_recorded_outputs_in_order() -> None:
                     tool_calls=[{"id": "c1", "name": "marker", "arguments": {"note": "hi"}}],
                     finish_reason="tool_calls",
                     reasoning_content="thinking",
+                    thinking_blocks=[{"type": "thinking", "thinking": "structured"}],
                     usage={"prompt_tokens": 3},
                 ),
             ),
@@ -253,6 +316,7 @@ async def test_provider_feeds_recorded_outputs_in_order() -> None:
     assert first.content == "plan"
     assert first.finish_reason == "tool_calls"
     assert first.reasoning_content == "thinking"
+    assert first.thinking_blocks == [{"type": "thinking", "thinking": "structured"}]
     assert first.usage == {"prompt_tokens": 3}
     assert [(tc.name, tc.arguments) for tc in first.tool_calls] == [("marker", {"note": "hi"})]
 

@@ -61,6 +61,11 @@ _BINARY_POLICY = "non-UTF-8 files are excluded from the redacted copy (cannot be
 # over-redacting ordinary text is more acceptable than leaking a short secret.
 _ENV_MIN_SECRET_LEN = 6
 
+# Values shorter than this are too unspecific for global substring matching.
+# They are still redacted when delimited as standalone tokens, but must not
+# rewrite ordinary identifiers such as ``session.key`` or ``marker``.
+_MIN_UNBOUNDED_SECRET_LEN = 6
+
 # "EMPTY" is the OpenAI-compatible ecosystem's dummy value for keyless local
 # endpoints (vLLM/sglang; ModelEndpoint.api_key defaults to it). The exemption
 # is scoped to api-key-named fields only — a password/token field literally
@@ -412,17 +417,23 @@ def _apply_exact(text: str, secrets: list[KnownSecret], counts: dict[str, int]) 
     # gives longest-match). Sequential str.replace re-scanned its own output:
     # a short value (a 1-char junk env key, say "k") then shredded the "k"
     # inside placeholders inserted for earlier, longer secrets.
-    variants: dict[str, str] = {}
+    variants: dict[str, tuple[str, bool]] = {}
     for secret in secrets:
         for variant in _variants(secret.value):
             if variant and variant not in variants:
-                variants[variant] = secret.label
+                variants[variant] = (secret.label, len(secret.value) < _MIN_UNBOUNDED_SECRET_LEN)
     if not variants:
         return text
-    alternation = re.compile("|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True)))
+    alternatives = []
+    for variant in sorted(variants, key=len, reverse=True):
+        escaped = re.escape(variant)
+        if variants[variant][1]:
+            escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+        alternatives.append(escaped)
+    alternation = re.compile("|".join(alternatives))
 
     def _sub(match: re.Match[str]) -> str:
-        label = variants[match.group(0)]
+        label = variants[match.group(0)][0]
         counts[label] = counts.get(label, 0) + 1
         return f"[REDACTED:{label}]"
 

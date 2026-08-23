@@ -112,7 +112,7 @@ def test_env_length_floor_only_for_suffix_inferred():
 
 
 def test_pattern_fallback(tmp_path):
-    pem = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEfakefakefake\\n-----END RSA PRIVATE KEY-----"
+    pem = "-----BEGIN " + "RSA PRIVATE KEY-----\\nMIIEfakefakefake\\n-----END RSA PRIVATE KEY-----"
     lines = [
         "sk-proj-fake1234567890abcdef",
         "AKIAFAKEFAKEFAKEFAKE",
@@ -310,10 +310,11 @@ def test_config_secret_collection():
     assert "/usr/bin:/bin" not in got.values()
 
 
-def test_single_char_secret_cannot_shred_other_placeholders(tmp_path):
-    """Replacement is one pass: a 1-char value (junk env keys happen) must not
-    rewrite the letters inside placeholders inserted for longer secrets."""
-    bundle = _make_bundle(tmp_path, spans_text=f'{{"session.key": "cli:a", "content": "{FAKE_KEY} ok"}}')
+def test_single_char_secret_only_replaces_standalone_tokens(tmp_path):
+    bundle = _make_bundle(
+        tmp_path,
+        spans_text=f'{{"session.key": "cli:a", "marker": "ok", "api_key": "k", "content": "{FAKE_KEY}"}}',
+    )
 
     report = tredact.redact_bundle(
         bundle,
@@ -323,8 +324,10 @@ def test_single_char_secret_cannot_shred_other_placeholders(tmp_path):
 
     text = (report.redacted_dir / "spans.jsonl").read_text(encoding="utf-8")
     assert f"[REDACTED:{FAKE_LABEL}]" in text
-    assert "o[REDACTED:env.DEEPSEEK_API_KEY]" in text
-    assert report.exact["env.DEEPSEEK_API_KEY"] == 3
+    assert '"session.key": "cli:a"' in text
+    assert '"marker": "ok"' in text
+    assert '"api_key": "[REDACTED:env.DEEPSEEK_API_KEY]"' in text
+    assert report.exact["env.DEEPSEEK_API_KEY"] == 1
 
 
 def test_short_config_secret_replaced(tmp_path):

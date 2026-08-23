@@ -38,9 +38,9 @@ What is compared (and how it is normalized)
 Per model call, the live request is compared against the recorded
 ``llm.input``: the ``model`` id, the streaming vs non-streaming path (from the
 recorded ``llm.stream`` attribute), the message-list length, each message's
-role and content, assistant ``tool_calls`` (name + arguments), and the *names*
-of the offered tools (schema bodies drift with cosmetic edits and are not
-compared). Normalization is deliberately narrow — only text the harness
+role, content, and reasoning fields, assistant ``tool_calls`` (name +
+arguments), and the *names* of the offered tools (schema bodies drift with
+cosmetic edits and are not compared). Normalization is deliberately narrow — only text the harness
 regenerates freshly on every run is masked, so a date or an id inside user
 content or tool arguments still counts as a real divergence:
 
@@ -107,7 +107,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, AsyncIterator
 
 from loguru import logger
@@ -252,6 +252,25 @@ class ReplayReport:
         return not self.halted
 
 
+def _artifact_path(bundle_dir: Path, ref: Any) -> Path | None:
+    """Resolve a bundle artifact reference without allowing it to escape."""
+    if not isinstance(ref, str) or not ref:
+        return None
+    rel = PurePosixPath(ref)
+    if rel.is_absolute() or PureWindowsPath(ref).is_absolute():
+        return None
+    error = ValueError(f"artifact reference {ref!r} escapes the bundle's artifacts/ directory")
+    if rel.parts[:1] != ("artifacts",) or any(part in (".", "..") for part in rel.parts):
+        raise error
+
+    bundle_root = bundle_dir.resolve()
+    artifacts_root = (bundle_root / "artifacts").resolve()
+    resolved = bundle_root.joinpath(*rel.parts).resolve()
+    if not artifacts_root.is_relative_to(bundle_root) or not resolved.is_relative_to(artifacts_root):
+        raise error
+    return resolved
+
+
 def _load_artifact(bundle_dir: Path, ref: Any) -> Any:
     """The JSON payload behind a (bundle-relative) artifact reference.
 
@@ -259,12 +278,9 @@ def _load_artifact(bundle_dir: Path, ref: Any) -> Any:
     time) or that does not exist in the bundle yields ``None`` — the caller
     decides whether that is fatal.
     """
-    if not isinstance(ref, str) or not ref:
+    resolved = _artifact_path(bundle_dir, ref)
+    if resolved is None:
         return None
-    path = Path(ref)
-    if path.is_absolute():
-        return None
-    resolved = bundle_dir / path
     if not resolved.is_file():
         return None
     try:
@@ -386,9 +402,9 @@ def _canonical_message(msg: Any) -> Any:
         out["content"] = "<system prompt: not compared>"
     else:
         out["content"] = _canonical(msg.get("content"))
-    for key in ("name", "tool_call_id"):
+    for key in ("name", "tool_call_id", "reasoning_content", "thinking_blocks"):
         if msg.get(key) is not None:
-            out[key] = msg[key]
+            out[key] = _canonical(msg[key])
     calls = msg.get("tool_calls")
     if calls:
         rendered = []
@@ -583,6 +599,7 @@ class ReplayProvider(LLMProvider):
             finish_reason=output.get("finish_reason") or "stop",
             usage=output.get("usage") or {},
             reasoning_content=output.get("reasoning_content"),
+            thinking_blocks=output.get("thinking_blocks"),
         )
 
     async def chat(
