@@ -15,6 +15,8 @@ from raven.spine import (
     Origin,
     Source,
     Text,
+    ToolEvent,
+    ToolPhase,
     TurnEnded,
     TurnFailed,
     TurnOutcome,
@@ -116,6 +118,24 @@ async def test_cli_outlet_eats_non_text():
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS))
     await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT))
     assert rendered == []  # eaten, not rendered
+
+
+async def test_cli_outlet_renders_completed_file_delivery():
+    rendered: list[str] = []
+    outlet = CliOutlet("cli", rendered.append)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="deliver-1",
+            metadata={
+                "raven_delivery": {
+                    "message": "Final outputs",
+                    "files": [{"name": "report.pdf", "path": "/tmp/report.pdf"}],
+                }
+            },
+        )
+    )
+    assert rendered == ["Final outputs\nDelivered files:\n- report.pdf: /tmp/report.pdf"]
 
 
 # --- CliOutlet progress rendering (-m path): the two-gate parity ---

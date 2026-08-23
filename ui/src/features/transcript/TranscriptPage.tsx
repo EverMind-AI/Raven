@@ -5,16 +5,16 @@ import * as dag from '../dag/graph'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
 import {
-  RENDERED as WS_RENDERED, fileKind, fileURL, openPath as wsOpenPath,
+  fileKind, fileURL, openPath as wsOpenPath,
 } from '../workspace/store'
 import * as store from './store'
 
 import type { DagNode } from '../dag/types'
 import type {
-  AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, FoldData, Lane,
+  AnswerData, ArtifactRow, ArtsData, AskData, CallData, DeliveredData, DeliveryRow, FoldData, Lane,
   NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
-import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
+import type { KeyboardEvent, ReactElement, ReactNode, RefObject } from 'react'
 import * as lightbox from '../../shell/lightbox'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
@@ -789,7 +789,26 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   )
 })
 
-const AnswerView = memo(function AnswerView({ lane, seg }: { lane: Lane; seg: AnswerData }): ReactElement {
+const AnswerFoot = memo(function AnswerFoot({ lane, seg }: { lane: Lane; seg: AnswerData }): ReactElement {
+  const branch = store.branchOf(lane)
+  return (
+    <div className="ansfoot">
+      <div className="acts">
+        <TipButton label={t('gui.answer.copy')} icon={COPY_ICO}
+          flashWord={t('gui.answer.copied')} onClick={() => store.copyText(seg.text)} />
+        {branch ? (
+          <TipButton label={t('gui.answer.branch')} icon={BRANCH_ICO}
+            onClick={() => branch(seg.text)} />
+        ) : null}
+      </div>
+      {seg.when ? <span className="turnmeta">{seg.when}</span> : null}
+    </div>
+  )
+})
+
+const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
+  lane: Lane; seg: AnswerData; showFoot?: boolean
+}): ReactElement {
   useSeg(lane, seg)
   const branch = store.branchOf(lane)
   const typing = seg.shown != null && seg.shown < seg.text.length
@@ -807,17 +826,7 @@ const AnswerView = memo(function AnswerView({ lane, seg }: { lane: Lane; seg: An
   return (
     <div className="answer in" ref={ctxRef(items)}>
       <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />
-      <div className="ansfoot">
-        <div className="acts">
-          <TipButton label={t('gui.answer.copy')} icon={COPY_ICO}
-            flashWord={t('gui.answer.copied')} onClick={() => store.copyText(seg.text)} />
-          {branch ? (
-            <TipButton label={t('gui.answer.branch')} icon={BRANCH_ICO}
-              onClick={() => branch(seg.text)} />
-          ) : null}
-        </div>
-        {seg.when ? <span className="turnmeta">{seg.when}</span> : null}
-      </div>
+      {showFoot ? <AnswerFoot lane={lane} seg={seg} /> : null}
     </div>
   )
 })
@@ -928,16 +937,12 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
    and as four different miniatures -- that difference is what the extra
    height buys. */
 
-const ART_CAP = 6
+const CHANGE_CAP = 4
+const DELIVERY_MIN = 178
+const DELIVERY_GAP = 8
 /* How many of the file's own lines a miniature draws. More than fills the
    tile at this scale; the rest would be rendered and then clipped. */
 const ART_HEAD_LINES = 16
-/* Above this an image is not worth fetching whole to paint 164 pixels of it,
-   and the tile shows its kind instead. There is no thumbnailer to ask -- the
-   gateway's /file serves the file itself -- so this ceiling is the only guard
-   between a tile and an eight-megabyte screenshot. */
-const ART_IMG_MAX = 2 * 1024 * 1024
-
 /* Text draws itself with nothing to wait for: a write tool's hunk already
    carried what it wrote, live and on replay both, so `head` is in memory
    before the tile mounts.
@@ -959,89 +964,135 @@ const ArtMini = memo(function ArtMini({ row }: { row: ArtifactRow }): ReactEleme
   return <span className="pic doc"><span className="mini"><span className="raw">{head}</span></span></span>
 })
 
-/* An image has to come down the wire, so this is the tile that can be slow.
-   It asks for the size first -- a HEAD on the same URL, no RPC of its own --
-   and only then decides whether to fetch the picture at all. Both waits are
-   covered by the skeleton: a tile that jumps from blank to full reads as the
-   page having been broken until that moment. */
-const ArtShot = memo(function ArtShot({ row }: { row: ArtifactRow }): ReactElement {
-  const [st, setSt] = useState<'probe' | 'load' | 'ok' | 'no'>('probe')
-  const url = fileURL(row.path)
-  useEffect(() => {
-    let alive = true
-    /* HEAD on the same URL the picture would come from. The response carries
-       Content-Length and no body, so asking costs one round trip and no
-       bytes -- and a page that cannot serve the file answers 401 or 404 here
-       rather than after a megabyte. */
-    fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-      .then((r) => {
-        if (!alive) return
-        const n = Number(r.headers.get('content-length'))
-        setSt(!r.ok || (Number.isFinite(n) && n > ART_IMG_MAX) ? 'no' : 'load')
-      })
-      .catch(() => { if (alive) setSt('no') })
-    return () => { alive = false }
-  }, [url])
-  if (st === 'no') return <span className="pic none"><Ico d={ACT_ICO.image as string} cls="fi" /></span>
+const humanSize = (bytes: number): string => {
+  if (!bytes) return ''
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1 }
+  return `${unit ? value.toFixed(value < 10 ? 1 : 0) : Math.round(value)} ${units[unit]}`
+}
+
+const DeliveryShot = memo(function DeliveryShot({ row, missing }: {
+  row: DeliveryRow; missing: () => void
+}): ReactElement {
+  const [ready, setReady] = useState(false)
   return (
-    <span className={'pic shot' + (st === 'ok' ? '' : ' skel')}>
-      {st === 'probe' ? null : (
-        <img src={url} alt="" loading="lazy" decoding="async"
-          onLoad={() => setSt('ok')} onError={() => setSt('no')} />
-      )}
-      {st === 'ok' ? null : <span className="sk" />}
+    <span className={'pic shot' + (ready ? '' : ' skel')}>
+      <img src={row.downloadPath} alt="" loading="lazy" decoding="async"
+        onLoad={() => setReady(true)} onError={missing} />
+      {ready ? null : <span className="sk" />}
     </span>
   )
 })
 
-const ArtTile = memo(function ArtTile({ row, onOpen }: { row: ArtifactRow; onOpen: () => void }): ReactElement {
-  /* Where it opens, said before the click: a kind the page renders opens in
-     the viewer, a kind it cannot read leaves for the host. */
+const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
+  row: DeliveryRow; preview: ArtifactRow | null
+}): ReactElement {
+  const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
+  const url = row.downloadPath
+  useEffect(() => {
+    let alive = true
+    if (row.missing) {
+      setState('missing')
+      return () => { alive = false }
+    }
+    setState('probe')
+    fetch(url, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
+      .then((res) => { if (alive) setState(res.ok ? 'ready' : 'missing') })
+      .catch(() => { if (alive) setState('missing') })
+    return () => { alive = false }
+  }, [row.missing, url])
   const kind = fileKind(row.name)
-  const away = !WS_RENDERED[kind]
+  const type = row.ext ? row.ext.toUpperCase() : t('gui.arts.file')
+  const fallback = (
+    <span className="pic none">
+      <Ico d={ACT_ICO.doc as string} cls="fi" />
+      <span className="ft">{type}</span>
+    </span>
+  )
+  const picture = state === 'probe' ? (
+    <span className="pic none skel"><span className="sk" /></span>
+  ) : state === 'missing' ? (
+    fallback
+  ) : kind === 'img' || kind === 'svg' ? (
+    <DeliveryShot row={row} missing={() => setState('missing')} />
+  ) : preview ? <ArtMini row={preview} /> : (
+    fallback
+  )
+  const meta = state === 'missing'
+    ? t('gui.arts.missing')
+    : [type, humanSize(row.size)].filter(Boolean).join(' \u00b7 ')
   return (
-    <div className="atile" title={row.path}>
-      {kind === 'img' || kind === 'svg' ? <ArtShot row={row} /> : <ArtMini row={row} />}
-      <span className="cap">
-        <span className="nm">{row.name}</span>
-        <span className="mt">
-          {row.ext ? row.ext.toUpperCase() : t('gui.arts.file')}
-          {row.lines ? ` \u00b7 ${t('gui.arts.lines', { n: String(row.lines) })}` : ''}
-        </span>
-        {away ? <span className="away">{t('gui.arts.away')}</span> : null}
-      </span>
-      {/* The whole tile is the target; a covering button keeps that one
-          keyboard stop and one accessible name, and leaves the picture free
-          to be block content a <button> may not contain. */}
-      <button className="hit" aria-label={t('gui.arts.open', { f: row.name })} onClick={onOpen} />
+    <div className={'atile' + (state === 'missing' ? ' missing' : '')} title={row.path}>
+      {picture}
+      <span className="cap"><span className="nm">{row.title}</span><span className="mt">{meta}</span></span>
+      <button className="hit" disabled={state !== 'ready'}
+        aria-label={t('gui.arts.open', { f: row.name })} onClick={() => { window.location.href = row.downloadPath }} />
     </div>
   )
 })
 
+function useDeliveryCapacity(ref: RefObject<HTMLDivElement | null>): number {
+  const [capacity, setCapacity] = useState(1)
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const measure = (): void => {
+      setCapacity(Math.max(1, Math.floor((node.clientWidth + DELIVERY_GAP) / (DELIVERY_MIN + DELIVERY_GAP))))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref])
+  return capacity
+}
+
 const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsData }): ReactElement | null {
   useSeg(lane, seg)
-  const rows = store.artifactsOf(seg.turn)
-  /* Read, not stored -- so a turn whose products the source no longer knows
-     about draws nothing rather than a bar of dead names. */
-  if (!rows.length) return null
-  const shown = seg.all ? rows : rows.slice(0, ART_CAP)
-  const rest = rows.length - shown.length
+  const changes = store.artifactsOf(lane, seg.turn)
+  const deliveries = store.deliveriesOf(lane, seg.turn)
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const capacity = useDeliveryCapacity(gridRef)
+  if (!changes.length && !deliveries.length) return null
+  const shownDeliveries = seg.deliveriesOpen ? deliveries : deliveries.slice(0, capacity)
+  const deliveryRest = deliveries.length - shownDeliveries.length
+  const shownChanges = seg.changesOpen ? changes : changes.slice(0, CHANGE_CAP)
+  const changeRest = changes.length - shownChanges.length
+  const previews = new Map(changes.map((row) => [row.path, row]))
   return (
     <div className="arts">
-      <div className="ahd">
-        <span className="lb">{t('gui.arts.head')}</span>
-        <span className="n">{rows.length}</span>
-      </div>
-      <div className="atiles">
-        {shown.map((r) => (
-          <ArtTile key={r.path} row={r} onOpen={() => wsOpenPath(r.path)} />
-        ))}
-        {rest > 0 ? (
-          <button className="amore" onClick={() => store.toggleArts(lane, seg)}>
-            {t('gui.arts.more', { n: String(rest) })}
-          </button>
-        ) : null}
-      </div>
+      {deliveries.length ? <section className="asec deliveries">
+        <div className="ahd">
+          <span className="ahm"><span className="lb">{t('gui.arts.delivered')}</span><span className="n">{deliveries.length}</span></span>
+        </div>
+        <div ref={gridRef} className="atiles">
+          {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row} preview={previews.get(row.path) || null} />)}
+        </div>
+        {deliveryRest > 0 || seg.deliveriesOpen ? <button className="amore"
+          aria-expanded={seg.deliveriesOpen} onClick={() => store.toggleArts(lane, seg, 'deliveries')}>
+          {seg.deliveriesOpen ? t('gui.arts.less') : t('gui.arts.more', { n: String(deliveryRest) })}
+        </button> : null}
+      </section> : null}
+      {changes.length ? <section className="asec changes">
+        <div className="ahd">
+          <span className="ahm"><span className="lb">{t('gui.arts.changed')}</span><span className="n">{changes.length}</span></span>
+        </div>
+        <div className="achanges">
+          {shownChanges.map((row) => <button key={row.path} className="achange" onClick={() => wsOpenPath(row.path)}>
+            <span className={'ck ' + row.change}>{t(row.change === 'new' ? 'gui.arts.new' : 'gui.arts.edit')}</span>
+            <span className="cn">{row.name}</span>
+            <span className="ct">{row.ext ? row.ext.toUpperCase() : t('gui.arts.file')}</span>
+            <span className="ca">+{row.lines}</span>
+            <span className="cd">{'\u2212'}{row.deleted}</span>
+          </button>)}
+        </div>
+        {changeRest > 0 || seg.changesOpen ? <button className="amore"
+          aria-expanded={seg.changesOpen} onClick={() => store.toggleArts(lane, seg, 'changes')}>
+          {seg.changesOpen ? t('gui.arts.less') : t('gui.arts.more', { n: String(changeRest) })}
+        </button> : null}
+      </section> : null}
     </div>
   )
 })
@@ -1082,6 +1133,34 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
+function stageRows(lane: Lane): ReactElement[] {
+  const rows: ReactElement[] = []
+  for (let i = 0; i < lane.segs.length; i += 1) {
+    const seg = lane.segs[i] as Seg
+    if (seg.kind === 'answer') {
+      let end = i + 1
+      while (end < lane.segs.length && !['ask', 'answer', 'arts'].includes(lane.segs[end]!.kind)) end += 1
+      const close = lane.segs[end]
+      if (close?.kind === 'arts') {
+        rows.push(
+          <div className="answer-turn" key={`${lane.epoch}:${seg.id}`}>
+            <AnswerView lane={lane} seg={seg} showFoot={false} />
+            {lane.segs.slice(i + 1, end).map((middle) => (
+              <SegView key={`${lane.epoch}:${middle.id}`} lane={lane} seg={middle} />
+            ))}
+            <ArtsView lane={lane} seg={close} />
+            <AnswerFoot lane={lane} seg={seg} />
+          </div>,
+        )
+        i = end
+        continue
+      }
+    }
+    rows.push(<SegView key={`${lane.epoch}:${seg.id}`} lane={lane} seg={seg} />)
+  }
+  return rows
+}
+
 export function StageView({ lane }: { lane: Lane }): ReactElement {
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.listV)
   const req = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.scrollReq)
@@ -1091,7 +1170,7 @@ export function StageView({ lane }: { lane: Lane }): ReactElement {
   }, [lane, req])
   return (
     <>
-      {lane.segs.map((s) => <SegView key={`${lane.epoch}:${s.id}`} lane={lane} seg={s} />)}
+      {stageRows(lane)}
     </>
   )
 }

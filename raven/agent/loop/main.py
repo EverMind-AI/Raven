@@ -123,6 +123,7 @@ def _runtime_origin(origin: "Origin | None") -> str | None:
 # mid-turn. ``_save_turn`` writes them as ``reasoning_ms`` / ``duration_ms``.
 _REASONING_MS_KEY = "_reasoning_ms"
 _TOOL_DURATION_MS_KEY = "_duration_ms"
+_TOOL_METADATA_KEY = "_metadata"
 
 
 def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
@@ -3087,8 +3088,8 @@ class AgentLoop:
                         duration_ms,
                         preview.replace("\n", " ")[:200],
                     )
+                    tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
                     if emit_tool_event:
-                        tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
                         await on_tool_event(
                             "complete",
                             {
@@ -3124,6 +3125,8 @@ class AgentLoop:
                         # transcript had to either invent a number or say nothing
                         # about a call that took two minutes.
                         messages[-1][_TOOL_DURATION_MS_KEY] = duration_ms
+                        if tool_metadata:
+                            messages[-1][_TOOL_METADATA_KEY] = tool_metadata
                     if (tool_diff := getattr(result, "diff", None)) and messages:
                         # Underscore-keyed while the turn is live so no provider
                         # payload grows a field mid-turn; `_save_turn` renames it
@@ -3988,6 +3991,8 @@ class AgentLoop:
                 # live provider payload, the plain one is what session.resume
                 # maps onto the wire so a reloaded page can renumber the change.
                 entry["diff"] = tool_diff
+            if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
+                entry["metadata"] = tool_metadata
             for private_key, stored_key in (
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),

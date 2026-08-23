@@ -115,6 +115,7 @@ function onEvent(ev) {
        display string: edit_file's old_text/new_text is the diff. */
     if (typeof wsOnTool === 'function') wsOnTool(p.name, p.arguments, false);
   } else if (ev.type === 'tool.complete') {
+    if (p.metadata) RavenIslands.transcript.delivery(WS.turn, p.metadata);
     const o = live.open.get(p.tool_call_id);
     if (!o) return;
     live.open.delete(p.tool_call_id);

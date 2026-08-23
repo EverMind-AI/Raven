@@ -162,6 +162,20 @@ export interface ArtifactRow {
   ext: string
   head: string | null
   lines: number
+  deleted: number
+  change: 'new' | 'edit'
+}
+
+export interface DeliveryRow {
+  path: string
+  name: string
+  title: string
+  description: string
+  ext: string
+  size: number
+  mediaType: string
+  downloadPath: string
+  missing: boolean
 }
 
 export interface ArtsData {
@@ -173,8 +187,8 @@ export interface ArtsData {
      from history on a reload, and a copy taken while the turn was live would
      then disagree with it. */
   turn: number
-  /* Whether the fold beyond the sixth tile is open. */
-  all: boolean
+  deliveriesOpen: boolean
+  changesOpen: boolean
 }
 
 export interface FoldData {
@@ -250,6 +264,7 @@ export interface HistoryMessage {
   reasoning_ms?: number
   duration_ms?: number
   diff?: string | string[]
+  metadata?: Record<string, unknown>
   notice?: { kind?: string; detail?: string }
   origin?: string
   turn_ended?: { status?: string; reason?: string }

@@ -383,6 +383,7 @@ window.RavenIslands = {
     finishTurn: transcript.finishTurn,
     turnKept: transcript.turnKept,
     artifacts: transcript.artifacts,
+    delivery: transcript.delivery,
     history: transcript.history,
     delivered: transcript.delivered,
     dagFeed: transcript.dagFeed,

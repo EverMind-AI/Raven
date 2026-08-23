@@ -350,7 +350,9 @@ async def handle_oauth_callback(request: web.Request) -> web.Response:
     )
 
 
-def build_app(gateway: WsGateway, static_dir: Path | None) -> web.Application:
+def build_app(gateway: WsGateway, static_dir: Path | None, *, deliverables: Any = None) -> web.Application:
+    from raven.web_rpc.files import add_files_routes
+
     app = web.Application()
     app.router.add_get("/health", gateway.handle_health)
     app.router.add_get("/auth", gateway.handle_auth_page)
@@ -359,6 +361,14 @@ def build_app(gateway: WsGateway, static_dir: Path | None) -> web.Application:
     app.router.add_get("/file", gateway.handle_file)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
+
+    def guard_delivery(request: web.Request) -> None:
+        if not gateway._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not gateway._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+    add_files_routes(app, deliverables, guard=guard_delivery)
 
     if static_dir is not None and (static_dir / "index.html").exists():
 

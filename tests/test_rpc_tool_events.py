@@ -72,6 +72,11 @@ class _FakeTool(Tool):
         return self._result
 
 
+class _MetadataTool(_FakeTool):
+    def take_metadata(self) -> dict[str, Any] | None:
+        return {"raven_delivery": {"files": [{"name": "report.pdf"}]}}
+
+
 def _make_agent(workspace: Path, responses: list[LLMResponse], *tools: Tool) -> AgentLoop:
     agent = AgentLoop(
         provider=_ScriptedProvider(responses),
@@ -126,6 +131,15 @@ async def test_tool_start_and_complete_emitted(workspace) -> None:
     assert complete_info["tool_call_id"] == "c-exec"
     assert "file.txt" in complete_info["result_preview"]
     assert complete_info["truncated"] is False
+
+
+async def test_tool_metadata_survives_when_no_live_event_consumer_is_attached(workspace) -> None:
+    agent = _make_agent(workspace, _tool_then_final("deliver_files"), _MetadataTool("deliver_files"))
+
+    _, _, messages, _ = await agent._run_agent_loop([{"role": "user", "content": "deliver"}])
+
+    tool_result = next(message for message in messages if message.get("role") == "tool")
+    assert tool_result["_metadata"] == {"raven_delivery": {"files": [{"name": "report.pdf"}]}}
 
 
 async def test_tool_start_carries_blocking_for_a_blocking_tool(workspace) -> None:

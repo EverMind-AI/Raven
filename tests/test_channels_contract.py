@@ -41,7 +41,7 @@ class _WithStreaming(_Min):
 
 def test_capabilities_defaults_all_false():
     c = Capabilities()
-    assert (c.interactive_login, c.streaming) == (False, False)
+    assert (c.interactive_login, c.streaming, c.file_attachments) == (False, False, False)
 
 
 def test_channel_spec_fields_and_factory():

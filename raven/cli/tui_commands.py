@@ -454,7 +454,8 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             build_plugin_tools,
             maybe_build_memory_backend,
         )
-        from raven.config.paths import get_cron_dir
+        from raven.agent.tools._deliverables import DeliverableStore
+        from raven.config.paths import get_cron_dir, get_deliverables_path
         from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
@@ -533,6 +534,7 @@ def _build_agent_loop(workspace: str | None = None, home: str | None = None):
             memory_config=ec_config.memory,
             backend=backend,
             plugin_tools=plugin_tools,
+            deliverables=DeliverableStore(get_deliverables_path()),
             agents=config.subagents.agents,
             playbook_config=config.playbooks,
             # TUI is always a multi-turn interactive session.

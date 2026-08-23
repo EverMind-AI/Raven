@@ -53,15 +53,6 @@ class Difference(NamedTuple):
 # tests below make either shape visible -- an undeclared difference fails, and so
 # does an entry that no longer matches the code.
 LEDGER: dict[str, Difference] = {
-    "deliverables": Difference(
-        absent_from=frozenset({"agent", "tui"}),
-        reason=(
-            "webui-only. The deliverable store backs deliver_files, whose whole "
-            "point is a browser download; a terminal has nowhere to deliver to. "
-            "Asserted deliberately by "
-            "test_cli_tui_commands.py::test_tui_agent_loop_receives_no_deliverables_store."
-        ),
-    ),
     "response_modifier": Difference(
         absent_from=frozenset({"tui"}),
         reason=(

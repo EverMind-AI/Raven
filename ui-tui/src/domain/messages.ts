@@ -8,6 +8,7 @@ import type { Msg, SessionInfo } from '../types.js'
 import { LONG_MSG } from '../config/limits.js'
 import { t } from '../i18n/index.js'
 import { buildToolTrailLine, fmtK } from '../lib/text.js'
+import { addUnique, artifactMessage, changedFile, deliveryFiles } from './turnArtifacts.js'
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 
@@ -45,15 +46,22 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
 
   const out: Msg[] = []
   let pending: string[] = []
+  let artifacts = { changes: [], deliveries: [] } as NonNullable<Msg['artifacts']>
+  const flushArtifacts = () => {
+    const message = artifactMessage(artifacts)
+    if (message) {out.push(message)}
+    artifacts = { changes: [], deliveries: [] }
+  }
 
   for (const row of rows) {
     if (!row || typeof row !== 'object') {
       continue
     }
 
-    const { context, duration_ms: durationMs, name, origin, role, text } = row as TranscriptRow
+    const { context, duration_ms: durationMs, metadata, name, origin, role, text, tool_calls: calls } = row as TranscriptRow
 
     if (role === 'user' && origin) {
+      flushArtifacts()
       /* A turn the runtime opened, not a person typing. Its text is internal
          prose, so it is replaced rather than shown: the same sentence the live
          trail prints when a delegated result rejoins the conversation, which is
@@ -66,6 +74,7 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     }
 
     if (role === 'tool') {
+      deliveryFiles(metadata).forEach(file => addUnique(artifacts.deliveries, file))
       // The stored span, so a resumed trail line carries the same "(1.2s)" the
       // live one did. Absent on an entry written before it was recorded --
       // undefined, which prints no clock rather than a "(0.0s)" nothing ran in.
@@ -83,17 +92,35 @@ export const toTranscriptMessages = (rows: unknown): Msg[] => {
     }
 
     if (typeof text !== 'string' || !text.trim()) {
+      if (role === 'assistant') {
+        for (const call of calls ?? []) {
+          let args: unknown = {}
+          try { args = JSON.parse(call.arguments || '{}') } catch { args = {} }
+          const change = changedFile(call.name || '', args)
+          if (change) {addUnique(artifacts.changes, change)}
+        }
+      }
       continue
     }
 
     if (role === 'assistant') {
+      for (const call of calls ?? []) {
+        let args: unknown = {}
+        try { args = JSON.parse(call.arguments || '{}') } catch { args = {} }
+        const change = changedFile(call.name || '', args)
+        if (change) {addUnique(artifacts.changes, change)}
+      }
       out.push({ role, text, ...(pending.length && { tools: pending }) })
       pending = []
+      if (!calls?.length) {flushArtifacts()}
     } else if (role === 'user' || role === 'system') {
+      flushArtifacts()
       out.push({ role, text })
       pending = []
     }
   }
+
+  flushArtifacts()
 
   return out
 }
@@ -117,8 +144,10 @@ interface TranscriptRow {
   context?: string
   duration_ms?: number
   name?: string
+  metadata?: Record<string, unknown>
   /** See `GatewayTranscriptMessage.origin`: set when the runtime opened the turn. */
   origin?: string
   role?: string
   text?: string
+  tool_calls?: Array<{ arguments?: string; id?: string; name?: string }>
 }

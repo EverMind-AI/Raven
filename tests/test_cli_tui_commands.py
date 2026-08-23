@@ -651,20 +651,18 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
 
 
 # ---------------------------------------------------------------------------
-# deliver_files is web-only: the TUI must not get a deliverable store
+# deliver_files is available in the TUI
 # ---------------------------------------------------------------------------
 
 
-def test_tui_agent_loop_receives_no_deliverables_store(patched_tui_loop_deps) -> None:
-    """deliver_files is a web-UI-only tool (its download box exists only there),
-    and registration is gated on the store's presence, so the TUI must pass
-    nothing. Passing a store here would put the tool in the TUI model's schema."""
+def test_tui_agent_loop_receives_deliverables_store(patched_tui_loop_deps) -> None:
+    from raven.agent.tools._deliverables import DeliverableStore
     from raven.cli.tui_commands import _build_agent_loop
 
     _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs.get("deliverables") is None
+    assert isinstance(kwargs.get("deliverables"), DeliverableStore)
 
 
 # ---------------------------------------------------------------------------

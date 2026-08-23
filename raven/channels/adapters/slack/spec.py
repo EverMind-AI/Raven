@@ -15,5 +15,5 @@ def _make(config):
 SPEC = ChannelSpec(
     display_name="Slack",
     factory=_make,
-    capabilities=Capabilities(),
+    capabilities=Capabilities(file_attachments=True),
 )

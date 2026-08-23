@@ -962,24 +962,43 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    Tiles wrap; they never scroll sideways. A file name has no length limit and
    the reading column is fixed, which is exactly how the delegated row grew
    past the page. */
-.arts { margin: 20px 0 2px; min-width: 0; }
-.arts .ahd {
-  display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em;
-  text-transform: uppercase; color: var(--faint);
+.arts {
+  margin: 26px 0 2px; padding: 14px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--ink);
+  container: artifacts / inline-size;
 }
-.arts .ahd .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.arts .asec + .asec {
+  margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--line-soft);
+}
+.arts .ahd {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+  font-size: 14.5px; line-height: 1.5; color: var(--muted);
+}
+.arts .ahd .ahm { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.arts .ahd .lb { color: var(--text); font-weight: 600; }
+.arts .ahd .n {
+  min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--ink);
+  color: var(--muted); font-family: var(--mono); font-size: 9.5px; line-height: 16px;
+  text-align: center; font-variant-numeric: tabular-nums;
+}
 .atiles {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
-  gap: 9px; min-width: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(178px, 100%), 1fr));
+  gap: 8px; min-width: 0;
 }
 .atile {
   position: relative; display: grid; min-width: 0; overflow: hidden;
   border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
   transition: border-color .14s, box-shadow .14s, transform .14s;
+  animation: artifact-in .18s ease-out;
 }
-.atile:hover { border-color: var(--faint); box-shadow: var(--elev-up); transform: translateY(-2px); }
-@media (prefers-reduced-motion: reduce) { .atile:hover { transform: none; } }
+@keyframes artifact-in { from { opacity: 0; transform: translateY(3px); } }
+.atile:hover { border-color: var(--faint); box-shadow: var(--elev-up); transform: translateY(-1px); }
+.atile.missing { opacity: .72; }
+.atile.missing:hover { border-color: var(--line); box-shadow: none; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .atile { animation: none; }
+  .atile:hover { transform: none; }
+}
 /* One keyboard stop and one accessible name for the whole tile, laid over it
    -- which also leaves the picture free to be block content, since a <button>
    may not contain any. */
@@ -988,12 +1007,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   cursor: pointer; border-radius: inherit;
 }
 .atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
+.atile .hit:disabled { cursor: default; }
 .atile .pic {
-  display: grid; height: 100px; overflow: hidden; position: relative;
+  display: grid; height: 80px; overflow: hidden; position: relative;
   background: var(--surface); border-bottom: 1px solid var(--line-soft);
 }
-.atile .pic.none { place-items: center; }
-.atile .pic.none .fi { width: 20px; height: 20px; stroke: var(--faint); }
+.atile .pic.none { place-content: center; justify-items: center; gap: 6px; }
+.atile .pic.none .fi { width: 18px; height: 18px; stroke: var(--faint); }
+.atile .pic.none .ft {
+  color: var(--muted); font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: .08em;
+}
 .atile .pic.doc { background: var(--ink); place-items: start; }
 .atile .pic.shot { background: var(--surface); }
 .atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
@@ -1009,12 +1033,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--muted); white-space: pre; overflow: hidden;
 }
 .atile .mini.prose > :first-child { margin-top: 0; }
-.atile .cap { display: grid; gap: 2px; padding: 7px 9px 8px; min-width: 0; }
+.atile .cap { display: grid; gap: 2px; min-height: 43px; padding: 7px 10px 8px; min-width: 0; }
 .atile .cap .nm {
-  font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 14.5px; font-weight: 600; line-height: 1.4;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .atile .cap .mt {
-  font-family: var(--mono); font-size: 10px; color: var(--faint);
+  font-family: var(--mono); font-size: 10px; line-height: 1.4; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 /* Where it opens, said before the click rather than after it. */
@@ -1023,12 +1048,38 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    placeholder the rail and the hub cards use -- a tile that jumps from blank
    to full reads as the page having been broken until that moment. */
 .atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
-.amore {
-  display: grid; place-items: center; min-height: 60px; padding: 8px;
-  border: 1px dashed var(--line); border-radius: 10px; background: none;
-  font-size: 12.5px; color: var(--muted); cursor: pointer;
+.achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; }
+.achange {
+  display: grid; grid-template-columns: 48px minmax(0, 1fr) 34px 34px 34px; align-items: center;
+  width: 100%; min-width: 0; min-height: 33px; padding: 5px 9px;
+  border: 0; border-bottom: 1px solid var(--line-soft); background: var(--ink);
+  color: var(--muted); text-align: left; cursor: pointer;
+  transition: background-color .14s, color .14s;
 }
-.amore:hover { color: var(--text); border-color: var(--faint); }
+.achange:last-child { border-bottom: 0; }
+.achange:hover { color: var(--text); background: var(--surface); }
+.achange .ck { font-size: 10.5px; font-weight: 600; color: var(--amber); }
+.achange .ck.new { color: var(--green); }
+.achange .cn {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-size: 14px; font-weight: 500;
+}
+.achange .ct, .achange .ca, .achange .cd {
+  color: var(--muted); font-family: var(--mono); font-size: 9.5px; text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.achange .ct { padding-left: 4px; }
+.amore {
+  display: inline-flex; margin: 7px 0 0; padding: 2px 0; border: 0; background: none;
+  font-size: 12.5px; line-height: 1.5; color: var(--muted); cursor: pointer;
+}
+.amore:hover { color: var(--text); }
+@container artifacts (max-width: 430px) {
+  .achange {
+    grid-template-columns: 44px minmax(0, 1fr) 32px 32px 32px;
+    padding-inline: 7px;
+  }
+}
 
 /* an empty target would still spend a flex gap, opening a hole after the verb */
 .wrow .ar:empty { display: none; }
@@ -1315,12 +1366,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    a turn is just what was said, and the actions and the time arrive when they
    can be used. The row keeps its space either way, so nothing shifts on hover
    -- and focus reveals it too, since a keyboard has no pointer to hover with. */
-.answer .acts, .answer .turnmeta, .ask .acts, .ask .turnmeta {
+.answer .acts, .answer .turnmeta, .answer-turn > .ansfoot .acts,
+.answer-turn > .ansfoot .turnmeta, .ask .acts, .ask .turnmeta {
   opacity: 0; transition: opacity .12s;
 }
 .answer:hover .acts, .answer:hover .turnmeta, .ask:hover .acts, .ask:hover .turnmeta,
 .answer:focus-within .acts, .answer:focus-within .turnmeta,
-.ask:focus-within .acts, .ask:focus-within .turnmeta { opacity: 1; }
+.ask:focus-within .acts, .ask:focus-within .turnmeta,
+.answer-turn:hover > .ansfoot .acts, .answer-turn:hover > .ansfoot .turnmeta,
+.answer-turn:focus-within > .ansfoot .acts, .answer-turn:focus-within > .ansfoot .turnmeta { opacity: 1; }
 /* Any control can carry its label in a hover pill instead of on the row: set
    data-tip and the row stays icons only. .tipdn prefers the pill below, for
    controls docked against the top of the window.
@@ -3808,4 +3862,3 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .ob-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line);
   transition: background .2s ease; }
 .ob-dots i.on { background: var(--text); }
-

@@ -615,8 +615,7 @@ async def test_delivery_note_rides_an_injected_body_when_the_tool_is_offered() -
 
 
 async def test_no_delivery_note_where_the_tool_is_absent() -> None:
-    """Every IM channel. Pointing at a tool that is not in the definitions reads
-    as an instruction that cannot be followed."""
+    """Pointing at a tool absent from the definitions cannot be followed."""
     src = _StubSource("hub", [_hit("hub/ppt", "ppt", body="body")])
     builder = SkillsSegmentBuilder(
         SkillForgeRouter([src]),
@@ -653,11 +652,10 @@ async def test_no_delivery_note_when_nothing_was_injected() -> None:
     assert seg.text == ""
 
 
-async def test_the_note_follows_the_real_channel_gate(tmp_path: Path) -> None:
+async def test_the_note_follows_the_real_tool_on_every_channel(tmp_path: Path) -> None:
     """The join the stubs cannot make: the real tool in a real registry, driven
     through the real _set_tool_context, read back through the real definitions.
-    ``DeliverFilesTool.channels`` stays the one place that decides -- a web turn
-    gets the note, the same builder on an IM turn does not."""
+    Every surface receives the same delivery instruction."""
     from raven.agent.loop.main import AgentLoop
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
@@ -666,11 +664,7 @@ async def test_the_note_follows_the_real_channel_gate(tmp_path: Path) -> None:
     from raven.context_engine.segments import render
 
     class _PlainTool(Tool):
-        """Channel-agnostic, so the IM leg's definitions stay non-empty and the
-        note is withheld by the membership check. Without it the filtered list is
-        empty, ``collect_tool_names`` collapses that to ``None``
-        (``return names or None``), and the leg would pass through the
-        no-tool-awareness branch instead -- proving nothing about the gate."""
+        """A second tool proves channel filtering preserves the full schema."""
 
         @property
         def name(self) -> str:
@@ -713,5 +707,5 @@ async def test_the_note_follows_the_real_channel_gate(tmp_path: Path) -> None:
     assert "deliver_files" in (await builder.build(_ctx("deck"))).text
 
     AgentLoop._set_tool_context(_Loop(), "telegram", "c1", None, session_key="telegram:c1")
-    assert render.collect_tool_names(registry.get_definitions) == ["read_file"]
-    assert "deliver_files" not in (await builder.build(_ctx("deck"))).text
+    assert render.collect_tool_names(registry.get_definitions) == ["read_file", "deliver_files"]
+    assert "deliver_files" in (await builder.build(_ctx("deck"))).text

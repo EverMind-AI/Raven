@@ -1,5 +1,4 @@
-"""Tests for the deliver_files tool: the web-channel gate, path validation, and
-the manifest it hands back to the turn stream."""
+"""Tests for deliver_files path validation and turn-stream manifests."""
 
 from __future__ import annotations
 
@@ -77,18 +76,14 @@ async def test_take_metadata_is_consumed_once(tool, tmp_path) -> None:
     assert tool.take_metadata() is None
 
 
-async def test_non_web_channel_refuses_without_touching_the_filesystem(tool, tmp_path) -> None:
-    """The refusal must not depend on the path being bad: an existing, valid
-    file is still refused, and nothing is registered."""
+async def test_non_web_channel_delivers_the_same_manifest(tool, tmp_path) -> None:
     _write(tmp_path / "chanwork", "real.txt")
     tool.set_context("whatsapp", "123", "whatsapp:123")
 
     result = await tool.execute(files=[{"path": "real.txt"}])
 
-    assert result.startswith("Error")
-    assert "web" in result
-    assert "whatsapp" in result
-    assert tool.take_metadata() is None
+    assert result.startswith("Delivered")
+    assert [item["name"] for item in tool.take_metadata()["raven_delivery"]["files"]] == ["real.txt"]
 
 
 async def test_missing_file_yields_an_error_and_no_manifest(tool) -> None:
@@ -244,10 +239,8 @@ async def test_manifest_survives_the_tool_call_forwarder(tool, tmp_path) -> None
 
 
 def test_set_tool_context_hands_deliver_files_the_channel_and_session_key() -> None:
-    """The tool needs the turn's channel (for the web gate) and the session key
-    (for token reuse); only _set_tool_context supplies them, and it only reaches
-    tools named in its whitelist. The registry gets the channel too -- that is
-    what withholds the tool from a channel it cannot serve."""
+    """The tool needs the turn's channel and session key for delivery routing
+    and token reuse; only _set_tool_context supplies them."""
     from raven.agent.loop.main import AgentLoop
 
     seen: dict[str, tuple[str, str, str]] = {}
@@ -273,17 +266,11 @@ def test_set_tool_context_hands_deliver_files_the_channel_and_session_key() -> N
     assert seen["channel"] == "web"
 
 
-def test_declares_itself_web_only(tool) -> None:
-    """The declaration is what the registry filters on; losing it puts the tool
-    back in every IM channel's schema, refusing only once called."""
-    assert tool.channels == frozenset({"web"})
+def test_declares_itself_available_to_every_channel(tool) -> None:
+    assert tool.channels is None
 
 
-def test_an_im_turn_never_sees_deliver_files_in_the_schema(tool) -> None:
-    """The join the test above cannot make: a real registry holding the real
-    tool, driven through the real _set_tool_context, read back the way a request
-    is actually assembled. Declaration, wiring and schema are each covered
-    alone; a break in how they meet would pass all three."""
+def test_every_surface_sees_deliver_files_in_the_schema(tool) -> None:
     from raven.agent.loop.main import AgentLoop
 
     registry = ToolRegistry()
@@ -297,7 +284,7 @@ def test_an_im_turn_never_sees_deliver_files_in_the_schema(tool) -> None:
         return {d["function"]["name"] for d in registry.get_definitions()}
 
     AgentLoop._set_tool_context(_Loop(), "telegram", "c1", None, session_key="telegram:c1")
-    assert "deliver_files" not in offered()
+    assert "deliver_files" in offered()
 
     AgentLoop._set_tool_context(_Loop(), "web", "c1", None, session_key="web:c1")
     assert "deliver_files" in offered()

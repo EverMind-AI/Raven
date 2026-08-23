@@ -420,6 +420,131 @@ describe('createChatStream — cancel preserves streamed content', () => {
   })
 })
 
+describe('createChatStream — turn artifacts', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    resetDirectChat()
+    turnController.fullReset()
+  })
+
+  it('appends deliveries and file changes after the completed answer', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: {
+        arguments: { path: '/tmp/report.md' },
+        name: 'write_file',
+        tool_call_id: 'write-1'
+      }
+    })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: {
+          raven_delivery: {
+            files: [{ name: 'report.md', path: '/tmp/report.md', size: 2048 }]
+          }
+        },
+        result_preview: 'Delivered report.md',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Done.' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        turn_id: 'turn-1',
+        usage: { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 }
+      }
+    })
+
+    expect(appended.at(-1)).toMatchObject({
+      artifacts: {
+        changes: [{ change: 'new', ext: 'MD', name: 'report.md' }],
+        deliveries: [{ ext: 'MD', missing: false, name: 'report.md', size: 2048, title: 'report.md' }]
+      },
+      kind: 'artifacts'
+    })
+  })
+
+  it.each(['cancelled_by_client', 'internal'] as const)('keeps deliveries after a %s error', async reason => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: { raven_delivery: { files: [{ name: 'report.pdf', path: '/tmp/report.pdf' }] } },
+        result_preview: 'Delivered report.pdf',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32000, message: 'turn failed', reason }
+    })
+
+    expect(appended).toContainEqual(expect.objectContaining({
+      artifacts: expect.objectContaining({
+        deliveries: [expect.objectContaining({ name: 'report.pdf' })]
+      }),
+      kind: 'artifacts'
+    }))
+  })
+
+  it('keeps deliveries after a local force reset with no later terminal event', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: {
+        metadata: { raven_delivery: { files: [{ name: 'report.pdf', path: '/tmp/report.pdf' }] } },
+        result_preview: 'Delivered report.pdf',
+        tool_call_id: 'deliver-1',
+        truncated: false
+      }
+    })
+
+    stream.forceReset()
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
+
+    expect(appended.filter(msg => msg.kind === 'artifacts')).toEqual([
+      expect.objectContaining({
+        artifacts: expect.objectContaining({
+          deliveries: [expect.objectContaining({ name: 'report.pdf' })]
+        })
+      })
+    ])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Direct chat: routing by the event's own tag
 // ---------------------------------------------------------------------------

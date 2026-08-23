@@ -25,6 +25,8 @@ export interface GatewayTranscriptMessage {
   context?: string
   duration_ms?: number
   name?: string
+  metadata?: Record<string, unknown>
+  tool_calls?: Array<{ arguments?: string; id?: string; name?: string }>
   /**
    * Present on the user entry of a turn the runtime opened, naming what opened
    * it. Absent means a person typed it. A marked row's text is internal prose --

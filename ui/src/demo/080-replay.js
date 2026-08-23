@@ -44,6 +44,7 @@ function replay(run, instant) {
       const h = open_[e.id];
       if (!h) return;
       h.done(e.ok, e.r, e.ms, e.diff);
+      if (e.meta) RavenIslands.transcript.delivery(WS.turn, e.meta);
       if (!e.ok) h.meta.st.failed = true;
       wsOnToolDone(h.meta.n, h.meta.a, e.ok, e.r, e.ms, e.diff);
     }, e.d);

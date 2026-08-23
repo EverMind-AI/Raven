@@ -49,7 +49,7 @@ class WeixinChannel(ChannelBase):
     config: WeixinConfig
     name = "weixin"
     display_name = "WeChat"
-    capabilities = Capabilities(interactive_login=True)  # QR pairing via iLink
+    capabilities = Capabilities(interactive_login=True, file_attachments=True)  # QR pairing via iLink
 
     def __init__(self, config: WeixinConfig):
         super().__init__(config)

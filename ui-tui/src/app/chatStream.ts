@@ -31,8 +31,9 @@ import type {
   TurnSendResult,
   TurnSubscribeParams
 } from '../rpc/index.js'
-import type { Msg } from '../types.js'
+import type { Msg, TurnArtifacts } from '../types.js'
 
+import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
 import {
@@ -109,6 +110,7 @@ export interface ChatStreamHandle {
 
 interface InternalState {
   attached: boolean
+  artifacts: TurnArtifacts
   unsubscribe: (() => Promise<void>) | null
   /**
    * The live turn id per view key (`viewKeyOf`).
@@ -258,7 +260,7 @@ const dispatch = (
       turnController.recordReasoningDelta(event.payload.text)
       return
     case 'tool.start':
-      onToolStart(event)
+      onToolStart(state, event)
 
       // The runtime emits no subagent.* event of any kind, so a dispatch tool
       // starting is the earliest signal that the session is about to have a new
@@ -273,7 +275,7 @@ const dispatch = (
       // for the legacy bus and we don't want a parallel preview channel.
       return
     case 'tool.complete':
-      onToolComplete(event)
+      onToolComplete(state, event)
       return
     case 'message.complete':
       onMessageComplete(state, event, appendMessage)
@@ -350,6 +352,7 @@ const dispatch = (
 }
 
 const onMessageStart = (state: InternalState, ev: MessageStartEvent): void => {
+  state.artifacts = { changes: [], deliveries: [] }
   state.turns.set(MAIN_VIEW_KEY, ev.payload.turn_id)
   markRunning(null)
   turnController.startMessage()
@@ -360,7 +363,7 @@ const onTokenDelta = (ev: TokenDeltaEvent): void => {
   turnController.recordMessageDelta({ text: ev.payload.text })
 }
 
-const onToolStart = (ev: ToolStartEvent): void => {
+const onToolStart = (state: InternalState, ev: ToolStartEvent): void => {
   const { tool_call_id, name, arguments: args, display } = ev.payload
 
   // The graph's own prompts, kept before the args are discarded: no dag.* event
@@ -372,12 +375,15 @@ const onToolStart = (ev: ToolStartEvent): void => {
   // Prefer the tool-authored call label; else preview the "what" of the call
   // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
   turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))
+  const change = changedFile(name, args)
+  if (change) {addUnique(state.artifacts.changes, change)}
 }
 
-const onToolComplete = (ev: ToolCompleteEvent): void => {
+const onToolComplete = (state: InternalState, ev: ToolCompleteEvent): void => {
   const { tool_call_id, result_preview, truncated } = ev.payload
   const summary = truncated ? `${result_preview} (truncated)` : result_preview
   turnController.recordToolComplete(tool_call_id, undefined, undefined, summary)
+  deliveryFiles(ev.payload.metadata).forEach(file => addUnique(state.artifacts.deliveries, file))
 }
 
 const onMessageComplete = (
@@ -400,8 +406,21 @@ const onMessageComplete = (
   if (!wasInterrupted && appendMessage) {
     const msgs: Msg[] = finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
     msgs.forEach(appendMessage)
+    appendArtifacts(state, appendMessage)
   }
+  state.artifacts = { changes: [], deliveries: [] }
   patchUiState({ status: 'ready' })
+}
+
+const appendArtifacts = (state: InternalState, appendMessage?: (msg: Msg) => void): void => {
+  if (!appendMessage) {
+    return
+  }
+  const artifact = artifactMessage({
+    changes: [...state.artifacts.changes],
+    deliveries: [...state.artifacts.deliveries]
+  })
+  if (artifact) {appendMessage(artifact)}
 }
 
 const onError = (
@@ -415,8 +434,12 @@ const onError = (
   clearRunning(null)
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
+    appendArtifacts(state, appendMessage)
+    state.artifacts = { changes: [], deliveries: [] }
     return
   }
+  appendArtifacts(state, appendMessage)
+  state.artifacts = { changes: [], deliveries: [] }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
   // the live anchor so the user can submit again. Append the real failure
   // detail (e.g. the underlying exception) when present, so a generic
@@ -450,6 +473,7 @@ const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: stri
 export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
   const state: InternalState = {
     attached: false,
+    artifacts: { changes: [], deliveries: [] },
     unsubscribe: null,
     turns: new Map()
   }
@@ -485,6 +509,8 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     sending.delete(MAIN_VIEW_KEY)
     state.turns.delete(MAIN_VIEW_KEY)
     restoreInputPrompt(opts.appendMessage, opts.sys)
+    appendArtifacts(state, opts.appendMessage)
+    state.artifacts = { changes: [], deliveries: [] }
   }
 
   const armAckWatchdog = (key: string): void => {
