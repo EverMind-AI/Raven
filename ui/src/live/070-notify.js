@@ -20,11 +20,17 @@ rpc.notify.event = (params) => {
 
 /* Approval wears the ask_user sheet (approveSheet), so a blocked turn always
    interrupts in the same place and shape. Closing it is a denial, never a
-   silent drop -- the engine is waiting on an answer either way. */
+   silent drop -- the engine is waiting on an answer either way.
+
+   Filed under the conversation the server says it asked on behalf of, for the
+   same reason clarify.request is (below): the request belongs to the turn that
+   raised it, not to whichever conversation the reader had open when it landed.
+   A frame that names none -- a dispatch with no conversation to name -- keeps
+   the old fallback and docks where the reader is. */
 rpc.notify['confirm.request'] = (p) => {
   const say = (answer) =>
     rpc.call('confirm.respond', { request_id: p.request_id, answer }).catch(() => {});
-  approveSheet(p.prompt || '', () => say(true), () => say(false));
+  approveSheet(p.prompt || '', () => say(true), () => say(false), p.conversation_id);
 };
 
 const SKIP_ANSWER = () => T('gui.clarify.skipped_msg');

@@ -48,8 +48,24 @@ class ConfirmBroker:
         self._send_frame = send_frame
         self._pending: dict[str, _PendingConfirm] = {}
 
-    async def await_confirm(self, prompt: str, *, default: bool) -> bool:
+    async def await_confirm(
+        self,
+        prompt: str,
+        *,
+        default: bool,
+        conversation_id: str | None = None,
+        send_frame: SendFrame | None = None,
+    ) -> bool:
         """Emit a ``confirm.request`` and await the matching answer.
+
+        ``conversation_id`` names the conversation the confirm was raised in, so
+        a frontend can file the sheet under it rather than under whichever
+        conversation the reader happens to have open -- the same field
+        ``clarify.request`` carries, and what lets
+        :func:`raven.rpc.connection.conversation_scoped` narrow the frame to the
+        surface that owns it. ``None`` when the entry point cannot name one (a
+        bare ``cli.dispatch``), which keeps the frame's own claim honest and
+        falls back to the broadcast.
 
         Returns ``default`` on hard-limit timeout, cancellation, EOF
         (:meth:`cancel_all`), or any internal error — never raises to the
@@ -59,16 +75,24 @@ class ConfirmBroker:
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         self._pending[request_id] = _PendingConfirm(future=future, default=default)
+        params: dict[str, Any] = {
+            "request_id": request_id,
+            "prompt": prompt,
+            "default": default,
+        }
+        if conversation_id:
+            params["conversation_id"] = conversation_id
         try:
-            await self._send_frame(
+            # `send_frame` overrides the broker's own when given: a request's
+            # confirm must reach the surface that ASKED, which may be a
+            # specific connection rather than whatever the broker was built on.
+            # The pending stays in THIS broker's registry, so the response
+            # handler (registered against the same broker) can resolve it.
+            await (send_frame if send_frame is not None else self._send_frame)(
                 {
                     "jsonrpc": "2.0",
                     "method": "confirm.request",
-                    "params": {
-                        "request_id": request_id,
-                        "prompt": prompt,
-                        "default": default,
-                    },
+                    "params": params,
                 }
             )
             return await asyncio.wait_for(future, _CONFIRM_HARD_LIMIT_S)

@@ -11,6 +11,9 @@
  * why its opener is published on the composer's bag instead of as a global of
  * its own -- the rack's six names are already there and this is the seventh
  * thing the layers do to that rack.
+ *
+ * "The conversation that asked" is a fact the caller has to carry in, not one
+ * this module can read: see `owner` on :func:`open`.
  */
 
 import { t } from '../../shell/bridge'
@@ -33,12 +36,24 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   return n
 }
 
-export function open(prompt: string, onAllow?: () => void, onDeny?: () => void): Approval {
+export function open(
+  prompt: string, onAllow?: () => void, onDeny?: () => void, owner?: string,
+): Approval {
   /* The conversation this request belongs to, read once and passed to all three
      of the calls that are scoped by it. Reading it again later would be a way
      for them to disagree -- the reader can switch conversations between any two
-     lines of an async page. */
-  const key = session()
+     lines of an async page.
+
+     `owner` is the conversation the request was raised in, which the caller
+     learns from the frame that raised it (live/070-notify.js). It is not always
+     the open one: a turn the reader stepped away from can block on an approval
+     at any moment, and filing that under whatever is on screen puts the question
+     over a conversation it does not belong to -- while the conversation that
+     asked shows nothing pending and stays paused on the server.
+
+     The fallback is for a caller with no conversation to name: the design canvas
+     preview, and a frame from a dispatch the server could not attribute. */
+  const key = owner || session()
 
   /* One question at a time in THIS conversation: a new request replaces the
      pending one rather than stacking a second sheet the reader has to answer

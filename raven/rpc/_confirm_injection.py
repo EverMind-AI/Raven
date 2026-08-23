@@ -33,8 +33,21 @@ if TYPE_CHECKING:
 
 
 @contextlib.contextmanager
-def confirm_injection(broker: "ConfirmBroker", loop: asyncio.AbstractEventLoop) -> Iterator[None]:
-    """Redirect ``typer.confirm`` / ``click.confirm`` to ``broker`` for the block."""
+def confirm_injection(
+    broker: "ConfirmBroker",
+    loop: asyncio.AbstractEventLoop,
+    conversation_id: str | None = None,
+    send_frame: Any | None = None,
+) -> Iterator[None]:
+    """Redirect ``typer.confirm`` / ``click.confirm`` to ``broker`` for the block.
+
+    ``conversation_id`` is the conversation the dispatch was asked for; it rides
+    into the ``confirm.request`` frame so the prompt is answerable where it was
+    raised. Passed explicitly rather than read from the connection contextvar:
+    ``run_coroutine_threadsafe`` schedules the coroutine in the loop's own
+    context, not the dispatch task's, so a contextvar read inside the broker
+    would come back empty.
+    """
     orig_typer_confirm = typer.confirm
     orig_click_confirm = click.confirm
 
@@ -45,7 +58,12 @@ def confirm_injection(broker: "ConfirmBroker", loop: asyncio.AbstractEventLoop) 
         *_args: Any,
         **_kwargs: Any,
     ) -> bool:
-        future = asyncio.run_coroutine_threadsafe(broker.await_confirm(str(text), default=bool(default)), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            broker.await_confirm(
+                str(text), default=bool(default), conversation_id=conversation_id, send_frame=send_frame
+            ),
+            loop,
+        )
         answer = future.result()
         if abort and not answer:
             # Preserve click's abort=True contract (no current call site uses

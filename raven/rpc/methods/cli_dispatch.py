@@ -257,7 +257,12 @@ def _invoke_ec_cli(argv: list[str]) -> int:
     return int(result) if isinstance(result, int) else 0
 
 
-async def cli_dispatch(params: dict, *, confirm_broker: "ConfirmBroker | None" = None) -> dict:
+async def cli_dispatch(
+    params: dict,
+    *,
+    confirm_broker: "ConfirmBroker | None" = None,
+    conversation_id: str | None = None,
+) -> dict:
     """Run an EC CLI command in-process; return ``CliResult``-shaped dict.
 
     When ``confirm_broker`` is supplied (TUI production path), ``typer.confirm``
@@ -267,6 +272,11 @@ async def cli_dispatch(params: dict, *, confirm_broker: "ConfirmBroker | None" =
     paused-on-confirm command is not killed mid-prompt (path B). Without a
     broker, ``typer.confirm`` keeps its native behavior and the timeout is
     unchanged.
+
+    ``conversation_id`` names the conversation this dispatch was asked for. It is
+    a caller argument rather than a ``params`` field because the entry point that
+    knows it is ``slash.exec`` (whose own ``session_id`` is where it comes from);
+    a bare ``cli.dispatch`` frame names no conversation and passes ``None``.
 
     Raises:
         ConfigValidationError (-32011): params shape / range invalid.
@@ -321,7 +331,15 @@ async def cli_dispatch(params: dict, *, confirm_broker: "ConfirmBroker | None" =
     # on the event loop) so the worker thread can run_coroutine_threadsafe back.
     if confirm_broker is not None:
         loop = asyncio.get_running_loop()
-        confirm_ctx: contextlib.AbstractContextManager = confirm_injection(confirm_broker, loop)
+        # The confirm reaches the surface that ASKED for it: the calling
+        # connection's own sink when there is one, the broker's destination
+        # otherwise. The pending stays in the broker's registry either way, so
+        # confirm.respond (registered against that broker) can resolve it.
+        from raven.rpc.connection import current_frame_sink
+
+        confirm_ctx: contextlib.AbstractContextManager = confirm_injection(
+            confirm_broker, loop, conversation_id, current_frame_sink()
+        )
         effective_timeout = timeout_s + _CONFIRM_HARD_LIMIT_S
     else:
         confirm_ctx = contextlib.nullcontext()
