@@ -744,12 +744,18 @@ def _supervise(port: int) -> None:
     with suppress(ValueError):  # not the main thread: nothing to install
         signal.signal(signal.SIGTERM, _on_term)
 
-    _write_web_state(port)
-    print(f"raven web: supervising the gateway on port {port} (pid {os.getpid()})", flush=True)
     delay = 1.0
     fast_failures = 0
     target = port
     try:
+        # Recorded inside the guard rather than before it. The handler above is
+        # armed the moment it is installed, so a SIGTERM arriving between the
+        # write and this `try` raised KeyboardInterrupt where no `finally` could
+        # see it -- leaving behind the very stale `web.json` this function
+        # exists to prevent. `raven web` followed straight away by `--stop` is
+        # exactly that timing.
+        _write_web_state(port)
+        print(f"raven web: supervising the gateway on port {port} (pid {os.getpid()})", flush=True)
         while True:
             started = time.monotonic()
             try:
