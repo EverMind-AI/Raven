@@ -908,6 +908,57 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
             time.sleep(0.05)
         assert not state.exists(), "SIGTERM left web.json behind on a dead pid"
 
+    def test_sigterm_during_the_prologue_still_removes_the_state_file(self, tmp_path) -> None:
+        """The signal that arrives before the loop does.
+
+        The test above sends SIGTERM once the file exists, which is a real
+        moment but a fleeting one: the supervisor is past it within microseconds,
+        so a regression here shows up as a rare red pipeline rather than a
+        failure. This holds the process in that moment on purpose -- the state
+        write is wrapped so it takes three seconds to return -- and terminates
+        it there. Then a handler armed outside the guard fails every run instead
+        of one in several hundred.
+        """
+        import os
+        import subprocess
+        import sys
+        import time
+
+        home = tmp_path / "home"
+        home.mkdir()
+        state = home / "web.json"
+        script = (
+            "import time\n"
+            "from raven.cli import serve_commands as s\n"
+            "s._gateway_argv = lambda p: ['sleep', '600']\n"
+            "s._bound_port_of = lambda p: None\n"
+            "_recorded = s._write_web_state\n"
+            "def _linger(port):\n"
+            "    _recorded(port)\n"
+            "    time.sleep(3)\n"
+            "s._write_web_state = _linger\n"
+            "s._supervise(18999)\n"
+        )
+        env = {**os.environ, "RAVEN_HOME": str(home)}
+        proc = subprocess.Popen([sys.executable, "-c", script], env=env)  # noqa: S603
+        try:
+            deadline = time.monotonic() + 15
+            while not state.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert state.exists(), "the supervisor never recorded itself"
+            # Still inside the lingering write, which is the window.
+            proc.terminate()
+            proc.wait(timeout=15)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+        deadline = time.monotonic() + 5
+        while state.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not state.exists(), "a SIGTERM before the loop left web.json on a dead pid"
+
 
 # ---------------------------------------------------------------------------
 # `raven serve` -- attach to a gateway that already hosts the page, instead of
