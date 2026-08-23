@@ -328,7 +328,16 @@ def _live_turns(activity: Any, offset: int) -> list[dict[str, Any]]:
     rows = [m for m in list(getattr(activity, "transcript", None) or []) if isinstance(m, dict)]
     prompt = getattr(activity, "prompt", None)
     if isinstance(prompt, str) and prompt:
-        rows.insert(0, {"role": "user", "content": prompt})
+        # Stamped with the run's own start. Unstamped, `_ms_of` reports 0 -- a
+        # valid instant -- and the page dated the question a reader had just
+        # asked to 1970. The steps beside it stay unstamped: this knows when the
+        # turn began and not when each of them happened, and a clock invented per
+        # row would move on every poll.
+        began = getattr(activity, "started_at_ms", None)
+        row: dict[str, Any] = {"role": "user", "content": prompt}
+        if isinstance(began, int) and began > 0:
+            row["timestamp"] = datetime.fromtimestamp(began / 1000).isoformat()
+        rows.insert(0, row)
     turns = _log_turns(rows)
     for index, turn in enumerate(turns):
         turn["call_id"] = f"live-{offset + index}"

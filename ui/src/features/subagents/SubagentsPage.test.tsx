@@ -376,6 +376,34 @@ describe('subagents island, an instance detail', () => {
     })
   }
 
+  it('does not date a turn nobody timestamped', async () => {
+    /* `at_ms` is 0 for a row nothing stamped -- a step off a transport's own
+       transcript, or the question of a turn still running -- and 0 is a valid
+       instant, so handing it to the renderer printed "1970-01-01 08:00" under
+       the message. */
+    const row = inst({ handle: 'chatty', status: 'running', resumable: true })
+    instances([row], {
+      instanceHistory: async () => ({
+        turns: [
+          { call_id: 'c1', role: 'user' as const, content: '在吗', at_ms: 0, live: true },
+          { call_id: 'c1', role: 'assistant' as const, content: '在', at_ms: 1755900000000 },
+        ],
+      }),
+    })
+    await mount()
+    await act(async () => {
+      ;(await screen.findByText('chatty')).closest('.sarow')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const messages = (paints[0]!.ctx as { messages: Array<Record<string, unknown>> }).messages
+    expect('timestamp' in messages[0]!).toBe(false)
+    /* And one that does have a clock keeps it. */
+    expect(messages[1]!.timestamp).toBe(1755900000000)
+  })
+
   it('carries the conversation on, addressed to this instance', async () => {
     const said: Array<[string, string, string]> = []
     await openInstance(inst({ handle: 'chatty', status: 'completed', resumable: true }), {

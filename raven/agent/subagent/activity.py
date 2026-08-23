@@ -26,6 +26,7 @@ rather than raising into a backend's happy path.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -82,6 +83,12 @@ class RunActivity:
     # matters: the record's `prompt.md` is addressed by a task id, and the
     # instance log gets the row only at the end.
     prompt: str | None = None
+    # When this run began, so a reader watching it can date the turn. Set on
+    # construction rather than reported by the run: what a watcher needs is one
+    # instant that does not move between polls, and nothing else on the way holds
+    # one -- the transcript rows a transport publishes carry no clock of their
+    # own, and the record's timestamps do not exist until the turn lands.
+    started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
 
     @property
     def tokens(self) -> int | None:
