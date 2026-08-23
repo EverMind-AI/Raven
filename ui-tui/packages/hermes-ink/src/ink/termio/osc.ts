@@ -69,6 +69,12 @@ export function wrapForMultiplexer(sequence: string): string {
  * - 'osc52': only the raw OSC 52 sequence will be written to stdout.
  *   Best-effort; iTerm2 disables OSC 52 by default.
  *
+ * Only meaningful once a copy has succeeded. setClipboard() can take no path
+ * at all -- headless, no tmux, and OSC 52 suppressed by the override -- and
+ * reports success false for it; this returns 'osc52' there, because the type
+ * has no word for "nothing happened". Both callers ask only after a non-empty
+ * result, so that combination is unreachable through them.
+ *
  * Decided by asking the same two questions setClipboard() asks, in the same
  * order: shouldUseNativeClipboard() for whether the native tool is wanted, and
  * copyNative()'s own platform gate for whether one exists. Keeping this in step

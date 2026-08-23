@@ -179,22 +179,51 @@ export async function writeClipboardText(
  * owns. Saying so there -- and not saying it where a native tool really did
  * write the clipboard -- is what keeps the wording worth reading.
  */
-function copiedCount(charCount: number): string {
-  return `copied ${charCount} character${charCount === 1 ? '' : 's'}`
+/**
+ * How many characters a reader would say the text has.
+ *
+ * `String.length` counts UTF-16 code units, so it reports three emoji as six
+ * and a combining accent as two. Segmenter is the only built-in that counts
+ * what is on screen; the spread fallback at least collapses surrogate pairs.
+ */
+export function graphemeCount(text: string): number {
+  if (typeof Intl.Segmenter === 'function') {
+    let count = 0
+
+    for (const _ of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      count++
+    }
+
+    return count
+  }
+
+  return [...text].length
 }
 
+/** 'copied'/'sent' plus a correctly pluralised count. The verb is the caller's
+ *  because only the native and tmux paths actually wrote anything. */
+function counted(verb: string, charCount: number): string {
+  return `${verb} ${charCount} character${charCount === 1 ? '' : 's'}`
+}
+
+/** OSC 52 hands bytes to the terminal and the terminal decides whether to keep
+ *  them -- an oversized sequence is dropped without a word, and a 2000-row
+ *  drag-scroll selection is one half-megabyte escape sequence. So that path
+ *  reports what was sent; the paths that really wrote a clipboard say copied. */
+const verbFor = (path: ClipboardPath): string => (path === 'osc52' ? 'sent' : 'copied')
+
 export function copyResultNotice(charCount: number, path: ClipboardPath): string {
-  const copied = copiedCount(charCount)
+  const head = counted(verbFor(path), charCount)
 
   switch (path) {
     case 'native':
-      return copied
+      return head
 
     case 'osc52':
-      return `${copied} via OSC 52 — if the paste comes up empty, allow clipboard access in your terminal`
+      return `${head} via OSC 52 — if the paste comes up empty, allow clipboard access in your terminal`
 
     case 'tmux-buffer':
-      return `${copied} to the tmux buffer — reaching the system clipboard needs tmux set-clipboard`
+      return `${head} to the tmux buffer — reaching the system clipboard needs tmux set-clipboard`
   }
 }
 
@@ -207,5 +236,5 @@ export function copyResultNotice(charCount: number, path: ClipboardPath): string
  * for the reason a paste came up empty.
  */
 export function copyOnSelectNotice(charCount: number, path: ClipboardPath, firstOfSession: boolean): string {
-  return firstOfSession ? copyResultNotice(charCount, path) : copiedCount(charCount)
+  return firstOfSession ? copyResultNotice(charCount, path) : counted(verbFor(path), charCount)
 }

@@ -33,7 +33,7 @@ import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
-import { copyOnSelectNotice } from '../lib/clipboard.js'
+import { copyOnSelectNotice, graphemeCount } from '../lib/clipboard.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
 import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
@@ -343,7 +343,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   useEffect(
     () =>
       subscribeCopyOnSelect(selection, text => {
-        sys(copyOnSelectNotice(text.length, getClipboardPath(), !copiedOnSelectRef.current))
+        sys(copyOnSelectNotice(graphemeCount(text), getClipboardPath(), !copiedOnSelectRef.current))
         copiedOnSelectRef.current = true
       }),
     [selection, sys]

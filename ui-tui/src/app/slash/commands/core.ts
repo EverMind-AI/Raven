@@ -22,7 +22,7 @@ import { NO_CONFIRM_DESTRUCTIVE } from '../../../config/env.js'
 import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
 import { HOTKEYS } from '../../../content/hotkeys.js'
 import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
-import { copyResultNotice, writeClipboardText } from '../../../lib/clipboard.js'
+import { copyResultNotice, graphemeCount, writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
 import { patchOverlayState } from '../../overlayStore.js'
@@ -358,7 +358,7 @@ export const coreCommands: SlashCommand[] = [
         const text = await ctx.composer.selection.copySelection()
 
         if (text) {
-          return sys(copyResultNotice(text.length, getClipboardPath()))
+          return sys(copyResultNotice(graphemeCount(text), getClipboardPath()))
         }
 
         return sys(

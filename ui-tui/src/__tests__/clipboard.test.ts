@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   copyOnSelectNotice,
+  graphemeCount,
   copyResultNotice,
   isUsableClipboardText,
   readClipboardText,
@@ -376,7 +377,36 @@ describe('copyOnSelectNotice', () => {
   it('goes terse after that', () => {
     // This fires on every drag. Repeating a full sentence about terminal
     // settings would bury the transcript the feature exists to let you read.
-    expect(copyOnSelectNotice(42, 'osc52', false)).toBe('copied 42 characters')
+    expect(copyOnSelectNotice(42, 'osc52', false)).toBe('sent 42 characters')
     expect(copyOnSelectNotice(1, 'tmux-buffer', false)).toBe('copied 1 character')
+  })
+})
+
+describe('copyResultNotice honesty', () => {
+  it('does not claim a copy on the one path whose outcome it cannot see', () => {
+    // OSC 52 writes bytes to the terminal and the terminal decides whether to
+    // honour them -- and silently drops an oversized sequence. A 2000-row
+    // drag-scroll selection is a single half-megabyte escape sequence that no
+    // terminal accepts, and setClipboard() still reports success because bytes
+    // were written. "copied" is a claim about the outcome; "sent" is what we
+    // actually know.
+    expect(copyResultNotice(42, 'osc52')).toContain('sent 42 characters')
+    expect(copyResultNotice(42, 'osc52')).not.toContain('copied')
+  })
+
+  it('still says copied where a native tool really wrote the clipboard', () => {
+    expect(copyResultNotice(42, 'native')).toBe('copied 42 characters')
+  })
+
+  it('counts what a reader would call a character, not utf-16 code units', () => {
+    // Three emoji are six code units. Reporting "6 characters" for a
+    // three-character selection is a small lie in the one line whose whole
+    // job is telling the truth about the copy.
+    expect(copyResultNotice([...'\u{1f389}\u{1f389}\u{1f389}'].length, 'native')).toBe('copied 3 characters')
+    expect(graphemeCount('\u{1f389}\u{1f389}\u{1f389}')).toBe(3)
+    expect(graphemeCount('\u4f60\u597d\u4e16\u754c')).toBe(4)
+    expect(graphemeCount('hello')).toBe(5)
+    // e + combining acute is one character on screen and two code points.
+    expect(graphemeCount('e\u0301cole')).toBe(5)
   })
 })
