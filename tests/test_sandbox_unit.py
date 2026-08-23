@@ -1455,6 +1455,43 @@ class TestSubagentSandboxLifecycle:
         assert req.source.sender_id == "subagent"
         assert req.conversation == "weixin:u1"
         assert handle.result_awaited is False  # fire-and-forget
+        # The identity a reader needs after a reload. Without it the stored
+        # entry is an ordinary user message and a reloaded transcript draws the
+        # re-injection as a question the user asked, fence markers and all.
+        assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
+
+    async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
+        """A graph's announce is the other injection shape -- the whole content is
+        the fence, with none of a spawn's framing -- and it has to carry the same
+        identity on the request AND on the event. A client watching live reads it
+        from the event; a client replaying the session reads it off the stored
+        entry, and the two must agree."""
+        from raven.agent.subagent import SubagentManager
+
+        captured: dict = {}
+        events: list[tuple[str, dict]] = []
+        manager = SubagentManager(provider=mock_provider, workspace=tmp_path)
+        manager.set_submit(lambda req: captured.__setitem__("req", req))
+
+        async def _sink(conversation, event):
+            events.append((conversation, event))
+
+        manager.set_delivery_sink(_sink)
+
+        origin = {"channel": "tui", "chat_id": "direct", "session_key": "tui:default"}
+        await manager.announce_dag_result("run-7", "3 completed, 0 failed", origin)
+        await asyncio.sleep(0)  # the sink is a fire-and-forget task
+
+        mark = {"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"}
+        assert captured["req"].delegated == mark
+        assert events and events[0][0] == "tui:default"
+        payload = events[0][1]["payload"]
+        assert {k: payload[k] for k in mark} == mark
+        # The event carries the text that was injected, verbatim -- the same
+        # string the stored entry holds, so both readers strip one fence.
+        assert payload["content"] == captured["req"].text
+        assert payload["content"].startswith("[BEGIN UNTRUSTED subagent #")
+        assert "3 completed, 0 failed" in payload["content"]
 
 
 def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):

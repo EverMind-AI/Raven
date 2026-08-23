@@ -51,6 +51,15 @@ function wsOnHistory(messages) {
   });
   (messages || []).forEach((m) => {
     if (!m) return;
+    if (m.role === 'user' && m.delegated) {
+      /* A delegated result re-entering counts as one turn here too -- a live
+         client advances on turn.started, and without the same step on replay
+         a reloaded session files the delegated reaction's files under its
+         parent's turn. Mirrors the rule in features/transcript/store.ts. An
+         origin-only entry (cron, sentinel) does NOT: it opens no workspace
+         turn there either. */
+      WS.turn += 1; return;
+    }
     if (m.role === 'user' && m.text && m.text.trim()) { WS.turn += 1; return; }
     if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) return;
     m.tool_calls.forEach((c) => {

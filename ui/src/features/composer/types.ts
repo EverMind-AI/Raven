@@ -40,6 +40,12 @@ export interface UploadRes {
  */
 export interface ComposerSource {
   busy(): boolean
+  /* Whether the busy turn can be stopped by the reader. A USER turn can; a
+     runtime turn (a delegated result re-entering) cannot -- turn.cancel only
+     resolves handles turn.send registered, and claiming the stop would reset
+     the UI while the delegated deltas still stream. The dock reads this to
+     keep the stop action from appearing at all for such a turn. */
+  cancellable(): boolean
   /* The live array, not a copy: an edit or a removal acts on the page's own
      queue exactly as the legacy renderer did. */
   queue(): string[]

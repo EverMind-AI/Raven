@@ -453,6 +453,110 @@ async def test_build_rpc_spine_honors_configured_pool_sizes():
         await teardown()
 
 
+async def test_the_boundary_carries_the_delivery_identity_and_text():
+    """The delivery row belongs at the moment the turn actually starts, so the
+    boundary that marks that moment has to carry the identity -- and the
+    injected text -- or the live client has nothing to draw."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="result")])
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=_src(),
+                text="[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]",
+                conversation="tui:c1",
+                turn_id="t1",
+                delegated={"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"},
+            )
+        )
+        await handle.result()
+    finally:
+        await teardown()
+
+    start = next(e for k, e in emitter.emitted if e["type"] == "turn.started")
+    d = start["payload"]["delegated"]
+    assert d["kind"] == "dag" and d["label"] == "run-7" and d["run_id"] == "run-7"
+    # The text that re-entered the conversation rides along, verbatim.
+    assert d["content"] == "[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]"
+
+
+async def test_a_runtime_turn_emits_the_boundary_and_no_message_start():
+    """A SUBAGENT turn WITH a delivery identity gets a turn.started boundary
+    (the client advances its live turn counter on it) and NO message.start --
+    that event belongs to turn.send. A user turn gets neither from the spine:
+    message.start comes from turn.send, and there is nothing to advance."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="result")])
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=_src(),
+                text="injected",
+                conversation="tui:c1",
+                turn_id="t1",
+                delegated={"kind": "dag", "label": "r1", "status": "ok"},
+            )
+        )
+        await handle.result()
+    finally:
+        await teardown()
+
+    types = emitter.types()
+    assert "turn.started" in types
+    assert "message.start" not in types
+    start = next(e for k, e in emitter.emitted if e["type"] == "turn.started")
+    assert start["payload"]["turn_id"] == "t1"
+    # The boundary carries the delivery identity, and nothing else.
+    assert set(start["payload"]) == {"turn_id", "delegated"}
+
+
+async def test_a_subagent_turn_without_delegated_identity_emits_no_boundary():
+    """The reviewer's shape: deep research's deliver_text turn is Origin.
+    SUBAGENT but persists only an assistant entry -- no delegated user entry
+    opens it on reload. Emitting a live boundary for it would advance the
+    workspace counter in a way the stored history does not, so it must not."""
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="answer")])
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=_src(),
+                text="",
+                conversation="tui:c1",
+                turn_id="t1",
+                deliver_text="the answer",
+            )
+        )
+        await handle.result()
+    finally:
+        await teardown()
+    assert "turn.started" not in emitter.types()
+
+
+async def test_a_user_turn_gets_no_boundary_from_the_spine():
+    emitter = FakeEmitter()
+    loop = _RunTurnLoop(events=[StreamDelta(delta="hi")])
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        turn_ids["tui:c1"] = "t1"
+        handle = scheduler.submit(
+            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
+        )
+        await handle.result()
+    finally:
+        await teardown()
+    assert "turn.started" not in emitter.types()
+
+
 async def test_streaming_turn_emits_token_deltas_then_message_complete():
     emitter = FakeEmitter()
     loop = _RunTurnLoop(

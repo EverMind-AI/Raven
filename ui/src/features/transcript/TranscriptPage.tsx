@@ -892,11 +892,32 @@ const StatusView = memo(function StatusView({ lane, seg }: { lane: Lane; seg: St
 
 const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; seg: DeliveredData }): ReactElement {
   useSeg(lane, seg)
+  /* The row says a result came back and opens the run it came from; the fold
+     holds what came back. Folded, because the retelling right below it is what
+     the reader is meant to read -- the delivered text is the receipt, there to
+     be checked against, and it is the sub-agent's words rather than Raven's. */
+  const headRef = useRef<HTMLButtonElement | null>(null)
+  const flip = (): void => pinRow(headRef.current, () => store.toggleDelivered(lane, seg))
   return (
-    <div className={'sdlv' + (seg.err ? ' err' : '')}>
-      <Ico d={SDLV_ICO} cls="ic" />
-      <button className="nm" onClick={seg.open}>{seg.isDag ? t('gui.deleg.dag_title') : seg.label}</button>
-      <span className="tx">{t(seg.err ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered')}</span>
+    <div className={'sdlv' + (seg.err ? ' err' : '') + (seg.shown ? ' open' : '')}>
+      <div className="sdhd">
+        <Ico d={SDLV_ICO} cls="ic" />
+        <button className="nm" onClick={seg.open}>{seg.isDag ? t('gui.deleg.dag_title') : seg.label}</button>
+        <span className="tx">{t(seg.err ? 'gui.deleg.delivered_err' : 'gui.deleg.delivered')}</span>
+        {seg.body ? (
+          <button ref={headRef} className="sdcv" onClick={flip}
+            aria-label={t('gui.deleg.body_aria')}
+            aria-expanded={String(seg.shown) as 'true' | 'false'}>
+            <span className="lb">{t('gui.deleg.body')}</span>
+            <Chev />
+          </button>
+        ) : null}
+      </div>
+      {seg.body ? (
+        <div className="sdbd" hidden={!seg.shown}>
+          <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(seg.body) }} />
+        </div>
+      ) : null}
     </div>
   )
 })

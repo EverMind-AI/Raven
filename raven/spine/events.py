@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from raven.spine.message import Media, Source
+from raven.spine.turn import Origin
 
 
 @dataclass(frozen=True)
@@ -46,8 +47,24 @@ class ToolPhase(StrEnum):
 
 @dataclass(frozen=True)
 class TurnStarted:
-    """Marker that a turn began."""
+    """Marker that a turn began.
 
+    ``origin`` is the request's, so a consumer can tell a turn the runtime
+    opened from one a person sent -- the RPC spine turns the former into a
+    ``turn.started`` boundary (the runtime's ``message.start`` is suppressed
+    for it, see raven/rpc/spine.py), and the latter into nothing here, because
+    ``turn.send`` owns that event.
+
+    ``delegated`` is the delivery identity when this turn IS a delegated
+    result re-entering the conversation (the shape ``subagent.delivered`` used
+    to carry, plus the injected text): the boundary is the moment the result
+    is actually visible, so that moment is where the row belongs -- not at
+    submission, when the result is still queued behind its parent.
+    """
+
+    origin: Origin | None = None
+    delegated: dict[str, str] | None = None
+    content: str | None = None
     conversation_id: str | None = None
     turn_id: str = ""
 

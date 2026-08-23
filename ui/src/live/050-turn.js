@@ -56,8 +56,34 @@ function onEvent(ev) {
     /* Read BEFORE busy is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */
     if (!busy && p.content) ask(p.content);
-    busy = true; goState(); drawMeter();
+    busy = true; busyCancellable = true; goState(); drawMeter();
     WS.turn += 1;
+  } else if (ev.type === 'turn.started') {
+    /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
+       The spine suppresses message.start for these, so this event is the whole
+       opening: the workspace turn advances, the client enters the busy state
+       (a queued send must wait for this turn's message.complete), and the
+       delivery row is drawn HERE -- this is the moment the result is actually
+       visible, not the moment it was submitted while its parent still owned
+       the lane. `delegated` carries the identity AND the injected text, the
+       same identity a stored entry carries on replay, so the two views draw
+       the same row at the same place. */
+    WS.turn += 1;
+    if (p.delegated) {
+      const d = p.delegated;
+      const isDag = d.kind === 'dag';
+      RavenIslands.transcript.delivered({
+        label: d.label || '',
+        isDag,
+        err: d.status === 'error',
+        body: d.content || '',
+        open: () => {
+          if (isDag) { DS.transcript.openDagRun(d.run_id || d.label || ''); return; }
+          DS.transcript.openSpawn('', d.label || '');
+        },
+      });
+    }
+    busy = true; busyCancellable = false; goState(); drawMeter();
   } else if (ev.type === 'episode.start') {
     if (live.st) { live.st.seal(); }
     flushSay();
@@ -121,24 +147,11 @@ function onEvent(ev) {
        per restart rather than per job -- the count is the payload's own. */
     toast(T('gui.cron.missed_x', { count: p.count }));
   } else if (ev.type === 'subagent.delivered') {
-    /* The seam a delegated result re-enters the conversation at: the row is
-       the "because" one line above the retelling that follows. Clicking it
-       opens the run the result came from. */
-    const isDag = p.kind === 'dag';
-    RavenIslands.transcript.delivered({
-      label: p.label || '',
-      isDag,
-      err: p.status === 'error',
-      open: () => {
-        if (isDag && p.run_id) {
-          const d = dagFor();
-          const first = d && d.run_id === p.run_id ? d.order[d.order.length - 1] : null;
-          if (first) { dagOpenNode(p.run_id, { id: first }); return; }
-        }
-        if (!isDag) { DS.transcript.openSpawn('', p.label); return; }
-        setWs(true, 'agents');
-      },
-    });
+    /* A result was submitted, not yet visible: the turn it opens is still
+       queued behind its parent, so the row does NOT belong here. It arrives
+       with the turn's own opening (turn.started, carrying the same identity)
+       -- until then this event is a no-op, kept for older servers that still
+       send it. */
   } else if (ev.type === 'cron.started') {
     // Mark (or seed) the job's row so the rail shows the run while it works;
     // the session file may not exist until the turn ends, hence the seed.
@@ -216,7 +229,22 @@ const fmtTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 // ticking row above the composer, so the strip under the field stays empty.
 DS.composer.meter = () => '';
 
+/* Opening a delegated graph: the last node if this page already holds the run's
+   own record, the agents panel otherwise. Installed as a source verb rather
+   than written inline in the delivered handler, because the row a RELOAD draws
+   has to open the same thing the live row does. */
+DS.transcript.openDagRun = function (runId) {
+  const id = String(runId || '');
+  if (id) {
+    const d = dagFor();
+    const last = d && d.run_id === id ? d.order[d.order.length - 1] : null;
+    if (last) { dagOpenNode(id, { id: last }); return; }
+  }
+  setWs(true, 'agents');
+};
+
 function finishTurn(usage) {
+  busyCancellable = false;
   killStatus();
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */

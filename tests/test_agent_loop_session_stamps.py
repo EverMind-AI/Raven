@@ -99,6 +99,49 @@ async def test_persisted_messages_carry_timestamp_not_turn_fields(workspace):
 
 
 @pytest.mark.asyncio
+async def test_a_delegated_turn_is_marked_on_disk_as_one(workspace):
+    """A re-injected result is a user entry the RUNTIME wrote, and the stored
+    line has to say so.
+
+    Without the mark it is an ordinary user message, and the only reader that
+    can tell the difference is one watching live (which hears
+    ``subagent.delivered``). A reload has nothing to go on and draws the
+    injection as a question the user asked -- prompt-injection fence and all.
+    The private spelling must not survive the write: it exists to stay out of
+    the provider payload, and ``session.resume`` puts the plain one on the wire.
+    """
+    agent = _make_agent(workspace)
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="tui", chat_id="chat1", sender_id="subagent", chat_type=ChatType.DM),
+        text="[BEGIN UNTRUSTED subagent #ab12cd34 - ...]\n3 completed\n[END UNTRUSTED subagent #ab12cd34]",
+        delegated={"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"},
+    )
+
+    out = await agent._process_message(req, origin=Origin.SUBAGENT)
+    assert out is not None
+
+    msgs = _persisted_messages(workspace)
+    users = [m for m in msgs if m.get("role") == "user"]
+    assert len(users) == 1, users
+    assert users[0]["delegated"] == {"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"}
+    assert "_delegated" not in users[0]
+    # The text is still there: the model reads it on its next turn. Only the
+    # reader must not read it as prose.
+    assert "3 completed" in users[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_turn_carries_no_delegation_mark(workspace):
+    """The mark means something, so it must be absent from a real question."""
+    agent = _make_agent(workspace)
+    await agent._process_message(_make_msg("what is the status"))
+    for m in _persisted_messages(workspace):
+        assert "delegated" not in m, m
+        assert "_delegated" not in m, m
+
+
+@pytest.mark.asyncio
 async def test_the_user_message_is_stamped_at_turn_start_not_turn_end(workspace):
     """The regression that made every restored fold read "1s".
 

@@ -41,6 +41,7 @@ const SLASH = [
    its own meter wording and the upload transport over this. */
 DS.composer ??= {
   busy: () => busy,
+  cancellable: () => busyCancellable,
   queue: () => q,
   meter: () => (busy ? T('gui.meter.running')
     : use ? T('gui.meter.usage', { calls: use.calls, in: (use.in / 1000).toFixed(1), out: (use.out / 1000).toFixed(1) })

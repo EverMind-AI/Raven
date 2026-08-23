@@ -157,8 +157,12 @@ class SubscriptionEmitter:
         that loses an event outright.
         """
         kind = event.get("type")
-        if kind == "message.start":
+        if kind in ("message.start", "turn.started"):
             # A new turn replaces the last one; nothing before it is live.
+            # turn.started opens a runtime turn -- the client needs the same
+            # in-flight buffer a message.start opens, or a subscriber joining
+            # mid-turn sees deltas with no opening boundary and the wrong
+            # workspace counter.
             self._replay[session_key] = [event]
             return
         buffered = self._replay.get(session_key)

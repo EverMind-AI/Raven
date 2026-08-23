@@ -240,8 +240,15 @@ let cancelInFlight = false;
 /* The two actions, installed on the source the composer already asks. `stop`
    is the go button's other half and the Escape key's; `send` is what the island
    hands a folded message to. */
+DS.composer.cancellable = () => busyCancellable;
 DS.composer.send = liveSend;
 DS.composer.stop = function () {
+  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
+     turn.cancel resolves only handles turn.send registered, and the stop
+     button claiming the UI here would reset the stage while the delegated
+     deltas are still streaming into it. The reader's stop does nothing until
+     the turn is one they can stop. */
+  if (!busyCancellable) return;
   const owner = cur;
   cancelInFlight = true;
   rpc.call('turn.cancel', { session_key: cur })

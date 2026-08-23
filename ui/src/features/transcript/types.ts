@@ -141,6 +141,13 @@ export interface DeliveredData {
   isDag: boolean
   err: boolean
   open: () => void
+  /* What was delivered, as a reader may read it: the text from inside the
+     untrusted fence, with the fence and the framing the model was given left
+     out. Empty when the delivery carried none -- and then the row has no fold,
+     which is also what an older session's stored entry gives. */
+  body: string
+  /* Whether that fold is open. */
+  shown: boolean
 }
 
 /* One file this turn produced, as the bar shows it. `head` is the file's own
@@ -246,6 +253,10 @@ export interface HistoryMessage {
   notice?: { kind?: string; detail?: string }
   origin?: string
   turn_ended?: { status?: string; reason?: string }
+  /* Present on a USER entry the runtime wrote: a delegated run's result coming
+     back. The model reads `text`, a reader must not -- see the note on the
+     delivery branch in history(). */
+  delegated?: { kind?: string; label?: string; status?: string; run_id?: string }
 }
 
 /* What the artifact bar reads, and all it reads: the workspace record's rows
@@ -271,6 +282,10 @@ export interface TranscriptSource {
   dagRows?: (runId: string) => Promise<SnapshotRow[]>
   openDagNode?: (runId: string, nodeId: string) => void
   openSpawn?: (agent: string, label: string) => void
+  /* Open the delegated GRAPH a delivery came from. One verb rather than the
+     live event handler doing it inline, because the replayed row has to open
+     the same thing the live row does. */
+  openDagRun?: (runId: string) => void
   /* Whether a detached lane host is parked rather than discarded: leaving a
      session mid-turn keeps the transcript as detached DOM and puts it back on
      return, so off the page does not mean finished with. */

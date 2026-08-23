@@ -336,6 +336,57 @@ class TestReplayOfATurnInFlight:
         assert [e["type"] for e in got].count("message.start") == 1
 
     @pytest.mark.asyncio
+    async def test_a_runtime_turn_is_replayable_for_a_late_subscriber(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """The reviewer's shape: a runtime turn opens with turn.started (not
+        message.start -- turn.send owns that), its deltas stream, and a
+        subscriber joins mid-turn. The boundary must seed the in-flight buffer
+        the way message.start does, or the joiner sees deltas with no opening
+        and the wrong workspace counter."""
+        await emitter.emit(
+            "s1",
+            {
+                "type": "turn.started",
+                "payload": {
+                    "turn_id": "t9",
+                    "delegated": {
+                        "kind": "dag",
+                        "label": "run-7",
+                        "status": "ok",
+                        "run_id": "run-7",
+                        "content": "result text",
+                    },
+                },
+            },
+        )
+        await emitter.emit("s1", _tok("res"))
+        await emitter.emit("s1", _tok("ult"))
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+
+        got = _events_for(send_frame, late)
+        assert got[0]["type"] == "turn.started"
+        assert got[0]["payload"]["delegated"]["kind"] == "dag"
+        # The delivery identity survived, and the streamed text came whole.
+        assert "".join(e["payload"]["text"] for e in got if e["type"] == "token.delta") == "result"
+
+    @pytest.mark.asyncio
+    async def test_a_runtime_turn_ending_clears_the_buffer(
+        self, emitter: SubscriptionEmitter, send_frame: AsyncMock
+    ) -> None:
+        """Same contract as message.start: once the turn is over the transcript
+        on disk is the record, so nothing is replayed on top of it."""
+        await emitter.emit("s1", {"type": "turn.started", "payload": {"turn_id": "t9"}})
+        await emitter.emit("s1", _tok("res"))
+        await emitter.emit("s1", {"type": "message.complete", "payload": {"turn_id": "t9", "usage": {}}})
+
+        late = await emitter.register("s1")
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+        assert _events_for(send_frame, late) == []
+
+    @pytest.mark.asyncio
     async def test_a_subscriber_present_all_along_sees_each_event_once(
         self, emitter: SubscriptionEmitter, send_frame: AsyncMock
     ) -> None:

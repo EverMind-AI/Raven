@@ -93,6 +93,7 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
   }
   const source: ComposerSource = {
     busy: () => false,
+    cancellable: () => false,
     queue: () => [],
     meter: () => '',
     slash: [],
@@ -179,8 +180,8 @@ describe('the send button', () => {
     expect(go().disabled).toBe(false)
   })
 
-  it('turns into stop while a turn runs, and halts on the click', () => {
-    const { calls } = wire({ busy: () => true })
+  it('turns into stop while a cancellable turn runs, and halts on the click', () => {
+    const { calls } = wire({ busy: () => true, cancellable: () => true })
     store.goPaint()
     expect(go().disabled).toBe(false)
     expect(go().classList.contains('halt')).toBe(true)
@@ -188,6 +189,25 @@ describe('the send button', () => {
     store.goClick()
     expect(calls.halted).toBe(1)
     expect(calls.sent).toEqual([])
+  })
+
+  /* The reviewer's shape: a runtime turn (delegated result re-entering) is
+     busy but NOT cancellable -- turn.cancel only resolves handles turn.send
+     registered, so claiming the stop would reset the UI while the delegated
+     deltas still stream. The dock must not offer the stop at all, and the
+     Send action stays what it says: it QUEUES the message, exactly as Enter
+     does, rather than being an inert click. */
+  it('queues on Send during a non-cancellable turn instead of stopping', () => {
+    const { calls } = wire({ busy: () => true, cancellable: () => false, queue: () => [] })
+    store.goPaint()
+    expect(go().classList.contains('halt')).toBe(false)
+    expect(go().getAttribute('aria-label')).toBe('发送')
+    ta().value = 'please queue this'
+    store.goClick()
+    /* Not stopped, and the message went out the send path (liveSend queues
+       it while busy) instead of being dropped. */
+    expect(calls.halted).toBe(0)
+    expect(calls.sent).toEqual(['please queue this'])
   })
 
   it('sends the trimmed text, clears the field and drops the parked draft', () => {
@@ -584,7 +604,10 @@ describe('a language flip', () => {
   it('repaints the dock in place: the labels, the palette and the live row', () => {
     let busy = true
     const q = ['queued one']
-    wire({ busy: () => busy, queue: () => q, slash: [{ id: 'gui.clear', fn: () => {} }] })
+    wire({
+      busy: () => busy, cancellable: () => true, queue: () => q,
+      slash: [{ id: 'gui.clear', fn: () => {} }],
+    })
     mountQueue()
     mountSlash()
     mountLive()

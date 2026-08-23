@@ -315,6 +315,27 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class TurnStartedPayload(_Strict):
+    turn_id: str
+    target: DirectTarget | None = None
+
+
+class TurnStartedEvent(_Strict):
+    """A turn the runtime opened (a delegated result re-entering the
+    conversation) has begun.
+
+    ``turn.send`` owns ``message.start``, and the spine suppresses it for these
+    turns -- so this event is the client's only live signal that a new turn
+    started. It advances the client's live turn bookkeeping (the workspace
+    record's turn number, which the artifact bar reads) and draws nothing: a
+    stored delegated user entry advances the same counter on replay, which is
+    what keeps the two views in step about which turn a file belongs to.
+    """
+
+    type: Literal["turn.started"]
+    payload: TurnStartedPayload
+
+
 class EpisodeStartPayload(_Strict):
     index: int
 
@@ -444,16 +465,29 @@ class SubagentDeliveredPayload(_Strict):
     label: str = Field(..., description="The spawn's display label, or the dag's run_id.")
     status: Literal["ok", "error"]
     run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
+    content: str = Field(
+        default="",
+        description=(
+            "The text that re-entered the conversation, verbatim. A client shows the "
+            "reader-facing part of it by keeping only what sits INSIDE the untrusted "
+            "fence -- and a client replaying this turn later reads the same string from "
+            "the stored entry's `text`, so one rule over one input keeps the live view "
+            "and the reloaded one from disagreeing about what was delivered."
+        ),
+    )
 
 
 class SubagentDeliveredEvent(_Strict):
     """A delegated run's result re-entered its conversation here.
 
-    The injection itself is invisible on the wire -- the next frame a client
-    sees is an assistant turn nobody visibly asked. This event marks the seam,
-    emitted just after the result is submitted to the main loop, so a client
-    can say "this reply is the sub-agent's result coming back" at the exact
-    point in the flow where that is true.
+    Emitted just after the result is submitted to the main loop, so a client can
+    say "this reply is the sub-agent's result coming back" at the exact point in
+    the flow where that is true. The turn it opens goes through the spine, which
+    emits no ``message.start``, so this event is the only LIVE signal that it
+    happened -- and a client replaying the session later reads the same identity
+    off the stored user entry's ``delegated`` field. Two readings of one fact,
+    which is what keeps a reloaded transcript from drawing the injection as a
+    question the user asked.
     """
 
     type: Literal["subagent.delivered"]
@@ -1920,6 +1954,19 @@ class TranscriptNotice(_Strict):
     detail: str | None = None
 
 
+class TranscriptDelegated(_Strict):
+    """Which delegated run re-entered the conversation at this entry.
+
+    The same identity ``subagent.delivered`` carries, so a replayed transcript
+    and a live stream draw the same row from the same fields.
+    """
+
+    kind: Literal["spawn", "dag"]
+    label: str
+    status: Literal["ok", "error"]
+    run_id: str | None = Field(default=None, description="Set for kind=dag, so a client can open the run.")
+
+
 class TranscriptMessage(_Strict):
     """One stored message in wire form: ``content`` renamed to ``text``."""
 
@@ -1972,6 +2019,18 @@ class TranscriptMessage(_Strict):
             "reader must not -- a sub-agent's announce carries an untrusted fence, an "
             "instance handle and an instruction not to repeat either to the user, and a "
             "cron reminder carries how to word the reply."
+        ),
+    )
+    delegated: TranscriptDelegated | None = Field(
+        default=None,
+        description=(
+            "Present on a USER entry the runtime wrote: a delegated run's result "
+            "re-entering the conversation. Same rule as `notice` and for the same "
+            "reason -- the model reads `text`, a reader must not. Render the delivery "
+            "row a live client draws from `subagent.delivered`, and take the readable "
+            "body from inside the untrusted fence in `text`; drawing `text` as prose "
+            "attributes to the user a question they never asked, fence markers "
+            "included. `origin` names who opened the turn; this says which run came back."
         ),
     )
 
