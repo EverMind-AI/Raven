@@ -35,17 +35,9 @@ export interface UploadRes {
 /* DS.composer: what the dock reads of the page it sits in. The demo shell
  * registers the fixture half (ui/src/demo/090-composer.js) and the live layer
  * installs over the parts only it can answer -- the meter's wording and the
- * upload transport. `busy` reads the page global the turn machine owns, so it
- * is a closure, never a snapshot. The queue belongs to the composer store.
+ * upload transport. Turn phase and queue state belong to the composer store.
  */
 export interface ComposerSource {
-  busy(): boolean
-  /* Whether the busy turn can be stopped by the reader. A USER turn can; a
-     runtime turn (a delegated result re-entering) cannot -- turn.cancel only
-     resolves handles turn.send registered, and claiming the stop would reset
-     the UI while the delegated deltas still stream. The dock reads this to
-     keep the stop action from appearing at all for such a turn. */
-  cancellable(): boolean
   meter(): string
   slash: SlashCmd[]
   /* What the demo canvas says instead of opening a file picker it has no

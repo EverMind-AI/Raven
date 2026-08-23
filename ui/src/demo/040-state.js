@@ -1,12 +1,6 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 sessionSet('a');
-let busy = false, timers = [], use = null;
-/* Whether the busy turn can be stopped by the reader. A USER turn can
-   (turn.send registered its handle); a runtime turn -- a delegated result
-   re-entering -- cannot, because turn.cancel only resolves handles turn.send
-   registered, and claiming the stop button would reset the UI while the
-   delegated deltas are still streaming into it. */
-let busyCancellable = false;
+let timers = [], use = null;
 let rt = 'local', model = 'minimax-m3', undoBin = null;
 const CFG = {
   /* Light until the reader says otherwise: a fresh install has no stored
@@ -116,7 +110,7 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
   approveSheet, clarifySheet, drawQueue: queueDraw, queuePush, queueShift,
-  queueClear, queueSnapshot, queueRestore } = RavenIslands.composer;
+  queueClear, queueSnapshot, queueRestore, turn } = RavenIslands.composer;
 /* Bound at the shared top level because the live parts run in the IIFE nested
    below it. The writers themselves stay in the modern bundle. */
 const { failureBar, bootError, upShade } = RavenIslands.chrome;

@@ -209,7 +209,7 @@ function redrawAll() {
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:
      re-opening the session mid-turn would cut the stream off. */
-  if (!draft && sessionCurrent() && !busy) openSession(sess(sessionCurrent()));
+  if (!draft && sessionCurrent() && !turn.busy()) openSession(sess(sessionCurrent()));
 }
 
 async function loadLang() {

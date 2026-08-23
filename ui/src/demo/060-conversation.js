@@ -5,7 +5,7 @@ function openSession(s) {
   // row goes back to carrying its timestamp.
   if (s.status === 'done') s.status = null;
   markNewCurrent();
-  stop_(); busy = false; queueClear(); use = null;
+  stop_(); turn.dispatch({ type: 'idle' }); queueClear(); use = null;
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);

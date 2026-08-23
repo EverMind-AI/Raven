@@ -1,4 +1,9 @@
 /* ---- notifications ------------------------------------------------ */
+const notifyTurn = (owner, event) => {
+  transitionTurn(owner, event);
+  if (owner === sessionCurrent()) { drawMeter(); goState(); drawList(); }
+};
+
 rpc.notify.event = (params) => {
   if (live.subId && params.subscription_id === live.subId) { onEvent(params.event || {}); return; }
   const sid = subSession[params.subscription_id];
@@ -29,9 +34,13 @@ rpc.notify.event = (params) => {
    A frame that names none -- a dispatch with no conversation to name -- keeps
    the old fallback and docks where the reader is. */
 rpc.notify['confirm.request'] = (p) => {
-  const say = (answer) =>
+  const owner = p.conversation_id || sessionCurrent();
+  notifyTurn(owner, { type: 'wait' });
+  const say = (answer) => {
+    notifyTurn(owner, { type: 'resume' });
     rpc.call('confirm.respond', { request_id: p.request_id, answer }).catch(() => {});
-  approveSheet(p.prompt || '', () => say(true), () => say(false), p.conversation_id);
+  };
+  approveSheet(p.prompt || '', () => say(true), () => say(false), owner);
 };
 
 /* The question the agent asks mid-turn. The sheet is the island's
@@ -44,7 +53,10 @@ rpc.notify['confirm.request'] = (p) => {
    would say the same thing twice. The step is still marked hasQA so the
    exchange keeps its own step instead of merging into a silent work run. */
 rpc.notify['clarify.request'] = (p) => {
+  const owner = p.conversation_id || sessionCurrent();
+  notifyTurn(owner, { type: 'wait' });
   clarifySheet(p, (answer) => {
+    notifyTurn(owner, { type: 'resume' });
     rpc.call('clarify.respond', { request_id: p.request_id, answer }).catch(() => {});
     if (live.st) live.st.hasQA = true;
   });

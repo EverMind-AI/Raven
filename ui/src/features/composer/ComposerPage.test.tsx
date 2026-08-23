@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
+import * as turn from './turn'
 
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -92,8 +93,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     down: () => {},
   }
   const source: ComposerSource = {
-    busy: () => false,
-    cancellable: () => false,
     meter: () => '',
     slash: [],
     /* The two actions live on the source now, not the shell. Spread last so a
@@ -148,6 +147,7 @@ function mountLive(afterPaint?: () => void): void {
 afterEach(() => {
   cleanup()
   store._resetForTests()
+  turn._resetForTests()
   lang = 'zh'
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -180,7 +180,8 @@ describe('the send button', () => {
   })
 
   it('turns into stop while a cancellable turn runs, and halts on the click', () => {
-    const { calls } = wire({ busy: () => true, cancellable: () => true })
+    const { calls } = wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
     store.goPaint()
     expect(go().disabled).toBe(false)
     expect(go().classList.contains('halt')).toBe(true)
@@ -197,7 +198,8 @@ describe('the send button', () => {
      Send action stays what it says: it QUEUES the message, exactly as Enter
      does, rather than being an inert click. */
   it('queues on Send during a non-cancellable turn instead of stopping', () => {
-    const { calls } = wire({ busy: () => true, cancellable: () => false })
+    const { calls } = wire()
+    turn.dispatch({ type: 'stream', cancellable: false })
     store.goPaint()
     expect(go().classList.contains('halt')).toBe(false)
     expect(go().getAttribute('aria-label')).toBe('发送')
@@ -304,8 +306,7 @@ describe('the queue rows', () => {
 
 describe('the live turn row', () => {
   it('appears when the turn starts, carries one glyph and one clock, and lands last', () => {
-    let busy = false
-    wire({ busy: () => busy })
+    wire()
     const stage = document.getElementById('stage')!
     /* The transcript island's lane host is already there; the row belongs
        after it. */
@@ -320,7 +321,7 @@ describe('the live turn row', () => {
     }} />, { container: host })
 
     expect(document.querySelector('.turnlive')).toBeNull()
-    busy = true
+    turn.dispatch({ type: 'stream', cancellable: true })
     act(() => { store.drawTurnLive() })
     const row = document.querySelector('.turnlive') as HTMLElement
     expect(row).toBeTruthy()
@@ -337,7 +338,7 @@ describe('the live turn row', () => {
     expect(document.querySelector('.turnlive')).toBe(row)
     expect(document.querySelector('.wkg')).toBe(glyph)
 
-    busy = false
+    turn.dispatch({ type: 'idle' })
     act(() => { store.drawTurnLive() })
     expect(document.querySelector('.turnlive')).toBeNull()
     expect(host.isConnected).toBe(false)
@@ -345,7 +346,8 @@ describe('the live turn row', () => {
 
   it('keeps counting from where the turn really started across a session round trip', () => {
     vi.useFakeTimers()
-    wire({ busy: () => true })
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
     mountLive()
     act(() => { store.drawTurnLive() })
     const anchor = store.liveAnchor()
@@ -359,7 +361,7 @@ describe('the live turn row', () => {
   })
 
   it('paints the meter from the source and shows the pill only away from the tail', () => {
-    const { calls } = wire({ busy: () => false, meter: () => '3 calls' })
+    const { calls } = wire({ meter: () => '3 calls' })
     mountLive()
     calls.stick = false
     const sc = document.getElementById('scroll')!
@@ -616,11 +618,10 @@ describe('the slash palette', () => {
 
 describe('a language flip', () => {
   it('repaints the dock in place: the labels, the palette and the live row', () => {
-    let busy = true
     wire({
-      busy: () => busy, cancellable: () => true,
       slash: [{ id: 'gui.clear', fn: () => {} }],
     })
+    turn.dispatch({ type: 'stream', cancellable: true })
     store.queueRestore(['queued one'])
     mountQueue()
     mountSlash()
@@ -647,7 +648,7 @@ describe('a language flip', () => {
     expect(document.querySelector('#slashList .d')!.textContent).toBe('help for gui.clear')
     expect(go().getAttribute('aria-label')).toBe('Stop')
     expect(document.querySelector('.turnlive')!.getAttribute('aria-label')).toContain('running')
-    busy = false
+    turn.dispatch({ type: 'idle' })
     act(() => { store.goPaint() })
     expect(go().getAttribute('aria-label')).toBe('Send')
   })

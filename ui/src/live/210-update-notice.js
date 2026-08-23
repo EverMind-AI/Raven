@@ -59,7 +59,7 @@ function askUpgrade() {
      start it again. Closing that dialog must not strand the reader. */
   const running = upMarkRead();
   if (running) { watchUpgrade(upShade(), running.t0); return; }
-  if (busy) {
+  if (turn.busy()) {
     confirmAsk(T('gui.upg.title'), T('gui.upg.body_busy'), T('gui.upg.close'), () => {});
     return;
   }

@@ -34,13 +34,10 @@ const SLASH = [
     }) }
 ];
 
-/* The fixture half of DS.composer. `busy` is a closure over the page global
-   the turn machine owns, never a snapshot. Live mode installs its own meter
-   wording and the upload transport over this. */
+/* The fixture half of DS.composer. Turn state belongs to the composer island;
+   live mode installs its own meter wording and upload transport over this. */
 DS.composer ??= {
-  busy: () => busy,
-  cancellable: () => busyCancellable,
-  meter: () => (busy ? T('gui.meter.running')
+  meter: () => (turn.busy() ? T('gui.meter.running')
     : use ? T('gui.meter.usage', { calls: use.calls, in: (use.in / 1000).toFixed(1), out: (use.out / 1000).toFixed(1) })
     : ''),
   slash: SLASH,
@@ -52,10 +49,10 @@ DS.composer ??= {
 const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.test(s) ? RUNS.fix : RUNS.gtm;
 
 function send(text) {
-  if (busy) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
+  if (turn.busy()) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
-  busy = true; use = null;
+  turn.dispatch({ type: 'send' }); use = null;
   drawMeter(); goState(); drawList();
   const run = pickRun(text);
   const s = sess(sessionCurrent());
@@ -68,7 +65,7 @@ function send(text) {
 }
 
 function halt() {
-  stop_(); busy = false;
+  stop_(); turn.dispatch({ type: 'idle' });
   noteRow('已中断 · 上面的步骤保留', '', { quiet: true, host: $('#stage') });
   drawMeter(); goState(); drawList();
 }

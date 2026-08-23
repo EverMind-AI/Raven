@@ -1,17 +1,17 @@
 import { ds, shell, t } from '../../shell/bridge'
+import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
 
 /* Plain external store, same shape as the other islands: the dock is driven
- * imperatively by the legacy page (the turn machine flips `busy`, the queue
+ * imperatively by the legacy page (the turn machine advances phase, the queue
  * drains into `send`, a session switch resets everything), so the state lives
  * here where the shims can reach it and the views subscribe.
  *
- * What is NOT here: `busy` and `use`. Those remain page globals the turn
- * machine writes and DS.composer exposes at paint time. The queue is composer
- * state: every path that adds, drains, clears, parks, or restores it goes
- * through this store, so queue ownership and queue rendering cannot diverge.
+ * `use` remains demo fixture state. The live phase and the queue are composer
+ * state: every path that changes, parks, or restores them goes through this
+ * island, so their ownership and rendering cannot diverge.
  */
 
 export interface ComposerState {
@@ -84,7 +84,7 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
 export function goPaint(): void {
   const b = el<HTMLButtonElement>('go')
   if (!b) return
-  if (source().busy() && source().cancellable()) {
+  if (turn.busy() && turn.cancellable()) {
     b.disabled = false
     b.classList.add('halt')
     b.innerHTML = ICON_STOP
@@ -252,7 +252,7 @@ export function setLiveAnchor(ms: number): void {
 export const liveMs = (): number => (liveT0 ? Date.now() - liveT0 : 0)
 
 export function drawTurnLive(): void {
-  if (!source().busy()) {
+  if (!turn.busy()) {
     if (liveTick) {
       clearInterval(liveTick)
       liveTick = null
@@ -266,7 +266,7 @@ export function drawTurnLive(): void {
   else set({ tick: state.tick + 1 })
   if (liveTick) return
   liveTick = setInterval(() => {
-    if (!source().busy()) {
+    if (!turn.busy()) {
       drawTurnLive()
       return
     }
@@ -453,7 +453,7 @@ export function fireSend(): void {
 }
 
 export function goClick(): void {
-  if (source().busy() && source().cancellable()) source().stop()
+  if (turn.busy() && turn.cancellable()) source().stop()
   /* A busy turn that cannot be cancelled is still a live turn: the Send
      action stays functional and QUEUES the message, exactly what Enter does
      and what the button says it does. An inert click that neither sends nor

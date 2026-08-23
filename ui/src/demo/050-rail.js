@@ -18,4 +18,4 @@ function renameTitle() { RavenIslands.rail.rename(); }
    deleteAll is the exception and is installed by demo/130-settings.js, next to
    the rest of that page's writes, because wiping the list here means clearing
    page state only this layer can reach. */
-DS.sessions ??= { snapshot: () => ({ rows: SESS, cur: sessionCurrent(), busy }) };
+DS.sessions ??= { snapshot: () => ({ rows: SESS, cur: sessionCurrent(), busy: turn.busy() }) };

@@ -32,7 +32,7 @@ rpc.onReconnect = async () => {
      subscription that openSession sets up. */
   const current = sessionCurrent();
   if (current && !draft) {
-    busy = false;
+    turn.dispatch({ type: 'idle' });
     const title = $('#title').textContent;
     await openSession({ id: current, title });
     showStatus(T('gui.reconnected'));
@@ -47,7 +47,7 @@ rpc.onReconnect = async () => {
 let draft = false;
 
 function resetView() {
-  stop_(); busy = false; queueClear();
+  stop_(); turn.dispatch({ type: 'idle' }); queueClear();
   resetTurnState();
   wsReset();
   setWs(false);
@@ -81,7 +81,7 @@ openSession = async function (s) {
   const row = sess(s.id);
   if (row && row.status === 'done') row.status = null;
   markNewCurrent();
-  stop_(); busy = false; queueClear();
+  stop_(); turn.dispatch({ type: 'idle' }); queueClear();
   resetTurnState();
   wsReset();
   setWs(false);
@@ -147,18 +147,18 @@ const mediaOf = (text) => {
    is the note a staged file becomes; the island builds the message and hands it
    over already folded. */
 function liveSend(text) {
-  if (busy) { queuePush(text); return; }
+  if (turn.busy()) { queuePush(text); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   lastAsk = text;
   ask(text);
-  busy = true;
+  turn.dispatch({ type: 'send' });
   resetTurnState();
   drawMeter(); goState(); drawList();
   const failed = (e) => {
     killStatus();
-    busy = false;
+    turn.dispatch({ type: 'idle' });
     noteRow(T('gui.err.send'), e.message === 'not connected' ? T('gui.err.disconnected') : (e.message || String(e)),
       { retry: () => liveSend(text) });
     goState(); drawMeter();
@@ -197,10 +197,11 @@ function liveSend(text) {
    left that prose as narration, which the fold then closed over: the reader
    pressed stop and watched the half-written answer disappear behind
    "done", under a note saying the output was kept. */
-function softStop() {
+function softStop(keepCancelling) {
   killStatus();
   RavenIslands.transcript.finishTurn(live.st, live.steps, turnDur());
-  stop_(); busy = false;
+  stop_();
+  if (!keepCancelling) turn.dispatch({ type: 'idle' });
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(T(RavenIslands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') });
@@ -213,23 +214,14 @@ function softStop() {
 /* Queued messages were waiting for the engine, and a stop is the engine coming
    free -- so the queue drains into it, same as after a finished turn. */
 function drainQueue() {
-  if (busy) return;
+  if (turn.busy()) return;
   const nx = queueShift();
   if (nx !== undefined) liveSend(nx);
 }
 
-/* True between our own turn.cancel and its response. The cancelled EVENT is
-   emitted mid-cancel, before the server has fully unwound the turn -- a drain
-   fired off the event raced the dying turn into a -32003 refusal (observed).
-   Our own cancel drains off the response instead, which the server sends only
-   after the turn is provably gone; the event-side drain stays for a cancel
-   made by another client on the same session. */
-let cancelInFlight = false;
-
 /* The two actions, installed on the source the composer already asks. `stop`
    is the go button's other half and the Escape key's; `send` is what the island
    hands a folded message to. */
-DS.composer.cancellable = () => busyCancellable;
 DS.composer.send = liveSend;
 DS.composer.stop = function () {
   /* A runtime turn (a delegated result re-entering) is NOT cancellable:
@@ -237,13 +229,18 @@ DS.composer.stop = function () {
      button claiming the UI here would reset the stage while the delegated
      deltas are still streaming into it. The reader's stop does nothing until
      the turn is one they can stop. */
-  if (!busyCancellable) return;
+  if (!turn.cancellable()) return;
   const owner = sessionCurrent();
-  cancelInFlight = true;
+  turn.dispatch({ type: 'cancel' });
   rpc.call('turn.cancel', { session_key: owner })
-    .then(() => { cancelInFlight = false; if (sessionCurrent() === owner) drainQueue(); },
-      () => { cancelInFlight = false; });
-  softStop();
+    .then(() => {
+      transitionTurn(owner, { type: 'idle' });
+      if (sessionCurrent() === owner) { drawMeter(); goState(); drawList(); drainQueue(); }
+    }, () => {
+      transitionTurn(owner, { type: 'idle' });
+      if (sessionCurrent() === owner) { drawMeter(); goState(); drawList(); }
+    });
+  softStop(true);
 };
 
 /* Deleting for real. Installed on the session source rather than replacing the

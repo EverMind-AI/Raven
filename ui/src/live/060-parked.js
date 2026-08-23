@@ -20,7 +20,7 @@ let turnOwner = null;
 let lastAsk = '';
 
 function parkTurn() {
-  if (!turnOwner || !busy) return;
+  if (!turnOwner || !turn.busy()) return;
   stopSayPaint();
   const s = sess(turnOwner);
   if (s) s.status = 'run';
@@ -28,7 +28,7 @@ function parkTurn() {
     nodes: [...$('#stage').childNodes],
     turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
       sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
-    busy, queue: queueSnapshot(),
+    phase: turn.snapshot(), queue: queueSnapshot(),
     /* The live clock's anchor. It is the composer island's own state, and the
        away session's idle turn-live paint zeroes it -- without carrying it
        here, a turn ten minutes in read "2s" after a round trip through
@@ -57,7 +57,7 @@ function restoreTurn(pk) {
   stage.innerHTML = '';
   pk.nodes.forEach((n) => stage.appendChild(n));
   Object.assign(live, pk.turn);
-  busy = pk.busy; queueRestore(pk.queue);
+  turn.restore(pk.phase); queueRestore(pk.queue);
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
   RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
@@ -70,4 +70,17 @@ function restoreTurn(pk) {
   drawMeter(); goState(); drawList(); drawBanner();
   if (typeof drawWs === 'function' && wsOpen) drawWs();
   down();
+  if (!turn.busy()) drainQueue();
+}
+
+/* A request or cancel response can arrive after its conversation was parked.
+   Apply the same reducer to the visible phase or to the saved copy, never to
+   whichever conversation merely happens to be open when the frame lands. */
+function transitionTurn(owner, event) {
+  if (owner === turnOwner && owner === sessionCurrent()) {
+    turn.dispatch(event);
+    return;
+  }
+  const pk = parkedTurns.get(owner);
+  if (pk) pk.phase = turn.reduce(pk.phase, event);
 }
