@@ -5,10 +5,8 @@
  * agent panels all draw the same chevrons and crosses, and building them by
  * hand in each place is how two of them end up 1.8px apart.
  *
- * The concat layers keep their own copy (demo/100-workspace.js) for the four
- * call sites still out there. That copy goes when the last of them does -- it is
- * not published from here, because a publish is a name to retire later and this
- * one has no reason to cross the boundary.
+ * The concat copy left after its final caller migrated was deleted rather than
+ * published from here: a publish would be another name to retire later.
  */
 
 import type { JSX } from 'react'

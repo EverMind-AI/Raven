@@ -265,28 +265,6 @@ function drawWs() {
   RavenIslands.workspace.draw();
 }
 
-const ICO = {
-  diff: 'M4 4h16v16H4zM12 8.5v7M8.5 12h7',
-  file: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z',
-  term: 'M3.5 5h17v14h-17zM7.5 10l2.5 2-2.5 2M12.5 14.5H16',
-  web: 'M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15',
-  ext: 'M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14M14 4h6v6M20 4l-9 9',
-  doc: 'M7 3.5h7L18.5 8v10.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2ZM13.5 3.5V8h4.5',
-  up: 'M14.5 6.5 9 12l5.5 5.5',
-  reveal: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z'
-    + 'M9.5 16l5-4.5M14.5 15V11.5H11'
-};
-function ico(d, cls) {
-  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('fill', 'none');
-  s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.8');
-  s.setAttribute('aria-hidden', 'true');
-  if (cls) s.setAttribute('class', cls);
-  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  p.setAttribute('d', d); s.appendChild(p);
-  return s;
-}
-
 /* The fixture source: what the workspace island may ask of demo mode. No
    list/reveal and no canBrowse -- the file tab keeps its demo empty note, and
    opening a change stays the honest toast. Registered, not

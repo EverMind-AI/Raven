@@ -73,7 +73,7 @@ distance to the next declaration, which is what produced the 173 above.
 | `hubSkeleton` | `demo/152-skills.js` | 26 | **moved** -- the skills island owns the first-load skeleton host |
 | `menuAt` | `demo/040-state.js` | 13 | writer |
 | `toast` | `demo/040-state.js` | 11 | writer |
-| small (`ico`, `mkMcpRow`, `authFail`, two install buttons) | various | ~120 | fold into whoever ends up owning each |
+| small (`mkMcpRow`, `authFail`, two install buttons) | various | ~100 | `ico` concat copy removed; fold the rest into their owners |
 
 About 1,000 lines, and the shape column matters more than the total. The rule
 the migration has settled on is the one `shell/lightbox.ts` states -- a thing
