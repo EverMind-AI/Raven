@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 
 import { env, supportsOsc52Clipboard } from '../../utils/env.js'
 
-import { shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
+import { clipboardDebugEnabled, getClipboardPath, shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
 
 describe('shouldEmitClipboardSequence', () => {
   it('suppresses local multiplexer clipboard OSC by default', () => {
@@ -99,6 +99,57 @@ describe('supportsOsc52Clipboard', () => {
 // than mocking copyNative inside setClipboard) matches the package's
 // existing style — tests pass env/terminal as arguments instead of using
 // vi.mock — and gives broader coverage of the env x terminal matrix.
+describe('RAVEN_TUI clipboard env aliases', () => {
+  it('honours the RAVEN_TUI spelling of the OSC 52 override', () => {
+    // The defect this closes: `/copy`'s own failure hint tells the user to
+    // set RAVEN_TUI_FORCE_OSC52, and every other env knob in this repo uses
+    // that prefix -- but only the upstream HERMES_TUI names were ever read,
+    // so following the hint changed nothing.
+    expect(
+      shouldEmitClipboardSequence({ RAVEN_TUI_FORCE_OSC52: '1', TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv)
+    ).toBe(true)
+    expect(
+      shouldEmitClipboardSequence({ RAVEN_TUI_FORCE_OSC52: '0', SSH_CONNECTION: '1' } as NodeJS.ProcessEnv)
+    ).toBe(false)
+  })
+
+  it('keeps reading the upstream HERMES_TUI names', () => {
+    // The vendored fork is still upstream code; an env var that worked
+    // before this change has to keep working after it.
+    expect(
+      shouldEmitClipboardSequence({ HERMES_TUI_FORCE_OSC52: '1', TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv)
+    ).toBe(true)
+  })
+
+  it('lets the RAVEN_TUI spelling win when both are set', () => {
+    // Pinning the precedence rather than leaving it to `??` ordering: this
+    // repo documents the RAVEN_TUI name, so that is the one a user who set
+    // both most recently meant.
+    expect(
+      shouldEmitClipboardSequence({
+        HERMES_TUI_FORCE_OSC52: '0',
+        RAVEN_TUI_FORCE_OSC52: '1',
+        TMUX: '/tmp/t,1,0'
+      } as NodeJS.ProcessEnv)
+    ).toBe(true)
+  })
+})
+
+describe('clipboardDebugEnabled', () => {
+  it('accepts either env prefix', () => {
+    // The same hint promises RAVEN_TUI_DEBUG_CLIPBOARD=1 explains a failed
+    // copy. It read HERMES_TUI_DEBUG_CLIPBOARD only, so the diagnostic the
+    // user was told to turn on stayed silent.
+    expect(clipboardDebugEnabled({ RAVEN_TUI_DEBUG_CLIPBOARD: '1' } as NodeJS.ProcessEnv)).toBe(true)
+    expect(clipboardDebugEnabled({ HERMES_TUI_DEBUG_CLIPBOARD: '1' } as NodeJS.ProcessEnv)).toBe(true)
+  })
+
+  it('stays off when neither is set', () => {
+    expect(clipboardDebugEnabled({} as NodeJS.ProcessEnv)).toBe(false)
+    expect(clipboardDebugEnabled({ RAVEN_TUI_DEBUG_CLIPBOARD: '' } as NodeJS.ProcessEnv)).toBe(false)
+  })
+})
+
 describe('shouldUseNativeClipboard', () => {
   it('returns false over SSH (native would write to remote clipboard)', () => {
     // Over SSH the user's terminal is on the local end of the pty;
@@ -193,5 +244,51 @@ describe('shouldUseNativeClipboard', () => {
     // (the module-level detected terminal), not null. Returns a boolean
     // without throwing.
     expect(typeof shouldUseNativeClipboard()).toBe('boolean')
+  })
+})
+
+describe('getClipboardPath', () => {
+  // setClipboard() decides native via shouldUseNativeClipboard() and then
+  // copyNative()'s own per-platform availability. A predictor that disagrees
+  // with either sends the user to fix the wrong thing, so every branch of both
+  // gets a case here rather than only the one this CI box runs on.
+
+  it('names native on a plain local macOS terminal', () => {
+    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'darwin', null)).toBe('native')
+  })
+
+  it('names native on a local Linux desktop with a display server', () => {
+    // The defect this closes: the predictor keyed native off darwin alone, so
+    // wl-copy/xclip really wrote the clipboard while the user was told the copy
+    // only left as an escape sequence and to go change a terminal setting.
+    expect(getClipboardPath({ DISPLAY: ':0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('native')
+    expect(getClipboardPath({ WAYLAND_DISPLAY: 'wayland-0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('native')
+  })
+
+  it('names native on Windows, where clip.exe always exists', () => {
+    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'win32', null)).toBe('native')
+  })
+
+  it('names osc52 on a terminal where setClipboard deliberately skips native', () => {
+    // On an allowlisted terminal setClipboard suppresses the native tool to
+    // avoid racing the terminal's own OSC 52 write, so OSC 52 is the only path
+    // taken -- the old predictor claimed 'native' here.
+    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'darwin', 'ghostty')).toBe('osc52')
+  })
+
+  it('names osc52 over SSH, where native would write the wrong machine', () => {
+    expect(getClipboardPath({ SSH_CONNECTION: '1' } as NodeJS.ProcessEnv, 'linux', null)).toBe('osc52')
+    expect(getClipboardPath({ DISPLAY: ':0', SSH_CONNECTION: '1' } as NodeJS.ProcessEnv, 'darwin', null)).toBe('osc52')
+  })
+
+  it('names osc52 on headless Linux, where no native tool can run', () => {
+    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'linux', null)).toBe('osc52')
+  })
+
+  it('names the tmux buffer only when no native tool is available', () => {
+    // Inside tmux with a native tool present, setClipboard fires both and the
+    // native write is the higher-confidence one, so that is what gets named.
+    expect(getClipboardPath({ TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv, 'darwin', null)).toBe('native')
+    expect(getClipboardPath({ TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('tmux-buffer')
   })
 })

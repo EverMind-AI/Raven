@@ -169,6 +169,8 @@ declare module '@hermes/ink' {
     readonly captureScrolledRows: (firstRow: number, lastRow: number, side: 'above' | 'below') => void
     readonly setSelectionBgColor: (color: string) => void
   }
+  export type ClipboardPath = 'native' | 'osc52' | 'tmux-buffer'
+  export function getClipboardPath(): ClipboardPath
   export function useHasSelection(): boolean
   export function useStdout(): { readonly stdout?: NodeJS.WriteStream }
   export function useTerminalFocus(): boolean

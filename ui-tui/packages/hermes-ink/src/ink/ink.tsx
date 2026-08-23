@@ -109,6 +109,7 @@ import {
 import {
   CLEAR_ITERM2_PROGRESS,
   CLEAR_TAB_STATUS,
+  clipboardDebugEnabled,
   setClipboard,
   supportsTabStatus,
   wrapForMultiplexer
@@ -1395,13 +1396,13 @@ export default class Ink {
           return text
         }
 
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error(
-            '[clipboard] no path reached the clipboard (headless + no tmux?) — set HERMES_TUI_FORCE_OSC52=1 to force the escape sequence'
+            '[clipboard] no path reached the clipboard (headless + no tmux?) — set RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence'
           )
         }
       } catch (err) {
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error('[clipboard] error:', err)
         }
       }

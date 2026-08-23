@@ -69,28 +69,69 @@ export function wrapForMultiplexer(sequence: string): string {
  * - 'osc52': only the raw OSC 52 sequence will be written to stdout.
  *   Best-effort; iTerm2 disables OSC 52 by default.
  *
- * pbcopy gating uses SSH_CONNECTION specifically, not SSH_TTY — tmux panes
+ * Decided by asking the same two questions setClipboard() asks, in the same
+ * order: shouldUseNativeClipboard() for whether the native tool is wanted, and
+ * copyNative()'s own platform gate for whether one exists. Keeping this in step
+ * with them is the whole point -- callers put the answer in front of the user,
+ * and a path named wrongly sends them to fix something that was never broken.
+ *
+ * The native gate uses SSH_CONNECTION specifically, not SSH_TTY — tmux panes
  * inherit SSH_TTY forever even after local reattach, but SSH_CONNECTION is
  * in tmux's default update-environment set and gets cleared.
  */
 export type ClipboardPath = 'native' | 'tmux-buffer' | 'osc52'
 
-export function getClipboardPath(): ClipboardPath {
-  const nativeAvailable = process.platform === 'darwin' && !process.env['SSH_CONNECTION']
+/** Whether copyNative() has a tool it can actually run on this platform.
+ *  Mirrors its own switch: pbcopy and clip.exe ship with the OS, while the
+ *  Linux tools need a display server to talk to. */
+function nativeToolAvailable(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
+  switch (platform) {
+    case 'darwin':
+    case 'win32':
+      return true
 
-  if (nativeAvailable) {
+    case 'linux':
+      return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY)
+
+    default:
+      return false
+  }
+}
+
+export function getClipboardPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  terminal: string | null = envModule.terminal
+): ClipboardPath {
+  // Native first: when it fires alongside tmux or OSC 52 it is the one write
+  // that is not contingent on a terminal or multiplexer setting.
+  if (shouldUseNativeClipboard(env, terminal) && nativeToolAvailable(env, platform)) {
     return 'native'
   }
 
-  if (process.env['TMUX']) {
+  if (env.TMUX) {
     return 'tmux-buffer'
   }
 
   return 'osc52'
 }
 
+/**
+ * Whether to log why a clipboard write took the path it did.
+ *
+ * Reads the RAVEN_TUI spelling as well as the upstream HERMES_TUI one: this
+ * repo documents the former (it is what `/copy` tells the user to set) and
+ * vendors the latter.
+ */
+export function clipboardDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.RAVEN_TUI_DEBUG_CLIPBOARD || env.HERMES_TUI_DEBUG_CLIPBOARD)
+}
+
 export function shouldEmitClipboardSequence(env: NodeJS.ProcessEnv = process.env): boolean {
   const override = (
+    env.RAVEN_TUI_FORCE_OSC52 ??
+    env.RAVEN_TUI_CLIPBOARD_OSC52 ??
+    env.RAVEN_TUI_COPY_OSC52 ??
     env.HERMES_TUI_FORCE_OSC52 ??
     env.HERMES_TUI_CLIPBOARD_OSC52 ??
     env.HERMES_TUI_COPY_OSC52 ??
@@ -143,7 +184,8 @@ export function shouldEmitClipboardSequence(env: NodeJS.ProcessEnv = process.env
  *     `allow-passthrough`, which many users don't have configured.
  *
  *     The OSC-52-will-emit guard matters too: if the user has set
- *     HERMES_TUI_FORCE_OSC52=0, no OSC 52 sequence will be written. If
+ *     RAVEN_TUI_FORCE_OSC52=0 (or the HERMES_TUI_ alias), no OSC 52
+ *     sequence will be written. If
  *     we ALSO skip native, the clipboard write becomes a no-op. So skip
  *     native only when OSC 52 will actually carry the data.
  */
@@ -158,7 +200,7 @@ export function shouldUseNativeClipboard(
 
   // Inside tmux/screen, OSC 52 is normally suppressed and we rely on
   // tmux load-buffer instead — so the wl-copy/OSC-52 race usually doesn't
-  // apply. Even when HERMES_TUI_FORCE_OSC52=1 forces a tmux-passthrough
+  // apply. Even when RAVEN_TUI_FORCE_OSC52=1 forces a tmux-passthrough
   // OSC 52 emission, we keep native enabled as a safety net: tmux's
   // outer-terminal forwarding depends on `allow-passthrough` in the
   // user's tmux config, so a forced OSC 52 may silently never reach the
@@ -284,10 +326,10 @@ export async function setClipboard(text: string): Promise<ClipboardResult> {
   // than raw OSC 52, so the wl-copy race usually doesn't apply, and
   // native is kept as a safety net because tmux passthrough forwarding
   // depends on the user's `allow-passthrough` config (note: when
-  // HERMES_TUI_FORCE_OSC52=1 we DO additionally emit a tmux-passthrough
+  // RAVEN_TUI_FORCE_OSC52=1 we DO additionally emit a tmux-passthrough
   // OSC 52, but it can be silently dropped without that setting).
   // Native also fires when the user has disabled OSC 52 emission via
-  // HERMES_TUI_FORCE_OSC52=0 (otherwise the clipboard write becomes a
+  // RAVEN_TUI_FORCE_OSC52=0 (otherwise the clipboard write becomes a
   // complete no-op). Fire-and-forget, but `nativeAttempted` tells us
   // whether ANY native path will be tried.
   const nativeAttempted = shouldUseNativeClipboard(process.env, envModule.terminal) && copyNative(text)
@@ -376,7 +418,7 @@ function copyNative(text: string): boolean {
 
       // No display server → native tools will fail immediately. Cache null.
       if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error('[clipboard] [native] Linux: no DISPLAY or WAYLAND_DISPLAY — native clipboard unavailable')
         }
 
@@ -392,7 +434,7 @@ function copyNative(text: string): boolean {
         const winner = await probeLinuxCopy()
         linuxCopy = winner
 
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error(`[clipboard] [native] Linux: clipboard probe complete → ${winner ?? 'no tool available'}`)
         }
 
