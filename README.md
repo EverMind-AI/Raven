@@ -183,6 +183,7 @@ raven gateway
 | `raven status` | Show configuration and runtime status |
 | `raven doctor` | Diagnose provider and environment problems |
 | `raven tracing` | Open the local trace dashboard |
+| `raven tracing compact` | Fold duplicate trace artifacts to reclaim disk space |
 | `raven sessions list` | Browse, resume, fork, export, or delete sessions |
 | `raven skill list` | Inspect the local SkillForge catalog |
 | `raven sentinel status` | Inspect proactive memory and scheduled nudges |

@@ -100,6 +100,15 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     ("tui",),  # recursive Ink+Node spawn would deadlock + steal stdin
     ("onboard",),  # prompt_toolkit three-step wizard hijacks stdin
     ("upgrade",),  # replacing the active Raven process is terminal-only
+    # ---- audit-artifacts-dedup extension (8 → 9) ----
+    # A full store's hash walk can outrun the dispatch timeout
+    # (``_DEFAULT_TIMEOUT_S`` here, 20s on the ``slash.exec`` path), and the
+    # backing thread is not cancelled on timeout — it would keep running
+    # detached after the RPC call returns, risking Ink reconciler corruption.
+    # Bare ``tracing`` and ``tracing stop`` are unaffected: only this action
+    # is blacklisted. ``compact`` is a positional action, so this prefix
+    # catches it only at argv[1] — _is_tracing_compact covers the rest.
+    ("tracing", "compact"),  # full-store hash walk can outrun the RPC timeout — terminal-only
     # ``agent`` (no -m) — handled specially in _is_dispatch_compatible
 }
 
@@ -114,6 +123,24 @@ def _is_agent_repl(argv: list[str]) -> bool:
     if not argv or argv[0] != "agent":
         return False
     return not any(a in ("-m", "--message") for a in argv[1:])
+
+
+def _is_tracing_compact(argv: list[str]) -> bool:
+    """Return True for a ``tracing compact`` invocation, at any argv position.
+
+    ``compact`` is a positional argument of the ``tracing`` leaf command, so
+    Click accepts it after any option: ``tracing --dry-run compact`` and
+    ``tracing --port 1 compact`` both run it. The ``_DISPATCH_BLACKLIST``
+    prefix match compares fixed positions and therefore only sees the action
+    at ``argv[1]``, so it alone would let those forms reach dispatch.
+
+    ``raven tracing compact``          -> blacklist hit
+    ``raven tracing --dry-run compact`` -> blacklist hit (this predicate)
+    ``raven tracing`` / ``tracing stop`` -> OK
+    """
+    if not argv or argv[0] != "tracing":
+        return False
+    return "compact" in argv[1:]
 
 
 # Default timeout if caller did not override.
@@ -131,7 +158,9 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
 
     1. Empty argv → False.
     2. Blacklist hard reject (prefix match against ``_DISPATCH_BLACKLIST``).
-    3. ``agent`` no-``-m`` REPL → False.
+    3. ``agent`` no-``-m`` REPL → False; ``tracing`` with a ``compact``
+       action anywhere in argv → False (positional action, so the prefix
+       match in step 2 sees it only at ``argv[1]``).
     4. Reflect ``ec_cli.app`` to determine whether argv resolves to a
        registered Typer command:
        - ``argv[0]`` in top-level command names → True.
@@ -175,6 +204,8 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
         if len(argv) >= plen and tuple(argv[:plen]) == prefix:
             return False
     if _is_agent_repl(argv):
+        return False
+    if _is_tracing_compact(argv):
         return False
     # Reflection-based positive check (replaces the v0.0.2 hardcoded
     # _DISPATCH_WHITELIST 19-tuple set). The helper module also serves

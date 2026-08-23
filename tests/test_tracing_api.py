@@ -8,11 +8,14 @@ error status, and no-op when disabled.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from raven.tracing import spans as _spans
+from raven.tracing import store as _store_mod
 from raven.tracing import trace
 
 
@@ -251,6 +254,168 @@ def test_subagent_children_nest(trace_dir):
     assert by["subagent.run"]["attributes"]["span.type"] == "subagent"
     assert by["subagent.run"]["attributes"]["subagent.label"] == "worker"
     assert inner_parent == sa_id  # inner llm.call nests under the subagent node
+
+
+def test_a_mutated_artifact_does_not_corrupt_the_next_record(trace_dir):
+    """An edit through one hard link must not follow the payload forward.
+
+    Every published artifact path is a writable link to the shared blob, so
+    without a check before linking, one mutated file makes every later record
+    of the same payload report a sha1 its own bytes do not have.
+    """
+    store = _spans._get_store()
+    payload = {"m": "good"}
+
+    first = store.persist_artifact("llm.input", {"traceId": "t1"}, payload)
+    Path(first["path"]).write_text("CORRUPT", encoding="utf-8")
+
+    second = store.persist_artifact("tool.output", {"traceId": "t2"}, payload)
+    text = Path(second["path"]).read_text(encoding="utf-8")
+
+    assert json.loads(text) == payload
+    assert hashlib.sha1(text.encode("utf-8")).hexdigest() == second["sha1"]
+    assert second["sha1"] == first["sha1"]
+
+
+def test_repairing_a_blob_leaves_the_edited_artifact_as_it_is(trace_dir):
+    """The damaged record keeps its bytes; only later references are repaired.
+
+    Rewriting an artifact somebody edited would be the audit trail lying a
+    second time. What must not survive is the damage spreading.
+    """
+    store = _spans._get_store()
+    payload = {"m": "good"}
+
+    first = store.persist_artifact("llm.input", {"traceId": "t1"}, payload)
+    mutated = Path(first["path"])
+    mutated.write_text("CORRUPT", encoding="utf-8")
+
+    second = Path(store.persist_artifact("tool.output", {"traceId": "t2"}, payload)["path"])
+    third = Path(store.persist_artifact("memory.recall", {"traceId": "t3"}, payload)["path"])
+
+    assert mutated.read_text(encoding="utf-8") == "CORRUPT"
+    assert mutated.stat().st_ino != second.stat().st_ino
+    assert second.stat().st_ino == third.stat().st_ino  # dedup resumes after the repair
+
+
+def test_an_intact_blob_is_not_rehashed_for_every_span(trace_dir, monkeypatch):
+    """The check costs one read per distinct payload per process, not per span.
+
+    Without the cached (inode, mtime, size) the write path would read the
+    whole blob on every reference, which is the cost the layout exists to
+    avoid.
+    """
+    store = _spans._get_store()
+    blob_reads: list[Path] = []
+    real_open = Path.open
+
+    def counting_open(self, mode="r", *args, **kwargs):
+        if _store_mod.BLOBS_DIR_NAME in self.parts and "b" in mode:
+            blob_reads.append(self)
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    for i in range(4):
+        store.persist_artifact("llm.input", {"traceId": f"t{i}"}, {"m": "same"})
+
+    assert blob_reads == []
+
+
+def test_identical_payloads_share_one_inode(trace_dir):
+    store = _spans._get_store()
+    payload = {"messages": ["a" * 5000]}
+
+    first = store.persist_artifact("llm.input", {"traceId": "t1"}, payload)
+    second = store.persist_artifact("llm.input", {"traceId": "t2"}, payload)
+
+    p1, p2 = Path(first["path"]), Path(second["path"])
+    assert p1 != p2
+    assert p1.stat().st_ino == p2.stat().st_ino
+    assert json.loads(p1.read_text(encoding="utf-8")) == payload
+    assert json.loads(p2.read_text(encoding="utf-8")) == payload
+    assert first["sha1"] == second["sha1"]
+    assert first["bytes"] == second["bytes"]
+
+
+def test_one_blob_backs_every_reference(trace_dir):
+    store = _spans._get_store()
+    payload = {"messages": ["b" * 100]}
+
+    store.persist_artifact("llm.input", {"traceId": "t1"}, payload)
+    art = store.persist_artifact("tool.input", {"traceId": "t2"}, payload)
+
+    blobs = sorted(store.blobs_dir.rglob("*.json"))
+    assert len(blobs) == 1
+    assert blobs[0].name == f"{art['sha1']}.json"
+    assert blobs[0].parent.name == art["sha1"][:2]
+    # blob + the two span paths
+    assert Path(art["path"]).stat().st_nlink == 3
+
+
+def test_distinct_payloads_do_not_share_a_blob(trace_dir):
+    store = _spans._get_store()
+
+    a = store.persist_artifact("llm.input", {"traceId": "t1"}, {"m": "one"})
+    b = store.persist_artifact("llm.input", {"traceId": "t2"}, {"m": "two"})
+
+    assert a["sha1"] != b["sha1"]
+    assert Path(a["path"]).stat().st_ino != Path(b["path"]).stat().st_ino
+    assert len(sorted(store.blobs_dir.rglob("*.json"))) == 2
+
+
+def test_write_path_falls_back_when_hard_links_are_unavailable(trace_dir, monkeypatch):
+    store = _spans._get_store()
+
+    def _no_links(*_args, **_kwargs):
+        raise OSError("hard links unsupported")
+
+    monkeypatch.setattr(_store_mod.os, "link", _no_links)
+    payload = {"m": "fallback"}
+
+    art = store.persist_artifact("tool.input", {"traceId": "t1"}, payload)
+
+    path = Path(art["path"])
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert path.stat().st_nlink == 1
+    assert art.get("error") is None
+    assert not list(store.blobs_dir.rglob("*.tmp"))
+
+
+def test_failed_temp_write_leaves_no_orphan_tmp_file(trace_dir, monkeypatch):
+    store = _spans._get_store()
+    real_write_text = Path.write_text
+    calls = {"n": 0}
+
+    def _fail_first_call(self, data, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Simulate a write that reaches disk before it fails (e.g. ENOSPC
+            # mid-write), so a leftover temp file would prove the bug.
+            real_write_text(self, data, *args, **kwargs)
+            raise OSError("simulated disk full")
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _fail_first_call)
+    payload = {"m": "diskfull"}
+
+    art = store.persist_artifact("tool.input", {"traceId": "t1"}, payload)
+
+    path = Path(art["path"])
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert path.stat().st_nlink == 1
+    assert art.get("error") is None
+    assert not list(store.blobs_dir.rglob("*.tmp"))
+
+
+def test_string_payloads_keep_the_txt_extension(trace_dir):
+    store = _spans._get_store()
+
+    art = store.persist_artifact("subagent.external.transcript", {"traceId": "t1"}, "raw text")
+
+    path = Path(art["path"])
+    assert path.suffix == ".txt"
+    assert path.read_text(encoding="utf-8") == "raw text"
+    assert (store.blobs_dir / art["sha1"][:2] / f"{art['sha1']}.txt").exists()
 
 
 # ---------------------------------------------------------------------------
