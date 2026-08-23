@@ -49,6 +49,7 @@ import * as panes from './shell/panes'
 import * as perm from './shell/perm'
 import { md } from './shell/prose'
 import * as scrollbars from './shell/scrollbars'
+import * as session from './shell/session'
 import { toggle as toggleTheme } from './shell/theme'
 import * as toastWriter from './shell/toast'
 import * as upgradeWriter from './shell/upgrade'
@@ -81,6 +82,8 @@ declare global {
     setCtx?: typeof ctxchip.set
     toast?: typeof toastWriter.show
     menuAt?: typeof menuWriter.show
+    sessionCurrent?: typeof session.current
+    sessionSet?: typeof session.setCurrent
   }
 }
 
@@ -140,6 +143,14 @@ window.setCtx = ctxchip.set
    names for islands until the bridge calls are retired on Axis 2. */
 window.toast = toastWriter.show
 window.menuAt = menuWriter.show
+window.sessionCurrent = session.current
+window.sessionSet = session.setCurrent
+
+session.onChange(() => {
+  sheets.sync()
+  dagSheet.sync()
+  rail.draw()
+})
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine

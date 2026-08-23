@@ -299,7 +299,7 @@ more types.
 | 2 | A (`use`, `tl`) | `use`, `tl` | deletions again; `use` becomes demo-layer-only | done |
 | 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins | done |
 | 4 | D (queue) | `q` | composer store owns the queue; parked via copied accessors | done |
-| 5 | B | `cur` | widest diff; alone in its MR | open |
+| 5 | B | `cur` | `shell/session.ts` owns the subscribed page pointer | done |
 | 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** | open |
 
 The two bold notes are the ones no gate enforces -- see "the incentive this

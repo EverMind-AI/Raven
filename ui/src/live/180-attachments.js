@@ -12,5 +12,5 @@ DS.composer.upload = (p) => rpc.call('fs.upload', {
   content_b64: p.content_b64,
   /* Read per call, not captured: a file can be staged in a draft that becomes
      a session between the pick and the upload. */
-  session: cur || '',
+  session: sessionCurrent() || '',
 });

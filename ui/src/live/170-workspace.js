@@ -63,18 +63,18 @@ DS.prose = {
 
 DS.workspace = {
   canBrowse: true,
-  list: (dir) => rpc.call('fs.list', { path: dir, session: cur || '' }).then((r) => {
+  list: (dir) => rpc.call('fs.list', { path: dir, session: sessionCurrent() || '' }).then((r) => {
     /* The root rides on every answer: it is the session's working directory,
        which shortPath below needs for every row the island asks about. */
     if (r.root) wsRoot = r.root;
     return r;
   }),
-  reveal: (p) => rpc.call('fs.reveal', { path: p, session: cur || '' }),
+  reveal: (p) => rpc.call('fs.reveal', { path: p, session: sessionCurrent() || '' }),
   /* The other half of the viewer: a kind the page cannot render goes to the
      host's own application for it. `app` is a name the reader picked, or
      absent for the host default. Only offered while the gateway IS this
      desktop -- see hostIsLocal below. */
-  openIn: (p, app) => rpc.call('fs.open', { path: p, session: cur || '', ...(app ? { app } : {}) }),
+  openIn: (p, app) => rpc.call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
   /* Whether an application launched on the gateway's host would appear on the
      reader's own screen. `open` runs where the gateway runs, so on a remote
      serve these actions would start programs on somebody else's machine. */

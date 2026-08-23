@@ -56,7 +56,7 @@ function onEvent(ev) {
     /* Read BEFORE busy is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */
     if (!busy && p.content) ask(p.content);
-    if (p.content) touchSession(cur, p.content);
+    if (p.content) touchSession(sessionCurrent(), p.content);
     busy = true; busyCancellable = true; goState(); drawMeter();
     WS.turn += 1;
   } else if (ev.type === 'turn.started') {
@@ -259,9 +259,9 @@ function finishTurn(usage) {
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);
-  const s = sess(cur);
+  const s = sess(sessionCurrent());
   if (s && live.say.trim()) s.last = live.say.trim().split('\n')[0].slice(0, 60);
-  touchSession(cur, live.say);
+  touchSession(sessionCurrent(), live.say);
   // OS notification when the answer lands while the window is in the
   // background; ntfPush itself checks focus and the user's preference.
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || live.say.trim().slice(0, 80));
@@ -275,7 +275,7 @@ function finishTurn(usage) {
    the moment it is sent, not after the turn ends, so the rail and the top bar
    never sit on 新任务 while the agent works. */
 function titleFromFirstMessage(text) {
-  const s = sess(cur);
+  const s = sess(sessionCurrent());
   if (!s || (s.title && s.title !== '新任务' && s.title !== T('gui.new_task'))) return;
   const t = text.trim().split('\n')[0].trim().slice(0, 30);
   if (!t) return;
@@ -304,10 +304,10 @@ async function refreshList() {
     // Pins and persisted fields come from the server. Only the running/done
     // marker is client state; a not-yet-saved current row also survives until
     // the first list response that contains it.
-    const reconciled = RavenIslands.rail.reconcile(SESS, rows, cur);
+    const reconciled = RavenIslands.rail.reconcile(SESS, rows, sessionCurrent());
     const currentMissing = reconciled.currentMissing;
     SESS = reconciled.rows;
-    if (currentMissing) await leaveDeletedSession(cur);
+    if (currentMissing) await leaveDeletedSession(sessionCurrent());
     else drawList();
   } catch { /* keep the stale list */ }
 }

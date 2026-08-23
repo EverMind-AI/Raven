@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
+import { current, setCurrent } from '../../shell/session'
 import * as store from './store'
 import { plainTitle } from './title'
 
@@ -9,9 +10,9 @@ import type { SessRow } from './types'
 import type { JSX, KeyboardEvent, MouseEvent } from 'react'
 import { term as findTerm } from '../../shell/find'
 
-/* The row's context/⋯ menu. Moving to a session still leaves through the
-   shell by name (setCur, openSession, drawList are page state this island does
-   not own); the actions ON a session go through the source instead, so
+/* The row's context/⋯ menu. Opening a session still leaves through the shell
+   by name; the current pointer is page-scoped modern state. Actions ON a
+   session go through the source instead, so
    what happens is whatever the installed source can actually do. */
 function togglePin(s: SessRow): void {
   s.pin = !s.pin
@@ -30,15 +31,9 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
     {
       label: t('gui.sess.rename'),
       fn: () => {
-        let cur: string | null = null
-        try {
-          cur = store.source().snapshot().cur
-        } catch {
-          /* keep null */
-        }
+        const cur = current()
         if (s.id !== cur) {
-          sh.setCur?.(s.id)
-          sh.drawList?.()
+          setCurrent(s.id)
           sh.openSession?.(s)
         }
         store.rename()
@@ -83,15 +78,9 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     if (editing) return
     const sh = shell()
     sh.showPage(null)
-    let now: string | null = cur
-    try {
-      now = store.source().snapshot().cur
-    } catch {
-      /* keep the rendered value */
-    }
+    const now = current()
     if (s.id !== now) {
-      sh.setCur?.(s.id)
-      sh.drawList?.()
+      setCurrent(s.id)
       sh.openSession?.(s)
     }
   }

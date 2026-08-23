@@ -65,7 +65,7 @@ DS.cron ??= {
     closeCron();
     const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
       run: null, from: 'cron', job: j.id };
-    SESS.unshift(s); cur = s.id; drawList(); openSession(s);
+    SESS.unshift(s); sessionSet(s.id); drawList(); openSession(s);
     DS.composer.send(j.what);
     toast(T('gui.cron.running_x', { name: j.name }));
   },
@@ -74,7 +74,7 @@ DS.cron ??= {
     const s = { id: 'n' + Date.now(), title: j.name, last: run ? run.note : '',
       when: run ? run.at : '', run: run && run.ok ? 'gtm' : null, status: run && !run.ok ? 'err' : null,
       from: 'cron', job: j.id };
-    SESS.unshift(s); cur = s.id; drawList(); openSession(s);
+    SESS.unshift(s); sessionSet(s.id); drawList(); openSession(s);
     if (run && !run.ok) {
       $('#stage').innerHTML = '';
       ask(j.what);

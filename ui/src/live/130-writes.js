@@ -11,7 +11,7 @@ DS.sessions.deleteAll = async () => {
     } catch { /* counted by what is left below */ }
   }
   SESS = SESS.filter((s) => !gone.includes(s.id));
-  cur = null;
+  sessionSet(null);
   startDraft();
   drawSettings();
   toast(SESS.length

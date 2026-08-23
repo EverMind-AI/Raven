@@ -27,7 +27,7 @@ function dockLift() { RavenIslands.composer.dockLift(); }
 const SLASH = [
   { id: 'gui.compress', fn: () => {} },
   { id: 'gui.clear', fn: () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
-      const s = sess(cur);
+      const s = sess(sessionCurrent());
       $('#stage').innerHTML = ''; pitch();
       if (s) { s.run = null; s.last = T('gui.sess.not_started'); }
       use = null; drawMeter(); drawList();
@@ -58,7 +58,7 @@ function send(text) {
   busy = true; use = null;
   drawMeter(); goState(); drawList();
   const run = pickRun(text);
-  const s = sess(cur);
+  const s = sess(sessionCurrent());
   if (s && !s.run) {
     s.run = run.key; s.status = null;
     if (s.title === '新任务') { s.title = run.title; $('#title').textContent = plainTitle(s.title); }

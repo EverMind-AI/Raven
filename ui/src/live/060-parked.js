@@ -9,12 +9,11 @@ const parkedTurns = new Map();  // session_key -> parked turn snapshot
 const subBySession = {};        // session_key -> subscription_id
 const subSession = {};          // subscription_id -> session_key
 const PARK_EVENT_CAP = 4000;
-/* The session the running turn belongs to. parkTurn must NOT key by `cur`:
-   every rail click does `cur = s.id; openSession(s)`, so by the time the
-   old turn is parked, `cur` already names the TARGET session — parking
-   under it would file the old transcript in the wrong drawer and the
-   parked-restore branch would immediately hand it back as the new
-   session's content (the "switching still shows the old session" bug). */
+/* The session the running turn belongs to. parkTurn must NOT key by the current
+   pointer: every rail click moves it before openSession(s), so by the time the
+   old turn is parked it already names the TARGET session. Parking under that
+   would file the old transcript in the wrong drawer and immediately hand it
+   back as the new session's content. */
 let turnOwner = null;
 /* The message a retry would re-send. Held here rather than read back off the
    last `.ask` bubble, which is markup and may belong to another session. */
@@ -53,7 +52,7 @@ DS.transcript.parked = (node) => {
 };
 
 function restoreTurn(pk) {
-  turnOwner = cur;
+  turnOwner = sessionCurrent();
   const stage = $('#stage');
   stage.innerHTML = '';
   pk.nodes.forEach((n) => stage.appendChild(n));
@@ -64,7 +63,7 @@ function restoreTurn(pk) {
   RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
   Object.assign(WS, pk.ws);
   wsRestore(pk.pane.tab, pk.pane.picked);
-  const s = sess(cur);
+  const s = sess(sessionCurrent());
   if (s && s.status === 'run') s.status = null;
   pk.events.forEach((ev) => { try { onEvent(ev); } catch { /* one bad frame must not eat the rest */ } });
   paintSay();

@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { current as currentSession } from '../../shell/session'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
@@ -131,10 +132,7 @@ let at = 0
    repaints -- and an unchanged answer costs no render at all. */
 let drawn = ''
 
-const sessionKey = (): string => {
-  const k = shell().sessionKey
-  return k ? k() : ''
-}
+const sessionKey = (): string => currentSession() || ''
 
 export function refresh(force = false): void {
   /* The list asks on each draw and a fresh answer causes one; the floor keeps
@@ -253,7 +251,7 @@ export function canSend(): boolean {
 const directPoke = new Map<string, ReturnType<typeof setTimeout>>()
 const DIRECT_POKE_MS = 500
 
-const targetKey = (t: { agent?: string; handle?: string }): string => `${t.agent} ${t.handle}`
+const targetKey = (t: { agent?: string; handle?: string }): string => `${t.agent}\u0000${t.handle}`
 
 /* An event belonging to a direct chat, forwarded here rather than rendered by
    the conversation -- the conversation is not its addressee and drops it.

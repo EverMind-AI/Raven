@@ -1,5 +1,6 @@
 /* ══ app state ════════════════════════════════════════════════════ */
-let cur = 'a', busy = false, timers = [], use = null;
+sessionSet('a');
+let busy = false, timers = [], use = null;
 /* Whether the busy turn can be stopped by the reader. A USER turn can
    (turn.send registered its handle); a runtime turn -- a delegated result
    re-entering -- cannot, because turn.cancel only resolves handles turn.send
@@ -69,7 +70,7 @@ function draftsWrite(all) {
 /* Park under the session that owned the composer while the text was typed,
    never under the one being opened. */
 function parkDraft() {
-  const key = draftOwner || cur || 'new';
+  const key = draftOwner || sessionCurrent() || 'new';
   const text = $('#ta').value;
   const all = draftsRead();
   if (text.trim()) all[key] = { t: text, at: Date.now() };

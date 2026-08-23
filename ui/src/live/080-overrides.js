@@ -30,14 +30,15 @@ rpc.onReconnect = async () => {
      transcript is persisted server-side, so a full re-open is lossless, and
      a turn that is genuinely still running keeps streaming into the fresh
      subscription that openSession sets up. */
-  if (cur && !draft) {
+  const current = sessionCurrent();
+  if (current && !draft) {
     busy = false;
     const title = $('#title').textContent;
-    await openSession({ id: cur, title });
+    await openSession({ id: current, title });
     showStatus(T('gui.reconnected'));
     setTimeout(killStatus, 2500);
-  } else if (cur) {
-    subscribe(cur);
+  } else if (current) {
+    subscribe(current);
   }
 };
 
@@ -62,8 +63,7 @@ function startDraft() {
   live.subId = null;
   parkDraft(); loadDraft('new');
   resetView();
-  draft = true; cur = null;
-  sheetsSync();
+  draft = true; sessionSet(null);
   $('#title').textContent = T('gui.new_task');
   pitch(); drawList(); ta.focus();
 }
@@ -74,11 +74,6 @@ openSession = async function (s) {
   // may still be streaming, and a stale live.subId would paint its events
   // into the newly opened stage. Route them to the parked buffer instead.
   live.subId = null;
-  /* Twice, deliberately. The rail sets `cur` before calling this, so syncing
-     here takes the last conversation's sheets down at once rather than leaving
-     them over the composer for as long as session.resume takes; the sync below
-     is the one that runs when `cur` was not settled yet (the reconnect path). */
-  sheetsSync();
   parkDraft(); loadDraft(s.id);
   draft = false;
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
@@ -99,11 +94,7 @@ openSession = async function (s) {
   const pk = parkedTurns.get(s.id);
   if (pk) {
     parkedTurns.delete(s.id);
-    cur = s.id;
-    // With `cur` settled: hand this conversation back the sheets it was raised
-    // with, and take away the ones the last conversation was still holding.
-    sheetsSync();
-    RavenIslands.dag.sync();
+    sessionSet(s.id);
     live.subId = subBySession[s.id] || null;
     restoreTurn(pk);
     if (!live.subId) await subscribe(s.id);
@@ -111,12 +102,10 @@ openSession = async function (s) {
   }
   try {
     const r = await rpc.call('session.resume', { session_id: s.id, session_key: s.id });
-    if (r.session_id && r.session_id !== s.id) { s.id = r.session_id; if (cur !== s.id) cur = s.id; }
-    cur = s.id;
-    sheetsSync();
-    RavenIslands.dag.sync();
+    if (r.session_id && r.session_id !== s.id) s.id = r.session_id;
+    sessionSet(s.id);
     /* resume hands back the canonical id, so the row rendered from the listed
-       id no longer matches `cur` -- without this redraw the rail shows nothing
+       id no longer matches the current pointer -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
     drawList();
     const u = (r.info && r.info.usage) || {};
@@ -175,10 +164,11 @@ function liveSend(text) {
     goState(); drawMeter();
   };
   if (!draft) {
-    turnOwner = cur;
-    touchSession(cur, text);
+    const current = sessionCurrent();
+    turnOwner = current;
+    touchSession(current, text);
     titleFromFirstMessage(text);
-    rpc.call('turn.send', { session_key: cur, content: text, ...mediaOf(text) }).catch(failed);
+    rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) }).catch(failed);
     return;
   }
   // The draft becomes a real session here, on its first message.
@@ -186,15 +176,15 @@ function liveSend(text) {
     const r = await rpc.call('session.create', {});
     const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
       when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
-    SESS.unshift(s); cur = s.id; draft = false;
-    turnOwner = cur;
+    SESS.unshift(s); sessionSet(s.id); draft = false;
+    turnOwner = sessionCurrent();
     // The composer was owned by 'new' until this point; keep later keystrokes
     // filed under the session that just came into being.
-    if (draftOwner === 'new') draftOwner = cur;
+    if (draftOwner === 'new') draftOwner = sessionCurrent();
     titleFromFirstMessage(text);
     drawList();
     await subscribe(s.id);
-    await rpc.call('turn.send', { session_key: cur, content: text, ...mediaOf(text) });
+    await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
   })().catch(failed);
 };
 
@@ -248,10 +238,10 @@ DS.composer.stop = function () {
      deltas are still streaming into it. The reader's stop does nothing until
      the turn is one they can stop. */
   if (!busyCancellable) return;
-  const owner = cur;
+  const owner = sessionCurrent();
   cancelInFlight = true;
-  rpc.call('turn.cancel', { session_key: cur })
-    .then(() => { cancelInFlight = false; if (cur === owner) drainQueue(); },
+  rpc.call('turn.cancel', { session_key: owner })
+    .then(() => { cancelInFlight = false; if (sessionCurrent() === owner) drainQueue(); },
       () => { cancelInFlight = false; });
   softStop();
 };
@@ -274,11 +264,11 @@ async function leaveDeletedSession(sessionId) {
   forgetSubscription(sessionId);
   sheetsForget(sessionId);
   RavenIslands.dag.forget(sessionId);
-  const transition = RavenIslands.rail.removeRow(SESS, cur, sessionId);
+  const transition = RavenIslands.rail.removeRow(SESS, sessionCurrent(), sessionId);
   SESS = transition.rows;
   if (transition.kind === 'unchanged') { drawList(); return; }
   if (transition.kind === 'open') {
-    cur = transition.next.id;
+    sessionSet(transition.next.id);
     await openSession(transition.next);
     return;
   }
@@ -287,11 +277,11 @@ async function leaveDeletedSession(sessionId) {
 }
 
 async function leaveArchivedSession(sessionId) {
-  const transition = RavenIslands.rail.removeRow(SESS, cur, sessionId);
+  const transition = RavenIslands.rail.removeRow(SESS, sessionCurrent(), sessionId);
   SESS = transition.rows;
   if (transition.kind === 'unchanged') { drawList(); return; }
   if (transition.kind === 'open') {
-    cur = transition.next.id;
+    sessionSet(transition.next.id);
     await openSession(transition.next);
     return;
   }

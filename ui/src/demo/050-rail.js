@@ -2,10 +2,9 @@
    The renderer is the rail island (ui/src/features/rail/); what remains
    here is its shell face -- the names the chrome, the conversation, the
    pages and the live layer still call -- and the snapshot source. The
-   list itself stays in the shared SESS/cur globals: the transcript, the
-   turn machinery, the schedule pages and settings all write them in
-   place, so the source hands the island a view of them rather than a
-   copy that could go stale. */
+   list itself stays in the shared SESS array: the transcript, turn machinery,
+   schedule pages and settings all write it in place. The page-scoped session
+   module supplies the current id beside that live view. */
 function markNewCurrent() { RavenIslands.rail.markNew(); }
 function drawList() { /* the island renders into #list */ RavenIslands.rail.draw(); }
 /* inline rename in the top bar, from the title bar's own button; the list
@@ -19,4 +18,4 @@ function renameTitle() { RavenIslands.rail.rename(); }
    deleteAll is the exception and is installed by demo/130-settings.js, next to
    the rest of that page's writes, because wiping the list here means clearing
    page state only this layer can reach. */
-DS.sessions ??= { snapshot: () => ({ rows: SESS, cur, busy }) };
+DS.sessions ??= { snapshot: () => ({ rows: SESS, cur: sessionCurrent(), busy }) };

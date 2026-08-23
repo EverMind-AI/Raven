@@ -66,7 +66,7 @@ DS.cron = {
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' };
     if (!sess(s.id)) SESS.unshift(s);
-    cur = s.id; drawList(); openSession(s);
+    sessionSet(s.id); drawList(); openSession(s);
   },
 };
 
