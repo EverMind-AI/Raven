@@ -1,7 +1,5 @@
-/* One provider row of the model panel. Both sources answer with the shared
-   PROVIDERS array (ui/src/demo/130-settings.js), mutated in place: the live
-   loadProviders rebuilds it from model.options, so the composer's model chip
-   menu and the island read the same rows. */
+/* One provider row of the model panel. Each source owns its provider list;
+   the live source shares its fetched rows with the composer's model picker. */
 export interface ProviderRow {
   id: string
   name: string
