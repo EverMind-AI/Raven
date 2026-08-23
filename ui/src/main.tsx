@@ -40,6 +40,7 @@ import * as banner from './shell/banner'
 import * as chips from './shell/chips'
 import * as ctxchip from './shell/ctxchip'
 import * as find from './shell/find'
+import * as failureWriter from './shell/failure'
 import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
 import * as menuWriter from './shell/menu'
@@ -50,6 +51,7 @@ import { md } from './shell/prose'
 import * as scrollbars from './shell/scrollbars'
 import { toggle as toggleTheme } from './shell/theme'
 import * as toastWriter from './shell/toast'
+import * as upgradeWriter from './shell/upgrade'
 
 /* The island bundle. Assembled ahead of the legacy script by ui/build.py, so
  * everything published here exists by the time the shell's shims and the
@@ -246,6 +248,13 @@ window.RavenIslands = {
   nav: {
     draw: navfly.draw,
     toggle: navfly.toggle,
+  },
+  /* One appended node per call, so these are writers rather than islands. The
+     concat layers keep the transport and boot decisions that ask for them. */
+  chrome: {
+    failureBar: failureWriter.show,
+    bootError: failureWriter.bootError,
+    upShade: upgradeWriter.open,
   },
   plugins: {
     host: plugHost,

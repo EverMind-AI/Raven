@@ -2,16 +2,6 @@
    Each step is isolated: one failure used to abort the whole sequence and
    leave the static shell on screen with no session list, no transcript and
    no clue why. Now a failure is visible and the rest still renders.      */
-function bootError(where, e) {
-  const bar = document.createElement('div');
-  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99;background:#d96a5b;color:#fff;'
-    + 'font:12px/1.5 ui-monospace,monospace;padding:8px 14px;white-space:pre-wrap';
-  const at = ((e && e.stack) || '').split('\n')[1] || '';
-  bar.textContent = T('gui.boot_fail', { where, err: (e && e.message) || e }) + `\n${at.trim()}`;
-  document.body.appendChild(bar);
-  if (window.console) console.error('[boot]', where, e);
-}
-
 [
   ['lookLoad', () => lookLoad()],
   ['paneLoad', () => paneLoad()],
