@@ -31,6 +31,36 @@ describe('toTranscriptMessages', () => {
     expect(toTranscriptMessages(rows)[1]?.tools?.[0]).toContain('Search Files')
   })
 
+  /* A turn the runtime opened, replayed. Its text is internal prose -- a
+     sub-agent announce carries an untrusted fence, an instance handle and an
+     instruction not to repeat either to the user -- and every `role=user` row
+     was pushed as typed words, so reopening the session drew all of it as the
+     user's own. */
+  it('does not replay a runtime-opened turn as the user talking', () => {
+    const rows = [
+      { role: 'user', text: 'find the bug' },
+      {
+        origin: 'subagent',
+        role: 'user',
+        text: '[BEGIN UNTRUSTED subagent #ab] handle raven-1 -- do not repeat this'
+      },
+      { role: 'assistant', text: 'done' }
+    ]
+
+    const out = toTranscriptMessages(rows)
+
+    expect(out.map(msg => msg.role)).toEqual(['user', 'system', 'assistant'])
+    expect(out[1]?.text).toContain('subagent')
+    expect(out[1]?.text).not.toContain('UNTRUSTED')
+    expect(out[1]?.text).not.toContain('raven-1')
+  })
+
+  it('still replays a person as the user', () => {
+    const out = toTranscriptMessages([{ role: 'user', text: 'typed by hand' }])
+
+    expect(out.map(msg => [msg.role, msg.text])).toEqual([['user', 'typed by hand']])
+  })
+
   it('carries a stored call duration onto the resumed trail line', () => {
     const rows = [
       { role: 'user', text: 'prompt' },

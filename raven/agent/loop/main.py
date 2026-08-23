@@ -90,6 +90,32 @@ _ABORTED_ACTION_REPLY = (
 # underscore keeps it out of the provider payload while the turn is live.
 _NOTICE_KEY = "_notice"
 
+# Marks the user entry of a turn the runtime opened on the agent's behalf, with
+# the origin that opened it. Same underscore-then-rename convention as
+# ``_notice``: ``_save_turn`` writes it as ``origin``, and the underscore keeps
+# it out of the live provider payload.
+#
+# The entry's *text* is runtime prose in these turns -- a sub-agent's announce
+# carries an untrusted fence, an instance handle and an instruction not to repeat
+# either of them to the user; a cron reminder carries "when you reply, mention
+# when the reminder was originally set". A reader with no way to tell it apart
+# from a person typing draws all of it as the user's own words on the next
+# reload, which is how those internals reached a screen.
+_ORIGIN_KEY = "_origin"
+
+
+def _runtime_origin(origin: "Origin | None") -> str | None:
+    """The mark for a turn the runtime opened, or ``None`` for a person's.
+
+    Every origin but ``USER`` earns one, not just ``SUBAGENT``: a cron
+    reminder's text carries "when you reply, mention when the reminder was
+    originally set", which is as much an instruction to the model as an
+    announce's untrusted fence is, and a reader that draws it as typed words
+    puts it on screen the same way.
+    """
+    return None if origin is None or origin is Origin.USER else str(origin)
+
+
 # How long a turn's parts took, on the entry each one belongs to: the thinking
 # span on the assistant message that carries the thought, the execution span on
 # the tool result. Same underscore-then-rename convention as ``_diff`` -- these
@@ -3532,7 +3558,7 @@ class AgentLoop:
                     )
                     if _question:
                         _ts = _dt.now().isoformat()
-                        session.record({"role": "user", "content": content, "timestamp": _ts})
+                        self._record_inbound(session, content, origin, _ts)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
                         session.pending_clarification = {
                             "original_message": content,
@@ -3580,7 +3606,7 @@ class AgentLoop:
                     if _question:
                         # Write the original request and the clarifying question into history to keep the conversation coherent.
                         _ts = _dt.now().isoformat()
-                        session.record({"role": "user", "content": content, "timestamp": _ts})
+                        self._record_inbound(session, content, origin, _ts)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
 
                         # Save the pending state so the next message can resume it.
@@ -3655,6 +3681,14 @@ class AgentLoop:
             selected_skills=selected_skills or None,
             model=routed_model,
         )
+        if (origin_mark := _runtime_origin(req.origin)) and initial_messages:
+            # Stamped on the envelope the assembler just built, which is the entry
+            # ``_save_turn`` persists as this turn's user message. Marked here
+            # rather than inside the assembler because the origin is a fact about
+            # the request, and the assembler is handed a turn, not a request.
+            last = initial_messages[-1]
+            if last.get("role") == "user":
+                last[_ORIGIN_KEY] = origin_mark
         # Surface the skills SkillForge injected this turn to the web UI's skill
         # panel (populated into _last_injected_skill_ids by the assemble above).
         await self._emit_injected_skills(key)
@@ -3878,6 +3912,24 @@ class AgentLoop:
         except Exception:  # noqa: BLE001 - see docstring
             logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
 
+    def _record_inbound(self, session: Session, content: str, origin: "Origin | None", timestamp: str) -> None:
+        """Persist the inbound entry of a turn that answers before ``_save_turn``.
+
+        The personalization flow can reply with a clarifying question and return,
+        so the envelope the assembler would have marked is never built and the
+        turn's user entry reaches disk from here instead. Both paths that do it
+        go through this one, because two copies of the same write is how one of
+        them came to be marked and the other not.
+
+        Writes ``origin`` rather than ``_origin``: the underscore exists so a
+        mark stays out of the live provider payload until ``_save_turn`` renames
+        it, and nothing here is going to a provider.
+        """
+        entry: dict[str, Any] = {"role": "user", "content": content, "timestamp": timestamp}
+        if mark := _runtime_origin(origin):
+            entry["origin"] = mark
+        session.record(entry)
+
     def _save_turn(self, session: Session, messages: list[dict], skip: int, *, received_at: str | None = None) -> None:
         """Save new-turn messages into session, truncating large tool results.
 
@@ -3902,6 +3954,8 @@ class AgentLoop:
                 continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if turn_origin := entry.pop(_ORIGIN_KEY, None):
+                entry["origin"] = turn_origin
             if notice := entry.pop(_NOTICE_KEY, None):
                 # Same rename as the diff below, for the same reason. Without
                 # it a reload draws this runtime prose as the model's answer,

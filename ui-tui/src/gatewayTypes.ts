@@ -24,6 +24,14 @@ export interface GatewayTranscriptMessage {
   context?: string
   duration_ms?: number
   name?: string
+  /**
+   * Present on the user entry of a turn the runtime opened, naming what opened
+   * it. Absent means a person typed it. A marked row's text is internal prose --
+   * a sub-agent's announce carries an untrusted fence, an instance handle and an
+   * instruction not to repeat either to the user -- so a reader must not draw it
+   * as the user's own words.
+   */
+  origin?: string
   role: 'assistant' | 'system' | 'tool' | 'user'
   text?: string
 }

@@ -165,6 +165,10 @@ export interface TranscriptMessage {
   diff?: string;
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
+  /**
+   * Present on the user entry of a turn the runtime opened, naming what opened it (`subagent`, `cron`, `sentinel`, `heartbeat`). Absent means a person typed it. Same rule as `notice`, one role over: the model reads `text`, a reader must not -- a sub-agent's announce carries an untrusted fence, an instance handle and an instruction not to repeat either to the user, and a cron reminder carries how to word the reply.
+   */
+  origin?: string;
 }
 export interface TranscriptToolCall {
   id: string;
