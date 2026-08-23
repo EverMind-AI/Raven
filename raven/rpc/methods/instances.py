@@ -26,13 +26,14 @@ with no turn to cancel.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.direct_chat import direct_root
+from raven.agent.subagent.instance_log import message_rows
+from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent.tool_vocabulary import normalize_row
 from raven.agent.subagent_dag.live import live_run_ids
@@ -242,27 +243,21 @@ async def instances_history(
     """One instance's whole conversation, in the transcript wire shape.
 
     Preferred source is the instance's own log
-    (:mod:`raven.agent.subagent.instance_log`): it is written turn by turn, in
-    order, across every lane that addressed the instance, and it holds *what the
-    run did on the way* -- the thought, the tool call, the tool's answer -- which
-    is the half of a turn the older reading could never show.
+    (:mod:`raven.agent.subagent.instance_log`): every lane that addressed the
+    instance appends to it as a turn lands -- ``spawn``, a DAG node, a direct
+    chat -- so it is the union, in order, and it holds *what the run did on the
+    way*: the thought, the tool call, the tool's answer.
 
-    The fallback stitches the three record directories together and yields a
-    prompt and a final output per call:
-
-    * ``direct/<agent>/<handle>/`` -- turns typed here;
-    * ``spawn/<call_id>/`` -- what the main agent already asked this instance;
-    * ``mas_dag/<run>/`` -- the same, for an instance a DAG run addressed.
-
-    All three, because an instance is nearly always *spawned* before anyone
-    switches into it, and a view that showed only the direct turns would open
-    empty on the exchange the user is looking at it for. It stays because a
-    conversation that ran before the instance log existed has no log to read, and
-    a two-message view of it beats an empty one.
-
-    Both paths yield ``DirectTurn`` rows, so a client that only reads ``role`` and
-    ``content`` is unaffected by the richer source; the step fields ride along
-    for one that draws them.
+    A conversation that ran before that file existed has no log, and is read
+    instead by stitching its three record directories back together
+    (:mod:`raven.agent.subagent.instance_records`). That is a second source for
+    one question, which is worth removing -- but not by migrating the records
+    into logs behind a live writer's back. ``finish`` writes a record's terminal
+    metadata and appends to the log as two separate steps, so no reader outside
+    that process can tell a finished record from one whose rows have already been
+    written, and a migration that guesses duplicates turns into an append-only
+    file. Closing it needs the two writes to become one critical section; until
+    then this keeps both sources and prefers the log.
 
     An instance with no records at all is not an error -- an unaddressed handle
     is simply empty.
@@ -274,17 +269,13 @@ async def instances_history(
     agent = str(params.get("agent") or "")
     handle = str(params.get("handle") or "")
 
-    logged = _instance_log_messages(session_dir, agent, handle)
+    logged = message_rows(session_dir, agent, handle)
     if logged:
         turns = _log_turns(logged)
     else:
-        exchanges: list[tuple[int, list[dict[str, Any]]]] = [
-            *_direct_exchanges(direct_root(session_dir, agent, handle)),
-            *_spawn_exchanges(spawn_root(session_dir), agent, handle),
-            *_dag_exchanges(dag_root(session_dir), agent, handle),
-        ]
-        exchanges.sort(key=lambda pair: pair[0])
-        turns = [turn for _at, turns in exchanges for turn in turns]
+        turns = stitched_turns(
+            direct_root(session_dir, agent, handle), spawn_root(session_dir), dag_root(session_dir), agent, handle
+        )
 
     # Whatever this instance is doing right now, which no file holds yet: the
     # log is written when the turn lands, so until then the only account of the
@@ -385,137 +376,18 @@ def _log_turns(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _ms_of(timestamp: Any) -> int:
-    """A log row's wall clock as epoch ms, or 0 when it has none."""
+    """A log row's wall clock as epoch ms, or 0 when it has none.
+
+    Rounded, not truncated: a fractional second has no exact binary form, so
+    ``1.001 * 1000`` is ``1000.9999...`` and truncating loses the millisecond.
+    Every row read from a log went through that.
+    """
     if not isinstance(timestamp, str):
         return 0
     try:
-        return int(datetime.fromisoformat(timestamp).timestamp() * 1000)
+        return round(datetime.fromisoformat(timestamp).timestamp() * 1000)
     except ValueError:
         return 0
-
-
-def _instance_log_messages(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:
-    """The instance log's message rows, header skipped.
-
-    The header is the one tagged record in the file; everything else is a message,
-    which is what makes the file the same grammar as a session log. A line that
-    will not parse is skipped rather than fatal, for the reason
-    ``_map_to_wire`` skips a malformed stored message: one bad line must not
-    empty a conversation.
-    """
-    from raven.agent.subagent.instance_log import transcript_path
-
-    path = transcript_path(session_dir, agent, handle)
-    rows: list[dict[str, Any]] = []
-    try:
-        with path.open(encoding="utf-8") as handle_file:
-            for line in handle_file:
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(row, dict) and "_type" not in row and row.get("role"):
-                    rows.append(row)
-    except OSError:
-        return []
-    return rows
-
-
-def _exchange(call_id: str, prompt: Path, out: Path, started: int, ended: int) -> tuple[int, list[dict[str, Any]]]:
-    """One prompt/output pair as the turns the client renders.
-
-    An exchange with no output is a turn that failed or is still running; it
-    yields the prompt alone rather than being dropped, so the view shows what
-    was asked either way.
-    """
-    turns: list[dict[str, Any]] = []
-    asked = _read_text(prompt)
-    answered = _read_text(out)
-
-    if asked is not None:
-        turns.append(
-            {"call_id": call_id, "role": "user", "content": asked, "at_ms": started, "prompt_path": str(prompt)}
-        )
-    if answered is not None:
-        turns.append(
-            {"call_id": call_id, "role": "assistant", "content": answered, "at_ms": ended, "out_path": str(out)}
-        )
-    return (started, turns)
-
-
-def _direct_exchanges(root: Path) -> list[tuple[int, list[dict[str, Any]]]]:
-    try:
-        calls = [p for p in root.iterdir() if p.is_dir()]
-    except OSError:
-        return []
-
-    out: list[tuple[int, list[dict[str, Any]]]] = []
-    for call in calls:
-        meta = _read_json(call / "meta.json")
-        started = int(meta.get("started_at_ms") or 0)
-        out.append(
-            _exchange(call.name, call / "prompt.md", call / "out.md", started, int(meta.get("ended_at_ms") or started))
-        )
-    return out
-
-
-def _spawn_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list[dict[str, Any]]]]:
-    """The spawns that addressed this instance.
-
-    Matched on the record's own ``agent`` / ``handle``, which the manager writes
-    into every spawn's meta -- never on the directory name, which is a call id.
-    """
-    try:
-        calls = [p for p in root.iterdir() if p.is_dir()]
-    except OSError:
-        return []
-
-    out: list[tuple[int, list[dict[str, Any]]]] = []
-    for call in calls:
-        meta = _read_json(call / "meta.json")
-        if meta.get("agent") != agent or meta.get("handle") != handle:
-            continue
-        started = int(meta.get("started_at_ms") or 0)
-        out.append(
-            _exchange(call.name, call / "prompt.md", call / "out.md", started, int(meta.get("ended_at_ms") or started))
-        )
-    return out
-
-
-def _dag_exchanges(root: Path, agent: str, handle: str) -> list[tuple[int, list[dict[str, Any]]]]:
-    """The DAG nodes that ran against this instance.
-
-    A node names its handle in ``instance``; when it names none the cli backend
-    falls back to the node id, which is then what the registry row carries -- so
-    both have to match, or a fan-out's exchanges are invisible to the instance
-    it actually bound.
-    """
-    try:
-        runs = [p for p in root.iterdir() if p.is_dir()]
-    except OSError:
-        return []
-
-    out: list[tuple[int, list[dict[str, Any]]]] = []
-    for run in runs:
-        manifest = _read_json(run / "manifest.json")
-        for node_id, node in manifest.items():
-            if not isinstance(node, dict) or node.get("subagent") != agent:
-                continue
-            if (node.get("instance") or node_id) != handle:
-                continue
-            started = int(node.get("started_at") or 0)
-            out.append(
-                _exchange(
-                    f"{run.name}/{node_id}",
-                    Path(node.get("prompt_file") or run / f"{node_id}.prompt.md"),
-                    Path(node.get("output_file") or run / f"{node_id}.out.md"),
-                    started,
-                    int(node.get("ended_at") or started),
-                )
-            )
-    return out
 
 
 def _paired_handle(rows: list[dict[str, Any]], agent: str, handle: str) -> str | None:
@@ -564,21 +436,6 @@ async def instances_forget(params: dict[str, Any]) -> dict[str, Any]:
     if paired is not None:
         removed = await registry.forget(session_key, agent, paired) or removed
     return {"removed": bool(removed)}
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def _read_text(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return None
 
 
 def register_instance_methods(

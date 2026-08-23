@@ -131,8 +131,41 @@ def append_turn(
     _append(transcript_path(session_dir, agent, handle), turn, header=header)
 
 
+def message_rows(session_dir: Path, agent: str, handle: str) -> list[dict[str, Any]]:
+    """This instance's message rows, header skipped; empty when it has none.
+
+    Rows rather than the file's existence, because the two differ: a crash
+    between the header write and the first row leaves a file that exists without
+    holding a conversation. Anything deciding whether this instance has a
+    conversation on record has to ask that question, and asking it here is what
+    keeps one answer to it.
+
+    The header is the one tagged record in the file; everything else is a
+    message, which is what makes this the same grammar as a session log. A line
+    that will not parse is skipped rather than fatal, for the reason
+    ``_map_to_wire`` skips a malformed stored message: one bad line must not
+    empty a conversation.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        with transcript_path(session_dir, agent, handle).open(encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and "_type" not in row and row.get("role"):
+                    rows.append(row)
+    except OSError:
+        return []
+    return rows
+
+
 __all__ = [
     "append_turn",
     "instance_root",
+    "message_rows",
     "transcript_path",
 ]

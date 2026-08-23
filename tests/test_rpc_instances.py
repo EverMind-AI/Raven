@@ -8,6 +8,7 @@ live agent loop degrades to empty rather than raising at the client.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -160,17 +161,14 @@ async def test_history_reads_the_record_directories_in_order(tmp_path: Path) -> 
     _stamp(second, 2000)
     _as_a_pre_log_conversation(session_dir)
 
-    manager = _FakeManager()
-    manager.session_dirs["s1"] = session_dir
-    out = await instances_history(
-        {"session_key": "s1", "agent": "A", "handle": "h"},
-        agent_loop_factory=_factory(_FakeLoop(manager)),
-    )
+    turns = await _history(session_dir, "A", "h")
 
-    assert [t["content"] for t in out["turns"]] == ["first", "a1", "second", "a2"]
-    assert [t["role"] for t in out["turns"]] == ["user", "assistant", "user", "assistant"]
-    assert out["turns"][0]["prompt_path"].endswith("prompt.md")
-    assert out["turns"][1]["out_path"].endswith("out.md")
+    assert [t["content"] for t in turns] == ["first", "a1", "second", "a2"]
+    assert [t["role"] for t in turns] == ["user", "assistant", "user", "assistant"]
+    # The record-only fields, which only this reading has: the log is keyed by
+    # instance and cannot name one call's files.
+    assert turns[0]["prompt_path"].endswith("prompt.md")
+    assert turns[1]["out_path"].endswith("out.md")
 
 
 def _as_a_pre_log_conversation(session_dir: Path) -> None:
@@ -211,14 +209,9 @@ async def test_history_orders_by_start_not_by_directory_name(tmp_path: Path) -> 
     assert later.dir.name < earlier.dir.name
     _as_a_pre_log_conversation(session_dir)
 
-    manager = _FakeManager()
-    manager.session_dirs["s1"] = session_dir
-    out = await instances_history(
-        {"session_key": "s1", "agent": "A", "handle": "h"},
-        agent_loop_factory=_factory(_FakeLoop(manager)),
-    )
+    turns = await _history(session_dir, "A", "h")
 
-    assert [t["content"] for t in out["turns"]] == ["first", "second"]
+    assert [t["content"] for t in turns] == ["first", "second"]
 
 
 async def test_history_of_a_turn_with_no_reply_yields_only_the_prompt(tmp_path: Path) -> None:
@@ -554,7 +547,6 @@ async def test_history_falls_back_when_an_instance_has_no_log(tmp_path: Path) ->
     turns = await _history(session_dir, "Coder", "notes")
 
     assert [t["content"] for t in turns] == ["asked", "answered"]
-    assert turns[0]["prompt_path"].endswith("prompt.md"), "the fallback keeps the fields it always carried"
 
 
 async def test_history_skips_the_logs_header_and_a_corrupt_line(tmp_path: Path) -> None:
@@ -667,7 +659,6 @@ async def test_live_steps_follow_the_turns_already_on_record(tmp_path: Path) -> 
 
     session_dir = tmp_path / "sessions" / "s1"
     _record(session_dir, "A", "h", task_id="t1", task="first", output="a1")
-    _as_a_pre_log_conversation(session_dir)
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
 
@@ -682,13 +673,12 @@ async def test_live_steps_follow_the_turns_already_on_record(tmp_path: Path) -> 
     assert [t["content"] for t in out["turns"][:2]] == ["first", "a1"]
 
 
-async def test_a_conversation_with_nothing_in_flight_reads_the_record_only(tmp_path: Path) -> None:
+async def test_a_conversation_with_nothing_in_flight_reads_the_log_only(tmp_path: Path) -> None:
     """The live index is empty once the block closes, and the record stands alone."""
     from raven.agent.subagent import activity
 
     session_dir = tmp_path / "sessions" / "s1"
     _record(session_dir, "A", "h", task_id="t1", task="first", output="a1")
-    _as_a_pre_log_conversation(session_dir)
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
 
@@ -804,7 +794,6 @@ async def test_a_finished_turn_keeps_its_prompt_on_record(tmp_path: Path) -> Non
     """Paired with the case above: the drop is for the *running* turn only."""
     session_dir = tmp_path / "sessions" / "s1"
     _record(session_dir, "A", "h", task_id="t1", task="do the thing", output="did it")
-    _as_a_pre_log_conversation(session_dir)
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
 
@@ -829,7 +818,6 @@ async def test_an_earlier_crashed_prompt_survives_a_new_turn(tmp_path: Path) -> 
     running = _record(session_dir, "A", "h", task_id="t2", task="the one running now", output=None)
     _stamp(crashed, 1000)
     _stamp(running, 2000)
-    _as_a_pre_log_conversation(session_dir)
     manager = _FakeManager()
     manager.session_dirs["s1"] = session_dir
 
@@ -1179,3 +1167,33 @@ async def test_a_running_turns_steps_are_left_unstamped(tmp_path: Path) -> None:
         )
 
     assert [t["at_ms"] > 0 for t in out["turns"]] == [True, False]
+
+
+async def test_a_log_rows_clock_survives_the_read(tmp_path: Path) -> None:
+    """A row's timestamp comes back as the millisecond it was written with.
+
+    Truncating instead of rounding loses it: a fractional second has no exact
+    binary form, so ``1.001 * 1000`` is ``1000.9999...`` and ``int()`` takes the
+    tick below. Every turn read from a log went through that, and a reader
+    sorting or keying on ``at_ms`` was one millisecond out.
+    """
+    from raven.agent.subagent.instance_log import append_turn
+
+    session_dir = tmp_path / "sessions" / "s1"
+    stamped = datetime.fromtimestamp(1.001).isoformat()
+    append_turn(
+        session_dir,
+        agent="A",
+        handle="h",
+        session_key="s1",
+        messages=[{"role": "user", "content": "asked", "timestamp": stamped}],
+    )
+
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    answered = await instances_history(
+        {"session_key": "s1", "agent": "A", "handle": "h"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+
+    assert [t["at_ms"] for t in answered["turns"]] == [1001]
