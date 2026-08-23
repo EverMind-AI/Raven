@@ -531,7 +531,7 @@ def test_manager_resolves_backends(tmp_path: Path) -> None:
     assert isinstance(mgr._resolve_backend("mirothinker"), OpenAIApiBackend)
     # A built-in row resolves to an in-process loop, and it is reached by name
     # like every other agent.
-    assert mgr._resolve_backend("raven") is not None
+    assert mgr._resolve_backend(GENERIC_AGENT) is not None
     # An unknown name raises rather than falling back. Substituting the in-process
     # loop answered *as* the agent the caller asked for, with none of its history
     # and no sign to anyone that a substitution happened.
@@ -540,7 +540,7 @@ def test_manager_resolves_backends(tmp_path: Path) -> None:
     names = [a.name for a in mgr.list_agents()]
     # The built-in rows lead (package seeds first), then config order.
     assert names[-2:] == ["claude_code", "mirothinker"]
-    assert "raven" in names
+    assert GENERIC_AGENT in names
 
 
 def test_manager_lists_stateful_flag(tmp_path: Path) -> None:
@@ -567,7 +567,7 @@ def test_manager_skips_bad_third_party_entry(tmp_path: Path) -> None:
     # The bad entry is skipped and the manager still builds -- with the package's
     # own rows, which do not come from config and so cannot be sunk by it.
     assert "bad" not in [a.name for a in mgr.list_agents()]
-    assert "raven" in [a.name for a in mgr.list_agents()]
+    assert GENERIC_AGENT in [a.name for a in mgr.list_agents()]
 
 
 class TestSharedRosterHelpers:
@@ -677,7 +677,7 @@ def test_dag_tool_with_every_configured_agent_disabled_keeps_the_built_in_rows(t
     off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
     tool = SubAgentDagTool(workspace=tmp_path, agents=[off])
     assert "off" not in tool.registry.names()
-    assert "raven" in tool.registry.names()
+    assert GENERIC_AGENT in tool.registry.names()
 
 
 # --- AgentLoop's run_subagent_dag registration gate -----------------------
@@ -780,7 +780,7 @@ def test_spawn_tool_exposes_agent_param_when_configured(tmp_path: Path) -> None:
     # The enum is the whole table: the built-in agents are choices too, which is
     # the point of them being on it.
     assert "claude_code" in params["properties"]["subagent"]["enum"]
-    assert "raven" in params["properties"]["subagent"]["enum"]
+    assert GENERIC_AGENT in params["properties"]["subagent"]["enum"]
     # And required, so every spawn names its agent rather than falling into a
     # default the model was never told about.
     assert "subagent" in params["required"]
@@ -796,7 +796,7 @@ def test_spawn_tool_offers_the_builtin_rows_with_no_config_at_all(tmp_path: Path
     """
     tool = SpawnTool(manager=_mgr(tmp_path, []))
     params = tool.parameters
-    assert "raven" in params["properties"]["subagent"]["enum"]
+    assert GENERIC_AGENT in params["properties"]["subagent"]["enum"]
     assert "subagent" in params["required"]
 
 
@@ -880,7 +880,7 @@ def test_spawn_tool_always_exposes_the_instance_param(tmp_path: Path) -> None:
         assert props["instance"]["type"] == "string"
         # The built-in rows are stateful (raven replays their message list), so a
         # handle is always offered for at least those.
-        assert "raven" in props["instance"]["description"]
+        assert GENERIC_AGENT in props["instance"]["description"]
         # `codex` has no resumeCommand, so it is not among the names offered one.
         assert "codex" not in props["instance"]["description"]
 

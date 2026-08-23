@@ -97,15 +97,15 @@ function UpgradeRow({ row }: { row: XaRow }): JSX.Element {
    mean nothing here (there is no command to test and no row to disconnect), and
    drawing them disabled reads as something being wrong.
 
-   `toggle` is the one verb the two do not share. A built-in row's switch is
-   real -- `subagents.toggle` creates its override row on first use, and that is
-   the only way to take one off the roster. A vendored row has neither: it is not
-   in config and its name is not a built-in one, so the same call answers
-   `subagent_not_found`. Its membership is the folder's, so the way to take one
-   out is to remove or disable the folder (`"enabled": false` in its
-   `subagent.json`), which is what the section hint says. Offering a switch that
-   errors is worse than offering none. */
-function BuiltinCard({ row, toggle = true, install = false }: { row: XaRow; toggle?: boolean; install?: boolean }): JSX.Element {
+   Neither kind gets a switch, for different reasons. A built-in row cannot leave
+   the roster at all: an unnamed `spawn` and a dag node with no `subagent` both
+   dispatch to it, so `subagents.toggle` refuses the name and the package's seed
+   outranks any stored `enabled`. A vendored row is not in config and its name is
+   not a built-in one, so the same call answers `subagent_not_found`; its
+   membership is the folder's, so the way to take one out is to remove or disable
+   the folder (`"enabled": false` in its `subagent.json`), which is what the
+   section hint says. Offering a switch that errors is worse than offering none. */
+function BuiltinCard({ row, install = false }: { row: XaRow; install?: boolean }): JSX.Element {
   const st = stateOf(row)
   const open = () => store.sheetOpen(row)
   return (
@@ -146,17 +146,6 @@ function BuiltinCard({ row, toggle = true, install = false }: { row: XaRow; togg
             }}
           >
             {t(row.building ? 'gui.agent.installing' : 'gui.agent.install')}
-          </button>
-        ) : null}
-        {toggle ? (
-          <button
-            className="mini ghost"
-            onClick={(e) => {
-              e.stopPropagation()
-              void store.run('toggle', row, { enabled: !row.enabled })
-            }}
-          >
-            {t(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable')}
           </button>
         ) : null}
         <button
@@ -342,16 +331,13 @@ function XaSheet({ row }: { row: XaRow }): JSX.Element {
               </button>
             ) : null
           ) : row.builtin ? (
-            /* No connect (already running), no test (nothing to spend), no
-               disconnect (not writing a row is what "use the default" means).
-               The switch is the only action, and it is the only way to take one
-               off the roster. */
-            <button
-              className="mini ghost"
-              onClick={() => void store.run('toggle', row, { enabled: !row.enabled })}
-            >
-              {t(row.enabled ? 'gui.agent.disable' : 'gui.agent.enable')}
-            </button>
+            /* No head action at all. No connect (already running), no test
+               (nothing to spend), no disconnect (not writing a row is what "use
+               the default" means) -- and no switch either: an unnamed `spawn` and
+               a dag node with no `subagent` both dispatch to this row, so
+               `subagents.toggle` refuses the name and the package's seed outranks
+               any stored `enabled`. The sheet is where its description is read. */
+            null
           ) : !row.configured ? (
             /* Connecting an HTTP agent needs its key first, so the head
                action defers to the form's save; every other kind connects
@@ -521,7 +507,7 @@ export function XaApp(): JSX.Element {
           <div className="sec-hint">{t('gui.agent.vendored_h')}</div>
           <div className="fset">
             {vendored.map((row) => (
-              <BuiltinCard key={row.name} row={row} toggle={false} install />
+              <BuiltinCard key={row.name} row={row} install />
             ))}
           </div>
         </div>

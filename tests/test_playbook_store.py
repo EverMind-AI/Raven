@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook import NodeSpec, ParamSpec, PlaybookExistsError, PlaybookSpec, PlaybookStore, Triggers
 
 _CJK_WORD = "\u7ade\u54c1"  # jing pin: "competitor"
@@ -356,7 +357,7 @@ def test_a_step_naming_a_retired_builtin_agent_is_repointed_at_raven(tmp_path: P
 
     spec = store.load("old-book")
 
-    assert [node.subagent for node in spec.nodes] == ["raven", "raven"]
+    assert [node.subagent for node in spec.nodes] == [GENERIC_AGENT, GENERIC_AGENT]
 
 
 def test_an_external_agent_whose_name_ends_in_raven_is_left_alone(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import ConfigValidationError
+from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
 from raven.rpc.methods.subagents import (
     register_subagents_methods,
     subagents_list,
@@ -125,7 +125,7 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     # so an overlay that omitted it would be hiding the agent every unnamed spawn
     # already dispatches to.
     assert set(by_name) == {
-        "raven",
+        "Raven",
         "Coder",
         "Researcher",
         "codex",
@@ -135,10 +135,10 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     }
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
-    assert by_name["raven"]["group"] == "builtin"
-    assert by_name["raven"]["builtin"] is True
-    assert by_name["raven"]["configured"] is False
-    assert by_name["raven"]["enabled"] is True
+    assert by_name["Raven"]["group"] == "builtin"
+    assert by_name["Raven"]["builtin"] is True
+    assert by_name["Raven"]["configured"] is False
+    assert by_name["Raven"]["enabled"] is True
     assert all(row["probe_status"] == "unknown" for row in result["rows"])
     assert all(row["probe_detail"] == "" for row in result["rows"])
     # group must still resolve correctly without a probe: openai keyed by its
@@ -589,34 +589,51 @@ async def test_cancel_still_reaches_the_first_call_while_a_second_is_refused(con
     assert _RUNNING == {}
 
 
-async def test_toggling_a_builtin_row_creates_its_override(config_path: Path) -> None:
-    """``enabled`` is the only way to take a built-in agent off the roster.
+async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
+    """The switch is not the caller's to throw, so the RPC refuses rather than writes.
 
-    The row exists on the table without existing in config, so the first toggle
-    has to write the override rather than report the name unknown -- and it must
-    write nothing but the switch, so the description and skills keep coming from
-    the package's own row.
+    An unnamed ``spawn`` and a DAG node with no ``subagent`` both normalize to the
+    generic built-in row, so taking it off the roster leaves the default pointing
+    at nothing. Refused rather than silently ignored: a caller that asked for a
+    state change is owed the reason it did not happen.
     """
-    result = await subagents_toggle({"name": "raven", "enabled": False})
-    assert result == {"enabled": False}
+    with pytest.raises(ConfigFieldReadonlyError):
+        await subagents_toggle({"name": "Raven", "enabled": False})
 
-    stored = [e for e in _stored(config_path) if e["name"] == "raven"]
-    assert len(stored) == 1
-    assert stored[0]["kind"] == "builtin"
-    assert stored[0]["enabled"] is False
+    # And the name it used to be written under is refused too: a guard that missed
+    # it would write a config row under the old name, which lands on the table as a
+    # second agent rather than as the override it was taken for.
+    with pytest.raises(ConfigFieldReadonlyError):
+        await subagents_toggle({"name": "raven", "enabled": False})
+
+    # Nothing was written on the way out either time: the override row that used to
+    # be created to carry the switch has no other reason to exist.
+    assert [e for e in _stored(config_path) if e["name"] in ("Raven", "raven")] == []
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["raven"]["enabled"] is False
-    # And the switch is all it overrode: the description still comes from the
-    # package's row. A write dumps the whole model, so applying the stored row
-    # field-for-field would blank the only line the model reads about this agent.
-    assert "in-process sub-agent" in rows["raven"]["description"]
-    # Still on the list -- switched off is not deleted, and it has to stay
-    # reachable to be switched back on.
-    assert rows["raven"]["group"] == "builtin"
+    assert rows["Raven"]["enabled"] is True
+    assert rows["Raven"]["group"] == "builtin"
+    # The description still comes from the package's row, which is the only line
+    # the model reads about this agent.
+    assert "in-process sub-agent" in rows["Raven"]["description"]
 
-    await subagents_toggle({"name": "raven", "enabled": True})
-    assert (await subagents_list({"probe": False}))["rows"] != []
+
+async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_roster(
+    config_path: Path,
+) -> None:
+    """No UI guard can reach a hand-edited config file, so the merge has to hold.
+
+    Written under the name the row used to carry, which is what a config edited
+    before the rename holds: it is still the seed's override, so it must neither
+    switch the seed off nor appear beside it as a second agent.
+    """
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append({"name": "raven", "kind": "builtin", "enabled": False})
+    config_path.write_text(json.dumps(raw))
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven"]["enabled"] is True
+    assert "raven" not in rows
 
 
 async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: Path) -> None:
@@ -981,3 +998,24 @@ async def test_building_a_name_no_folder_carries_is_refused(
 
     with pytest.raises(SubagentNotFoundError):
         await subagents_build({"name": "claude_code"})
+
+
+async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path: Path) -> None:
+    """The roster is where a user learns their entry is dead, not the server log.
+
+    The capitalised spelling was accepted before the generic row was renamed to it,
+    so config can hold a cli entry of that name. It is inert at runtime, and the
+    list used to carry it beside the built-in row as a second enabled-looking agent
+    of the same name -- a view that keys by name opens whichever comes first.
+    """
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {"name": "Raven", "kind": "cli", "enabled": True, "command": "x {prompt}", "description": "legacy"}
+    )
+    config_path.write_text(json.dumps(raw))
+
+    rows = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven"]
+
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "builtin"
+    assert rows[0]["enabled"] is True

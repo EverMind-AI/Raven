@@ -192,6 +192,14 @@ export function failureDetailLine(row: SubagentRow | undefined): null | string {
 }
 
 function statusCell(row: SubagentRow): string {
+  // A built-in row is never probed and never tested -- there is no command to
+  // launch and no endpoint to reach -- so it is the one row on the roster whose
+  // probe detail is always empty. Its description goes here instead: a blank
+  // column next to the agent every unnamed spawn lands on says nothing at all.
+  if (row.kind === 'builtin') {
+    return row.description
+  }
+
   if (row.last_test_ok === true) {
     const age = ageText(row.last_test_at_ms)
 
@@ -236,10 +244,15 @@ function SubagentRowLine({
   startedAt: number | undefined
   t: Theme
 }) {
-  const glyph = STATUS_GLYPH[row.probe_status] ?? '?'
-  // `[new]` means "not added yet", which a built-in row never is: it is on the
-  // table already, so its switch state is the whole truth about it.
-  const toggleLabel = row.configured || row.kind === 'builtin' ? (row.enabled ? '[on ]' : '[off]') : '[new]'
+  // A built-in row is this very process, so it is never probed and its status is
+  // always `unknown`. A `?` beside a loop that is running right now reads as a
+  // fault, and its availability is not the question the roster is asking.
+  const glyph = row.kind === 'builtin' ? STATUS_GLYPH.ready : (STATUS_GLYPH[row.probe_status] ?? '?')
+  // A built-in row has no switch to show: `enabled` on a seed row belongs to the
+  // package, not to config, so the slot carries a fixed marker of the same width
+  // instead -- a switch drawn next to a key that does nothing is a broken control.
+  // `[new]` means "not added yet", which a built-in row never is.
+  const toggleLabel = row.kind === 'builtin' ? '[core]' : row.configured ? (row.enabled ? '[on ]' : '[off]') : '[new]'
 
   // The gap between the two columns is a margin, never a `<Text> </Text>`
   // child. A text node is flex-shrinkable: once name + detail exceed the
@@ -842,15 +855,16 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
       return
     }
 
-    // A built-in agent takes exactly one action. There is no connection to edit,
-    // no command to test, and deleting is not a thing that exists for it -- so the
-    // three keys below are dropped rather than opening a form with nothing in it
-    // or spending a turn to "verify" this process.
+    // A built-in agent takes no action at all. There is no connection to edit, no
+    // command to test, and deleting is not a thing that exists for it -- so those
+    // keys are dropped rather than opening a form with nothing in it or spending a
+    // turn to "verify" this process. Nor is the switch throwable: every unnamed
+    // spawn and every dag node with no sub-agent dispatches to this row, so
+    // `subagents.toggle` refuses the name and the seed outranks a stored
+    // `enabled`. It also never reached the backend from here -- `toggle` guards on
+    // `configured`, false for a row nobody had to write -- so the key spent its
+    // life reporting a built-in agent as an unadded preset.
     if (selected.kind === 'builtin') {
-      if (ch === ' ') {
-        toggle(selected)
-      }
-
       return
     }
 
@@ -1019,7 +1033,12 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
       {runningNames.length > 0 ? <OverlayHint t={t}>Esc cancels the running test</OverlayHint> : null}
       <OverlayHint t={t}>
         {view === 'main'
-          ? '↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close'
+          ? // The built-in row answers to none of the configuring keys, and a hint
+            // that offers a switch it does not have is the same broken control as
+            // drawing one.
+            selected?.kind === 'builtin'
+            ? '↑/↓ select · r refresh · Esc/q close'
+            : '↑/↓ select · Enter add/edit/open · space toggle · t test · d delete · r refresh · Esc/q close'
           : selected?.configured
             ? '↑/↓ select · Enter edit · space toggle · t test · d delete · r refresh · ←/Esc back · q close'
             : '↑/↓ select · r refresh · ←/Esc back · q close'}

@@ -10,6 +10,7 @@ import types
 from pathlib import Path
 
 from raven.agent.context import ContextBuilder
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.context_engine.base import AssemblyContext
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -366,7 +367,9 @@ class TestIdentityDelegationSection:
         """It carries no capability bias, so it owns no kind of work -- and a row
         that declared some would render a prohibition aimed at the agent reading
         it."""
-        builder = IdentitySegmentBuilder(tmp_path, list_subagents=lambda: [self._meta("raven", "owns everything.")])
+        builder = IdentitySegmentBuilder(
+            tmp_path, list_subagents=lambda: [self._meta(GENERIC_AGENT, "owns everything.")]
+        )
         assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
 
 
