@@ -94,7 +94,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
   const source: ComposerSource = {
     busy: () => false,
     cancellable: () => false,
-    queue: () => [],
     meter: () => '',
     slash: [],
     /* The two actions live on the source now, not the shell. Spread last so a
@@ -198,7 +197,7 @@ describe('the send button', () => {
      Send action stays what it says: it QUEUES the message, exactly as Enter
      does, rather than being an inert click. */
   it('queues on Send during a non-cancellable turn instead of stopping', () => {
-    const { calls } = wire({ busy: () => true, cancellable: () => false, queue: () => [] })
+    const { calls } = wire({ busy: () => true, cancellable: () => false })
     store.goPaint()
     expect(go().classList.contains('halt')).toBe(false)
     expect(go().getAttribute('aria-label')).toBe('发送')
@@ -227,9 +226,24 @@ describe('the send button', () => {
 })
 
 describe('the queue rows', () => {
+  it('owns add, drain, clear, and copied park snapshots', () => {
+    wire()
+    store.queuePush('first')
+    store.queuePush('second')
+    const parked = store.queueSnapshot()
+    parked.push('outside')
+    expect(store.queueShift()).toBe('first')
+    expect(store.queueSnapshot()).toEqual(['second'])
+    store.queueClear()
+    expect(store.queueSnapshot()).toEqual([])
+    store.queueRestore(parked)
+    parked[0] = 'changed outside'
+    expect(store.queueSnapshot()).toEqual(['first', 'second', 'outside'])
+  })
+
   it('draws one row per queued message with an edit and a remove button', () => {
-    const q = ['first', 'second']
-    wire({ queue: () => q })
+    wire()
+    store.queueRestore(['first', 'second'])
     mountQueue()
     const rows = document.querySelectorAll('#queued .qrow')
     expect(rows.length).toBe(2)
@@ -240,50 +254,50 @@ describe('the queue rows', () => {
     expect(btns[1]!.getAttribute('aria-label')).toBe('删掉')
   })
 
-  it('commits an edit on Enter, writing through to the page queue', () => {
-    const q = ['first', 'second']
-    wire({ queue: () => q })
+  it('commits an edit on Enter to the composer queue', () => {
+    wire()
+    store.queueRestore(['first', 'second'])
     mountQueue()
     act(() => { store.editRow(1) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     expect(input.value).toBe('second')
     input.value = 'second, revised'
     act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
-    expect(q).toEqual(['first', 'second, revised'])
+    expect(store.queueSnapshot()).toEqual(['first', 'second, revised'])
     expect(document.querySelector('#queued .qrow input')).toBeNull()
   })
 
   it('lets an IME keep Enter while a composition is open', () => {
-    const q = ['first']
-    wire({ queue: () => q })
+    wire()
+    store.queueRestore(['first'])
     mountQueue()
     act(() => { store.editRow(0) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     input.value = 'half typed'
     act(() => { fireEvent.keyDown(input, { key: 'Enter', isComposing: true }) })
-    expect(q).toEqual(['first'])
+    expect(store.queueSnapshot()).toEqual(['first'])
     expect(document.querySelector('#queued .qrow input')).toBeTruthy()
   })
 
   it('cancels on Escape, and the blur that follows does not commit either', () => {
-    const q = ['first']
-    wire({ queue: () => q })
+    wire()
+    store.queueRestore(['first'])
     mountQueue()
     act(() => { store.editRow(0) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     input.value = 'never mind'
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
     act(() => { fireEvent.blur(input) })
-    expect(q).toEqual(['first'])
+    expect(store.queueSnapshot()).toEqual(['first'])
   })
 
-  it('removes a row from the page queue', () => {
-    const q = ['first', 'second']
-    wire({ queue: () => q })
+  it('removes a row from the composer queue', () => {
+    wire()
+    store.queueRestore(['first', 'second'])
     mountQueue()
     const rm = document.querySelectorAll('#queued .qrow')[0]!.querySelectorAll('button.icb')[1]!
     act(() => { fireEvent.click(rm) })
-    expect(q).toEqual(['second'])
+    expect(store.queueSnapshot()).toEqual(['second'])
     expect(document.querySelectorAll('#queued .qrow').length).toBe(1)
   })
 })
@@ -603,11 +617,11 @@ describe('the slash palette', () => {
 describe('a language flip', () => {
   it('repaints the dock in place: the labels, the palette and the live row', () => {
     let busy = true
-    const q = ['queued one']
     wire({
-      busy: () => busy, cancellable: () => true, queue: () => q,
+      busy: () => busy, cancellable: () => true,
       slash: [{ id: 'gui.clear', fn: () => {} }],
     })
+    store.queueRestore(['queued one'])
     mountQueue()
     mountSlash()
     mountLive()

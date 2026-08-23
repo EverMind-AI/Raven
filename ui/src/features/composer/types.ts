@@ -35,8 +35,8 @@ export interface UploadRes {
 /* DS.composer: what the dock reads of the page it sits in. The demo shell
  * registers the fixture half (ui/src/demo/090-composer.js) and the live layer
  * installs over the parts only it can answer -- the meter's wording and the
- * upload transport. `busy`/`queue` read the page globals the turn machine
- * owns, so they are closures, never snapshots.
+ * upload transport. `busy` reads the page global the turn machine owns, so it
+ * is a closure, never a snapshot. The queue belongs to the composer store.
  */
 export interface ComposerSource {
   busy(): boolean
@@ -46,9 +46,6 @@ export interface ComposerSource {
      the UI while the delegated deltas still stream. The dock reads this to
      keep the stop action from appearing at all for such a turn. */
   cancellable(): boolean
-  /* The live array, not a copy: an edit or a removal acts on the page's own
-     queue exactly as the legacy renderer did. */
-  queue(): string[]
   meter(): string
   slash: SlashCmd[]
   /* What the demo canvas says instead of opening a file picker it has no

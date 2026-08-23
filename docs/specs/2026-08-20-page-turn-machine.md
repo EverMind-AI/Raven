@@ -298,7 +298,7 @@ more types.
 | 1 | A (minus `use`) | `kids`, `lastRun`, `raw` | deletions only; drops 2 park fields, gate checks it | done |
 | 2 | A (`use`, `tl`) | `use`, `tl` | deletions again; `use` becomes demo-layer-only | done |
 | 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins | done |
-| 4 | D (queue) | `q` | composer store owns the queue; **park via accessor** | open |
+| 4 | D (queue) | `q` | composer store owns the queue; parked via copied accessors | done |
 | 5 | B | `cur` | widest diff; alone in its MR | open |
 | 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** | open |
 

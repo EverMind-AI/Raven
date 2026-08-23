@@ -73,7 +73,8 @@ function replay(run, instant) {
       const s = sess(cur);
       if (s) { s.last = run.key === 'gtm' ? '抓取了官网，出了对比表' : '3 runs, 0 failures'; s.status = null; }
       drawMeter(); goState(); drawList();
-      if (q.length) { const nx = q.shift(); drawQ(); send(nx); }
+      const nx = queueShift();
+      if (nx !== undefined) send(nx);
     }, 300);
   });
 }

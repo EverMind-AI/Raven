@@ -46,13 +46,13 @@ rpc.onReconnect = async () => {
 let draft = false;
 
 function resetView() {
-  stop_(); busy = false; q = [];
+  stop_(); busy = false; queueClear();
   resetTurnState();
   wsReset();
   setWs(false);
   $('#stage').innerHTML = '';
   $('#flash').textContent = '';
-  drawQ(); drawMeter(); goState(); drawBanner();
+  drawMeter(); goState(); drawBanner();
 }
 
 function startDraft() {
@@ -86,14 +86,14 @@ openSession = async function (s) {
   const row = sess(s.id);
   if (row && row.status === 'done') row.status = null;
   markNewCurrent();
-  stop_(); busy = false; q = [];
+  stop_(); busy = false; queueClear();
   resetTurnState();
   wsReset();
   setWs(false);
   $('#title').textContent = plainTitle(s.title);
   $('#stage').innerHTML = '';
   $('#flash').textContent = '';
-  drawQ(); drawMeter(); goState(); drawBanner();
+  drawMeter(); goState(); drawBanner();
   // A parked turn restores in place of a disk reload: the transcript on disk
   // does not have the still-streaming content, the parked DOM does.
   const pk = parkedTurns.get(s.id);
@@ -142,9 +142,9 @@ openSession = async function (s) {
    over -- the reader's own bubble renders its chips from it, and it is what
    survives into session history. So the paths ride to the model as a typed
    `media` field as well, recovered from that same note rather than threaded
-   separately: a queued message is a plain string by the time it is drained
-   (drawQ lets the reader edit it), and the draft path sends from a second
-   place, so deriving here covers all three with one rule. */
+   separately: a queued message is a plain string by the time it is drained,
+   and the draft path sends from a second place, so deriving here covers all
+   three with one rule. */
 const mediaOf = (text) => {
   const paths = splitAtts(String(text)).atts;
   return paths.length ? { media: paths } : {};
@@ -158,7 +158,7 @@ const mediaOf = (text) => {
    is the note a staged file becomes; the island builds the message and hands it
    over already folded. */
 function liveSend(text) {
-  if (busy) { q.push(text); drawQ(); return; }
+  if (busy) { queuePush(text); return; }
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
@@ -223,10 +223,9 @@ function softStop() {
 /* Queued messages were waiting for the engine, and a stop is the engine coming
    free -- so the queue drains into it, same as after a finished turn. */
 function drainQueue() {
-  if (busy || !q.length) return;
-  const nx = q.shift();
-  drawQ();
-  liveSend(nx);
+  if (busy) return;
+  const nx = queueShift();
+  if (nx !== undefined) liveSend(nx);
 }
 
 /* True between our own turn.cancel and its response. The cancelled EVENT is

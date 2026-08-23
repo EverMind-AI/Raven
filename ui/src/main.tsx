@@ -352,6 +352,11 @@ window.RavenIslands = {
   composer: {
     goPaint: composer.goPaint,
     drawQueue: composer.drawQueue,
+    queuePush: composer.queuePush,
+    queueShift: composer.queueShift,
+    queueClear: composer.queueClear,
+    queueSnapshot: composer.queueSnapshot,
+    queueRestore: composer.queueRestore,
     drawMeter: composer.drawMeter,
     fitField: composer.fitField,
     dockLift: composer.dockLift,
