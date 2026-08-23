@@ -16,8 +16,11 @@ the engine (``_uses_default_engine`` is always True), and
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from raven.agent.context import ContextBuilder
 from raven.agent.loop import AgentLoop
@@ -30,9 +33,15 @@ from raven.config.raven import (
 )
 from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
+from raven.context_engine.base import AssemblyContext
 from raven.context_engine.factory import build_context_engine
-from raven.context_engine.segments import MemorySegmentBuilder, SkillsSegmentBuilder
+from raven.context_engine.segments import (
+    IdentitySegmentBuilder,
+    MemorySegmentBuilder,
+    SkillsSegmentBuilder,
+)
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.memory_engine import TokenBudget
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     HubSkillSource,
@@ -445,3 +454,119 @@ def test_push_config_restores_the_legacy_pipeline(tmp_path):
     assert any(isinstance(b, SkillsSegmentBuilder) for b in engine._builders)
     assert engine._scent is None
     assert engine.skills_router is not None
+
+
+# ---------------------------------------------------------------------------
+# Ownership reaching the identity prompt, and the paths it depends on
+# ---------------------------------------------------------------------------
+
+
+def _assembly_ctx() -> AssemblyContext:
+    return AssemblyContext(
+        session_key="s",
+        current_message="hi",
+        media=None,
+        channel=None,
+        chat_id=None,
+        session_messages=[],
+        budget=TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+    )
+
+
+class TestOwnershipReachesTheIdentityPrompt:
+    """The join no stub can make: a real config row, through the real registry,
+    into the assembled prompt -- and a real tool table deciding whether the
+    prohibition it carries is one the model can act on."""
+
+    OWNS = "owns decks. Do not build the deck yourself."
+
+    @pytest.fixture(autouse=True)
+    def _isolated_switches(self, tmp_path: Path, monkeypatch) -> None:
+        """Point the live off-switch read at a file of our own.
+
+        Every case here goes through the real tool table, which reads
+        ``tools.disabledTools`` from whatever config file is current -- so without
+        this they consult the developer's own ``~/.raven/config.json``, and a
+        locally disabled ``spawn`` makes them red on one machine and green in CI.
+        """
+        self._switches = tmp_path / "config.json"
+        self._disable()
+        monkeypatch.setattr("raven.config.loader._current_config_path", self._switches)
+
+    def _disable(self, *names: str) -> None:
+        self._switches.write_text(json.dumps({"tools": {"disabledTools": list(names)}}), encoding="utf-8")
+
+    @staticmethod
+    def _identity(agent: AgentLoop) -> IdentitySegmentBuilder:
+        return next(b for b in agent.context_engine._builders if isinstance(b, IdentitySegmentBuilder))
+
+    async def _text(self, agent: AgentLoop) -> str:
+        return (await self._identity(agent).build(_assembly_ctx())).text
+
+    def _scribe(self, kind: str = "cli") -> list:
+        row = {"name": "Scribe", "kind": kind, "owns": self.OWNS}
+        if kind == "cli":
+            row["command"] = "echo hi"
+        return SubagentsConfig(agents=[row]).agents
+
+    async def test_a_custom_builtin_specialist_gets_its_line(self, tmp_path: Path) -> None:
+        """A built-in row is on the same dispatchable table as an external one, so
+        narrowing one into a specialist has to be declarable the same way."""
+        assert f"`Scribe` {self.OWNS}" in await self._text(_make_loop(tmp_path, agents=self._scribe("builtin")))
+
+    async def test_an_external_specialist_gets_its_line(self, tmp_path: Path) -> None:
+        """Regression guard for the path that already worked, not a proof of the
+        fix: this one is green on either side of it."""
+        assert f"`Scribe` {self.OWNS}" in await self._text(_make_loop(tmp_path, agents=self._scribe()))
+
+    async def test_ownership_on_the_generic_row_claims_nothing(self, tmp_path: Path) -> None:
+        """Paired with a real specialist so the absence is selective: asserting
+        only that the claim is missing would also pass on an install where the
+        whole section failed to render."""
+        agents = SubagentsConfig(
+            agents=[
+                {"name": "raven", "kind": "builtin", "owns": "owns everything. Do not do anything yourself."},
+                {"name": "Scribe", "kind": "cli", "command": "echo hi", "owns": self.OWNS},
+            ]
+        ).agents
+        text = await self._text(_make_loop(tmp_path, agents=agents))
+        assert f"`Scribe` {self.OWNS}" in text
+        assert "owns everything" not in text
+
+    async def test_withholding_every_dispatch_path_retires_the_prohibition(self, tmp_path: Path) -> None:
+        """Read from the file per turn, so a switch flipped on the settings page
+        takes the section away and putting it back brings it back -- without which
+        the prompt forbids work the turn has no way to hand off."""
+        agent = _make_loop(tmp_path, agents=self._scribe())
+        offered = {d["function"]["name"] for d in agent.tools.get_definitions()}
+        assert {"spawn", "run_subagent_dag"} <= offered
+
+        assert "## Delegation" in await self._text(agent)
+
+        self._disable("spawn", "run_subagent_dag")
+        assert "## Delegation" not in await self._text(agent)
+
+        self._disable()
+        assert "## Delegation" in await self._text(agent)
+
+    async def test_withholding_the_whole_tool_table_retires_it_too(self, tmp_path: Path) -> None:
+        """Naming the two dispatch tools is not the only way to reach zero live
+        paths. Withholding every registered tool reaches it through a successful
+        but empty lookup, which the gate first shipped reporting as both paths
+        live -- so the prohibition survived on a turn offering no tools at all.
+        """
+        agent = _make_loop(tmp_path, agents=self._scribe())
+        every = sorted({d["function"]["name"] for d in agent.tools.get_definitions()})
+        assert {"spawn", "run_subagent_dag"} <= set(every)
+        assert "## Delegation" in await self._text(agent)
+
+        self._disable(*every)
+        assert agent.tools.get_definitions() == []
+        assert "## Delegation" not in await self._text(agent)
+
+    async def test_withholding_one_path_keeps_the_other_named(self, tmp_path: Path) -> None:
+        self._disable("spawn")
+        text = await self._text(_make_loop(tmp_path, agents=self._scribe()))
+        assert f"`Scribe` {self.OWNS}" in text
+        assert "`run_subagent_dag`" in text
+        assert "`spawn`" not in text

@@ -122,7 +122,7 @@ def build_context_engine(
         rewriter, gate = None, None
 
     builders = [
-        IdentitySegmentBuilder(workspace),
+        IdentitySegmentBuilder(workspace, list_subagents=list_subagents, get_tool_definitions=get_tool_definitions),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,

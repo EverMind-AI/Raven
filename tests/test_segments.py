@@ -213,8 +213,11 @@ class TestCollectToolNames:
 
         assert render.collect_tool_names(None) is None
         assert render.collect_tool_names(_boom) is None
-        # Empty list collapses to None too: an agent with zero tools is not a
-        # real state, so treating it as "unknown" is the safe reading.
+        # Empty list collapses to None too -- not because zero tools is
+        # unreachable (naming every registered tool in tools.disabled_tools
+        # reaches it) but because this helper's consumer has no always-skill to
+        # withhold when the agent holds nothing. A caller that must tell the two
+        # apart reads _tool_names; see live_dispatch_tools.
         assert render.collect_tool_names(lambda: []) is None
 
     def test_malformed_entries_are_skipped_not_fatal(self) -> None:
@@ -298,3 +301,151 @@ class TestActiveSkills:
 
         assert seg is not None
         assert "subagent-dag-orchestration" in seg.text
+
+
+class TestIdentityDelegationSection:
+    """A sub-agent that declares what it owns gets a line in the prompt telling
+    the model not to do that work itself. Only declared agents appear, so an
+    install with none reads exactly as it did before."""
+
+    @staticmethod
+    def _meta(name: str, owns: str = ""):
+        from raven.agent.subagent.backends import AgentMeta
+
+        return AgentMeta(name, f"{name} description", True, True, False, owns)
+
+    def test_declared_agents_get_an_ownership_line(self, tmp_path: Path) -> None:
+        text = render.identity_text(
+            tmp_path,
+            specialists=[("Scribe", "owns decks. Do not build the deck yourself.")],
+        )
+        assert "## Delegation" in text
+        assert "`Scribe` owns decks. Do not build the deck yourself." in text
+        assert "You are an orchestrator first" in text
+
+    def test_nothing_declared_keeps_the_joint_the_section_took_over(self, tmp_path: Path) -> None:
+        """An install with no declaring agent must read exactly as it did before.
+
+        This test used to compare ``identity_text`` against itself -- ``specialists=[]``
+        against the default -- which agrees whatever the output is. It passed while
+        the section had moved the blank line before ``## Raven Guidelines`` inside
+        itself and dropped it on the empty branch, so the prompt every install
+        without a specialist renders was one blank line short. The joint is the
+        thing to assert; the self-comparison is kept only as the weaker half.
+        """
+        plain = render.identity_text(tmp_path, specialists=[])
+        assert plain == render.identity_text(tmp_path)
+        assert "## Delegation" not in plain
+        # Three newlines, not two: the platform policy block ends with one of its
+        # own, so asserting two passes with the separator dropped as well.
+        assert "\n\n\n## Raven Guidelines" in plain
+
+    def test_the_section_sits_above_the_guidelines(self, tmp_path: Path) -> None:
+        """A rule about which agent to name has to be read before the general
+        guidelines it qualifies, not after them."""
+        text = render.identity_text(tmp_path, specialists=[("Scribe", "owns decks.")])
+        assert text.index("## Delegation") < text.index("## Raven Guidelines")
+
+    async def test_builder_collects_only_agents_that_declare_ownership(self, tmp_path: Path) -> None:
+        roster = [self._meta("Scribe", "owns decks."), self._meta("Nomad")]
+        builder = IdentitySegmentBuilder(tmp_path, list_subagents=lambda: roster)
+        text = (await builder.build(_ctx(tmp_path))).text
+        assert "`Scribe` owns decks." in text
+        assert "Nomad" not in text
+
+    async def test_builder_survives_a_roster_lookup_that_raises(self, tmp_path: Path) -> None:
+        """Prompt assembly must not fail because the agent table is mid-rebuild."""
+
+        def _boom():
+            raise RuntimeError("table is being rebuilt")
+
+        builder = IdentitySegmentBuilder(tmp_path, list_subagents=_boom)
+        assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
+
+    async def test_the_generic_row_is_never_a_specialist(self, tmp_path: Path) -> None:
+        """It carries no capability bias, so it owns no kind of work -- and a row
+        that declared some would render a prohibition aimed at the agent reading
+        it."""
+        builder = IdentitySegmentBuilder(tmp_path, list_subagents=lambda: [self._meta("raven", "owns everything.")])
+        assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
+
+
+class TestDelegationNeedsSomewhereToDelegateTo:
+    """The section prohibits a specialist's kind of work, so it must not outlive
+    the tools that carry the work away. With every dispatch path withheld a
+    request has no compliant action left: the model either does the forbidden
+    thing or abandons the task."""
+
+    SPEC = [("Scribe", "owns decks. Do not build the deck yourself.")]
+
+    @staticmethod
+    def _defs(*names: str) -> list[dict]:
+        return [{"function": {"name": n}} for n in names]
+
+    def test_no_live_path_reads_like_an_install_without_specialists(self, tmp_path: Path) -> None:
+        assert render.identity_text(tmp_path, specialists=self.SPEC, dispatch_tools=()) == render.identity_text(
+            tmp_path
+        )
+
+    def test_only_the_paths_that_exist_are_named(self, tmp_path: Path) -> None:
+        spawn_only = render.identity_text(tmp_path, specialists=self.SPEC, dispatch_tools=("spawn",))
+        assert "`Scribe` owns decks." in spawn_only
+        assert "`spawn`" in spawn_only
+        assert "run_subagent_dag" not in spawn_only
+
+    def test_the_guard_is_not_too_tight_either(self, tmp_path: Path) -> None:
+        """``spawn`` withheld while the graph tool is live is still a delegable
+        install -- suppressing the section there would lose a rule that applies."""
+        dag_only = render.identity_text(tmp_path, specialists=self.SPEC, dispatch_tools=("run_subagent_dag",))
+        assert "`Scribe` owns decks." in dag_only
+        assert "`run_subagent_dag`" in dag_only
+        assert "`spawn`" not in dag_only
+
+    def test_an_unknowable_tool_surface_does_not_gate(self) -> None:
+        """A wiring gap must degrade to saying too much: the alternative deletes
+        the rule on every install that never wired the lookup up."""
+
+        def _boom():
+            raise RuntimeError("registry mid-rebuild")
+
+        assert render.live_dispatch_tools(None) == render.DISPATCH_TOOLS
+        assert render.live_dispatch_tools(_boom) == render.DISPATCH_TOOLS
+
+    def test_a_readable_but_empty_tool_table_does_gate(self) -> None:
+        """This case was asserted the other way round when the gate was added,
+        which is how it shipped broken. An empty table is not an unreadable one:
+        it is a turn that can delegate nothing, reachable by naming every
+        registered tool in ``tools.disabledTools`` -- and a request needing no
+        tools at all is exactly the one the prohibition would then strand.
+
+        ``collect_tool_names`` still folds empty into ``None`` for the
+        always-skills filter, so both halves of the divergence are pinned here:
+        it is a deliberate difference between two questions, not a drift.
+        """
+        assert render.live_dispatch_tools(lambda: []) == ()
+        assert render.collect_tool_names(lambda: []) is None
+
+    def test_a_tool_list_without_any_dispatch_path_gates(self) -> None:
+        assert render.live_dispatch_tools(lambda: self._defs("grep", "read_file")) == ()
+
+    async def test_builder_drops_the_section_when_the_turn_offers_no_dispatch_tool(self, tmp_path: Path) -> None:
+        from raven.agent.subagent.backends import AgentMeta
+
+        builder = IdentitySegmentBuilder(
+            tmp_path,
+            list_subagents=lambda: [AgentMeta("Scribe", "d", True, True, False, "owns decks.")],
+            get_tool_definitions=lambda: self._defs("grep"),
+        )
+        assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
+
+    async def test_builder_keeps_it_when_the_turn_offers_one(self, tmp_path: Path) -> None:
+        from raven.agent.subagent.backends import AgentMeta
+
+        builder = IdentitySegmentBuilder(
+            tmp_path,
+            list_subagents=lambda: [AgentMeta("Scribe", "d", True, True, False, "owns decks.")],
+            get_tool_definitions=lambda: self._defs("spawn"),
+        )
+        text = (await builder.build(_ctx(tmp_path))).text
+        assert "`Scribe` owns decks." in text
+        assert "run_subagent_dag" not in text
