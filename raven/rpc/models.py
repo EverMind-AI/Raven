@@ -827,6 +827,17 @@ class SessionPinResult(_Strict):
     pending: bool
 
 
+class SessionArchiveParams(_Strict):
+    session_id: str = Field(..., description="Full session_key.")
+    archived: bool = Field(..., description="True hides the session from session.list; False restores it.")
+
+
+class SessionArchiveResult(_Strict):
+    archived: bool
+    session_key: str
+    pending: bool
+
+
 class SessionClearParams(_Strict):
     """Params for session.clear — wipe messages in place, keep the sid."""
 
@@ -2869,6 +2880,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.most_recent": (SessionMostRecentParams, SessionMostRecentResult),
     "session.title": (SessionTitleParams, SessionTitleResult),
     "session.pin": (SessionPinParams, SessionPinResult),
+    "session.archive": (SessionArchiveParams, SessionArchiveResult),
     "session.clear": (SessionClearParams, SessionClearResult),
     "session.undo": (SessionUndoParams, SessionUndoResult),
     "session.export": (SessionExportParams, SessionExportResult),
@@ -3024,6 +3036,8 @@ __all__ = [
     "SessionMostRecentResult",
     "SessionTitleParams",
     "SessionTitleResult",
+    "SessionArchiveParams",
+    "SessionArchiveResult",
     "SessionClearParams",
     "SessionClearResult",
     "SessionUndoParams",

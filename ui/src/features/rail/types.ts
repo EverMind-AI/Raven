@@ -33,7 +33,7 @@ export interface RailSnapshot {
 export interface RailSource {
   snapshot(): RailSnapshot
 
-  /* The four things a reader can do TO a session, rather than read about one.
+  /* The things a reader can do TO a session, rather than read about one.
      All optional, and the reason is that the offline demo has an answer for
      each of them already: the island's own optimistic behaviour, which is the
      honest thing for a page with no server behind it. A source that installs
@@ -52,6 +52,9 @@ export interface RailSource {
   /* The pin moved. Optimistic in the island; a source that cannot keep the
      flag says so by not being here. */
   pin?(id: string, pinned: boolean): void
+  /* Hide it from the picker without deleting its transcript. The live source
+     owns the navigation transition when the hidden row is current. */
+  archive?(s: SessRow): void
   /* Every session, from the settings page's data section. */
   deleteAll?(): void
 }

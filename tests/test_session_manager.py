@@ -186,6 +186,24 @@ def test_find_most_recent_chat_id_nested_by_updated_at(tmp_path: Path):
     assert mgr.find_most_recent_chat_id("feishu") is None
 
 
+def test_find_most_recent_can_exclude_archived_sessions(tmp_path: Path):
+    """Resume skips archived sessions while delivery keeps its existing default."""
+    mgr = SessionManager(tmp_path)
+    active = mgr.get_or_create("tui:active")
+    active.add_message("user", "keep visible")
+    active.updated_at = datetime(2026, 6, 10, 10, 0, 0)
+    mgr.save(active)
+
+    archived = mgr.get_or_create("tui:archived")
+    archived.add_message("user", "hide me")
+    archived.metadata["archived"] = True
+    archived.updated_at = datetime(2026, 6, 10, 11, 0, 0)
+    mgr.save(archived)
+
+    assert mgr.find_most_recent_chat_id("tui") == "archived"
+    assert mgr.find_most_recent_chat_id("tui", include_archived=False) == "active"
+
+
 def test_find_most_recent_ignores_old_flat_files(tmp_path: Path):
     """Pre-refactor flat files are ignored for lookup but never deleted."""
     _seed_nested(tmp_path, "tui", "nested01", "2026-06-10T10:00:00")

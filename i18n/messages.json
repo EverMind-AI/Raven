@@ -3391,6 +3391,22 @@
       "en": "Finished, unread",
       "zh": "已完成，未查看"
     },
+    "gui.sess.archive": {
+      "en": "Archive",
+      "zh": "归档"
+    },
+    "gui.sess.archive_failed": {
+      "en": "Could not archive the session - {detail}",
+      "zh": "会话归档失败 · {detail}"
+    },
+    "gui.sess.archived": {
+      "en": "Archived {title}",
+      "zh": "已归档「{title}」"
+    },
+    "gui.sess.restore_failed": {
+      "en": "Could not restore the session - {detail}",
+      "zh": "会话恢复失败 · {detail}"
+    },
     "gui.sess.just_now": {
       "en": "just now",
       "zh": "刚刚"

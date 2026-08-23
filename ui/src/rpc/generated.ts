@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 131 methods, 74 component schemas.
+// 132 methods, 74 component schemas.
 
 /* eslint-disable */
 /**
@@ -1213,6 +1213,24 @@ export interface SessionPinParams {
 }
 export interface SessionPinResult {
   pinned: boolean;
+  session_key: string;
+  /**
+   * True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save.
+   */
+  pending: boolean;
+}
+export interface SessionArchiveParams {
+  /**
+   * Full session_key.
+   */
+  session_id: string;
+  /**
+   * True hides the session from session.list; False restores it.
+   */
+  archived: boolean;
+}
+export interface SessionArchiveResult {
+  archived: boolean;
   session_key: string;
   /**
    * True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save.
@@ -2881,6 +2899,7 @@ export interface RpcMethods {
   'session.most_recent': { params: SessionMostRecentParams; result: SessionMostRecentResult };
   'session.title': { params: SessionTitleParams; result: SessionTitleResult };
   'session.pin': { params: SessionPinParams; result: SessionPinResult };
+  'session.archive': { params: SessionArchiveParams; result: SessionArchiveResult };
   'session.clear': { params: SessionClearParams; result: SessionClearResult };
   'session.undo': { params: SessionUndoParams; result: SessionUndoResult };
   'session.export': { params: SessionExportParams; result: SessionExportResult };
@@ -3080,6 +3099,7 @@ export const RPC_METHODS = [
   "rollback.list",
   "rollback.restore",
   "secret.respond",
+  "session.archive",
   "session.branch",
   "session.clear",
   "session.close",

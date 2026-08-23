@@ -315,6 +315,45 @@
       "errors": []
     },
     {
+      "name": "session.archive",
+      "summary": "Archive or restore a session; archived sessions are omitted from session.list.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key."
+          }
+        },
+        {
+          "name": "archived",
+          "required": true,
+          "schema": {
+            "type": "boolean",
+            "description": "True hides the session from session.list; False restores it."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionArchiveResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["archived", "session_key", "pending"],
+          "properties": {
+            "archived": { "type": "boolean" },
+            "session_key": { "type": "string" },
+            "pending": {
+              "type": "boolean",
+              "description": "True when the flag is held in memory for a lazy (never-saved) session and lands with the session's first save."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "session.clear",
       "summary": "Wipe a session's messages in place, keeping the same session_id.",
       "params": [

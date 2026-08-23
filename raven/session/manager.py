@@ -315,7 +315,13 @@ class SessionManager:
             return SessionResolution("resolved", key=matches[0]["key"])
         return SessionResolution("not_found")
 
-    def find_most_recent_chat_id(self, channel: str, *, this_project_only: bool = False) -> str | None:
+    def find_most_recent_chat_id(
+        self,
+        channel: str,
+        *,
+        this_project_only: bool = False,
+        include_archived: bool = True,
+    ) -> str | None:
         """Return the chat_id of the most-recently-updated session on this
         channel, or None if no such session exists.
 
@@ -347,6 +353,11 @@ class SessionManager:
         existed. Those carry no project attribution, and ``_get_session_path``
         already lets any project adopt one, so excluding them here would strand
         every pre-upgrade conversation with no way to reach it from ``-c``.
+
+        ``include_archived`` defaults to True because delivery callers still
+        need the latest live destination even when it is hidden from session
+        pickers. Resume callers set it to False so archiving remains a durable
+        opt-out from automatic reopening.
         """
         best_chat_id: str | None = None
         best_updated = ""
@@ -370,6 +381,8 @@ class SessionManager:
                 continue
             ch, chat_id = key_val.split(":", 1)
             if ch != channel or not chat_id:
+                continue
+            if not include_archived and (meta.get("metadata") or {}).get("archived"):
                 continue
             if this_project_only and self.project_dir is not None:
                 # The slug is lossy, so one group can hold two projects
