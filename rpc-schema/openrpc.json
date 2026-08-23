@@ -1800,7 +1800,7 @@
     {
       "name": "commands.catalog",
       "summary": "Dynamic CLI command catalog reflected from the Typer app (replaces v0.0.2 -32012 stub).",
-      "description": "Reflects raven.cli.commands.app to build a slash-command catalog consumed by ui-tui's alias / prefix-1-match / multi-match-ambiguous logic in createSlashHandler.ts. Filters out _DISPATCH_BLACKLIST entries (gateway / provider login / channels login / sandbox shell / tui / onboard) and agent-without-message. See harness-command-catalog-dynamic design.md §D1-D2.",
+      "description": "Reflects raven.cli.commands.app to build a slash-command catalog consumed by ui-tui's alias / prefix-1-match / multi-match-ambiguous logic in createSlashHandler.ts. Filters out _DISPATCH_BLACKLIST entries (gateway / provider login / channels login / sandbox shell / tui / onboard / upgrade / tracing compact) and agent-without-message. See harness-command-catalog-dynamic design.md §D1-D2.",
       "params": [],
       "result": {
         "name": "CommandsCatalogResult",

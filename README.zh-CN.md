@@ -178,6 +178,7 @@ raven gateway
 | `raven status` | 查看配置和运行时状态 |
 | `raven doctor` | 诊断 provider 和环境问题 |
 | `raven tracing` | 打开本地 trace dashboard |
+| `raven tracing compact` | 去重已保存的 trace artifacts，释放磁盘空间 |
 | `raven sessions list` | 浏览、恢复、fork、导出或删除 sessions |
 | `raven skill list` | 查看本地 SkillForge catalog |
 | `raven sentinel status` | 查看主动记忆和计划 nudges |
