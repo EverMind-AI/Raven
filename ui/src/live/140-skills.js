@@ -6,8 +6,8 @@
 
    Search rejections travel back raw: the island renders them in place
    with a retry. install/remove toast their own failures here and reject
-   `{handled: true}`, the contract the island's catch reads. Both refresh
-   SKILLS through loadExt so every installed surface answers the change. */
+   `{handled: true}`, the contract the island's catch reads. Both refresh the
+   live source through loadExt so every installed surface answers the change. */
 const skillhubErr = (e) => (e.data && e.data.detail) || e.message || e;
 
 DS.skills = {
@@ -27,5 +27,5 @@ DS.skills = {
       toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
       throw { handled: true };
     }),
-  installed: () => SKILLS,
+  installed: () => skillsLive,
 };

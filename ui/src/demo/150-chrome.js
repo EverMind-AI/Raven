@@ -142,11 +142,11 @@ $('#cKind').onclick = (e) => {
   [...$('#cKind').children].forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
   drawCaps();
 };
-$('#mAdd').onclick = () => {
+$('#mAdd').onclick = async () => {
   const n = $('#mName').value.trim(), a = $('#mAddr').value.trim();
   if (!n || !a) { toast(T('gui.adv.need_fields')); return; }
-  PLUGINS.push({ id: 'x' + Date.now(), name: n, reach: 'auth', state: 'on', glyph: '◆',
-    one: '手动添加的插件', src: a, ver: '—', cat: '我的系统', tools: [], perms: ['联网'] });
+  try { await DS.plugins.manual(n, a); }
+  catch (e) { toast(T('gui.plug.op_failed', { err: e.message || e })); return; }
   $('#mName').value = ''; $('#mAddr').value = '';
   drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));
 };

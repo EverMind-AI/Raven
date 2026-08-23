@@ -87,6 +87,7 @@ export interface PluginsSource {
   toggle(name: string, enabled: boolean): Promise<McpSnapshot | null>
   togglePy(row: InstalledRow, on: boolean): Promise<unknown>
   auth(name: string): Promise<McpSnapshot | null>
+  manual(name: string, address: string): Promise<unknown>
   rows(): InstalledRow[]
   reload(): Promise<unknown>
 }

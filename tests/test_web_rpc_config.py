@@ -2238,6 +2238,28 @@ async def test_mcp_set_writes_without_asking_for_a_restart(tmp_path: Path, monke
     assert [s["name"] for s in res["result"]["servers"]] == ["browser"]
 
 
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [
+        ("https://mcp.example.test/api", {"url": "https://mcp.example.test/api"}),
+        ('npx -y "@acme/crm mcp"', {"command": "npx", "args": ["-y", "@acme/crm mcp"]}),
+    ],
+)
+async def test_mcp_set_expands_the_manual_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, address: str, expected: dict
+) -> None:
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {}}', encoding="utf-8")
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "manual", "address": address}]})
+
+    assert "error" not in res, res
+    server = update_mcp.get_mcp_servers(config_path=tmp_path / "config.json")[0]
+    assert {key: server[key] for key in expected} == expected
+
+
 async def test_mcp_set_reconciles_the_live_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The write is only half the job -- the running loop has to be moved to it."""
     monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")

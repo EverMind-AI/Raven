@@ -74,6 +74,7 @@ function install(
       row.state = on ? 'on' : 'off'
     },
     auth: async () => null,
+    manual: async () => {},
     rows: () => rowsArr,
     reload: async () => {},
     ...over,

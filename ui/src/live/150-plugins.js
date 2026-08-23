@@ -60,7 +60,12 @@ DS.plugins = {
       toast(T('gui.plug.op_failed', { err: pmErrText(e) }));
       throw { handled: true };
     }),
-  rows: () => PLUGINS,
+  manual: async (name, address) => {
+    const listed = await rpc.call('raven.mcp.list', {});
+    await rpc.call('raven.mcp.set', { servers: [...(listed.servers || []), { name, address }] });
+    await loadExt();
+  },
+  rows: () => pluginsLive,
   reload: () => loadExt(),
 };
 
@@ -82,7 +87,7 @@ rpc.notify['memory.health'] = (p) => {
 
 let pmExtSoon = null;
 rpc.notify['mcp.status'] = (p) => {
-  const row = PLUGINS.find((x) => x.m && x.m.name === p.name);
+  const row = pluginsLive.find((x) => x.m && x.m.name === p.name);
   if (row) Object.assign(row.m, p);
   else {
     // Unknown server (fresh install, or events arriving before the first

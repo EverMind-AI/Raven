@@ -31,7 +31,7 @@ const skInstBtn = (() => {
   return { sync() {
     b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
     b.innerHTML = '';
-    b.append(mk('span', null, T('gui.plug.installed_n', { n: SKILLS.length })));
+    b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
   } };
 })();
 
