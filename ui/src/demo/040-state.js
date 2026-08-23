@@ -115,6 +115,9 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
   approveSheet, clarifySheet } = RavenIslands.composer;
+/* Bound at the shared top level because the live parts run in the IIFE nested
+   below it. The writers themselves stay in the modern bundle. */
+const { failureBar, bootError, upShade } = RavenIslands.chrome;
 
 
 /* Preview without an engine: __approve('rm -rf build/'). */

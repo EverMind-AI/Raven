@@ -177,14 +177,11 @@ function authFail() {
   // the shell's native overlay -- the failure must be readable there too.
   hideSplash(0);
   shellReady();
-  const bar = mk('div', 'topfail');
   if (askShellReauth()) {
-    bar.textContent = T('gui.auth.retry');
-    document.body.appendChild(bar);
+    failureBar(T('gui.auth.retry'));
     return;
   }
-  bar.textContent = T(SHELL ? 'gui.auth.dead_app' : 'gui.auth.checking');
-  document.body.appendChild(bar);
+  const bar = failureBar(T(SHELL ? 'gui.auth.dead_app' : 'gui.auth.checking'));
   if (SHELL) return;
   /* "Not authenticated OR the service stopped" made the reader guess between
      two causes with opposite fixes -- and a restarted `serve` mints a fresh
@@ -193,8 +190,8 @@ function authFail() {
      replies to a browser holding a cookie the gateway has already forgotten. */
   fetch('/health', { cache: 'no-store' })
     .then((r) => r.ok && r.json())
-    .then((j) => { bar.textContent = T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead'); })
-    .catch(() => { bar.textContent = T('gui.auth.dead'); });
+    .then((j) => { bar.say(T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead')); })
+    .catch(() => { bar.say(T('gui.auth.dead')); });
 }
 
 /* Anything that breaks after the socket is up is NOT an auth failure. Blaming
@@ -206,12 +203,9 @@ function bootFail(e) {
   shellReady();
   const detail = (e && e.data && (e.data.detail || e.data.reason)) || '';
   const msg = [(e && e.message) || String(e), detail].filter(Boolean).join(' - ');
-  const bar = mk('div', 'topfail');
-  bar.textContent = T('gui.boot_fail', { where: 'live boot', err: msg });
-  document.body.appendChild(bar);
+  failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }));
   // A dead boot must not leave the rail shimmering forever under the banner.
   listReady = true;
   drawList();
   if (window.console) console.error('[live boot]', e);
 }
-

@@ -30,53 +30,6 @@ function showUpNote(kind, latest) {
   note.hidden = false;
 }
 
-function upShade() {
-  document.querySelectorAll('.upshade').forEach((n) => n.remove());
-  const shade = mk('div', 'upshade');
-  const card = mk('div', 'upcard');
-  /* The waiting state is a bar and one line. An install the reader cannot
-     hurry does not become shorter by being described, and the staged copy this
-     replaced -- a stage name, a running clock, and a paragraph after ninety
-     seconds explaining itself -- spent the whole wait telling someone with
-     nothing to decide that there was still nothing to decide. */
-  const bar = mk('div', 'upbar');
-  bar.appendChild(mk('i'));
-  const title = mk('div', 't');
-  card.append(bar, title);
-  shade.appendChild(card);
-  document.body.appendChild(shade);
-  return {
-    say(text) {
-      title.textContent = text;
-    },
-    /* A failure is the one state with something to decide, so it is the one
-       state that gets more than a line: what went wrong, and the command that
-       does it by hand. */
-    fail(text, detail) {
-      bar.hidden = true;
-      title.textContent = text;
-      const sub = mk('div', 'sub', detail ? `${detail}\n${T('gui.upg.manual')}` : T('gui.upg.manual'));
-      const cmd = mk('div', 'cmd');
-      const code = mk('code', null, 'raven upgrade');
-      const cp = mk('button', null, T('gui.dtl.copy'));
-      cp.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText('raven upgrade'); };
-      cmd.append(code, cp);
-      const foot = mk('div', 'foot');
-      const close = mk('button', 'btn', T('gui.upg.close'));
-      close.onclick = () => shade.remove();
-      foot.appendChild(close);
-      card.append(sub, cmd, foot);
-    },
-    /* Takes down this card and no other. The caller that needs it is the rpc
-       client's rejoin, which used to do it by clearing the document of
-       `.upshade` -- and a document-wide sweep cannot tell a card it raised
-       itself from the one an upgrade watcher is still writing into. */
-    close() {
-      shade.remove();
-    },
-  };
-}
-
 /* An upgrade outlives the page that started it: serve exits, a detached helper
    installs, and what comes back is a fresh load. The marker is how any load
    tells "an upgrade is running" from "no upgrade has been asked for" -- without
@@ -226,4 +179,3 @@ function watchForUpdates() {
     if (document.visibilityState === 'visible') probe();
   });
 }
-
