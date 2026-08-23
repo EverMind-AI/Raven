@@ -3,7 +3,15 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { type ScrollBoxHandle, useApp, useHasSelection, useSelection, useStdout, useTerminalTitle } from '@hermes/ink'
+import {
+  getClipboardPath,
+  type ScrollBoxHandle,
+  useApp,
+  useHasSelection,
+  useSelection,
+  useStdout,
+  useTerminalTitle
+} from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -25,10 +33,12 @@ import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
+import { copyOnSelectNotice } from '../lib/clipboard.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
+import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
-import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../lib/platform.js'
+import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey } from '../lib/platform.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
@@ -177,46 +187,10 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   const hasSelection = useHasSelection()
   const selection = useSelection()
-  const lastCopiedVersionRef = useRef(-1)
 
   useEffect(() => {
     selection.setSelectionBgColor(ui.theme.color.selectionBg)
   }, [selection, ui.theme.color.selectionBg])
-
-  // macOS Terminal.app does not forward Cmd+C to fullscreen TUIs that enable
-  // mouse tracking, so the only reliable native-feeling path is iTerm-style
-  // copy-on-select: once a drag creates a stable TUI selection, write it to
-  // the system clipboard while keeping the highlight visible.
-  //
-  // Subscribe directly via the ink selection bus (not useSyncExternalStore)
-  // so React doesn't re-render MainApp on every drag-move tick. The version
-  // ref de-dupes against re-entrant notifications.
-  useEffect(() => {
-    if (!isMac) {
-      return
-    }
-
-    return selection.subscribe(() => {
-      if (!selection.hasSelection()) {
-        return
-      }
-
-      const state = selection.getState() as { isDragging?: boolean } | null
-
-      if (state?.isDragging) {
-        return
-      }
-
-      const version = selection.version()
-
-      if (version === lastCopiedVersionRef.current) {
-        return
-      }
-
-      lastCopiedVersionRef.current = version
-      void selection.copySelectionNoClear()
-    })
-  }, [selection])
 
   const clearSelection = useCallback(() => {
     selection.clearSelection()
@@ -355,6 +329,25 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const sys = useCallback((text: string) => appendMessage({ role: 'system', text }), [appendMessage])
+
+  // Terminals do not forward their own copy shortcut to a TUI that enables
+  // mouse tracking, so copy-on-select is what makes a transcript selection
+  // copyable at all. That holds on every platform, not just macOS.
+  //
+  // Nothing on screen changes when a drag ends, so the transcript line is the
+  // only confirmation the clipboard was written. Lives below `sys` because the
+  // dependency array is evaluated during render, while `sys` is still in its
+  // temporal dead zone further up.
+  const copiedOnSelectRef = useRef(false)
+
+  useEffect(
+    () =>
+      subscribeCopyOnSelect(selection, text => {
+        sys(copyOnSelectNotice(text.length, getClipboardPath(), !copiedOnSelectRef.current))
+        copiedOnSelectRef.current = true
+      }),
+    [selection, sys]
+  )
 
   const page = useCallback(
     (text: string, title?: string) => patchOverlayState({ pager: { lines: text.split('\n'), offset: 0, title } }),

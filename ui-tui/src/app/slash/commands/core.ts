@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { forceRedraw } from '@hermes/ink'
+import { forceRedraw, getClipboardPath } from '@hermes/ink'
 
 import type {
   ConfigGetValueResponse,
@@ -22,7 +22,7 @@ import { NO_CONFIRM_DESTRUCTIVE } from '../../../config/env.js'
 import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
 import { HOTKEYS } from '../../../content/hotkeys.js'
 import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
-import { writeClipboardText } from '../../../lib/clipboard.js'
+import { copyResultNotice, writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
 import { patchOverlayState } from '../../overlayStore.js'
@@ -358,12 +358,12 @@ export const coreCommands: SlashCommand[] = [
         const text = await ctx.composer.selection.copySelection()
 
         if (text) {
-          return sys(`copied ${text.length} characters`)
-        } else {
-          return sys(
-            'clipboard copy failed — try RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence; RAVEN_TUI_DEBUG_CLIPBOARD=1 for details'
-          )
+          return sys(copyResultNotice(text.length, getClipboardPath()))
         }
+
+        return sys(
+          'clipboard copy failed — try RAVEN_TUI_FORCE_OSC52=1 to force the escape sequence; RAVEN_TUI_DEBUG_CLIPBOARD=1 for details'
+        )
       }
 
       if (arg && Number.isNaN(parseInt(arg, 10))) {

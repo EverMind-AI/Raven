@@ -3,6 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { type ClipboardPath } from '@hermes/ink'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -168,4 +169,43 @@ export async function writeClipboardText(
   }
 
   return false
+}
+
+/**
+ * Transcript line for a completed copy, naming the channel it actually took.
+ *
+ * Only the OSC 52 path can silently fail: the bytes reach the terminal and
+ * the terminal decides whether to honour them, which is a setting the user
+ * owns. Saying so there -- and not saying it where a native tool really did
+ * write the clipboard -- is what keeps the wording worth reading.
+ */
+function copiedCount(charCount: number): string {
+  return `copied ${charCount} character${charCount === 1 ? '' : 's'}`
+}
+
+export function copyResultNotice(charCount: number, path: ClipboardPath): string {
+  const copied = copiedCount(charCount)
+
+  switch (path) {
+    case 'native':
+      return copied
+
+    case 'osc52':
+      return `${copied} via OSC 52 — if the paste comes up empty, allow clipboard access in your terminal`
+
+    case 'tmux-buffer':
+      return `${copied} to the tmux buffer — reaching the system clipboard needs tmux set-clipboard`
+  }
+}
+
+/**
+ * Transcript line for an automatic copy-on-select write.
+ *
+ * This fires on every drag, so it stays terse -- except the first one of a
+ * session, which carries the path caveat. OSC 52 is the one path the terminal
+ * can still refuse, and the first copy is the only moment a user is looking
+ * for the reason a paste came up empty.
+ */
+export function copyOnSelectNotice(charCount: number, path: ClipboardPath, firstOfSession: boolean): string {
+  return firstOfSession ? copyResultNotice(charCount, path) : copiedCount(charCount)
 }

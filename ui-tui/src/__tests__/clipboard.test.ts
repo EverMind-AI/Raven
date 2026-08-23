@@ -5,7 +5,13 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { isUsableClipboardText, readClipboardText, writeClipboardText } from '../lib/clipboard.js'
+import {
+  copyOnSelectNotice,
+  copyResultNotice,
+  isUsableClipboardText,
+  readClipboardText,
+  writeClipboardText
+} from '../lib/clipboard.js'
 
 describe('readClipboardText', () => {
   it('reads text from pbpaste on macOS', async () => {
@@ -322,5 +328,55 @@ describe('writeClipboardText', () => {
       expect.arrayContaining(['-NoProfile', '-NonInteractive']),
       expect.anything()
     )
+  })
+})
+
+describe('copyResultNotice', () => {
+  it('says the copy only left as an escape sequence', () => {
+    // The defect this closes: over SSH with no native clipboard tool, a copy
+    // that never reached the user's terminal still reported a flat "copied 42
+    // characters". The one case where the user has something to fix is the
+    // one case the message has to name.
+    const notice = copyResultNotice(42, 'osc52')
+
+    expect(notice).toContain('42')
+    expect(notice).toContain('OSC 52')
+    expect(notice.toLowerCase()).toContain('terminal')
+  })
+
+  it('reports a native copy without a caveat', () => {
+    // pbcopy/wl-copy actually wrote the clipboard, so hedging here would
+    // train the user to ignore the wording in the case that matters.
+    const notice = copyResultNotice(7, 'native')
+
+    expect(notice).toBe('copied 7 characters')
+  })
+
+  it('names the tmux buffer as the thing that was written', () => {
+    // tmux load-buffer succeeded; whether that reaches the system clipboard
+    // is the user's set-clipboard setting, not something we can claim.
+    const notice = copyResultNotice(9, 'tmux-buffer')
+
+    expect(notice).toContain('9')
+    expect(notice).toContain('tmux')
+  })
+
+  it('counts one character as one, not as a plural', () => {
+    expect(copyResultNotice(1, 'native')).toBe('copied 1 character')
+  })
+})
+
+describe('copyOnSelectNotice', () => {
+  it('carries the path caveat on the first copy of a session', () => {
+    // The user has to learn once that OSC 52 is best-effort and where the
+    // switch lives. The first drag is the only moment that lands.
+    expect(copyOnSelectNotice(42, 'osc52', true)).toBe(copyResultNotice(42, 'osc52'))
+  })
+
+  it('goes terse after that', () => {
+    // This fires on every drag. Repeating a full sentence about terminal
+    // settings would bury the transcript the feature exists to let you read.
+    expect(copyOnSelectNotice(42, 'osc52', false)).toBe('copied 42 characters')
+    expect(copyOnSelectNotice(1, 'tmux-buffer', false)).toBe('copied 1 character')
   })
 })
