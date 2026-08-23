@@ -22,6 +22,7 @@ const ICO = {
   file: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z',
   web: 'M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15',
   ext: 'M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14M14 4h6v6M20 4l-9 9',
+  download: 'M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14',
   doc: 'M7 3.5h7L18.5 8v10.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2ZM13.5 3.5V8h4.5',
   reveal: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z'
     + 'M9.5 16l5-4.5M14.5 15V11.5H11',
@@ -278,6 +279,7 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
           <button className="mini ghost" onPointerUp={pick}>{t('gui.ws.open_with_pick')}</button>
         </div>
       ) : null}
+      {f.downloadPath ? <a className="mini ghost" href={f.downloadPath}>{t('gui.ws.download')}</a> : null}
       <button
         className="mini ghost"
         onClick={() => {
@@ -397,6 +399,12 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
         >
           <Ico d={ICO.ext} />
         </button>
+      ) : null}
+      {f?.downloadPath ? (
+        <a className="ghost-ic tipdn" data-tip={t('gui.ws.download')} aria-label={t('gui.ws.download')}
+          href={f.downloadPath}>
+          <Ico d={ICO.download} />
+        </a>
       ) : null}
       {f ? (
         <button

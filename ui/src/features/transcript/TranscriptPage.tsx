@@ -6,7 +6,7 @@ import { DagGraph } from '../dag/DagGraph'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
 import {
-  fileKind, fileURL, openPath as wsOpenPath,
+  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
 import * as store from './store'
 
@@ -961,7 +961,8 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
       {picture}
       <span className="cap"><span className="nm">{row.title}</span><span className="mt">{meta}</span></span>
       <button className="hit" disabled={state !== 'ready'}
-        aria-label={t('gui.arts.open', { f: row.name })} onClick={() => { window.location.href = row.downloadPath }} />
+        aria-label={t('gui.arts.open', { f: row.name })}
+        onClick={() => wsOpenDelivery(row.path, row.downloadPath)} />
     </div>
   )
 })
