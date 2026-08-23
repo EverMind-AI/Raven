@@ -60,7 +60,7 @@ async function loadProviders() {
 const settingsSnapshot = () => ({
   raw: RAW, configPath: configPathLive, everos: everosLive,
   providers: PROVIDERS, curProvider, model,
-  toolGroups: TOOL_GROUPS, tools: TOOLS,
+  toolGroups: TOOL_GROUPS, tools: toolsLive,
 });
 
 const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;

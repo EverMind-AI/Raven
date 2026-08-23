@@ -1206,7 +1206,7 @@ function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>;
             aria-checked={row.on}
             aria-label={t('gui.caps.toggle_aria', { name: row.name })}
             onClick={() => {
-              /* Assigned on the shared row, which is where the persistence
+              /* Assigned on the source row, which is where the persistence
                  lives: live mode defines `on` as an accessor that writes
                  tools.disabledTools. Then a redraw, because the flip changed
                  state React does not hold. */

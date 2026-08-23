@@ -52,12 +52,10 @@ export interface ToolGroup {
   hint?: string
 }
 
-/* One built-in tool. Shared with the legacy layers rather than copied
-   (ui/src/demo/030-fixtures.js declares the array, and the live loadExt
-   rebuilds it), and `on` is the reason the sharing matters: in live mode it is
-   an accessor over `tools.disabledTools` (ui/src/live/090-extensions.js), so
-   assigning it persists the flip. In the demo it is a plain field and the flip
-   is local, which is what the offline page always did. */
+/* One built-in tool. Each settings source owns its list. In live mode `on`
+   is an accessor over `tools.disabledTools`, so assigning it persists the
+   flip. In the demo it is a plain field and the flip is local, which is what
+   the offline page always did. */
 export interface ToolRow {
   id: string
   name: string
