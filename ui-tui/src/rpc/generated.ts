@@ -440,6 +440,10 @@ export interface ErrorEvent {
   type: 'error';
   payload: {
     code: number;
+    /**
+     * The turn this failure belongs to. Empty when the emitter did not know it; a consumer that correlates a request to a turn must not treat an empty value as its own.
+     */
+    turn_id?: string;
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;

@@ -49,7 +49,58 @@ _WRAPPER_OPTIONS_WITH_VALUE = {
     ),
 }
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
-_COMMAND_BOUNDARIES = frozenset(";&|\n(){}`")
+# Programs whose own arguments are another command to run. These are not
+# wrappers in the `_unwrap_command_wrappers` sense -- `xargs rm` runs `rm` once
+# per input line rather than becoming it -- but the command they carry has to
+# be classified, or `xargs rm -rf` and `timeout 5 rm -rf` land on the opposite
+# side of the policy from the bare `rm -rf` they are.
+_COMMAND_RUNNERS: dict[str, frozenset[str]] = {
+    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "setsid": frozenset(),
+    "stdbuf": frozenset({"-e", "--error", "-i", "--input", "-o", "--output"}),
+    "time": frozenset({"-f", "--format", "-o", "--output"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "xargs": frozenset(
+        {
+            "-a",
+            "--arg-file",
+            "-d",
+            "--delimiter",
+            "-E",
+            "-I",
+            "-i",
+            "--replace",
+            "-L",
+            "-l",
+            "--max-lines",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-s",
+            "--max-chars",
+        }
+    ),
+}
+# `timeout` alone takes a positional before the command it runs.
+_TIMEOUT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
+
+_TIMEOUT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")
+
+
+# Whole tokens that are shell operators, and therefore command boundaries.
+# Matched as whole tokens and not character by character: ``shlex`` groups a run
+# of punctuation into one token, and a *quoted* argument made only of those
+# characters arrives here looking identical to an operator. That is how
+# ``aws --query '{}' --cli-binary-format raw s3 cp`` came to be split at its own
+# argument, leaving the next segment to start at an option -- so the executable,
+# which is what every family matcher keys on, was lost and the command was
+# allowed without asking. ``{}`` is on no shell's operator list; ``{`` and ``}``
+# are operators separately, and a bare ``{}`` is an ordinary word
+# (``find -exec rm {} \;`` and ``xargs -I{}`` both rely on that).
+_COMMAND_OPERATORS = frozenset({";", ";;", "&", "&&", "|", "||", "(", ")", "{", "}", "`"})
 _SHELL_COMMAND_WRAPPERS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
 _SYSTEM_POWER_COMMANDS = frozenset({"halt", "poweroff", "reboot", "shutdown"})
 _POWER_MULTIPLEXERS = frozenset({"busybox", "init", "loginctl", "systemctl", "telinit"})
@@ -81,7 +132,9 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     lexer.whitespace_split = True
     segment: list[str] = []
     for token in lexer:
-        if token and all(char in _COMMAND_BOUNDARIES for char in token):
+        # A run of newlines is a boundary however long it is; everything else
+        # has to be an operator by name.
+        if token and (token in _COMMAND_OPERATORS or set(token) == {"\n"}):
             if segment:
                 yield segment
                 segment = []
@@ -107,6 +160,35 @@ def _embedded_shell_command(segment: list[str]) -> str | None:
         if index + 1 < len(segment):
             return segment[index + 1]
     return None
+
+
+def _runner_inner_command(segment: list[str]) -> str | None:
+    """Return the command a recognized command-runner was handed, if any.
+
+    Option values are consumed so the command position is found rather than
+    guessed; an unrecognized option shape ends the scan, which leaves a token
+    that is not an executable in front and matches nothing.
+    """
+
+    if not segment:
+        return None
+    options_with_value = _COMMAND_RUNNERS.get(PurePath(segment[0]).name)
+    if options_with_value is None:
+        return None
+    tokens = segment[1:]
+    while tokens and tokens[0].startswith("-") and tokens[0] != "-":
+        option = tokens.pop(0)
+        if option == "--":
+            break
+        # A value attached to its option (`-n5`, `--max-args=5`) is already
+        # consumed; only a separate one has to be stepped over.
+        if "=" in option or (not option.startswith("--") and len(option) > 2):
+            continue
+        if option in options_with_value and tokens:
+            tokens.pop(0)
+    if PurePath(segment[0]).name == "timeout" and tokens and _TIMEOUT_DURATION.fullmatch(tokens[0]):
+        tokens = tokens[1:]
+    return shlex.join(tokens) if tokens else None
 
 
 def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
@@ -144,6 +226,18 @@ def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
             and _matches_delete_command(embedded, _depth=_depth + 1)
         ):
             return True
+        # The command a RUNNER was handed, at the same depth as the
+        # embedded shell above. ``timeout 5 rm -rf x`` and
+        # ``xargs -I{} rm -rf {}`` are the bare command they carry, and
+        # this walker is hand-rolled rather than built on ``_iter_argv``,
+        # so it does not inherit the unwrap from there.
+        runner = _runner_inner_command(segment)
+        if (
+            runner is not None
+            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+            and _matches_delete_command(runner, _depth=_depth + 1)
+        ):
+            return True
     return False
 
 
@@ -164,6 +258,18 @@ def _matches_system_power_command(command: str, *, _depth: int = 0) -> bool:
             embedded is not None
             and _depth < _MAX_EMBEDDED_SHELL_DEPTH
             and _matches_system_power_command(embedded, _depth=_depth + 1)
+        ):
+            return True
+        # The command a RUNNER was handed, at the same depth as the
+        # embedded shell above. ``timeout 5 rm -rf x`` and
+        # ``xargs -I{} rm -rf {}`` are the bare command they carry, and
+        # this walker is hand-rolled rather than built on ``_iter_argv``,
+        # so it does not inherit the unwrap from there.
+        runner = _runner_inner_command(segment)
+        if (
+            runner is not None
+            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+            and _matches_system_power_command(runner, _depth=_depth + 1)
         ):
             return True
     return False
@@ -216,24 +322,26 @@ def _iter_argv(command: str, *, _depth: int = 0) -> Iterator[list[str]]:
         yield segment
         if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
             continue
-        # Only the embedded shell here. Seeing through a command RUNNER
-        # (``timeout 5 git push``) needs a helper this module does not have, so
-        # that wrapper hides a family match -- exactly as it already hides a
-        # delete from ``_matches_delete_command``. This gate is therefore no
-        # weaker than the surface it joins, and no stronger; the gap is written
-        # here rather than left to be found.
-        nested = _embedded_shell_command(segment)
-        if nested is not None:
-            yield from _iter_argv(nested, _depth=_depth + 1)
+        # The embedded shell and the command a RUNNER was handed. The runner half
+        # closes the gap this comment used to record: ``timeout 5 git push`` and
+        # ``xargs -I{} rm -rf {}`` carry a command that has to be classified, or
+        # they land on the opposite side of the policy from the bare command they
+        # are. It became load-bearing when quoted metacharacters stopped being
+        # command boundaries -- ``{}`` had been splitting ``xargs -I{} rm -rf {}``
+        # into a segment that happened to start at ``rm``, so the delete was
+        # caught by accident rather than by looking.
+        for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
+            if nested is not None:
+                yield from _iter_argv(nested, _depth=_depth + 1)
 
 
-# Global options that take their value as the next word, per executable. Only
-# options certain to take one are listed, and the asymmetry is the point: an
-# option missing from this table leaves its value among the words, which
-# over-reads by one and can only make a caller ask about more than it must,
-# while listing a boolean flag by mistake would consume the verb itself and let
-# the command through. When unsure, leave it out. Options that carry their value
-# attached (``--git-dir=X``, ``terraform -chdir=DIR``) need no entry.
+# Global options that take their value as the next word, per executable. This is
+# an accuracy aid, not a safety mechanism: see ``_subcommands``, which cannot
+# under-read whether or not an option appears here. Skipping a known value keeps
+# a path or a profile name from reading as a verb. Listing a boolean flag by
+# mistake would consume the following word, which is why only options certain to
+# take a separate value belong here; options that carry theirs attached
+# (``--git-dir=X``, ``terraform -chdir=DIR``) need no entry.
 _GLOBAL_OPTIONS_WITH_VALUE: dict[str, frozenset[str]] = {
     "git": frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}),
     "gh": frozenset({"-R", "--repo", "--hostname"}),
@@ -317,20 +425,29 @@ _GLOBAL_OPTIONS_WITH_VALUE: dict[str, frozenset[str]] = {
 }
 
 
-def _subcommands(argv: list[str], count: int = 2) -> list[str]:
-    """The first few non-option words after the executable.
+def _subcommands(argv: list[str]) -> list[str]:
+    """Every non-option word after the executable, in order.
 
-    An option's value is consumed when the executable is known to take one
-    there. Skipping the option but not its value counted the value as one of the
-    words being looked for, so the budget ran out before the verb:
-    ``git --git-dir X --work-tree Y push`` read as the two paths and never saw
-    ``push`` -- an ALLOW for the command that bare ``git push`` prompts about.
-    ``aws --profile p --region r s3 cp`` lost ``s3`` the same way.
+    There is deliberately no limit on how many are returned, and that is the
+    property the callers depend on: **this cannot under-read**. Two earlier
+    versions could. The first skipped options but not their values, so a value
+    was counted as one of the words being looked for. The second consumed the
+    values of a table of known options, which merely moved the failure to the
+    options the table was missing -- ``aws --query '{}' --cli-binary-format raw``
+    exhausted a two-word budget before ``s3``, exactly as
+    ``git --git-dir X --work-tree Y push`` had before ``push``. No table of every
+    option of every tool can be complete, so correctness must not rest on one.
 
-    ``git -C /repo push`` and ``git push`` still have to read the same, which is
-    what the table delivers exactly rather than by over-reading. See
-    :data:`_GLOBAL_OPTIONS_WITH_VALUE` for why an incomplete table is the safe
-    kind of incomplete.
+    Returning every word means an unconsumed option value becomes an extra
+    candidate. That can only make a caller match something it need not have,
+    which for a policy means asking about a command it could have allowed -- the
+    direction a safety boundary is allowed to fail in. Under-reading means not
+    asking, which is the direction that let a publish through.
+
+    :data:`_GLOBAL_OPTIONS_WITH_VALUE` is therefore an accuracy aid rather than a
+    safety mechanism: skipping a known option's value keeps ``git -C push
+    status`` (a directory that happens to be named ``push``) from reading as a
+    publish. An option missing from it costs precision, never safety.
     """
 
     options_with_value = _GLOBAL_OPTIONS_WITH_VALUE.get(PurePath(argv[0]).name, frozenset())
@@ -347,8 +464,6 @@ def _subcommands(argv: list[str], count: int = 2) -> list[str]:
                 rest.pop(0)
             continue
         words.append(word)
-        if len(words) >= count:
-            break
     return words
 
 
@@ -508,7 +623,7 @@ def _matches_destructive_vcs_command(command: str) -> bool:
     for argv in _iter_argv(command):
         if PurePath(argv[0]).name != "git":
             continue
-        words = _subcommands(argv, count=3)
+        words = _subcommands(argv)
         for word in words:
             flags = _DESTRUCTIVE_GIT.get(word)
             if flags is None:

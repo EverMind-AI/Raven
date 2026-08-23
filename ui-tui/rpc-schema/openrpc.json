@@ -1853,8 +1853,14 @@
             "additionalProperties": false,
             "required": ["code", "message"],
             "properties": {
-              "code": { "type": "integer" },
-              "message": { "type": "string" },
+              "code": {
+          "type": "integer"
+        },
+        "turn_id": {
+          "type": "string",
+          "description": "The turn this failure belongs to. Empty when the emitter did not know it; a consumer that correlates a request to a turn must not treat an empty value as its own."
+        },
+        "message": { "type": "string" },
               "reason": {
                 "type": "string",
                 "enum": ["cancelled_by_client", "internal"]

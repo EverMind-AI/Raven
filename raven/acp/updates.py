@@ -643,8 +643,17 @@ class UpdateTranslator:
         if session is None or session.turn is None:
             return
         turn = session.turn
-        turn.turn_id = turn_id or None
-        held = turn.deferred.pop(turn_id, None) if turn_id else None
+        # Empty is stored as empty and not folded into ``None``: the two mean
+        # different things and the difference is a hang. ``None`` is "not told
+        # yet", which holds an ending. ``""`` is "told, and there is no id" --
+        # a caller whose ``turn.send`` answered without one -- and that has to
+        # settle on whatever ends the turn, because there is no key to correlate
+        # with and waiting for one that never comes leaves the prompt unanswered
+        # forever. Correlation is enforced only where a key exists.
+        turn.turn_id = turn_id
+        if not turn_id:
+            logger.debug("acp: turn.send named no turn for {}; settlement cannot be correlated", session_id)
+        held = turn.deferred.pop(turn_id, None) if turn_id else next(iter(turn.deferred.values()), None)
         turn.deferred.clear()
         if held is not None:
             turn.settle(held)
@@ -725,24 +734,44 @@ class UpdateTranslator:
             return
         # Updates above go out for the whole session -- a client showing what the
         # runtime is doing in its workspace is information, not a bug. Turn
-        # bookkeeping is different: it answers one request, so it is keyed on the
-        # turn this prompt actually started.
+        # bookkeeping is different: it answers one request, so it takes a
+        # POSITIVE match on the turn this prompt started. Reading a missing id as
+        # "mine" is the same defect as not looking at the id at all: the runtime
+        # shares this lane (see ``_owns_lane``), and the notice shape carries no
+        # id at all, so "absent" cannot mean "this turn's".
         event_turn_id = _event_turn_id(event)
-        if turn.turn_id is not None and event_turn_id and event_turn_id != turn.turn_id:
-            self._drop(f"{event.get('type') if isinstance(event, dict) else 'event'}/<another turn>")
+        if turn.turn_id == "":
+            # Told there is no id. No correlation is possible, so this behaves the
+            # way it did before correlation existed. Recorded as a distinct state
+            # rather than silently sharing the "not told yet" branch, because that
+            # one holds and holding here would never end.
+            if result.latch and turn.latched is None:
+                turn.latched = result.latch
+            if result.stop:
+                turn.settle(result.stop)
+            return
+        if turn.turn_id is None:
+            # ``turn.send`` emits ``message.start`` before it returns, so events
+            # can arrive before this prompt learns which turn is its own. An
+            # ending that names a turn is held, because dropping it would hang a
+            # prompt whose turn finished inside that window; one that names none
+            # is neither held nor applied.
+            # Held under its own id, which may be the empty one: an ending that
+            # names no turn is still an ending, and whether it is this prompt's
+            # cannot be decided until ``turn.send`` says whether there is an id
+            # to compare at all. Dropping it here hung every prompt whose runtime
+            # reports no turn id, because the legacy path below then had nothing
+            # left to settle from.
+            if result.stop and len(turn.deferred) < MAX_DEFERRED_ENDINGS:
+                turn.deferred.setdefault(event_turn_id, result.stop)
+            return
+        if event_turn_id != turn.turn_id:
+            self._drop(f"{event.get('type') if isinstance(event, dict) else 'event'}/<not this turn>")
             return
         if result.latch and turn.latched is None:
             turn.latched = result.latch
-        if not result.stop:
-            return
-        if turn.turn_id is None and event_turn_id:
-            # The id is not known yet, so this cannot be attributed. Held rather
-            # than applied or dropped: applying it is the defect, and dropping it
-            # would hang a prompt whose turn finished inside that window.
-            if len(turn.deferred) < MAX_DEFERRED_ENDINGS:
-                turn.deferred.setdefault(event_turn_id, result.stop)
-            return
-        turn.settle(result.stop)
+        if result.stop:
+            turn.settle(result.stop)
 
     def _drop(self, what: str) -> None:
         self.dropped[what] = self.dropped.get(what, 0) + 1

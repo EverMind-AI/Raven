@@ -369,22 +369,30 @@ class TestExternalEffectFamilies:
         assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
         assert asking.approval_reason(command) is not None
 
-    @pytest.mark.parametrize("command", ["timeout 60 npm install", "nice -n 10 git push origin main"])
-    def test_a_command_runner_still_launders_one_here(self, asking: ShellCommandPolicy, command: str) -> None:
-        """The known hole, pinned so it is a decision and not a surprise.
+    @pytest.mark.parametrize(
+        ("command", "family"),
+        [
+            ("timeout 60 npm install", "install_command"),
+            ("nice -n 10 git push origin main", "publish_command"),
+        ],
+    )
+    def test_a_command_runner_no_longer_launders_one(
+        self, asking: ShellCommandPolicy, command: str, family: str
+    ) -> None:
+        """Was ``test_a_command_runner_still_launders_one_here``, which pinned the
+        hole and said outright that whoever added the runner unwrap should find it
+        failing and flip it into this. That is what happened: the helper is here
+        now, so a runner's inner command is classified rather than laundered.
 
-        Reading a command RUNNER's inner command needs a helper this module does
-        not have, so ``timeout 60 npm install`` runs unannounced while
-        ``npm install`` asks. The same wrapper already hides a delete from
-        ``_matches_delete_command``, so this gate is no weaker than the surface
-        it joins -- but it is not stronger, and the shape of the gap belongs in a
-        test rather than only in a comment.
-
-        Whoever adds the runner unwrap should find this test failing and flip it
-        into the case above.
+        It stopped being optional when quoted metacharacters stopped being
+        command boundaries. ``{}`` had been splitting ``xargs -I{} rm -rf {}``
+        into a segment that happened to start at ``rm``, so a delete behind a
+        runner was caught by accident; removing that accident would have left it
+        allowed. ``timeout 5 rm -rf x`` and ``timeout 5 shutdown -h now`` were
+        never caught here at all, and are now.
         """
-        assert asking.evaluate(command) is CommandDecision.ALLOW
-        assert asking.approval_reason(command) is None
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) == family
 
     @pytest.mark.parametrize(
         "command",
@@ -662,6 +670,86 @@ class TestAGlobalOptionValueIsNotASubcommand:
         """After ``--`` a word that looks like an option is an argument, so the
         table must not keep consuming past it."""
         assert asking.approval_reason("git -C /repo push -- --not-an-option") == "publish_command"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            # The two options here are documented AWS globals that a table of
+            # "options certain to take a value" did not happen to list. Review
+            # found this shape against the table version, and it is the reason
+            # the word budget is gone rather than the table extended: no table of
+            # every option of every tool can be complete, so nothing that decides
+            # whether to ask may depend on one being complete.
+            "aws --query '{}' --cli-binary-format raw-in-base64-out s3 cp ./x s3://bucket/x",
+            "aws --profile p --region r --output json --query x s3 cp a b",
+            "kubectl -n ns --context c --kubeconfig k --as u apply -f x.yaml",
+            "git -c a.b=c -c d.e=f --git-dir /r/.git --work-tree /r push origin main",
+        ],
+    )
+    def test_no_number_of_option_values_can_hide_the_verb(self, asking: ShellCommandPolicy, command: str) -> None:
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) is not None
+
+    def test_a_quoted_argument_of_metacharacters_is_not_a_command_boundary(self, asking: ShellCommandPolicy) -> None:
+        """Found while fixing the case above, and it is the more serious half.
+
+        The segmenter decided a token was a boundary when every character in it
+        was a shell metacharacter, which a *quoted* argument can satisfy.
+        ``aws --query '{}' ... s3 cp`` was therefore cut in two at its own
+        argument, and the second piece began with an option -- so ``argv[0]``,
+        which every family matcher keys on to find its table, was an option
+        rather than an executable, and no family could fire at all. Extending the
+        option table would not have touched this: the command never reached the
+        table as one command.
+        """
+        from raven.agent.tools.shell_policy import _iter_argv
+
+        argvs = list(_iter_argv("aws --query '{}' --cli-binary-format raw s3 cp ./x s3://b/x"))
+
+        assert len(argvs) == 1, f"one command, not {len(argvs)}: {argvs}"
+        assert argvs[0][0] == "aws", "the executable has to survive segmentation"
+
+    @pytest.mark.parametrize(
+        ("command", "decision"),
+        [
+            # The shapes that rely on a bare ``{}`` being an ordinary word, and
+            # the real operators that must still split. Both directions, because
+            # the fix moves the line between them.
+            ("{ rm file.txt; }", CommandDecision.REQUIRE_APPROVAL),
+            # Asked rather than refused: this repo's policy has no unconditional
+            # recursive-delete deny, so REQUIRE_APPROVAL is what "the operator
+            # split and the delete was seen" looks like here.
+            ("xargs -I{} rm -rf {}", CommandDecision.REQUIRE_APPROVAL),
+            (r'find . -name "*.log" -exec rm {} \;', CommandDecision.REQUIRE_APPROVAL),
+            ("rm -rf build && git push", CommandDecision.REQUIRE_APPROVAL),
+        ],
+    )
+    def test_the_operators_that_must_still_split_still_split(
+        self, asking: ShellCommandPolicy, command: str, decision: CommandDecision
+    ) -> None:
+        assert asking.evaluate(command) is decision
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            # A bare ``{}`` had been splitting this into a segment that happened
+            # to start at ``rm``, so the delete was caught by accident. Once a
+            # quoted metacharacter stopped being a boundary, the accident stopped
+            # too and this evaluated to ALLOW -- a regression the segmentation fix
+            # introduced and the runner unwrap closes by looking on purpose.
+            "xargs -I{} rm -rf {}",
+            # Never caught here before, for the same missing reason.
+            "timeout 5 rm -rf build",
+            "nice -n 10 rm -rf build",
+        ],
+    )
+    def test_a_command_a_runner_was_handed_is_still_classified(
+        self, asking: ShellCommandPolicy, command: str
+    ) -> None:
+        assert asking.evaluate(command) is not CommandDecision.ALLOW
+
+    def test_a_runner_holding_a_power_command_is_still_refused(self, asking: ShellCommandPolicy) -> None:
+        assert asking.evaluate("timeout 5 shutdown -h now") is CommandDecision.HARD_DENY
 
     def test_an_unknown_option_over_reads_rather_than_under_reads(self, asking: ShellCommandPolicy) -> None:
         """No table lists every option of every tool. An unconsumed value becomes

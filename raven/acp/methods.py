@@ -464,8 +464,13 @@ class AcpMethods:
             # runtime submitted, and without this their endings answer this
             # request -- the client is told the turn is over before its own turn
             # starts. ``turn.send`` is the only place that knows.
-            if isinstance(accepted, dict):
-                self._translator.accept_turn(session.session_id, str(accepted.get("turn_id") or ""))
+            # Always called, including with an empty id: the translator needs to
+            # be told that no id is coming, or it holds every ending waiting for
+            # one and the prompt is never answered.
+            self._translator.accept_turn(
+                session.session_id,
+                str(accepted.get("turn_id") or "") if isinstance(accepted, dict) else "",
+            )
             stop = await future
         finally:
             self._translator.end_turn(session.session_id)

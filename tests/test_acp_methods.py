@@ -789,7 +789,15 @@ class TestPrompt:
                     "subscription_id": sub,
                     "event": {
                         "type": "error",
-                        "payload": {"code": -32099, "message": "c", "reason": "cancelled_by_client"},
+                        # ``turn_id`` is part of the shape the emitters produce
+                        # now; without it this frame names no turn and settlement
+                        # will not take it.
+                        "payload": {
+                            "code": -32099,
+                            "message": "c",
+                            "reason": "cancelled_by_client",
+                            "turn_id": "t1",
+                        },
                     },
                 },
             }

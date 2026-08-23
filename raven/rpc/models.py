@@ -313,6 +313,13 @@ class MessageCompleteEvent(_Strict):
 
 class ErrorEventPayload(_Strict):
     code: int
+    turn_id: str = Field(
+        "",
+        description=(
+            "The turn this failure belongs to. Empty when the emitter did not know it; "
+            "a consumer that correlates a request to a turn must not treat an empty value as its own."
+        ),
+    )
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None

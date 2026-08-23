@@ -241,8 +241,27 @@ class TuiOutlet:
             {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+    async def emit_error(
+        self,
+        conversation_id: str,
+        code: int,
+        message: str,
+        reason: str,
+        detail: str = "",
+        turn_id: str = "",
+    ) -> None:
+        """A turn's failure, tagged with the turn it belongs to when known.
+
+        ``turn_id`` matters to any consumer that answers a *request* off this
+        event. One session's subscription also carries turns the runtime
+        submitted, and this lane is shared -- see ``_owns_lane`` -- so a consumer
+        with no id to compare cannot tell a foreign turn's failure from its own,
+        and will answer the wrong request. Empty when the caller did not know the
+        turn, which a consumer must read as "not mine" rather than as "mine".
+        """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
+        if turn_id:
+            payload["turn_id"] = turn_id
         if detail:
             payload["detail"] = detail
         await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
@@ -321,6 +340,10 @@ def _make_tui_sink(
                     "turn_failed",
                     "internal",
                     event.error or "",
+                    # The ending turn's own id, for the same reason
+                    # ``emit_complete`` takes it rather than reading the lane
+                    # slot: the slot may hold a client turn that has not started.
+                    turn_id=event.turn_id,
                 )
             return
         if isinstance(event, TurnStarted):

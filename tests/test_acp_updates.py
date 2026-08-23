@@ -605,9 +605,11 @@ class TestTurnState:
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
 
-        await translator.send_frame(_event("notice", kind="action_blocked", detail="first"))
-        await translator.send_frame(_event("notice", kind="action_blocked", detail="second"))
-        await translator.send_frame(_event("message.complete"))
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(_event("notice", kind="action_blocked", detail="first", turn_id="t"))
+        await translator.send_frame(_event("notice", kind="action_blocked", detail="second", turn_id="t"))
+        await translator.send_frame(_event("message.complete", turn_id="t"))
 
         assert await future == "refusal"
 
@@ -619,8 +621,12 @@ class TestTurnState:
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
 
-        await translator.send_frame(_event("error", code=-32099, message="c", reason="cancelled_by_client"))
-        await translator.send_frame(_event("message.complete"))
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(
+            _event("error", code=-32099, message="c", reason="cancelled_by_client", turn_id="t")
+        )
+        await translator.send_frame(_event("message.complete", turn_id="t"))
 
         assert await future == "cancelled"
 
@@ -629,7 +635,7 @@ class TestTurnState:
         translator = UpdateTranslator(emit=written.append)
         translator.add(_session())
 
-        await translator.send_frame(_event("message.complete"))
+        await translator.send_frame(_event("message.complete", turn_id="t"))
         await translator.send_frame(_event("token.delta", text="late"))
 
         assert len(written) == 1, "the text still goes out; only the turn bookkeeping is skipped"
@@ -649,7 +655,8 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         first = translator.begin_turn("acp:s1")
-        await translator.send_frame(_event("message.complete"))
+        translator.accept_turn("acp:s1", "t")
+        await translator.send_frame(_event("message.complete", turn_id="t"))
         await first
 
         second = translator.begin_turn("acp:s1")
@@ -660,6 +667,8 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+
+        translator.accept_turn("acp:s1", "t")
 
         assert translator.settle_turn("acp:s1", "cancelled") is True
         assert translator.settle_turn("acp:s1", "end_turn") is False
@@ -676,6 +685,8 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+
+        translator.accept_turn("acp:s1", "t")
 
         translator.close()
 
@@ -698,6 +709,8 @@ class TestTurnState:
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
+
+        translator.accept_turn("acp:s1", "t")
 
         translator.close()
         translator.close()
@@ -967,7 +980,10 @@ class TestTerminationIsExactlyOnce:
         "tool.complete": {"tool_call_id": "t", "result_preview": "ok"},
         "message.start": {"turn_id": "t"},
         "message.complete": {"turn_id": "t", "usage": {}},
-        "error": {"code": -32099, "message": "boom", "reason": "internal"},
+        # turn_id is part of the shape now: the sink stamps the ending turn's own
+        # id, because a consumer answering a request off this event cannot tell a
+        # foreign turn's failure from its own without it.
+        "error": {"code": -32099, "message": "boom", "reason": "internal", "turn_id": "t"},
         "notice": {"kind": "action_blocked", "detail": "no"},
         "episode.start": {"index": 1},
         "dag.run_started": {"nodes": []},
@@ -1023,9 +1039,13 @@ class TestTerminationIsExactlyOnce:
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
 
-        await translator.send_frame(_event("error", code=-32099, message="c", reason="cancelled_by_client"))
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(
+            _event("error", code=-32099, message="c", reason="cancelled_by_client", turn_id="t")
+        )
         await translator.send_frame(_event("message.complete", turn_id="t", usage={}))
-        await translator.send_frame(_event("error", code=-1, message="late", reason="internal"))
+        await translator.send_frame(_event("error", code=-1, message="late", reason="internal", turn_id="t"))
 
         assert await future == "cancelled"
 
@@ -1143,14 +1163,21 @@ class TestTheRealOutletPath:
     async def test_a_cancel_event_resolves_the_prompt_as_cancelled(self):
         written, translator, emitter, outlet = await self._wire()
         future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "turn-1")
         try:
             # The exact call ``turn.cancel`` makes: one error event whose reason is
-            # the only cancelled-turn signal the runtime produces.
+            # the only cancelled-turn signal the runtime produces, carrying the
+            # turn the lane was bound to.
             await emitter.emit(
                 "acp:s1",
                 {
                     "type": "error",
-                    "payload": {"code": -32099, "message": "turn_cancelled", "reason": "cancelled_by_client"},
+                    "payload": {
+                        "code": -32099,
+                        "message": "turn_cancelled",
+                        "reason": "cancelled_by_client",
+                        "turn_id": "turn-1",
+                    },
                 },
             )
             await self._settle()
@@ -1174,7 +1201,15 @@ class TestTheRealOutletPath:
         finally:
             await emitter.close_session("acp:s1")
 
-        assert await future == "refusal"
+        # ``end_turn`` and not ``refusal``, and this is the one deliberate
+        # fidelity loss in the turn-correlation fix. The real ``Notice`` carries
+        # no turn id -- ``_run_turn`` has none to give it -- and the runtime
+        # shares this lane, so a refusal seen here cannot be shown to belong to
+        # this prompt. Latching it anyway is how a foreign turn's block came to be
+        # reported as this turn's outcome. The refusal is not lost: it is
+        # delivered as message content, asserted below, which is what the person
+        # reads. Recorded in the compatibility matrix.
+        assert await future == "end_turn"
         assert _updates(written)[0]["content"]["text"] == "policy refused"
 
     async def test_another_sessions_stream_does_not_leak_into_this_one(self):
@@ -1547,10 +1582,18 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
 
         assert await future == "end_turn"
 
-    async def test_an_ending_with_no_turn_id_still_answers(self):
-        """An emitter that does not know the turn id leaves the field empty. That
-        cannot be attributed either way, and refusing to settle would hang a
-        prompt over a shape that predates this correlation."""
+    async def test_an_ending_with_no_turn_id_does_not_answer(self):
+        """The first version of this fix settled on an id-less ending, reasoning
+        that refusing would hang a prompt. That was wrong in the direction that
+        matters: the production notice shape carries no id at all and the runtime
+        shares this lane, so "absent" cannot mean "this turn's" -- reading it that
+        way leaves the original defect reachable through a different door.
+
+        Nothing hangs as a result. Every ending that can answer a prompt now
+        names its turn: ``message.complete`` always did, and the three error
+        emitters (the sink's ``TurnFailed``, ``turn.cancel``, and the
+        never-started path) stamp it too. A closing connection and
+        ``session/cancel`` still settle out of band."""
         translator = UpdateTranslator(emit=lambda f: None)
         translator.add(_session())
         future = translator.begin_turn("acp:s1")
@@ -1558,7 +1601,7 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
 
         await translator.send_frame(_event("message.complete"))
 
-        assert await future == "end_turn"
+        assert not future.done()
 
     async def test_an_event_that_is_not_a_mapping_carries_no_turn(self):
         """``send_frame`` does not vet the event body, and ``translate`` returns
@@ -1587,6 +1630,59 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
 
         translator.accept_turn("acp:s1", "mine")
         translator.accept_turn("acp:nope", "mine")
+
+    async def test_a_foreign_notice_through_the_real_outlet_does_not_latch(self):
+        """Driven through the real ``SubscriptionEmitter`` and ``RpcOutlet``,
+        because the shape they emit is the whole question: an earlier version of
+        this test handed the translator a notice carrying a ``turn_id`` the
+        production producer does not send, so it passed while the defect it named
+        stayed reachable."""
+        from raven.rpc.spine import TuiOutlet
+        from raven.rpc.subscriptions import COALESCE_WINDOW_S, SubscriptionEmitter
+        from raven.spine.events import Notice, NoticeKind
+
+        written: list[dict] = []
+        translator = UpdateTranslator(emit=written.append)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        subscription_id = await emitter.register("acp:s1")
+        translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id=subscription_id))
+        outlet = TuiOutlet("acp", emitter)
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+        try:
+            await outlet.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail="not mine", conversation_id="acp:s1"))
+            await outlet.emit_complete("acp:s1", "mine", {})
+            await asyncio.sleep(COALESCE_WINDOW_S * 3)
+        finally:
+            await emitter.close_session("acp:s1")
+
+        assert await future == "end_turn", "a notice nobody can attribute must not decide this prompt's outcome"
+
+    async def test_a_foreign_error_through_the_real_outlet_does_not_settle(self):
+        """The other half, and the reason ``emit_error`` now takes a turn id: the
+        real emitter sent none, so any turn's failure answered this prompt."""
+        from raven.rpc.spine import TuiOutlet
+        from raven.rpc.subscriptions import COALESCE_WINDOW_S, SubscriptionEmitter
+
+        written: list[dict] = []
+        translator = UpdateTranslator(emit=written.append)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        subscription_id = await emitter.register("acp:s1")
+        translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id=subscription_id))
+        outlet = TuiOutlet("acp", emitter)
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+        try:
+            await outlet.emit_error("acp:s1", -32000, "turn_failed", "internal", "boom", turn_id="runtime-turn")
+            await asyncio.sleep(COALESCE_WINDOW_S * 3)
+            assert not future.done(), "another turn's failure is not this prompt's answer"
+
+            await outlet.emit_error("acp:s1", -32000, "turn_failed", "internal", "mine", turn_id="mine")
+            await asyncio.sleep(COALESCE_WINDOW_S * 3)
+        finally:
+            await emitter.close_session("acp:s1")
+
+        assert await future == "end_turn"
 
     async def test_the_held_endings_do_not_grow_without_bound(self):
         """The hold exists for one narrow window. A stream of foreign turns must
