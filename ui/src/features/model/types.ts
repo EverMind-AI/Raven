@@ -18,11 +18,6 @@ export interface Provider {
 
 export interface ModelSource {
   providers(): Provider[]
-  current(): string
-  /* Show `m` as chosen without waiting for the server. Kept apart from persist
-     below because the picker sets it twice on a failure -- forward, then back --
-     and neither of those is a write to the config. */
-  setLocal(m: string): void
   /* Send it. Rejecting is meaningful: the picker rolls the local pick back. */
   persist(m: string): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the

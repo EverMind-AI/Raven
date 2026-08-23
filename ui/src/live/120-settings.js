@@ -36,7 +36,7 @@ async function loadSettings() {
   configPathLive = r.config_path || configPathLive;
   drawBanner();
   const defaults = (RAW.agents && RAW.agents.defaults) || {};
-  if (defaults.model) { model = defaults.model; setModelLabel(); }
+  if (defaults.model) { modelSet(defaults.model); setModelLabel(); }
   try { await loadProviders(); } catch { /* model options unavailable — keep the rows already shown */ }
 }
 
@@ -52,12 +52,12 @@ async function loadProviders() {
     key: p.authenticated ? '已配置' : '',
   }));
   curProvider = mo.provider || '';
-  if (mo.model) { model = mo.model; setModelLabel(); }
+  if (mo.model) { modelSet(mo.model); setModelLabel(); }
 }
 
 const settingsSnapshot = () => ({
   raw: RAW, configPath: configPathLive, everos: everosLive,
-  providers: providersLive, curProvider, model,
+  providers: providersLive, curProvider, model: modelCurrent(),
   toolGroups: TOOL_GROUPS, tools: toolsLive,
 });
 
@@ -65,6 +65,10 @@ const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;
 
 DS.settings = {
   load: async () => {
+    /* The tool inventory is part of settings. Loading it here keeps every
+       opener on the island's one refresh path rather than replacing the
+       demo-layer openSettings binding in live mode. */
+    try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
     await loadSettings();
     await loadEveros();
     return settingsSnapshot();
@@ -101,7 +105,7 @@ DS.settings = {
     await loadProviders();
     return settingsSnapshot();
   },
-  model: () => model,
+  model: () => modelCurrent(),
   /* The version check the rail-foot notice already does, on demand. No new
      backend: system.version carries the answer. */
   checkUpdate: async (btn) => {
@@ -139,13 +143,6 @@ DS.settings = {
      in one place. Not awaited: the pick repaints synchronously and the persist
      speaks for itself if it fails. */
   setLang: (v) => { langPickLive(v, { persist: true }); },
-};
-
-openSettings = async function () {
-  /* loadExt too: the agent's tool inventory is a settings page, and a panel
-     drawn from the demo list would flip switches that do not exist. */
-  try { await loadExt(); } catch (e) { toast(`加载失败：${e.message || e}`); }
-  await RavenIslands.settings.open();
 };
 
 /* -- language ---------------------------------------------------------
@@ -223,19 +220,19 @@ async function loadLang() {
 /* A model id is provider-qualified (openrouter/anthropic/claude-opus-4.6);
    the chip only has room for the part that identifies the model. */
 const shortModel = (m) => String(m || '').split('/').pop();
-const setModelLabel = () => { $('#modelName').textContent = shortModel(model); $('#modelChip').title = model; };
-
-/* The picker itself is an island (ui/src/features/model/). What stays here is
-   the source it reads: the provider list this transport fetched, the page's
-   current pick, and the two halves of writing one -- the local set the chip
-   repaints from, and the rpc call that can reject. Splitting those two is what
-   lets the picker be optimistic and still roll back. */
-DS.model = {
-  providers: () => providersLive,
-  current: () => model,
-  setLocal: (m) => { model = m; setModelLabel(); },
-  persist: (m) => rpc.call('config.set', { key: 'model', value: m }),
-  openSettings: () => openSettings(),
+const setModelLabel = () => {
+  const model = modelCurrent();
+  $('#modelName').textContent = shortModel(model); $('#modelChip').title = model;
 };
 
-$('#modelChip').onclick = () => openModelPicker();
+/* The picker itself is an island (ui/src/features/model/). What stays here is
+   the provider list this transport fetched and the rpc call that can reject.
+   The island owns the current pick, so its optimistic update and rollback do
+   not cross the page-layer boundary. */
+DS.model = {
+  providers: () => providersLive,
+  persist: (m) => rpc.call('config.set', { key: 'model', value: m }),
+  openSettings: () => RavenIslands.settings.open(),
+};
+
+$('#modelChip').onclick = () => openModelPicker(null, setModelLabel);

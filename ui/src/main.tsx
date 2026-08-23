@@ -284,6 +284,10 @@ window.RavenIslands = {
     installedCount: plugins.installedCount,
     event: plugins.onEvent,
   },
+  model: {
+    current: modelPicker.current,
+    setCurrent: modelPicker.setCurrent,
+  },
   xa: {
     open: xa.open,
     close: xa.close,
