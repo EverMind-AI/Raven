@@ -5,8 +5,8 @@ import * as composer from './features/composer/mount'
 import * as approve from './features/composer/approve'
 import * as clarify from './features/composer/clarify'
 import * as sheets from './features/composer/sheets'
-import * as dag from './features/dag/graph'
 import * as dagNodes from './features/dag/nodes'
+import * as dagSheet from './features/dag/mount'
 import { ConnApp } from './features/connections/ConnPage'
 import * as connections from './features/connections/store'
 import * as browser from './features/browser/mount'
@@ -225,23 +225,20 @@ window.RavenIslands = {
      graph holds), and inside the live layer none of it was reachable from a
      test. */
   dag: {
-    layout: dag.layout,
-    gist: dag.gist,
-    summary: dag.summary,
-    took: dag.took,
-    /* The status glyphs, so the sheet and the transcript's own dag card draw one
-       alphabet rather than each keeping a copy of these four paths. */
-    MARKS: dag.MARKS,
-    /* And the adapter that turns a `dag.run_started` payload into nodes, so the
-       sheet and the card agree on what one is. */
+    /* The adapter that turns a `dag.run_started` payload into nodes, so the
+       sheet and the transcript's card agree on what a node is. */
     fromStarted: dagNodes.fromStarted,
-    /* The box, and only the box. The spacing constants used to be here too, from
-       when the layout ran in the live layer; it moved into graph.ts, so the only
-       reader left for GAP_X, GAP_Y and PAD is graph.ts itself and its tests,
-       which import them. This bag grows one line per helper an island actually
-       needs -- never ahead of need, and not behind one either. */
-    W: dag.W,
-    H: dag.H,
+    /* The sheet itself, now that it is drawn here rather than in the live layer.
+       Four calls: a run arrives, a run was mutated in place, the open
+       conversation changed, a conversation went away -- plus one read, for the
+       delegation row that opens the run's last node. The geometry, the marks and
+       the summary lines are no longer published: their only caller was the
+       imperative builder that this replaces. */
+    start: dagSheet.start,
+    touch: dagSheet.touch,
+    sync: dagSheet.sync,
+    forget: dagSheet.forget,
+    run: dagSheet.run,
   },
   /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
      rides the same bag because the bag is simply what the legacy shell reaches
