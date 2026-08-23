@@ -27,15 +27,14 @@ interface Harness {
 }
 
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
-  let model = 'minimax-m3'
-  const h: Harness = { toasts: [], persisted: [], local: [], settings: 0, after: 0, model: () => model }
+  const h: Harness = { toasts: [], persisted: [], local: [], settings: 0, after: 0, model: store.current }
+  let last = store.current()
+  store.subscribe(() => {
+    const next = store.current()
+    if (next !== last) { h.local.push(next); last = next }
+  })
   const source: ModelSource = {
     providers: () => providers,
-    current: () => model,
-    setLocal: (m) => {
-      model = m
-      h.local.push(m)
-    },
     persist: async (m) => {
       h.persisted.push(m)
     },
@@ -77,7 +76,7 @@ const type = (text: string) =>
   })
 
 afterEach(() => {
-  act(() => store.close())
+  act(() => store._resetForTests())
   cleanup()
   delete window.RavenShell
   delete window.DS
@@ -107,7 +106,8 @@ describe('the model picker', () => {
   })
 
   it('opens on the provider holding the current model, and marks it', () => {
-    install({ current: () => 'claude-sonnet-5' })
+    store.setCurrent('claude-sonnet-5')
+    install()
     mount()
     openIt()
     expect(rows('provs')[1]!.getAttribute('aria-selected')).toBe('true')
@@ -117,7 +117,8 @@ describe('the model picker', () => {
   })
 
   it('shows a provider-qualified name without its vendor half', () => {
-    install({ current: () => 'vendor/claude-opus-5' })
+    store.setCurrent('vendor/claude-opus-5')
+    install()
     mount()
     openIt()
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual([
@@ -140,7 +141,7 @@ describe('the model picker', () => {
   })
 
   it('moves the selection off a provider a search emptied', () => {
-    install({ current: () => 'minimax-m3' })
+    install()
     mount()
     openIt()
     type('sonnet')
@@ -149,7 +150,7 @@ describe('the model picker', () => {
   })
 
   it('keeps the moved selection after the term is cleared', () => {
-    install({ current: () => 'minimax-m3' })
+    install()
     mount()
     openIt()
     type('sonnet')
@@ -170,7 +171,8 @@ describe('the model picker', () => {
        this case unfalsifiable: there is no column below it to be wrongly moved
        to, so a version that moved the selection anywhere it liked would land
        back on it and the assertion would hold either way. */
-    install({ current: () => 'claude-sonnet-5' })
+    store.setCurrent('claude-sonnet-5')
+    install()
     mount()
     openIt()
     type('nothing-like-this')
@@ -215,6 +217,7 @@ describe('the model picker, choosing', () => {
     })
     expect(pick()).toBeNull()
     expect(h.local).toEqual(['minimax-m2'])
+    expect(store.current()).toBe('minimax-m2')
     expect(h.persisted).toEqual(['minimax-m2'])
     expect(h.toasts).toEqual(['已切换到 minimax-m2'])
   })
@@ -226,8 +229,8 @@ describe('the model picker, choosing', () => {
     await act(async () => {
       rows('models')[1]!.click()
     })
-    /* Forward then back, both local: the chip must never be left claiming a
-       model the config did not take. */
+    /* Forward then back: the chip must never be left claiming a model the
+       config did not take. */
     expect(h.local).toEqual(['minimax-m2', 'minimax-m3'])
     expect(h.model()).toBe('minimax-m3')
     expect(h.toasts).toEqual(['切换失败：no such model'])

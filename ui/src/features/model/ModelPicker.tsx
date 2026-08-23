@@ -27,7 +27,7 @@ function Pick(): JSX.Element {
   const at = store.openAt()
   const host = at.host as HTMLElement
   const providers = store.authed()
-  const current = store.source().current()
+  const current = store.current()
   const box = useRef<HTMLDivElement>(null)
   const field = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')

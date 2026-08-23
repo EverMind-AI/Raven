@@ -95,7 +95,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
-const EXPECTED = 7
+const EXPECTED = 5
 const EXPECTED_HELD = 5
 const EXPECTED_VERBS = 57
 

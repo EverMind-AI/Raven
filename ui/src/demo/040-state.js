@@ -1,7 +1,7 @@
 /* ══ app state ════════════════════════════════════════════════════ */
 sessionSet('a');
 let timers = [], use = null;
-let rt = 'local', model = 'minimax-m3', undoBin = null;
+let rt = 'local', undoBin = null;
 const CFG = {
   /* Light until the reader says otherwise: a fresh install has no stored
      preference, and following the system would mean the desktop shell's
@@ -111,6 +111,7 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
   approveSheet, clarifySheet, drawQueue: queueDraw, queuePush, queueShift,
   queueClear, queueSnapshot, queueRestore, turn } = RavenIslands.composer;
+const { current: modelCurrent, setCurrent: modelSet } = RavenIslands.model;
 /* Bound at the shared top level because the live parts run in the IIFE nested
    below it. The writers themselves stay in the modern bundle. */
 const { failureBar, bootError, upShade } = RavenIslands.chrome;

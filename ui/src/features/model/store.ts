@@ -27,6 +27,7 @@ const CLOSED: OpenAt = { host: null, after: null, footer: false }
 
 let at: OpenAt = CLOSED
 let epoch = 0
+let selected = 'minimax-m3'
 const subs = new Set<() => void>()
 
 export const source = (): ModelSource => ds<ModelSource>('model')
@@ -49,6 +50,13 @@ const announce = (): void => {
 export const openAt = (): OpenAt => at
 export const version = (): number => epoch
 export const isOpen = (): boolean => !!at.host
+export const current = (): string => selected
+
+export function setCurrent(model: string): void {
+  if (selected === model) return
+  selected = model
+  announce()
+}
 
 /* Every open replaces the one before it rather than stacking: the chip and the
    settings button can both be reached while a picker is up. */
@@ -77,22 +85,21 @@ export function close(): void {
    list decides both columns and the initial selection. */
 export const authed = (): Provider[] => source().providers().filter((p) => p.on && p.models.length)
 
-/* Optimistic, and the rollback is the reason the source splits setLocal from
-   persist: the chip has to say the new model before the round trip, because the
-   next turn already uses it. A rejected write puts the old one back and says so,
-   rather than leaving the page claiming a model the config never took. */
+/* Optimistic: the chip has to say the new model before the round trip, because
+   the next turn already uses it. A rejected write puts the old one back and
+   says so rather than leaving the page claiming a model the config never took. */
 export async function choose(m: string): Promise<void> {
   const src = source()
-  const prev = src.current()
+  const prev = current()
   const after = at.after
   close()
-  src.setLocal(m)
+  setCurrent(m)
   after?.()
   try {
     await src.persist(m)
     shell().toast(`已切换到 ${short(m)}`)
   } catch (e) {
-    src.setLocal(prev)
+    setCurrent(prev)
     after?.()
     shell().toast(`切换失败：${detail(e)}`)
   }
@@ -105,4 +112,11 @@ export const short = (m: string): string => String(m || '').split('/').pop() as 
 const detail = (e: unknown): string => {
   const err = e as { data?: { detail?: string }; message?: string } | null
   return err?.data?.detail || err?.message || String(e)
+}
+
+export function _resetForTests(): void {
+  at = CLOSED
+  epoch = 0
+  selected = 'minimax-m3'
+  subs.clear()
 }

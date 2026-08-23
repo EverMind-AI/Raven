@@ -87,12 +87,9 @@ tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) se
    (ui/src/shell/foot.ts), which publishes drawFoot(); the door itself is
    here, because the dialog behind it is. */
 
-/* The one door to settings. live.js reassigns it to refresh the server's
-   config before drawing. Both go through the island's open(), which draws,
-   lifts the veil and reads the counters in that order; drawing and revealing
-   by hand here would skip the read, and the usage card would sit on "loading"
-   until the poll happened to tick. */
-let openSettings = async () => { await RavenIslands.settings.open(); };
+/* The one door to settings. The island's source owns the refresh that must
+   happen before drawing, so both modes use the same opener. */
+const openSettings = async () => { await RavenIslands.settings.open(); };
 
 $('#meBtn').onclick = () => openSettings();
 
@@ -100,9 +97,9 @@ $('#modelChip').onclick = () => {
   const r = $('#modelChip').getBoundingClientRect();
   const items = [];
   PROVIDERS.filter((p) => p.on).forEach((p) => p.models.forEach((m) => items.push({
-    label: m === model ? `${m} ✓` : m,
+    label: m === modelCurrent() ? `${m} ✓` : m,
     // No toast: the chip right there already shows the new model.
-    fn: () => { model = m; $('#modelName').textContent = m; }
+    fn: () => { modelSet(m); $('#modelName').textContent = m; }
   })));
   items.push('-', { label: T('gui.slash.manage_models'), fn: () => { sTab = 'model'; drawSettings(); openSet(); } });
   menuAt(r.left, r.bottom + 6, items);

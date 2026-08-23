@@ -153,14 +153,14 @@ function setRuntime() {
 DS.settings ??= {
   load: async () => ({
     raw: {}, configPath: '~/.raven/config.json', everos: null,
-    providers: PROVIDERS, curProvider: '', model,
+    providers: PROVIDERS, curProvider: '', model: modelCurrent(),
     toolGroups: TOOL_GROUPS, tools: TOOLS,
   }),
   set: async () => { throw { notLive: true }; },
   everosSet: async () => { throw { notLive: true }; },
   usage: async () => null,
   provider: async () => { throw { notLive: true }; },
-  model: () => model,
+  model: () => modelCurrent(),
   checkUpdate: () => notLive(),
   setLang: (v) => langPickDemo(v),
 };
