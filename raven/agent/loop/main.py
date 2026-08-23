@@ -1548,6 +1548,7 @@ class AgentLoop:
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        surface: str | None = None,
         selected_skills: list[Any] | None = None,
         model: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -1579,6 +1580,7 @@ class AgentLoop:
                 describe_tool=self._describe_tool_name(),
                 channel=channel,
                 chat_id=chat_id,
+                surface=surface,
                 selected_skills=selected_skills,
             ),
         )
@@ -3649,6 +3651,7 @@ class AgentLoop:
             media=media_paths if media_paths else None,
             channel=channel,
             chat_id=chat_id,
+            surface=req.source.surface,
             selected_skills=selected_skills or None,
             model=routed_model,
         )

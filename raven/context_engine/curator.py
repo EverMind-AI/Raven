@@ -39,6 +39,7 @@ class TurnContext:
     media: list[str] | None = None
     channel: str | None = None
     chat_id: str | None = None
+    surface: str | None = None
     selected_skills: list[Any] | None = None
     # Whether this turn's model can see a picture. Decided by the loop (it owns
     # the provider and the model id) and carried here because the message is
