@@ -267,6 +267,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             "diff",
             "turn_ended",
             "notice",
+            "origin",
             "reasoning_ms",
             "duration_ms",
         ):

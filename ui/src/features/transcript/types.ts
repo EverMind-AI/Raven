@@ -244,6 +244,7 @@ export interface HistoryMessage {
   duration_ms?: number
   diff?: string | string[]
   notice?: { kind?: string; detail?: string }
+  origin?: string
   turn_ended?: { status?: string; reason?: string }
 }
 

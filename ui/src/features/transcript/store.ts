@@ -991,6 +991,19 @@ export function history(lane: Lane, messages: HistoryMessage[]): void {
      products. */
   const closeProducts = (): void => { artifacts(lane, turnNo) }
   messages.forEach((m, i) => {
+    if (m.role === 'user' && m.origin) {
+      /* A turn the runtime opened, not a person typing. Its text is internal:
+         a sub-agent's announce carries an untrusted fence, the instance handle
+         and an instruction not to repeat either to the user; a cron reminder
+         carries how to word the reply. Drawn as the delivered row a live view
+         already shows for the same event, which also restores that row on a
+         reload -- it is pushed by `subagent.delivered` and so was absent from
+         every replayed transcript. */
+      sealTools()
+      foldClose(msOf(m.timestamp))
+      delivered(lane, { label: m.origin, isDag: false, err: false, open: () => {} })
+      return
+    }
     if (m.role === 'user' && m.text && m.text.trim()) {
       sealTools()
       closeTurn(msOf(m.timestamp))
