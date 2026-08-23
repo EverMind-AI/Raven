@@ -536,12 +536,13 @@ describe('a delegated result coming back', () => {
 })
 
 describe("the turn's delivered files and file changes", () => {
-  const manifest = (names: string[], missing = false): Record<string, unknown> => ({
+  const manifest = (names: string[], missing = false, description = ''): Record<string, unknown> => ({
     raven_delivery: {
       files: names.map((name) => ({
         path: `/w/${name}`, name, title: name, size: 12000,
         media_type: name.endsWith('.png') ? 'image/png' : 'text/markdown',
         download_path: `/files/download?token=${name}`,
+        description,
         missing,
       })),
       invalid: [],
@@ -586,6 +587,34 @@ describe("the turn's delivered files and file changes", () => {
     await act(async () => { await Promise.resolve() })
     act(() => { (($('.atile .hit')) as HTMLElement).click() })
     expect(opened).toEqual(['/w/final.pdf'])
+  })
+
+  it('uses a horizontal full-row card only for a single delivery', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'deliver it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['brief.md'], false, 'Ready to publish') },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($('.atiles')?.classList.contains('single')).toBe(true)
+    expect($('.atile .ds')?.textContent).toBe('Ready to publish')
+
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'deliver both', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: manifest(['brief.md', 'data.csv'], false, 'Ready to publish') },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    const grids = $$('.atiles')
+    const second = grids[grids.length - 1]
+    expect(second).toBeTruthy()
+    expect(second?.classList.contains('single')).toBe(false)
+    expect(second?.querySelector('.atile .ds')).toBeNull()
   })
 
   it('restores a delivery from stored tool metadata after a reload', () => {

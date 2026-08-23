@@ -1058,6 +1058,33 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-family: var(--mono); font-size: 10px; line-height: 1.4; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.atiles.single .atile {
+  grid-template-columns: clamp(104px, 18cqi, 132px) minmax(0, 1fr);
+  transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
+}
+.atiles.single .atile .pic {
+  width: 100%; height: auto; aspect-ratio: 1;
+  border-right: 1px solid var(--line-soft); border-bottom: 0;
+}
+.atiles.single .atile .cap {
+  align-content: center; gap: 5px; min-height: 0; padding: 14px 18px;
+}
+.atiles.single .atile .cap .nm {
+  display: -webkit-box; overflow: hidden; white-space: normal;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  font-size: 16px; line-height: 1.35;
+}
+.atiles.single .atile .cap .ds {
+  display: -webkit-box; overflow: hidden; color: var(--muted);
+  font-size: 13px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.atiles.single .atile .cap .mt { font-size: 10.5px; }
+@container artifacts (max-width: 430px) {
+  .atiles.single .atile .cap { gap: 3px; padding: 10px 12px; }
+  .atiles.single .atile .cap .nm { font-size: 14.5px; -webkit-line-clamp: 1; }
+  .atiles.single .atile .cap .ds { font-size: 12px; -webkit-line-clamp: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .atiles.single .atile { transition: none; } }
 /* Where it opens, said before the click rather than after it. */
 .atile .cap .away { font-family: var(--mono); font-size: 10px; color: var(--sky); }
 /* An image is the one tile that can be slow, so it gets the same shimmering

@@ -919,8 +919,8 @@ const DeliveryShot = memo(function DeliveryShot({ row, missing }: {
   )
 })
 
-const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
-  row: DeliveryRow; preview: ArtifactRow | null
+const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
+  row: DeliveryRow; preview: ArtifactRow | null; single: boolean
 }): ReactElement {
   const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
   const url = row.downloadPath
@@ -959,7 +959,11 @@ const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
   return (
     <div className={'atile' + (state === 'missing' ? ' missing' : '')} title={row.path}>
       {picture}
-      <span className="cap"><span className="nm">{row.title}</span><span className="mt">{meta}</span></span>
+      <span className="cap">
+        <span className="nm">{row.title}</span>
+        {single && row.description ? <span className="ds">{row.description}</span> : null}
+        <span className="mt">{meta}</span>
+      </span>
       <button className="hit" disabled={state !== 'ready'}
         aria-label={t('gui.arts.open', { f: row.name })}
         onClick={() => wsOpenDelivery(row.path, row.downloadPath)} />
@@ -1001,8 +1005,9 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
         <div className="ahd">
           <span className="ahm"><span className="lb">{t('gui.arts.delivered')}</span><span className="n">{deliveries.length}</span></span>
         </div>
-        <div ref={gridRef} className="atiles">
-          {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row} preview={previews.get(row.path) || null} />)}
+        <div ref={gridRef} className={'atiles' + (deliveries.length === 1 ? ' single' : '')}>
+          {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row}
+            preview={previews.get(row.path) || null} single={deliveries.length === 1} />)}
         </div>
         {deliveryRest > 0 || seg.deliveriesOpen ? <button className="amore"
           aria-expanded={seg.deliveriesOpen} onClick={() => store.toggleArts(lane, seg, 'deliveries')}>

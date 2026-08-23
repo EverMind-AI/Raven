@@ -196,6 +196,11 @@ const GTM_DELIVERY_FILES = [
   { path:'research/brief.docx', name:'brief.docx', title:'研究摘要', size:16820, media_type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
 ];
 
+const FIX_DELIVERY_FILES = [
+  { path:'internal/db/pool.go', name:'pool.go', title:'连接池修复',
+    description:'后台任务使用独立连接池，登录请求增加 2 秒超时。', size:3412, media_type:'text/x-go' },
+];
+
 const GTM_FILE_EVENTS = [
   { t:'t+', d:180, id:6, n:'write_file', a:{ path:'research/pricing.csv', content:'product,plan,price\nClay,Launch,167\n11x,Digital Worker,custom\nUnify,Growth,custom\n' } },
   { t:'t-', d:220, id:6, ok:true, r:'wrote research/pricing.csv (4 lines)', ms:220 },
@@ -383,6 +388,9 @@ const RUNS = {
       { t:'t-', d:400, id:9, ok:true, r:'', ms:400 },
       { t:'ep', d:320 },
       { t:'think', d:700, s:4, x:'测试通过。把根因、改动、验证写清楚，并给出后续建议。' },
+      { t:'t+', d:120, id:10, n:'deliver_files', a:{ files:[{ path:'internal/db/pool.go' }] } },
+      { t:'t-', d:120, id:10, ok:true, r:'Delivered 1 file: pool.go', ms:120,
+        meta:{ raven_delivery:{ files:FIX_DELIVERY_FILES } } },
       { t:'answer', d:500, x:`## 根因
 
 整点的批量同步任务和登录请求**共用同一个连接池**（\`max_open_conns=10\`）。任务一跑就占满连接，登录请求卡在获取连接处，一直等到网关 15s 超时。
