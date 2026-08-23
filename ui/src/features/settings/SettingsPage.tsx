@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { open as openUrl } from '../../shell/open-url'
 import { deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
@@ -622,10 +623,10 @@ function AboutPage(): JSX.Element {
           </div>
         </div>
         <div className="srow">
-          <button className="mini ghost" onClick={() => sh.openUrl?.('https://raven.evermind.ai')}>
+          <button className="mini ghost" onClick={() => openUrl('https://raven.evermind.ai')}>
             {t('gui.set.abt.docs')}
           </button>
-          <button className="mini ghost" onClick={() => sh.openUrl?.('https://github.com/EverMind-AI/Raven')}>
+          <button className="mini ghost" onClick={() => openUrl('https://github.com/EverMind-AI/Raven')}>
             {t('gui.set.abt.repo')}
           </button>
         </div>

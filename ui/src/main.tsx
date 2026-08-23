@@ -45,6 +45,7 @@ import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
 import * as menuWriter from './shell/menu'
 import * as navfly from './shell/navfly'
+import * as urlAction from './shell/open-url'
 import * as panes from './shell/panes'
 import * as perm from './shell/perm'
 import { md } from './shell/prose'
@@ -269,6 +270,7 @@ window.RavenIslands = {
     failureBar: failureWriter.show,
     bootError: failureWriter.bootError,
     upShade: upgradeWriter.open,
+    openUrl: urlAction.open,
   },
   plugins: {
     host: plugHost,

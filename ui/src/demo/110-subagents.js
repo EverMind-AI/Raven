@@ -12,11 +12,6 @@
    keeps the list fresh, the per-run record, and the painter that draws one. */
 DS.agents ??= { list: async () => [] };
 
-/* Opening a url for real needs the host: overridden in live.js, and honest
-   about being a demo here rather than pretending. Opening a path is no longer
-   here at all -- that one is DS.workspace.openPath, which the island asks. */
-function wsOpenUrl(u) { toast(`demo：正式版会用系统浏览器打开 ${u}`); }
-
 /* ── tool-event hooks ──────────────────────────────────────────────────
    Fed the FULL argument object, because that is where the diff lives. */
 function wsOnTool(name, args, silent) {
