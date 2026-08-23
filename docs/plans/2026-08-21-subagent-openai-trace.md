@@ -58,7 +58,7 @@ sites, so the wire is byte-identical to today and no front end changes.
 | --- | --- |
 | Create `raven/agent/subagent/backends/turn_rows.py` | The row shape, and the event constructors that feed it. Knows no transport. |
 | Create `raven/agent/subagent/openai_steps.py` | `reasoning_steps` -> turn events, with the thinking accumulator. |
-| Modify `raven/agent/subagent/backends/acp_agent.py` | `AcpCollector.messages()` becomes an adapter onto `turn_rows.rows()`. |
+| Modify `raven/agent/subagent/backends/acp_agent.py` | `_TurnCollector.messages()` becomes an adapter onto `turn_rows.rows()`. |
 | Modify `raven/agent/subagent/backends/openai_api.py` | Feed the reader on both response paths; publish transcript and usage. |
 | Create `tests/fixtures/mirothinker/` | The captured payloads the reader tests run on. |
 | Modify `CONTEXT.md` | Add **Turn Rows** and **Step Dialect**. |
@@ -872,7 +872,7 @@ git commit -m "feat(subagent): give a delegated turn's rows one builder"
 ### Task 6: The ACP collector builds its rows through it
 
 **Files:**
-- Modify: `raven/agent/subagent/backends/acp_agent.py:291-355` (`AcpCollector.messages`)
+- Modify: `raven/agent/subagent/backends/acp_agent.py:291-355` (`_TurnCollector.messages`)
 - Test: `tests/test_subagent_acp.py:432-454`
 
 **Interfaces:**

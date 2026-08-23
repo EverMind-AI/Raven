@@ -872,6 +872,30 @@ carry no record the journal did not (47 against 47, for 78x the transcript's byt
 call's record still names the journal and the byte range it occupied.
 _Avoid_: reading it as the wire log - that is the Frame Journal.
 
+**Turn Rows** (`raven/agent/subagent/backends/turn_rows.py`):
+The provider-shaped message rows one delegated turn contributes to the Instance Log, built
+from a transport-neutral event list (`say` / `thought` / `call` / `result`). Both the ACP
+collector and the OpenAI Step Dialect produce that list, which is what makes an `openai`
+instance's conversation read identically to an `acp` one - two implementations of one shape
+would diverge at the first fix applied to only one. A call row wears whatever thought preceded
+it and opens with that thought's clock, so a renderer can fold a finished stretch with a real
+duration. The final answer is not among them: the record keeps it and the reader appends it as
+the Closing Message.
+_Avoid_: confusing them with **Live rows** - the same shape from a different source, and only
+the latter is a snapshot.
+
+**Step Dialect** (`raven/agent/subagent/openai_steps.py`):
+How one OpenAI-compatible endpoint's `reasoning_steps` extension is read into Turn Rows events
+- the step's own tool name, its own argument keys, and its result with the transport's wrapping
+removed (`fetch_url_content` nests its result as a JSON string, and a decoded failure there is
+what makes the row not-ok). Sibling to **ACP Dialect**, for a transport that reports its steps
+in a response field instead of a notification. Buffered and streamed responses differ in shape
+- a streamed `thinking` step arrives as token fragments, measured at 106 frames for 4 thoughts
+- and one accumulator serves both, which is what keeps a live view and a settled record in
+agreement.
+_Avoid_: reading a step type as a raven tool name - it is the endpoint's, and **Tool
+Vocabulary** maps it.
+
 **ACP Dialect** (`raven/agent/subagent/acp_dialects/`):
 How one ACP adapter's tool-call frames are read into a record: the adapter's own name for the
 tool at the finest grain the transport gives - `_meta.claudeCode.toolName` where the adapter

@@ -435,7 +435,12 @@ async def test_the_collector_serves_a_timestamped_partial_while_in_flight() -> N
     """A watching panel reads the run as it happens: every rendered message
     carries the wall clock of the event that opened it, and the in-flight shape
     appends whatever answer text has streamed so far -- which the settled shape
-    must NOT carry, because the record keeps the answer in out.md."""
+    must NOT carry, because the record keeps the answer in out.md.
+
+    The shape itself is pinned in ``tests/test_subagent_turn_rows.py`` now that
+    both transports build it through one module. This case stays end to end on
+    purpose: an adapter that mapped the wrong event field would satisfy every
+    unit test over there and still produce the wrong rows here."""
     from raven.agent.subagent.backends.acp_agent import _TurnCollector
 
     col = _TurnCollector()
