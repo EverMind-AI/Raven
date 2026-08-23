@@ -592,7 +592,11 @@ export type GatewayEvent =
     }
   | { payload: { request_id: string }; session_id?: string; type: 'sudo.request' }
   | { payload: { env_var: string; prompt: string; request_id: string }; session_id?: string; type: 'secret.request' }
-  | { payload: { default: boolean; prompt: string; request_id: string }; session_id?: string; type: 'confirm.request' }
+  | {
+      payload: { conversation_id?: string; default: boolean; prompt: string; request_id: string }
+      session_id?: string
+      type: 'confirm.request'
+    }
   | { payload: { task_id: string; text: string }; session_id?: string; type: 'background.complete' }
   | {
       payload: { fired_at: string; job_id: string; name: string; text: string }

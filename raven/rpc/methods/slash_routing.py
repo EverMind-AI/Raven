@@ -101,8 +101,15 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
 
     Never raises -32xxx. Hermes's ``createSlashHandler.ts:83-92`` consumes the
     response via ``r?.output`` / ``r?.warning``.
+
+    The caller's ``session_id`` is the conversation the slash was typed in, and
+    it is what a destructive command's ``confirm.request`` is filed under -- a
+    prompt has to be answerable where it was raised, not wherever the reader has
+    since navigated. Absent (an older client) it stays ``None`` and the frame
+    names no conversation, exactly as before.
     """
     raw_command = str(params.get("command", "")).strip()
+    conversation_id = str(params.get("session_id") or "").strip() or None
     if not raw_command:
         # Empty / whitespace slash → friendly hint in output (no warning field
         # to avoid the createSlashHandler.ts:88 "/: no output" tail).
@@ -116,6 +123,18 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
     if not argv:
         return {"output": "(empty slash command — type /help for a list)"}
 
+    # A slash's confirm must reach the connection that asked for it, but the
+    # persistent per-conversation owner is NOT the way to say so: that owner
+    # routes the engine's in-flight questions (clarify.request /
+    # approval.request), and claiming it here would hand a later question from
+    # the browser's running turn to the terminal. So the confirm travels on
+    # THIS connection's own sink -- request-local, no claim, nothing mutated.
+    # The confirm travels on the CALLING connection's own sink -- decided
+    # inside cli_dispatch, per request, without touching the persistent
+    # per-conversation owner -- while the pending stays in the SHARED broker's
+    # registry, which is the one confirm.respond is registered against. A new
+    # broker here would never be resolved.
+    scoped = confirm_broker
     try:
         result = await cli_dispatch(
             {
@@ -123,7 +142,8 @@ async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker |
                 "width": _DEFAULT_WIDTH,
                 "timeout_s": _SLASH_TIMEOUT_S,
             },
-            confirm_broker=confirm_broker,
+            confirm_broker=scoped,
+            conversation_id=conversation_id,
         )
     except NotDispatchCompatibleError:
         # Either P3 blacklist (provider login / gateway / sandbox shell /

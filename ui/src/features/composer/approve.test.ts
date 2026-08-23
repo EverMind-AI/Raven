@@ -50,6 +50,75 @@ describe('the approval sheet', () => {
     expect(sheets()[0]!.dataset.sess).toBe(session())
   })
 
+  /* Which conversation asked is the caller's to say, because it is not always
+     the one on screen: a turn the reader stepped away from can block on an
+     approval at any moment. Filed under the open conversation instead, the
+     question docks over a conversation it has nothing to do with -- and the one
+     that asked shows nothing pending while its turn stays paused on the server
+     waiting for the answer. */
+  it('files the request under the conversation named by the caller', () => {
+    openSession = 'b'
+    open('rm -rf build/', () => {}, () => {}, 'a')
+
+    /* Nothing over the composer the reader is actually looking at. */
+    expect(sheets().length).toBe(0)
+
+    openSession = 'a'
+    sync()
+    expect(sheets().length).toBe(1)
+    expect(sheets()[0]!.dataset.sess).toBe('a')
+    expect(rack().querySelector('.what')!.textContent).toBe('rm -rf build/')
+  })
+
+  it('docks where the reader is when the caller names no conversation', () => {
+    openSession = 'b'
+    open('rm -rf build/')
+    expect(sheets()[0]!.dataset.sess).toBe('b')
+  })
+
+  /* The named conversation has to reach every scoped call, not just the filing:
+     a request for A while B is on screen must not withdraw B's pending question,
+     and must not be answerable off the keyboard of the reader looking at B. */
+  it('scopes replacement and the keyboard to the conversation that asked', () => {
+    const said: string[] = []
+    openSession = 'b'
+    open('B asks', () => said.push('B-allow'), () => said.push('B-deny'))
+    open('A asks', () => said.push('A-allow'), () => said.push('A-deny'), 'a')
+
+    /* B's question is untouched, and it is still B's that answers here. */
+    expect(sheets().length).toBe(1)
+    expect(rack().querySelector('.what')!.textContent).toBe('B asks')
+    key('1')
+    expect(said).toEqual(['B-allow'])
+
+    openSession = 'a'
+    sync()
+    expect(rack().querySelector('.what')!.textContent).toBe('A asks')
+    key('1')
+    expect(said).toEqual(['B-allow', 'A-allow'])
+  })
+
+  /* The same scoping, in the order that catches the withdrawal handle rather
+     than the filing: the away request is registered FIRST, so a subsequent
+     request in the open conversation is what would reach for it. Registered
+     under the open conversation instead, this is a silent withdrawal -- no
+     callback runs, the sheet is gone, and A's turn waits on the server for an
+     answer no UI can give any more. */
+  it('registers the withdrawal handle under the conversation that asked', () => {
+    const said: string[] = []
+    openSession = 'b'
+    open('A asks', () => said.push('A-allow'), () => said.push('A-deny'), 'a')
+    open('B asks', () => said.push('B-allow'), () => said.push('B-deny'))
+
+    openSession = 'a'
+    sync()
+    expect(sheets().length).toBe(1)
+    expect(rack().querySelector('.what')!.textContent).toBe('A asks')
+    expect(said).toEqual([])
+    key('1')
+    expect(said).toEqual(['A-allow'])
+  })
+
   it('offers allow first, numbered, and marks it as the default', () => {
     open('do it')
     expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.allow', '2gui.confirm.deny'])

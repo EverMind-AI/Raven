@@ -86,6 +86,23 @@ def set_frame_sink(sink: SendFrame) -> bool:
     return True
 
 
+def current_frame_sink() -> SendFrame | None:
+    """The sink of the connection this code is running on, or None.
+
+    Unlike :func:`frame_sink_for` (which resolves through the persistent
+    per-conversation owner), this is the connection's OWN sink -- the caller
+    on the other end of the socket, whoever owns the conversation. A
+    request-local action (a slash's confirm, for example) wants THIS one: it
+    must reach the surface that asked, without claiming or disturbing the
+    conversation's owner, which still routes the engine's in-flight questions.
+    """
+    state = _state.get()
+    if state is None:
+        return None
+    sink = state.get("send_frame")
+    return sink if callable(sink) else None
+
+
 def claim_conversation(conversation_id: str) -> bool:
     """Record this connection as the surface a conversation speaks through.
 

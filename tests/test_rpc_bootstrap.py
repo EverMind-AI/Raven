@@ -189,3 +189,16 @@ def test_the_approval_broker_is_conversation_scoped() -> None:
 
     src = inspect.getsource(bootstrap.build_rpc_stack)
     assert "ApprovalBroker(send_frame=conversation_scoped(send_frame))" in src
+
+
+def test_the_confirm_broker_is_conversation_scoped() -> None:
+    """Same reason, and it is the field that made it possible: a destructive
+    command's yes/no now names the conversation it was raised in, so it can reach
+    that surface instead of every terminal attached to the gateway. Pinned at the
+    assembly for the same reason as the approval broker above; the routing and
+    the no-conversation fallback are covered in tests/test_rpc_confirm.py.
+    """
+    import inspect
+
+    src = inspect.getsource(bootstrap.build_rpc_stack)
+    assert "ConfirmBroker(send_frame=conversation_scoped(send_frame))" in src

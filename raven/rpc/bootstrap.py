@@ -81,15 +81,13 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
 
     dispatcher = Dispatcher()
     emitter = SubscriptionEmitter(send_frame=send_frame)
-    # Left on the broadcast because there is nothing to scope it by: a
-    # ``confirm.request`` frame carries only request_id / prompt / default, and
-    # ``confirm.respond`` resolves by request_id alone, so a destructive
-    # terminal confirm opens the yes/no sheet on every surface attached here and
-    # either one can answer it. conversation_scoped cannot close that -- the
-    # conversation has to be threaded into ConfirmBroker (cli.dispatch knows it)
-    # or the owning sink captured when the dispatch starts. Deferred; see the
-    # scoped-out note on the gateway-hosts-the-page change.
-    confirm_broker = ConfirmBroker(send_frame=send_frame)
+    # ``confirm.request`` now names the conversation the dispatch was asked for
+    # (slash.exec threads its session_id down; see cli_dispatch), so the same
+    # scoping as the question broker applies: a destructive command's yes/no
+    # sheet reaches the surface that conversation speaks through instead of every
+    # terminal attached here. A dispatch that names no conversation -- a bare
+    # cli.dispatch -- still broadcasts, which is what it did before.
+    confirm_broker = ConfirmBroker(send_frame=conversation_scoped(send_frame))
     # approval.request / approval.closed both carry conversation_id, so the same
     # scoping as the question broker below keeps a protected-command overlay on
     # the surface that sent the turn instead of every attached terminal.

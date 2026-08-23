@@ -313,26 +313,342 @@ async def test_non_tui_confirm_unchanged(fake_confirm_app) -> None:
     assert result["exit_code"] != 0  # native confirm failed; no phantom success
 
 
-async def test_a_confirm_frame_names_no_conversation_so_it_cannot_be_scoped() -> None:
-    """Why ``bootstrap`` leaves this broker on the raw broadcast while the
-    approval and question brokers are ``conversation_scoped``: there is no field
-    to scope by. ``conversation_scoped`` reads ``params.conversation_id``, finds
-    nothing here, and falls straight through to broadcast -- so on a gateway
-    hosting the page a destructive terminal confirm still opens the sheet on
-    every attached surface. Closing it means threading the conversation into
-    ConfirmBroker (``cli.dispatch`` knows it) or capturing the owning sink when
-    the dispatch starts; deferred, and this test is the marker.
+# ---------------------------------------------------------------------------
+# Per-conversation scoping of the notification itself
+# (connection.conversation_scoped, what the gateway's confirm broker is built on)
+# ---------------------------------------------------------------------------
+
+
+async def _hold_connection(sink, conversation_id: str, ready: asyncio.Event, release: asyncio.Event) -> None:
+    """Stand in for one live socket: its own connection scope, held open in its
+    own task, exactly as a transport holds one while it dispatches frames."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    connection.set_frame_sink(sink)
+    connection.claim_conversation(conversation_id)
+    ready.set()
+    try:
+        await release.wait()
+    finally:
+        connection.unbind_connection(token)
+
+
+async def test_a_confirm_names_the_conversation_it_was_raised_in() -> None:
+    """The field a frontend files the sheet under. Without it the yes/no docks
+    over whichever conversation the reader happens to have open, which is not
+    the one whose command is paused waiting for the answer.
     """
-    from raven.rpc.connection import conversation_scoped
+    frames, send_frame = _frame_collector()
+    broker = ConfirmBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_confirm("Delete everything?", default=False, conversation_id="tui:a"))
+    frame = await _wait_for_frame(frames)
+
+    assert frame["params"]["conversation_id"] == "tui:a"
+    broker.resolve(frame["params"]["request_id"], False)
+    await task
+
+
+async def _hold_terminal_connection(sink, ready: asyncio.Event, release: asyncio.Event) -> None:
+    """A live socket that has NOT sent a turn: it binds a connection scope (so
+    slash_exec can route its confirms to it) but claims NO conversation -- the
+    persistent owner belongs to whoever actually sent the last turn."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    connection.set_frame_sink(sink)
+    ready.set()
+    try:
+        await release.wait()
+    finally:
+        connection.unbind_connection(token)
+
+
+async def _terminal_dispatch(dispatcher, sink, session_id: str, command: str, broker, task_out: dict) -> None:
+    """Invoke slash.exec AS the terminal through the REGISTERED dispatcher,
+    with the terminal's own connection scope current (so cli_dispatch's
+    per-request sink is the terminal's)."""
+    from raven.rpc import connection
+
+    token = connection.bind_connection()
+    connection.set_frame_sink(sink)
+    try:
+        frame = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "slash.exec",
+            "params": {"command": command, "session_id": session_id},
+        }
+        resp = await dispatcher.dispatch(frame)
+        task_out["result"] = resp.get("result", {})
+    finally:
+        connection.unbind_connection(token)
+
+
+async def _terminal_invoke(send_frame, session_id: str, command: str, broker, task_out: dict) -> None:
+    """Run slash.exec AS the terminal: its own connection scope is current, so
+    the claim inside slash_exec lands on THIS connection -- exactly what a real
+    terminal RPC call does. The browser holds a stale claim on the same
+    session and must not receive the frame."""
+    from raven.rpc import connection
+    from raven.rpc.methods.slash_routing import slash_exec
+
+    token = connection.bind_connection()
+    connection.set_frame_sink(send_frame)
+    # No claim here: the terminal has NOT sent a turn; the session's owner is
+    # whoever claimed it last -- which the test arranges to be the browser.
+    try:
+        task_out["result"] = await slash_exec({"command": command, "session_id": session_id}, confirm_broker=broker)
+    finally:
+        connection.unbind_connection(token)
+
+
+async def test_slash_exec_confirm_reaches_the_caller_and_only_the_caller(fake_confirm_app) -> None:
+    """The reviewer's first shape: a browser already OWNS the shared session (it
+    sent the last turn), and the terminal now runs a destructive slash on the
+    same session. The confirm must reach the TERMINAL -- the surface that asked
+    -- not the owner, and not broadcast.
+
+    slash_exec routes the confirm on the CALLING connection's own sink, so the
+    owner registry is neither consulted nor mutated."""
+
+    broadcast_frames, broadcast = _frame_collector()
+    tab_frames, tab_send = _frame_collector()
+    terminal_frames: list[dict] = []
+
+    release = asyncio.Event()
+    tab_ready = asyncio.Event()
+    tab = asyncio.create_task(_hold_connection(tab_send, "tui:shared", tab_ready, release))
+    await asyncio.wait_for(tab_ready.wait(), 1)
+
+    try:
+        # The terminal runs the slash with a broker handed in explicitly (the
+        # caller's own sink is what production wires, and the test's
+        # auto-answering sink stands in for the frontend answering it). The
+        # frame must reach THIS sink -- the caller -- not the stale owner.
+        holder: dict = {}
+
+        async def answering_terminal_send(frame: dict) -> None:
+            terminal_frames.append(frame)
+            holder["broker"].resolve(frame["params"]["request_id"], True)
+
+        broker = ConfirmBroker(answering_terminal_send)
+        holder["broker"] = broker
+        task_out: dict = {}
+        invoke = asyncio.create_task(
+            _terminal_invoke(answering_terminal_send, "tui:shared", "needs-confirm", broker, task_out)
+        )
+        frame = await _wait_for_frame(terminal_frames)
+        assert frame["params"]["conversation_id"] == "tui:shared"
+        assert tab_frames == []
+        assert broadcast_frames == []
+        await asyncio.wait_for(invoke, 2)
+        assert "DID-IT" in task_out["result"]["output"]
+    finally:
+        release.set()
+        await asyncio.gather(tab)
+
+
+async def test_slash_exec_with_no_prior_owner_still_reaches_only_the_caller(fake_confirm_app) -> None:
+    """The reviewer's second shape: a freshly created or resumed session with
+    no earlier turn means _owners has nobody for it. The caller's own sink is
+    still the destination, so the frame never broadcasts."""
+
+    broadcast_frames, broadcast = _frame_collector()
+    terminal_frames: list[dict] = []
+
+    holder: dict = {}
+
+    async def answering_terminal_send(frame: dict) -> None:
+        terminal_frames.append(frame)
+        holder["broker"].resolve(frame["params"]["request_id"], False)
+
+    broker = ConfirmBroker(answering_terminal_send)
+    holder["broker"] = broker
+    task_out: dict = {}
+    invoke = asyncio.create_task(
+        _terminal_invoke(answering_terminal_send, "tui:new", "needs-confirm", broker, task_out)
+    )
+    frame = await _wait_for_frame(terminal_frames)
+    assert frame["params"]["conversation_id"] == "tui:new"
+    assert broadcast_frames == []
+    await asyncio.wait_for(invoke, 2)
+    assert "ABORTED" in task_out["result"]["output"]
+
+
+async def test_a_confirm_reaches_only_the_surface_that_owns_the_conversation() -> None:
+    """One gateway, two live surfaces. A destructive command run in the
+    terminal's session used to open the sheet in the browser tab as well, and
+    either one could answer it; naming the conversation is what lets
+    ``conversation_scoped`` narrow the frame to the surface that raised it.
+    """
+    from raven.rpc import connection
+
+    broadcast_frames, broadcast = _frame_collector()
+    terminal_frames, terminal_send = _frame_collector()
+    tab_frames, tab_send = _frame_collector()
+
+    release = asyncio.Event()
+    tab_ready, term_ready = asyncio.Event(), asyncio.Event()
+    tab = asyncio.create_task(_hold_connection(tab_send, "tui:tab", tab_ready, release))
+    term = asyncio.create_task(_hold_connection(terminal_send, "tui:term", term_ready, release))
+    await asyncio.wait_for(tab_ready.wait(), 1)
+    await asyncio.wait_for(term_ready.wait(), 1)
+
+    try:
+        broker = ConfirmBroker(connection.conversation_scoped(broadcast))
+        task = asyncio.create_task(
+            broker.await_confirm("Delete everything?", default=False, conversation_id="tui:term")
+        )
+        frame = await _wait_for_frame(terminal_frames)
+        assert frame["params"]["conversation_id"] == "tui:term"
+        assert tab_frames == []
+        assert broadcast_frames == []
+        broker.resolve(frame["params"]["request_id"], True)
+        assert await task is True
+    finally:
+        release.set()
+        await asyncio.gather(tab, term)
+
+
+async def test_a_confirm_with_no_conversation_still_broadcasts() -> None:
+    """A bare ``cli.dispatch`` names no conversation, so the frame carries no
+    field to scope by and every attached surface sees it -- what the confirm
+    round-trip did before it could name one. The key is absent rather than null:
+    the frame claims nothing it cannot back up.
+    """
+    from raven.rpc import connection
 
     frames, send_frame = _frame_collector()
-    broker = ConfirmBroker(conversation_scoped(send_frame))
+    broker = ConfirmBroker(connection.conversation_scoped(send_frame))
 
     task = asyncio.create_task(broker.await_confirm("Delete everything?", default=False))
     frame = await _wait_for_frame(frames)
 
     assert set(frame["params"]) == {"request_id", "prompt", "default"}
-    assert "conversation_id" not in frame["params"]
-
     broker.resolve(frame["params"]["request_id"], False)
+    await task
+
+
+async def test_a_terminal_slash_does_not_hijack_the_browsers_turn_questions(fake_confirm_app) -> None:
+    """The reviewer's regression: the browser OWNS the session and its turn is
+    running; the terminal runs a slash that NEVER confirms (a noop). The old
+    claim made that slash steal the owner, so a question the browser's turn
+    later emitted -- a clarify/approval resolving through the persistent owner
+    -- went to the terminal. It must still reach the BROWSER."""
+    from raven.rpc import connection
+
+    terminal_frames, terminal_send = _frame_collector()
+    tab_frames, tab_send = _frame_collector()
+
+    release = asyncio.Event()
+    tab_ready, term_ready = asyncio.Event(), asyncio.Event()
+    # The BROWSER owns the session (it sent the last turn). The terminal is a
+    # live socket that has NOT sent a turn: it must not claim the conversation.
+    tab = asyncio.create_task(_hold_connection(tab_send, "tui:shared", tab_ready, release))
+    term = asyncio.create_task(_hold_terminal_connection(terminal_send, term_ready, release))
+    await asyncio.wait_for(tab_ready.wait(), 1)
+    await asyncio.wait_for(term_ready.wait(), 1)
+
+    try:
+        # The terminal runs a slash that needs no confirmation. It must not
+        # change who owns the conversation.
+        task_out: dict = {}
+        invoke = asyncio.create_task(_terminal_invoke(terminal_send, "tui:shared", "noop", None, task_out))
+        await asyncio.wait_for(invoke, 2)
+
+        # The browser's running turn emits a question through the engine's own
+        # task: no connection is bound, so it goes through conversation_scoped,
+        # which resolves the PERSISTENT owner -- still the browser.
+        engine_frames, engine_send = _frame_collector()
+        broker = ConfirmBroker(connection.conversation_scoped(engine_send))
+        task = asyncio.create_task(broker.await_confirm("Question?", default=False, conversation_id="tui:shared"))
+        frame = await _wait_for_frame(tab_frames)
+        assert frame["params"]["conversation_id"] == "tui:shared"
+        assert terminal_frames == []
+        broker.resolve(frame["params"]["request_id"], True)
+        await task
+    finally:
+        release.set()
+        await asyncio.gather(tab, term)
+
+
+async def test_the_registered_slash_path_routes_the_confirm_to_the_caller(fake_confirm_app) -> None:
+    """The reviewer's exact wiring: the production gateway registers
+    slash.exec with the SHARED broker (build_rpc_stack -> register_aligned_
+    methods_except_system -> register_slash_routing_methods), and the browser
+    owns the session. A terminal slash's confirm must reach the terminal -- on
+    the caller's own sink -- while the pending stays in the shared broker, so
+    confirm.respond (registered against that same broker) can resolve it."""
+    from raven.rpc import connection
+    from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.slash_routing import register_slash_routing_methods
+
+    tab_frames, tab_send = _frame_collector()
+    terminal_frames: list[dict] = []
+    broadcast_frames, broadcast = _frame_collector()
+
+    async def terminal_sink(frame: dict) -> None:
+        terminal_frames.append(frame)
+
+    shared = ConfirmBroker(connection.conversation_scoped(broadcast))
+    dispatcher = Dispatcher()
+    register_slash_routing_methods(dispatcher, confirm_broker=shared)
+
+    release = asyncio.Event()
+    tab_ready, term_ready = asyncio.Event(), asyncio.Event()
+    tab = asyncio.create_task(_hold_connection(tab_send, "tui:shared", tab_ready, release))
+    term = asyncio.create_task(_hold_terminal_connection(terminal_sink, term_ready, release))
+    await asyncio.wait_for(tab_ready.wait(), 1)
+    await asyncio.wait_for(term_ready.wait(), 1)
+
+    try:
+        # The terminal invokes slash.exec THROUGH the registered dispatcher.
+        invoke = asyncio.create_task(
+            _terminal_dispatch(dispatcher, terminal_sink, "tui:shared", "needs-confirm", shared, {})
+        )
+        frame = await _wait_for_frame(terminal_frames)
+        assert frame["params"]["conversation_id"] == "tui:shared"
+        assert tab_frames == []
+        # The pending is in the SHARED broker, so confirm.respond resolves it.
+        assert shared.resolve(frame["params"]["request_id"], True) is True
+        await asyncio.wait_for(invoke, 2)
+    finally:
+        release.set()
+        await asyncio.gather(tab, term)
+
+
+async def test_slash_exec_files_the_confirm_under_the_session_it_was_typed_in(fake_confirm_app) -> None:
+    """End to end over the seam that actually knows the conversation: the
+    ``session_id`` the client sends with ``slash.exec`` is what comes back out on
+    the ``confirm.request`` frame.
+    """
+    from raven.rpc.methods.slash_routing import slash_exec
+
+    frames, send_frame = _frame_collector()
+    broker = ConfirmBroker(send_frame)
+
+    task = asyncio.create_task(slash_exec({"command": "needs-confirm", "session_id": "tui:a"}, confirm_broker=broker))
+    frame = await _wait_for_frame(frames)
+
+    assert frame["params"]["conversation_id"] == "tui:a"
+    broker.resolve(frame["params"]["request_id"], True)
+    assert "DID-IT" in (await task)["output"]
+
+
+async def test_slash_exec_without_a_session_names_no_conversation(fake_confirm_app) -> None:
+    """An older client sends no ``session_id``; the frame then names nothing
+    rather than inventing a conversation for the sheet to dock in."""
+    from raven.rpc.methods.slash_routing import slash_exec
+
+    frames, send_frame = _frame_collector()
+    broker = ConfirmBroker(send_frame)
+
+    task = asyncio.create_task(slash_exec({"command": "needs-confirm"}, confirm_broker=broker))
+    frame = await _wait_for_frame(frames)
+
+    assert "conversation_id" not in frame["params"]
+    broker.resolve(frame["params"]["request_id"], True)
     await task
