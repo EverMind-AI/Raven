@@ -193,6 +193,7 @@ window.RavenIslands = {
     rows: subagentsStore.rows,
     openRow: subagentsStore.openRow,
     openDagNode: subagentsStore.openDagNode,
+    directEvent: subagentsStore.directEvent,
     sel: subagentsStore.sel,
   },
   rail: {

@@ -245,6 +245,40 @@ async def test_run_dag_writes_node_status_transitions_to_registry(
     assert final_status == {"a": "completed", "b": "completed"}
 
 
+async def test_run_dag_records_the_node_an_instance_handle_belongs_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A node on a handle owns two rows, and nothing in either says so: the
+    handle carries no mark of its node, and ``mint_handle`` promises that nothing
+    keys on the slug it derives. Written here, at the one point that holds both
+    halves, so a reader can report the node once instead of twice."""
+    reg = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", reg)
+
+    spec = parse_dag_spec(
+        {
+            "nodes": [
+                {"id": "shape", "subagent": "x", "prompt_template": "hello", "instance": "shape-726da8"},
+                {"id": "bare", "subagent": "x", "prompt_template": "hi"},
+            ]
+        }
+    )
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": _FakeExec()}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        session_key="web:sess1",
+        run_id="r1",
+    )
+
+    rows = {r["handle"]: r for r in reg.list_instances("web:sess1")}
+    assert (rows["shape-726da8"]["runId"], rows["shape-726da8"]["nodeId"]) == ("r1", "shape")
+    # A node that names no instance runs on no handle, so it has only its own row.
+    assert set(rows) == {"r1/shape", "r1/bare", "shape-726da8"}
+
+
 async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path: Path) -> None:
     # a and b are both independent (root) nodes so they run concurrently in the
     # same round; c depends on b, so cascade-skip is also covered. b blocks

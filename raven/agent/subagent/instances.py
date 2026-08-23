@@ -59,6 +59,18 @@ def default_registry_path() -> Path:
     return get_config_path().parent / _FILENAME
 
 
+def _dag_origin(existing: dict[str, Any]) -> dict[str, Any]:
+    """The DAG node this handle belongs to, carried forward across a rewrite.
+
+    Every writer below rebuilds its record wholesale, so a status write or a
+    re-``commit`` would drop the link ``link_dag_node`` stamped -- and the link
+    is the only thing that can pair a minted handle back to its node:
+    ``mint_handle`` says outright that nothing keys on the slug it derives.
+    """
+    origin = {k: existing[k] for k in ("runId", "nodeId") if existing.get(k)}
+    return origin
+
+
 class InstanceRegistry:
     """Handle-to-session-id store backed by one JSON file."""
 
@@ -114,14 +126,16 @@ class InstanceRegistry:
             records = self._load()
             key = (session_key, agent, handle)
             now = int(time.time() * 1000)
+            existing = records.get(key) or {}
             records[key] = {
                 "kind": kind,
                 "sessionKey": session_key,
                 "agent": agent,
                 "handle": handle,
                 "agentId": agent_id,
-                "createdAtMs": (records.get(key) or {}).get("createdAtMs", now),
+                "createdAtMs": existing.get("createdAtMs", now),
                 "updatedAtMs": now,
+                **_dag_origin(existing),
             }
             try:
                 self._flush()
@@ -160,6 +174,7 @@ class InstanceRegistry:
                 "agentId": agent_id or existing.get("agentId"),
                 "createdAtMs": existing.get("createdAtMs", now),
                 "updatedAtMs": now,
+                **_dag_origin(existing),
             }
             try:
                 self._flush()
@@ -198,6 +213,52 @@ class InstanceRegistry:
             except OSError as e:  # noqa: BLE001 - persistence is best-effort
                 logger.warning(
                     "subagent instance registry write failed (dag node state live in-process, "
+                    "will not survive restart): {}",
+                    e,
+                )
+
+    async def link_dag_node(self, session_key: str, agent: str, handle: str, run_id: str, node_id: str) -> None:
+        """Mark the instance a DAG node is running on as belonging to that node.
+
+        A node's own status lives on its ``dag-node`` row, keyed by
+        ``<run_id>/<node_id>``; when its sub-agent is stateful the node *also*
+        runs on an ordinary handle, which the backend commits under separately.
+        Nothing in either row says they are the same piece of work, and the
+        handle cannot supply it -- ``mint_handle`` derives a readable slug from
+        the node id but promises nothing keys on it. So the pairing is recorded
+        here, by the one caller that holds both halves.
+
+        Written before the node dispatches, so the row exists even if the node
+        never reaches ``commit``: an instance that failed on its first turn is
+        still the node's, and a reader that saw only the ``dag-node`` row would
+        report the graph twice.
+        """
+        async with self._lock:
+            records = self._load()
+            key = (session_key, agent, handle)
+            now = int(time.time() * 1000)
+            existing = records.get(key) or {}
+            if existing.get("runId") == run_id and existing.get("nodeId") == node_id:
+                return
+            records[key] = {
+                # `kind` is carried, never stamped: this may run before the
+                # backend has committed its binding, and typing the row here
+                # would make `lookup` refuse the acp id that arrives later.
+                **existing,
+                "kind": existing.get("kind") or "cli",
+                "sessionKey": session_key,
+                "agent": agent,
+                "handle": handle,
+                "runId": run_id,
+                "nodeId": node_id,
+                "createdAtMs": existing.get("createdAtMs", now),
+                "updatedAtMs": now,
+            }
+            try:
+                self._flush()
+            except OSError as e:  # noqa: BLE001 - persistence is best-effort
+                logger.warning(
+                    "subagent instance registry write failed (dag node link live in-process, "
                     "will not survive restart): {}",
                     e,
                 )

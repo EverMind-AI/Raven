@@ -1,6 +1,7 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { instanceCtxStatus, toInstanceCtx } from './history'
 
-import type { AgentRow, AgentsSource, OpenItem } from './types'
+import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
 import type { Shell } from '../../shell/bridge'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
@@ -16,6 +17,19 @@ import type { Shell } from '../../shell/bridge'
 
 export interface AgentsState {
   rows: AgentRow[]
+  /* What the panel lists. The runs in `rows` are still read, because a run
+     detail opened from the conversation's own graph card takes its header from
+     them -- they are just no longer a second group on this list. */
+  instances: InstanceRow[]
+  /* Why the last direct turn could not be sent, for the composer to say so, and
+     which instance refused it. Null while nothing has failed.
+
+     Addressed, not just a string: a refusal usually says "still answering the
+     previous turn", which is true of one instance and a lie about any other. A
+     bare string was shown by whichever composer drew next -- and a rejection
+     can resolve after the reader has already moved on, so clearing this on
+     open would not have been enough. */
+  sendFail: { agent: string; handle: string; why: string } | null
   open: OpenItem | null
   /* The listed row may mislabel a run the list has aged out; the context
      answer carries the truth and corrects the open header through this. */
@@ -27,7 +41,9 @@ export interface AgentsState {
   tick: number
 }
 
-const initial: AgentsState = { rows: [], open: null, who: null, epoch: 0, tick: 0 }
+const initial: AgentsState = {
+  rows: [], instances: [], sendFail: null, open: null, who: null, epoch: 0, tick: 0,
+}
 
 let state: AgentsState = { ...initial }
 const listeners = new Set<() => void>()
@@ -151,6 +167,168 @@ export function refresh(force = false): void {
 
 export const rows = (): AgentRow[] => state.rows
 
+export const instances = (): InstanceRow[] => state.instances
+
+let instBusy = false
+let instAt = 0
+let instDrawn = ''
+
+export function refreshInstances(force = false): void {
+  /* Its own floor and its own in-flight flag: the two lists answer at different
+     speeds, and one slow answer must not hold the other's refresh back. */
+  const asked = sessionKey()
+  const src = source()
+  if (!asked || instBusy || !src.instances || (!force && Date.now() - instAt < 2500)) return
+  instBusy = true
+  src.instances(asked)
+    .then((rows) => {
+      if (asked !== sessionKey()) return
+      const next = rows || []
+      const print = `${asked}|${JSON.stringify(next)}`
+      if (print !== instDrawn) {
+        instDrawn = print
+        set({ instances: next })
+      }
+      /* A node opened before its row was known lands on the node view; promote
+         it now that the row is here, so the same work is not showing under two
+         different screens depending on whether the panel had been opened yet. */
+      const open = state.open
+      if (open && open.kind === 'dag') {
+        const row = instanceOf(open.run_id, open.node, next)
+        if (row) openInstance(row)
+      }
+    })
+    .catch(() => { /* same rule as the run list: keep what is drawn */ })
+    .then(() => { instBusy = false; instAt = Date.now() })
+}
+
+/* The row a graph node ran on, if it ran on one. A stateless node has no
+   handle and therefore no row -- for that one the node's own record is all
+   there is to show.
+
+   Never the node's own status row, which carries the same two ids: its handle
+   is `<run>/<node>`, which names a node rather than a conversation, and
+   `instance.history` holds nothing under it. Promoting to that row opened an
+   empty screen for exactly the nodes whose record view is the only thing there
+   is to see. */
+function instanceOf(runId: string, nodeId: string, rows: InstanceRow[] = state.instances): InstanceRow | null {
+  return rows.find((x) => x.kind !== 'dag-node' && x.runId === runId && x.nodeId === nodeId) || null
+}
+
+export function openInstance(it: InstanceRow): void {
+  /* The same stage the runs use: an instance's direct chat is a transcript, and
+     giving it a second renderer would be a second place for the transcript's
+     rules to drift out of. */
+  stageFresh = true
+  paintedStatus = null
+  set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
+}
+
+/* What a row in the list opens. Ordinarily the instance it names; for a
+   stateless node's row, that node's own record -- the only record it has. The
+   run wrote it under `(run, node)`, so asking `instance.history` for the
+   `<run>/<node>` handle the row is keyed by finds neither half and draws the
+   node as if it had done nothing.
+
+   The row stays in the list either way: it is one of the graph's nodes, and
+   dropping it would take that node off the only list that says the graph ran. */
+export function openInstanceRow(it: InstanceRow): void {
+  if (it.kind === 'dag-node' && it.runId && it.nodeId) {
+    openDagNode(it.runId, { id: it.nodeId, subagent: it.agent })
+    return
+  }
+  openInstance(it)
+}
+
+export function canSend(): boolean {
+  return !!source().instanceSend
+}
+
+/* Coalesced: a direct turn streams, so this arrives per token, and each read is
+   a whole transcript. One read per window is enough to keep the page moving.
+
+   Per target, not one timer for the page: two instances can be answering at
+   once, and a shared timer let whichever spoke first swallow the other's
+   window for half a second. */
+const directPoke = new Map<string, ReturnType<typeof setTimeout>>()
+const DIRECT_POKE_MS = 500
+
+const targetKey = (t: { agent?: string; handle?: string }): string => `${t.agent} ${t.handle}`
+
+/* An event belonging to a direct chat, forwarded here rather than rendered by
+   the conversation -- the conversation is not its addressee and drops it.
+
+   Only the fact is used, never the payload: an instance's transcript is read
+   back through `instance.history`, which is the one place its turns are
+   assembled from every lane that addressed it. Rendering the delta here instead
+   would be a second renderer for the same thing, and the two would drift. */
+export function directEvent(target: { agent?: string; handle?: string }, type?: string): void {
+  const key = targetKey(target)
+  const settle = (): void => {
+    /* The row's status moved (running -> completed), which the list is the only
+       source for, and the open transcript grew. */
+    instDrawn = ''
+    refreshInstances(true)
+    /* Read the open item now rather than when the event arrived. Half a second
+       is long enough to switch instances in, and the stage belongs to whoever
+       is open when the timer fires -- captured, this painted the instance the
+       reader had just left into the box of the one they had just opened. */
+    const open = state.open
+    if (!open || open.kind !== 'instance' || targetKey(open) !== key) return
+    const box = stageEl
+    if (box && box.isConnected) paintInstance(box, open.agent, open.handle)
+  }
+  const pending = directPoke.get(key)
+  if (type === 'message.complete' || type === 'error') {
+    if (pending) { clearTimeout(pending); directPoke.delete(key) }
+    settle()
+    return
+  }
+  if (pending) return
+  directPoke.set(key, setTimeout(() => { directPoke.delete(key); settle() }, DIRECT_POKE_MS))
+}
+
+/* Whether the turn was taken, so the composer knows whether it may drop the
+   text it submitted: `turn.send` legitimately refuses one addressed to an
+   instance that is still answering the turn before. */
+export function sendToInstance(agent: string, handle: string, text: string): Promise<boolean> {
+  const src = source()
+  const said = text.trim()
+  if (!src.instanceSend || !said) return Promise.resolve(false)
+  if (state.sendFail) set({ sendFail: null })
+  return src.instanceSend(agent, handle, said)
+    .then(() => {
+      /* Forced, past the refresh floor: the row going `running` is what starts
+         the heartbeat repainting this stage, so waiting out the floor would
+         leave the turn invisible for as long as it takes. */
+      refreshInstances(true)
+      return true
+    })
+    .catch((e: unknown) => {
+      /* Said rather than swallowed. A refusal here is usually this instance
+         still answering the turn before, which the reader can act on. */
+      set({ sendFail: { agent, handle, why: (e as Error)?.message || String(e) } })
+      return false
+    })
+}
+
+/* Why this instance refused a turn, and nothing about any other. */
+export function sendFailOf(agent: string, handle: string): string | null {
+  const fail = state.sendFail
+  return fail && fail.agent === agent && fail.handle === handle ? fail.why : null
+}
+
+export function forgetInstance(it: InstanceRow): void {
+  const src = source()
+  if (!src.instanceForget) return
+  /* Dropped from view first: the row is gone the moment it is asked for, and a
+     failed call is corrected by the next refresh. Waiting for the server to
+     answer leaves the row under the cursor that just dismissed it. */
+  set({ instances: state.instances.filter((x) => !(x.agent === it.agent && x.handle === it.handle)) })
+  instDrawn = ''
+  void src.instanceForget(it.agent, it.handle).catch(() => { /* the refresh restores it */ })
+}
+
 /* ── opening and closing ────────────────────────────────────────────── */
 
 export function openRow(it: AgentRow): void {
@@ -167,11 +345,25 @@ export function openRow(it: AgentRow): void {
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
-   the territory); a node reached from the trail's card carries no subagent. */
+   the territory); a node reached from the trail's card carries no subagent.
+
+   A node that ran on an instance opens as that instance, which is the same
+   screen this panel's own row for it opens -- one piece of work reached two
+   ways has to land in one place, or the two views drift and only one of them
+   grows the next thing (the direct-chat composer was on exactly one of them).
+   A stateless node has no instance, and keeps its own record view. */
 export function openDagNode(runId: string, n: { id: string; subagent?: string | null }): void {
+  const row = instanceOf(runId, n.id)
+  if (row) {
+    openInstance(row)
+    return
+  }
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label: n.id }, who: null })
+  /* Opened before this panel had ever asked for its rows: ask now, and the
+     refresh promotes this to the instance view if a row turns up. */
+  refreshInstances(true)
 }
 
 /* Back to the list, not to the graph: the graph never went anywhere. */
@@ -221,6 +413,33 @@ function emptyStage(box: HTMLElement, text: string): void {
 function failStage(box: HTMLElement, e: unknown): void {
   stageFresh = true
   emptyStage(box, (e as Error)?.message || String(e))
+}
+
+export function paintInstance(box: HTMLElement, agent: string, handle: string): void {
+  const src = source()
+  if (!src.instanceHistory) {
+    emptyStage(box, t('gui.ws.agents_none'))
+    return
+  }
+  const openAt = state.open
+  src.instanceHistory(agent, handle)
+    .then((r) => {
+      if (state.open !== openAt || !box.isConnected) return
+      /* Painted through the transcript's own renderer, like a run's record, but
+         not with the answer as it arrives: `toInstanceCtx` is what turns turns
+         into messages. Handing the raw answer over drew every populated
+         instance as empty. The key is the handle so reopening a different
+         instance repaints rather than appending to the one before it. */
+      const row = state.instances.find((x) => x.agent === agent && x.handle === handle)
+      const ctx = toInstanceCtx(r?.turns, row?.status ?? undefined)
+      paintedStatus = ctx.status || null
+      verb('agentStagePaint')(box, ctx, { key: `in:${agent}:${handle}`, reset: stageFresh })
+      stageFresh = false
+    })
+    .catch((e: unknown) => {
+      if (state.open !== openAt || !box.isConnected) return
+      failStage(box, e)
+    })
 }
 
 export function paintSpawn(box: HTMLElement, id: string): void {
@@ -301,11 +520,34 @@ function onPoll(): void {
   const shows = shell().wsShows
   if (!shows || !shows('agents')) return
   const open = state.open
+  /* Both lists on the same heartbeat: an instance's status moves when a direct
+     turn ends, which no run row reports. */
+  refreshInstances()
   if (!open) {
     refresh()
     return
   }
   refresh(true)
+  if (open.kind === 'instance') {
+    /* Watched on the instance list rather than the run list, which carries no
+       row for it -- but watched, not skipped: `instance.history` answers
+       replacement `live` rows while a direct turn is running, so without a
+       repaint here the open transcript froze at its first snapshot until the
+       reader closed and reopened it. */
+    const row = state.instances.find((x) => x.agent === open.agent && x.handle === open.handle)
+    const stNow = instanceCtxStatus(row?.status ?? undefined) ?? null
+    if (paintedStatus && stNow && paintedStatus !== stNow) {
+      paintedStatus = stNow
+      stageFresh = true
+      set({ epoch: state.epoch + 1 })
+      return
+    }
+    if (stNow !== 'run') return
+    const stage = stageEl
+    if (!stage || !stage.isConnected) return
+    paintInstance(stage, open.agent, open.handle)
+    return
+  }
   const it = open.kind === 'dag'
     ? state.rows.find((a) => a.kind === 'dag' && a.run_id === open.run_id && a.node === open.node)
     : state.rows.find((a) => a.id === open.id)
@@ -374,6 +616,11 @@ export function reset(): void {
   drawn = ''
   at = 0
   busy = false
+  /* The instance list's own three, or the next conversation waits out this
+     one's refresh floor before it may ask for anything. */
+  instDrawn = ''
+  instAt = 0
+  instBusy = false
   stageFresh = true
   paintedStatus = null
   const dot = document.getElementById('wsAgentRun')
@@ -384,6 +631,8 @@ export function reset(): void {
 /* Test seam only: module-level timers and flags survive between tests. */
 export function _resetForTests(): void {
   stopClock()
+  for (const timer of directPoke.values()) clearTimeout(timer)
+  directPoke.clear()
   mounted = false
   hooked = null
   stageEl = null

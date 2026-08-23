@@ -6381,7 +6381,7 @@
       "InstanceRow": {
         "type": "object",
         "additionalProperties": false,
-        "description": "One sub-agent instance this session has used, verbatim from the instance registry. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` are set only on a dag-node row.",
+        "description": "One sub-agent instance this session has used, verbatim from the instance registry apart from `resumable`. camelCase because the web RPC serves the same record unchanged. `runId` / `nodeId` name the DAG node an instance belongs to: set on a dag-node row, and on the ordinary row of a stateful node, which is what lets one invocation's two rows be reported as one.",
         "required": ["sessionKey", "agent", "handle", "kind"],
         "properties": {
           "sessionKey": { "type": "string" },
@@ -6393,7 +6393,11 @@
           "runId": { "type": "string" },
           "nodeId": { "type": "string" },
           "createdAtMs": { "type": "integer" },
-          "updatedAtMs": { "type": "integer" }
+          "updatedAtMs": { "type": "integer" },
+          "resumable": {
+            "type": "boolean",
+            "description": "Whether a conversation can be opened with this row. False for a dag-node row, whose handle names a node rather than a conversation, and for an agent whose backend is not stateful. Answered by the server because statefulness is a property of the agent's configured backend, which no front end can read off the row."
+          }
         }
       },
       "DirectTurn": {
