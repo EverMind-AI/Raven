@@ -203,6 +203,28 @@ const ACP_ROW: SubagentRow = {
   test_running: false
 }
 
+// The package's one built-in row, in the shape the backend emits: never probed
+// (there is no command to launch and no endpoint to reach), so `unknown` with an
+// empty detail, and `configured: false` because not writing a row is how "use the
+// package's default" is spelled.
+const BUILTIN_ROW: SubagentRow = {
+  builtin: true,
+  configured: false,
+  description: "Raven's own in-process sub-agent: files, shell and web. IMPORTANT: it cannot call sub-agents.",
+  enabled: true,
+  group: 'builtin',
+  has_api_key: false,
+  kind: 'builtin',
+  last_test_at_ms: undefined,
+  last_test_detail: undefined,
+  last_test_ok: undefined,
+  name: 'Raven',
+  preset: undefined,
+  probe_detail: '',
+  probe_status: 'unknown',
+  test_running: false
+}
+
 interface Harness {
   // frame()'s `output` is an append-only concatenation of every byte ink
   // ever wrote (ink's cell-diffing can skip re-emitting a cell whose content
@@ -1445,6 +1467,73 @@ describe('SubagentsHub form and delete confirm', () => {
 // a rendered frame, per this file's established pattern (flattenSubagentRows,
 // failureDetailLine) for logic that does not need a terminal to prove itself
 // and that a keystroke-driven frame snapshot cannot prove reliably anyway.
+
+describe('SubagentsHub built-in row', () => {
+  // A single-row fixture puts the target at index 0 by construction, so each case
+  // exercises the built-in rule itself rather than arrow-key delivery timing.
+  it('shows a fixed marker where every other row shows a switch', async () => {
+    const h = mount({ rows: [BUILTIN_ROW] })
+    await waitForFrame(h, 'Raven')
+
+    expect(h.frame()).toContain('[core]')
+    // `[on ]` advertises a control this row does not have. It never legitimately
+    // renders for a built-in, so its absence is assertable on the append-only frame.
+    expect(h.frame()).not.toContain('[on ]')
+
+    h.unmount()
+  })
+
+  it('fills the status column with its description, having no probe to report', async () => {
+    const h = mount({ rows: [BUILTIN_ROW] })
+    await waitForFrame(h, 'in-process sub-agent')
+
+    h.unmount()
+  })
+
+  it('reads as available rather than unprobed', async () => {
+    const h = mount({ rows: [BUILTIN_ROW] })
+    await waitForFrame(h, 'Raven')
+
+    expect(h.frame()).toContain('\u25cf Raven')
+
+    h.unmount()
+  })
+
+  it('offers only the keys it answers to', async () => {
+    const h = mount({ rows: [BUILTIN_ROW] })
+    await waitForFrame(h, 'Raven')
+
+    // Advertising a switch on the one row that has none is the same broken
+    // control as drawing one: every key below does nothing while it is selected.
+    expect(h.frame()).not.toContain('space toggle')
+    expect(h.frame()).not.toContain('t test')
+    expect(h.frame()).not.toContain('d delete')
+    expect(h.frame()).toContain('r refresh')
+
+    h.unmount()
+  })
+
+  it("'space' neither switches it off nor calls it a preset", async () => {
+    const h = mount({ rows: [BUILTIN_ROW] })
+    await waitForFrame(h, 'Raven')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    // A refusal makes no RPC call at all, so there is nothing to poll for; give
+    // any (incorrect) call time to surface before asserting its absence.
+    await delay(90)
+
+    expect(h.gw.request).not.toHaveBeenCalledWith('subagents.toggle', expect.anything())
+    // The switch used to fall through to the preset guard, which reads on
+    // `configured` -- false for a built-in because not writing a row is how "use
+    // the package's default" is spelled. So it told the user to press Enter to add
+    // an agent already on the table, for which Enter opens nothing.
+    expect(h.frame()).not.toContain('only a preset')
+
+    h.unmount()
+  })
+})
+
 describe('mergeProbeColumns', () => {
   it('keeps a prior row probe_status/probe_detail and takes everything else fresh', () => {
     const prior: SubagentRow = { ...CODER_ROW, enabled: true }

@@ -1384,8 +1384,11 @@ class BuiltinAgentConfig(Base):
     ``raven.agent.subagent.builtin_agents``), matched by ``name`` -- writing one
     is how a user retunes ``research-raven``'s skills, and writing a name the
     package does not ship is how they add a fifth. There is no way to delete a
-    seed row, because not writing it is what "use the default" means; set
-    ``enabled: false`` to take one off the roster.
+    seed row, because not writing it is what "use the default" means -- nor to
+    switch one off: ``enabled`` is the one field an override may not speak to, and
+    ``merge_builtin_seeds`` discards it. An unnamed ``spawn`` and a dag node with
+    no ``subagent`` both dispatch to the generic seed, so a roster without it is a
+    roster with a hole where the default lands.
 
     ``skills`` and ``tools`` are three-valued on purpose. ``null`` (the default)
     means the full catalogue, an empty list means *no* menu at all, and a list

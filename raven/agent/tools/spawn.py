@@ -214,7 +214,9 @@ class SpawnTool(Tool):
         # is what keeps the rest of the dispatch path unchanged.
         minted = not instance and self._is_stateful(subagent)
         if minted:
-            instance = mint_handle(label or task, fallback=subagent or "raven")
+            from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+
+            instance = mint_handle(label or task, fallback=subagent or GENERIC_AGENT)
         org = self._cur()
         # Cleared before the call rather than only on the stateless path: an earlier
         # stateful call whose metadata went uncollected (no tool-event sink on this

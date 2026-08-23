@@ -129,31 +129,52 @@ def _raw_entries(path: Path) -> list[dict]:
     return []
 
 
-def reject_builtin_transport_changes(entries: list[dict]) -> None:
-    """Raise when an incoming entry would rewrite a built-in row's transport.
+def reject_builtin_transport_changes(entries: list[dict], *, existing: list[dict] | None = None) -> None:
+    """Raise when an incoming entry would *newly* claim a built-in row's name.
 
     A built-in agent is an in-process raven loop; its row exists whether or not
     config mentions one, and an override may retune what it can reach (``skills``,
-    ``tools``, ``model``) or take it off the roster (``enabled: false``). What it
-    may not do is claim the name for another transport: that leaves the built-in
-    agent unreachable under a name every stored playbook and instance record
-    already points at.
+    ``tools``, ``model``). What it may not do is claim the name for another
+    transport: every name the generic row answers to is reserved, so a cli / acp /
+    openai entry spelled that way would shadow the row that an unnamed ``spawn``
+    and a dag node with no ``subagent`` both dispatch to.
+
+    ``existing`` is what config already holds, and an entry matching one of those
+    by name *and* kind passes. Without that, the rule would reject every write
+    while such a row is on disk -- including the write that removes it, which is
+    the one the user needs. That case is real rather than theoretical: the
+    capitalised spelling was accepted until the generic row was renamed to it, so
+    an install can hold one through no fault of its own. It stays inert at runtime
+    (``merge_builtin_seeds`` ignores it) and the roster reports it as ignored, so
+    tolerating it here costs nothing and locks nobody out.
 
     A *removal* needs no check here -- writing no row for a seed is exactly how
     "use the package's default" is spelled, so it is not a delete.
     """
-    from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
+    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
 
+    held = {(e.get("name"), e.get("kind")) for e in (existing or []) if isinstance(e, dict)}
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name")
-        if name in BUILTIN_AGENT_NAMES and entry.get("kind") not in (None, "builtin"):
-            raise ValueError(
-                f"sub-agent {name!r} is a built-in agent, so it cannot be redeclared as kind "
-                f"{entry.get('kind')!r}: the built-in one would become unreachable under a name "
-                "playbooks and instance records already use. Choose another name for this entry"
+        kind = entry.get("kind")
+        if not name or not is_builtin_agent_name(name) or kind in (None, "builtin"):
+            continue
+        if (name, kind) in held:
+            logger.warning(
+                "sub-agent {!r} is declared as kind {!r} but that name is reserved for a built-in "
+                "agent; the entry is already in config so this write is allowed, but the built-in "
+                "row owns the name and this one is ignored -- rename or remove it",
+                name,
+                kind,
             )
+            continue
+        raise ValueError(
+            f"sub-agent {name!r} is a built-in agent, so it cannot be redeclared as kind "
+            f"{kind!r}: the built-in one would become unreachable under a name "
+            "playbooks and instance records already use. Choose another name for this entry"
+        )
 
 
 def get_agents(*, config_path: Path | None = None) -> list[dict]:
@@ -183,7 +204,8 @@ def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
     stop starting behind the very config a user needs the UI to fix. Here the
     caller is holding the value and can be told.
     """
-    reject_builtin_transport_changes([e for e in entries if isinstance(e, dict)])
+    path = config_path or get_config_path()
+    reject_builtin_transport_changes([e for e in entries if isinstance(e, dict)], existing=_raw_entries(path))
     # Counted on the incoming entries, not on the validated model: the schema
     # deduplicates on load (keeping the first, so a hand-edited config still
     # starts), which means by then there is only one of each and this check would
@@ -195,7 +217,6 @@ def set_agents(entries: list[dict], *, config_path: Path | None = None) -> None:
     validated = SubagentsConfig(agents=entries)
     dumped = validated.model_dump(by_alias=True)[_ALIAS]
 
-    path = config_path or get_config_path()
     data = _raw_config(path)
     data.setdefault("subagents", {})
     # Drop the older spellings so a config never carries two competing lists.

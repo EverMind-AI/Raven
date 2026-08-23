@@ -70,10 +70,14 @@ connection fields; `AgentCaps` and `Injectable` are *derived* from it, and are w
 consumer branches on so that nothing has to switch on the transport.
 Three sources compose it, weakest first: **vendored** rows discovered on the
 filesystem, then `builtin` package seeds, then config. `builtin` rows are package seeds
-(`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, a
-config row of the same name is a field-level override, and `enabled: false` is the only
-way to take one off the roster. Read under the older key `thirdParty`
-too; the write path emits `agents`.
+(`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
+config row of the same name is a field-level override -- of every field but `enabled`,
+which the merge discards, so a seed row cannot be taken off the roster at all. An unnamed
+`spawn` and a DAG node with no `subagent` both dispatch to the generic seed, `Raven`. A name
+a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`; `raven` -> `Raven`), so
+stored instance rows, direct-chat records and dag nodes written before a rename still find
+their agent -- exact match first, and the roster never offers an alias back. Read under the
+older key `thirdParty` too; the write path emits `agents`.
 _Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
 entry point and not the other is no longer a state that exists.

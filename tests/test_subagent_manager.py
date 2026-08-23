@@ -529,7 +529,7 @@ async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
     assert IN_SUBAGENT_RUN.get() is False
 
 
-RAVEN_ROW = ("s1", "raven", "notes")
+RAVEN_ROW = ("s1", GENERIC_AGENT, "notes")
 
 
 async def test_default_subagent_gets_a_registry_row(tmp_path, monkeypatch):

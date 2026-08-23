@@ -14,6 +14,7 @@ import pytest
 from raven.agent import workdir
 from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import format_agent_listing, third_party_agent_meta
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent_dag import DagValidationError, parse_dag_spec
 from raven.agent.subagent_dag._store import read_session_nodes
 from raven.agent.subagent_dag.backend import LocalFileBackend
@@ -1001,7 +1002,7 @@ class TestSubagentRoster:
         default install orchestrate a graph at all."""
         desc = SubAgentDagTool(workspace=tmp_path, agents=[]).description
         assert "(none configured)" not in desc
-        assert "raven" in desc
+        assert GENERIC_AGENT in desc
 
 
 class TestSubagentEnum:
@@ -1034,7 +1035,7 @@ class TestSubagentEnum:
         tool.set_agents([])
         names = self._subagent_field(tool)["enum"]
         assert "Coder" not in names
-        assert "raven" in names
+        assert GENERIC_AGENT in names
 
     def test_schema_is_rebuilt_and_never_mutates_the_module_constant(self, tmp_path: Path) -> None:
         """The constant is shared by every instance; annotating it in place

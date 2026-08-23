@@ -37,7 +37,7 @@ from raven.config.update_subagents import (
     remove_agent,
     set_agents,
 )
-from raven.rpc.errors import ConfigValidationError, SubagentNotFoundError
+from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotFoundError
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -175,8 +175,19 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     unready = vendored_state()
     merged = merge_vendored_seeds(configured, vendored)
 
+    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
+
     builtin_cfgs = [c for c in merge_builtin_seeds(merged) if getattr(c, "kind", None) == "builtin"]
-    external = [c for c in merged if getattr(c, "kind", None) != "builtin"]
+    # Filtered by the same rule the table applies, not merely split on kind. Every
+    # name the generic row answers to is reserved, and a non-builtin entry spelled
+    # that way is ignored at runtime -- so listing it here put a second row of that
+    # name on the roster, indistinguishable from a live agent and reported enabled.
+    # A view that keys by name then opens whichever came first.
+    external = [
+        c
+        for c in merged
+        if getattr(c, "kind", None) != "builtin" and not is_builtin_agent_name(getattr(c, "name", "") or "")
+    ]
     configured_names = {getattr(c, "name", "") for c in configured}
 
     entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
@@ -248,8 +259,8 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "preset": getattr(cfg, "preset", None),
                 "kind": cfg.kind,
                 "description": getattr(cfg, "description", "") or "",
-                # A built-in row's switch is real (it is the only way to take one
-                # off the roster); a preset row has none until it is configured.
+                # A built-in row is always on (its switch is the package's, not
+                # config's); a preset row has none until it is configured.
                 "enabled": bool(getattr(cfg, "enabled", True)) if source != "preset" else False,
                 "configured": source == "config",
                 # Discovered under ``subagents/`` rather than written anywhere.
@@ -398,23 +409,24 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     """Set `enabled` on one entry - the flag the roster filter reads."""
     name = params.get("name")
     enabled = bool(params.get("enabled"))
+    # Checked before the lookup, not after: a built-in row may also exist in config
+    # (as a field-level override of the seed), and writing the switch onto that row
+    # would report success for a change ``merge_builtin_seeds`` then discards.
+    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
+
+    if name and is_builtin_agent_name(name):
+        raise ConfigFieldReadonlyError(
+            f"sub-agent {name!r} is a built-in agent and cannot be switched off: an unnamed spawn "
+            "and a dag node with no sub-agent both dispatch to it",
+            data={"field": "enabled", "name": name},
+        )
     try:
         entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
     target = next((e for e in entries if e.get("name") == name), None)
     if target is None:
-        # A built-in row exists on the table without existing in config, and
-        # ``enabled`` is the only way to take one off the roster -- so toggling one
-        # for the first time has to *create* its override row rather than report
-        # the name unknown. Only ``enabled`` is written: everything else keeps
-        # coming from the package's seed.
-        from raven.agent.subagent.builtin_agents import BUILTIN_AGENT_NAMES
-
-        if name not in BUILTIN_AGENT_NAMES:
-            raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
-        target = {"name": name, "kind": "builtin"}
-        entries.append(target)
+        raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})
     target["enabled"] = enabled
     try:
         set_agents(entries, config_path=get_config_path())

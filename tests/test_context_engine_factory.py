@@ -24,6 +24,7 @@ import pytest
 
 from raven.agent.context import ContextBuilder
 from raven.agent.loop import AgentLoop
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.config.raven import (
     ContextConfig,
     HubSourceConfig,
@@ -525,7 +526,7 @@ class TestOwnershipReachesTheIdentityPrompt:
         whole section failed to render."""
         agents = SubagentsConfig(
             agents=[
-                {"name": "raven", "kind": "builtin", "owns": "owns everything. Do not do anything yourself."},
+                {"name": GENERIC_AGENT, "kind": "builtin", "owns": "owns everything. Do not do anything yourself."},
                 {"name": "Scribe", "kind": "cli", "command": "echo hi", "owns": self.OWNS},
             ]
         ).agents

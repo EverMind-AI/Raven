@@ -122,8 +122,10 @@ def register_config_methods(
     from raven.agent.subagent_dag._resume import read_run_reconciled
     from raven.agent.subagent_dag.live import cancel_run, live_run_ids
     from raven.agent.workdir import validate_override
+    from raven.config.loader import get_config_path
     from raven.config.schema import SubagentsConfig
     from raven.config.update_subagents import (
+        _raw_entries,
         get_agents,
         reject_builtin_transport_changes,
         reject_unsupported_acp_fields,
@@ -155,7 +157,7 @@ def register_config_methods(
         # for a cli entry would leave the in-process agent unreachable under a name
         # stored playbooks already use. Refused here, where the caller holds the
         # value, for the same reason the two checks above are.
-        reject_builtin_transport_changes(agents)
+        reject_builtin_transport_changes(agents, existing=_raw_entries(get_config_path()))
         # Validate + write atomically (raises on bad schema / duplicate names;
         # the dispatcher surfaces the error to the client, nothing is applied).
         set_agents(agents)

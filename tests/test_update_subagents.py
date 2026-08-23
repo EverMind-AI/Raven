@@ -20,6 +20,10 @@ def _cfg(tmp_path: Path) -> Path:
     return tmp_path / "config.json"
 
 
+def _entries(path: Path) -> list[dict]:
+    return json.loads(path.read_text())["subagents"]["agents"]
+
+
 def test_set_and_get_roundtrip(tmp_path: Path) -> None:
     p = _cfg(tmp_path)
     set_agents(
@@ -114,3 +118,79 @@ def test_a_builtin_name_cannot_be_claimed_by_another_transport(tmp_path: Path) -
     # Overriding it as a built-in row is the supported edit.
     set_agents([{"name": "raven", "kind": "builtin", "skills": ["local/web-search"]}], config_path=p)
     assert get_agents(config_path=p)[0]["skills"] == ["local/web-search"]
+
+
+class TestTheBuiltinNamesAreReserved:
+    """Both spellings of the generic row's name belong to it, and no transport
+    may claim either -- but a config that already holds one must stay editable.
+
+    `Raven` was accepted before the generic row was renamed to it, so real installs
+    can hold such an entry. Refusing every write while one is on disk would lock the
+    user out of the whole config surface, including the edit that removes it: the
+    guard rejects *introducing* a reserved name, not possessing one.
+    """
+
+    @pytest.mark.parametrize("name", ["Raven", "raven"])
+    @pytest.mark.parametrize("kind", ["cli", "acp", "openai"])
+    def test_a_new_entry_cannot_claim_either_spelling(self, tmp_path: Path, name: str, kind: str) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"subagents": {"agents": []}}))
+
+        with pytest.raises(ValueError, match="built-in"):
+            set_agents([{"name": name, "kind": kind, "command": "x {prompt}"}], config_path=p)
+
+    def test_another_casing_is_not_reserved(self, tmp_path: Path) -> None:
+        # Only the two spellings the row answers to are taken. `RAVEN` resolves to
+        # itself, collides with no seed, and is an ordinary name.
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"subagents": {"agents": []}}))
+
+        set_agents([{"name": "RAVEN", "kind": "cli", "command": "x {prompt}"}], config_path=p)
+
+        assert [e["name"] for e in _entries(p)] == ["RAVEN"]
+
+    def test_an_entry_already_on_disk_does_not_block_an_unrelated_edit(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "subagents": {
+                        "agents": [
+                            {"name": "Raven", "kind": "cli", "command": "x {prompt}", "description": "legacy"},
+                            {"name": "Coder", "kind": "cli", "command": "x {prompt}", "description": "unrelated"},
+                        ]
+                    }
+                }
+            )
+        )
+
+        # The edit the user is actually making is to Coder. Before this guard knew
+        # what was already on disk, the legacy row made every write fail -- including
+        # the one that would have removed it.
+        set_agents(
+            [
+                {"name": "Raven", "kind": "cli", "command": "x {prompt}", "description": "legacy"},
+                {"name": "Coder", "kind": "cli", "command": "x {prompt}", "description": "edited"},
+            ],
+            config_path=p,
+        )
+
+        stored = {e["name"]: e for e in _entries(p)}
+        assert stored["Coder"]["description"] == "edited"
+        assert "Raven" in stored
+
+    def test_and_removing_the_legacy_entry_is_allowed(self, tmp_path: Path) -> None:
+        p = tmp_path / "config.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "subagents": {
+                        "agents": [{"name": "Raven", "kind": "cli", "command": "x {prompt}", "description": "l"}]
+                    }
+                }
+            )
+        )
+
+        set_agents([], config_path=p)
+
+        assert _entries(p) == []

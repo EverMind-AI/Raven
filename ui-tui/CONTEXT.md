@@ -64,9 +64,13 @@ preset there is read-only, since there is nothing to configure until the binary 
 configured agent whose binary went missing keeps every action, so a broken one can still
 be edited or removed. Every kind that launches a command is filed that way - `cli` and
 `acp` alike - while an openai row is placed on whether it was saved, so a preset needing
-just an api key stays directly addable. It edits `~/.raven/config.json` and hot-applies
-the result, so it changes what the model may dispatch to. Not to be confused with the
-Agents Overlay, which shows live delegation state and writes nothing.
+just an api key stays directly addable. The one `builtin` row answers to no action at all:
+it is this process, so there is nothing to test or delete, and its switch belongs to the
+package rather than to config - it renders `[core]` where the others carry one, and fills
+its status column with its description, having no probe to report. It edits
+`~/.raven/config.json` and hot-applies the result, so it changes what the model may
+dispatch to. Not to be confused with the Agents Overlay, which shows live delegation state
+and writes nothing.
 
 **Direct Chat** (`ui-tui/src/app/directChatStore.ts`):
 The mode in which the chat view is taken over by one sub-agent instance's own

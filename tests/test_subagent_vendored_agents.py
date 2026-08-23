@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.subagent import vendored_agents as va
+from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.registry import AgentRegistry
 
 _REAL_SUBAGENTS_ROOT = va.subagents_root
@@ -297,7 +298,7 @@ class TestOnTheTable:
 
         registry.apply([])
 
-        assert "raven" in registry.names()
+        assert GENERIC_AGENT in registry.names()
 
     def test_a_config_row_of_the_same_name_overrides_the_discovered_one(self, tree: Path) -> None:
         """The user's edit wins, and does not appear as a second row of one name.
@@ -329,7 +330,7 @@ class TestOnTheTable:
 
         registry.apply([ThirdPartyCliSubagentConfig(name="RAVEN-B", command="x {prompt}")])
 
-        assert [row.name for row in registry.rows()] == ["raven", "RAVEN-A", "RAVEN-B", "RAVEN-C"]
+        assert [row.name for row in registry.rows()] == [GENERIC_AGENT, "RAVEN-A", "RAVEN-B", "RAVEN-C"]
 
 
 def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

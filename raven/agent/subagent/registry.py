@@ -34,7 +34,7 @@ from raven.agent.subagent.backends import (
     build_third_party_backend,
     format_agent_listing,
 )
-from raven.agent.subagent.builtin_agents import merge_builtin_seeds
+from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
 from raven.agent.subagent.vendored_agents import discover_vendored_rows, merge_vendored_seeds
 
 
@@ -220,8 +220,13 @@ class AgentRegistry:
         Disabled rows are returned because "exists but is turned off here" and
         "was never registered" need different errors -- a playbook that names a
         disabled agent is not a broken playbook.
+
+        A name a seed used to answer to resolves to the seed (see
+        :data:`LEGACY_AGENT_ALIASES`), so a stored instance row, direct-chat record
+        or dag node written before a rename still finds its agent. Exact first: an
+        agent that really holds the name owns it.
         """
-        return self._rows.get(name)
+        return self._rows.get(name) or self._rows.get(canonical_agent_name(name))
 
     def meta(self) -> list[AgentMeta]:
         """Roster entries for the enabled rows, in table order."""
@@ -248,6 +253,10 @@ class AgentRegistry:
         bounds what ``build`` can ask for, so a node cannot widen its own reach by
         naming a skill the agent's row excludes.
         """
+        # Resolved the same way as :meth:`get`, and for the same stored references:
+        # a resume that found its row here would still fail to dispatch if only one
+        # of the two lookups understood the name it was written under.
+        name = name if name in self._rows else canonical_agent_name(name)
         row = self._rows.get(name)
         if row is None:
             return None
@@ -279,8 +288,15 @@ class AgentRegistry:
         reference resolvable; whether this machine currently has that agent
         switched on is a runtime condition with its own error, not a reason to
         call the file malformed.
+
+        Includes the legacy aliases of the rows on the table: a playbook written
+        before an agent was renamed names it by its old name, and that reference
+        resolves (see :meth:`get`), so calling the file malformed would be wrong.
+        Not the same view as :meth:`names`, which is the enum the model picks from
+        and offers current names only.
         """
-        return sorted(self._rows)
+        aliases = {alias for alias, current in LEGACY_AGENT_ALIASES.items() if current in self._rows}
+        return sorted(set(self._rows) | aliases)
 
 
 @dataclass(frozen=True)

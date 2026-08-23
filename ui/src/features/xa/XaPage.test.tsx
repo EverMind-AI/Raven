@@ -398,25 +398,32 @@ describe('xa island, built-in agents', () => {
     expect(card.querySelector('.led')!.className).toBe('led off')
   })
 
-  it('offers the switch and the sheet, and nothing that would mean nothing', async () => {
+  it('offers the sheet, and nothing that would mean nothing', async () => {
     const h = install([builtin()])
     await mount()
     const labels = [...document.querySelectorAll('.pcard .ctl button')].map((b) => b.textContent)
-    expect(labels).toEqual(['gui.agent.disable', 'gui.agent.configure'])
+    /* The switch went with the refusal: `subagents.toggle` answers
+       `config_field_readonly` for a built-in name, so the button could only ever
+       have produced an error toast. */
+    expect(labels).toEqual(['gui.agent.configure'])
     await act(async () => {
       ;(document.querySelector('.pcard .ctl button') as HTMLElement).click()
     })
-    expect(h.acts).toEqual([['toggle', 'research-raven']])
+    /* Configure opens the sheet rather than running anything. */
+    expect(h.acts).toEqual([])
   })
 
-  it('opens a sheet whose only action is the switch', async () => {
+  it('opens a sheet with no action to offer', async () => {
     install([builtin()])
     await mount()
     await act(async () => {
       ;(document.querySelector('.pcard') as HTMLElement).click()
     })
     const head = [...document.querySelectorAll('#dBody .dact button')].map((b) => b.textContent)
-    expect(head).toEqual(['gui.agent.disable'])
+    /* Paired with a positive assertion that the sheet opened at all, so an empty
+       list cannot pass by the sheet simply not rendering. */
+    expect(document.querySelector('#dBody')).not.toBeNull()
+    expect(head).toEqual([])
     /* No disconnect: there is no row to remove, and the legacy sheet guarded
        that section on `configured` for exactly this reason. */
     expect(document.querySelector('#dBody .danger')).toBeNull()
@@ -470,14 +477,21 @@ describe('xa island, vendored builds', () => {
     expect(labels).toContain('gui.agent.configure')
   })
 
-  it('a built-in row keeps its switch', async () => {
-    /* The variant is per-section, not global: a built-in row's switch is real
-       and is the only way to take one off the roster. */
-    install([row({ name: 'raven', preset: undefined, kind: 'builtin', configured: false, builtin: true })])
+  it('a built-in row has no switch to offer', async () => {
+    /* `subagents.toggle` refuses a built-in name outright -- an unnamed spawn and
+       a dag node with no sub-agent both dispatch to that row, so it cannot leave
+       the roster. Drawing the switch anyway would be the one thing this card's
+       own rule forbids: a button that errors is worse than no button. */
+    install([row({ name: 'Raven', preset: undefined, kind: 'builtin', configured: false, builtin: true })])
     await mount()
-    await screen.findByText('raven')
+    await screen.findByText('Raven')
 
-    expect([...document.querySelectorAll('.pcard button')].map((b) => b.textContent)).toContain('gui.agent.disable')
+    const labels = [...document.querySelectorAll('.pcard button')].map((b) => b.textContent)
+    expect(labels).not.toContain('gui.agent.disable')
+    expect(labels).not.toContain('gui.agent.enable')
+    /* Paired with the positive case: a card rendering no buttons at all would
+       satisfy the two assertions above without the row being reachable. */
+    expect(labels).toContain('gui.agent.configure')
   })
 
   it('an unbuilt one offers Install, a ready one does not', async () => {

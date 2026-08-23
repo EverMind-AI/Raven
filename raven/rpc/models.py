@@ -139,7 +139,10 @@ class SubagentRow(_Strict):
             "A built-in agent: raven's own in-process loop, on the agent table whether or not "
             "config mentions it. Distinct from `configured`, which stays false for one -- not "
             "writing a row is how 'use the package's default' is spelled, so there is nothing "
-            "to delete and no transport to connect. `enabled` is the only action it takes."
+            "to delete and no transport to connect. It takes no action at all: `subagents.toggle` "
+            "answers `config_field_readonly` for it, because an unnamed spawn and a dag node with "
+            "no sub-agent both dispatch to this row, so it cannot leave the roster. A client must "
+            "not offer a switch, a test or a delete for it."
         ),
     )
     group: Literal["builtin", "installed", "uninstalled"]
