@@ -366,6 +366,7 @@ window.RavenIslands = {
      longer reachable from out here: live's send used to take the staged paths
      off it, and the island folds them into the message itself now. */
   composer: {
+    turn: composer.turn,
     goPaint: composer.goPaint,
     drawQueue: composer.drawQueue,
     queuePush: composer.queuePush,

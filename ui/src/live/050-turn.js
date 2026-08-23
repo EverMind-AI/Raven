@@ -53,11 +53,12 @@ function onEvent(ev) {
      `subagents.instance.history`. */
   if (p.target) { RavenIslands.subagents.directEvent(p.target, ev.type); return; }
   if (ev.type === 'message.start') {
-    /* Read BEFORE busy is set: the window that sent this turn has already
+    /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */
-    if (!busy && p.content) ask(p.content);
+    if (!turn.busy() && p.content) ask(p.content);
     if (p.content) touchSession(sessionCurrent(), p.content);
-    busy = true; busyCancellable = true; goState(); drawMeter();
+    turnOwner = sessionCurrent();
+    turn.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter();
     WS.turn += 1;
   } else if (ev.type === 'turn.started') {
     /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
@@ -84,7 +85,8 @@ function onEvent(ev) {
         },
       });
     }
-    busy = true; busyCancellable = false; goState(); drawMeter();
+    turnOwner = sessionCurrent();
+    turn.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter();
   } else if (ev.type === 'episode.start') {
     if (live.st) { live.st.seal(); }
     flushSay();
@@ -127,17 +129,22 @@ function onEvent(ev) {
        previous content survives. */
     if (typeof wsOnToolDone === 'function') wsOnToolDone(o.name, o.args, ok, preview, took, p.diff);
   } else if (ev.type === 'message.complete') {
+    /* Our own cancel already folded and reset the visible turn. The server can
+       finish unwinding before turn.cancel replies; only that reply may release
+       the queued send. */
+    if (turn.phase() === 'cancelling') return;
     finishTurn(p.usage || {});
   } else if (ev.type === 'error') {
     killStatus();
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
-      if (busy) softStop();
-      if (!cancelInFlight) setTimeout(drainQueue, 400);
+      if (turn.phase() === 'cancelling') return;
+      if (turn.busy()) softStop();
+      setTimeout(drainQueue, 400);
       return;
     }
-    busy = false;
+    turn.dispatch({ type: 'idle' });
     noteRow(p.message || 'error', p.detail || p.reason || '',
       lastAsk ? { retry: () => liveSend(lastAsk) } : null);
     goState(); drawMeter(); drawList();
@@ -246,7 +253,6 @@ DS.transcript.openDagRun = function (runId) {
 };
 
 function finishTurn(usage) {
-  busyCancellable = false;
   killStatus();
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
@@ -255,7 +261,7 @@ function finishTurn(usage) {
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
   RavenIslands.transcript.artifacts(WS.turn);
-  busy = false;
+  turn.dispatch({ type: 'idle' });
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max);

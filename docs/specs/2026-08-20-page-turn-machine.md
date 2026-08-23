@@ -1,6 +1,6 @@
 # The page's turn machine
 
-Status: accepted. Steps 1 to 3 are done; 4 to 6 open. This line is the only
+Status: complete. Steps 1 to 6 are done. This line is the only
 place a reader can learn that -- the prose below is plan-tense on purpose, and
 the inventory's file:line references are pinned to a commit rather than kept
 current, so nothing else here reports progress.
@@ -300,7 +300,7 @@ more types.
 | 3 | C | `send`, `halt` | also removes two `RavenIslands` reach-ins | done |
 | 4 | D (queue) | `q` | composer store owns the queue; parked via copied accessors | done |
 | 5 | B | `cur` | `shell/session.ts` owns the subscribed page pointer | done |
-| 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** | open |
+| 6 | D (phase) | `busy` | the phase model; needs step 5; **park via accessor** | done |
 
 The two bold notes are the ones no gate enforces -- see "the incentive this
 document has to argue against" above. Step 2 lost its bold note when the
