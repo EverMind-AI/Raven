@@ -214,6 +214,8 @@ window.RavenIslands = {
     markNew: rail.markNew,
     remove: rail.remove,
     rename: rail.rename,
+    reconcile: rail.reconcileRows,
+    removeRow: rail.removeSessionRow,
   },
   /* Not a React island either, and not a renderer at all: the dag panel's
      geometry and its two summary lines. The graph itself is still drawn by

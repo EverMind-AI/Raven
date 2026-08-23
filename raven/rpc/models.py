@@ -705,15 +705,18 @@ class SessionListItem(_Strict):
 
     id: str = Field(..., description="Full session_key: <channel>:<chat_id>.")
     message_count: int
-    preview: str
+    preview: str = Field(..., description="First user message, used as the untitled-session identity fallback.")
+    last_message_preview: str = Field(..., description="Latest non-empty user or assistant message text.")
     source: str | None = None
     started_at: float = Field(..., description="Unix timestamp from created_at.")
+    updated_at: float = Field(..., description="Unix timestamp of the latest user or assistant message.")
     title: str
     pinned: bool = Field(default=False, description="User pinned this session to the top of the picker.")
 
 
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
+    channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
 
 
 class SessionListResult(_Strict):

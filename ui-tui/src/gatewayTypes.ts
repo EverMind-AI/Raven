@@ -3,6 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { SessionListItem as RpcSessionListItem, SessionListResult } from './rpc/generated.js'
 import type { SessionInfo, SlashCategory, Usage } from './types.js'
 
 export interface GatewaySkin {
@@ -138,18 +139,8 @@ export interface SessionResumeResponse {
   session_id: string
 }
 
-export interface SessionListItem {
-  id: string
-  message_count: number
-  preview: string
-  source?: string
-  started_at: number
-  title: string
-}
-
-export interface SessionListResponse {
-  sessions?: SessionListItem[]
-}
+export type SessionListItem = RpcSessionListItem
+export type SessionListResponse = SessionListResult
 
 export interface SessionDeleteResponse {
   deleted: null | string

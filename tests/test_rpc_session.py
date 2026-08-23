@@ -41,6 +41,7 @@ from raven.rpc.methods.session import (
     session_resume,
     session_title,
 )
+from raven.rpc.models import METHOD_MODELS
 from raven.session.manager import SessionManager
 from raven.utils.helpers import estimate_prompt_tokens
 
@@ -572,7 +573,7 @@ async def test_session_close_returns_ok_without_session_key() -> None:
 
 
 async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """session.list returns a sessions list from the tui channel, sorted by updated_at desc."""
+    """session.list returns a sessions list from the tui channel."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -595,8 +596,10 @@ async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, mon
     assert "tui:20260610_110000_bbb222" in ids
 
 
-async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """session.list returns sessions ordered by updated_at descending."""
+async def test_session_list_sorted_by_latest_conversation_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """session.list returns sessions ordered by latest readable message."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -646,6 +649,54 @@ async def test_session_list_item_shape(tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(item["started_at"], (int, float))
 
 
+async def test_session_list_contract_accepts_real_multichannel_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declared contract includes the fields the browser actually sends
+    and consumes, including a populated nested row."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("cron:contract")
+    session.add_message("user", "run the digest")
+    session.add_message("assistant", "digest complete")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    params_model, result_model = METHOD_MODELS["session.list"]
+    params_model.model_validate({"channels": ["tui", "cron"], "limit": 10})
+    result_model.model_validate(await session_list({"channels": ["tui", "cron"]}))
+
+
+async def test_session_list_scans_once_for_multiple_channels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    for key in ("tui:one", "cron:two", "cli:three"):
+        session = mgr.get_or_create(key)
+        session.add_message("user", key)
+        mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    scans = 0
+    scan_file = mgr._scan_file
+
+    def counted(path: Path):
+        nonlocal scans
+        scans += 1
+        return scan_file(path)
+
+    monkeypatch.setattr(mgr, "_scan_file", counted)
+    result = await session_list({"channels": ["tui", "cron"]})
+
+    assert {row["source"] for row in result["sessions"]} == {"tui", "cron"}
+    assert scans == 3, "every stored file is scanned once, not once per requested channel"
+
+
 async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list does not include sessions from non-tui channels."""
     cfg = load_config()
@@ -670,7 +721,7 @@ async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest
 
 
 async def test_session_list_honors_limit_after_sort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """limit slices AFTER the updated_at-desc sort — newest sessions win."""
+    """limit slices after the activity sort, so newest sessions win."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -760,6 +811,25 @@ async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypat
 
     result = await session_delete({"session_id": "tui:ghost_session"})
     assert result == {"deleted": None}
+
+
+async def test_session_delete_rejects_a_running_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    key = "tui:running"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(key)
+    session.add_message("user", "keep working")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+    monkeypatch.setattr(turn_module, "is_session_busy", lambda candidate: candidate == key)
+
+    with pytest.raises(TurnInProgressError):
+        await session_delete({"session_id": key})
+
+    assert mgr.exists(key), "a running writer must keep its transcript"
 
 
 async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1477,31 +1547,60 @@ async def test_session_list_reaches_the_channels_it_was_asked_for(
     )
 
 
-async def test_session_list_orders_by_when_the_user_last_spoke(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A session's place in the list is when its owner last spoke to it, not when
-    a background write last touched the file: a long tail of assistant and tool
-    records would otherwise outrank a conversation the user just left."""
+async def test_session_list_orders_by_latest_conversational_activity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An assistant reply is new Session activity and moves its row."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
 
     mgr = SessionManager(tmp_path)
     older_user = mgr.get_or_create("tui:20260610_100000_older1")
-    older_user.add_message("user", "spoke first")
+    older_user.add_message("user", "spoke first", timestamp="2026-06-10T10:00:00")
     mgr.save(older_user)
 
     recent_user = mgr.get_or_create("tui:20260610_110000_recent")
-    recent_user.add_message("user", "spoke second")
+    recent_user.add_message("user", "spoke second", timestamp="2026-06-10T11:00:00")
     mgr.save(recent_user)
 
-    # The first session keeps working long after its owner stopped typing.
-    for _ in range(3):
-        older_user.add_message("assistant", "still working")
+    older_user.add_message("assistant", "finished later", timestamp="2026-06-10T12:00:00")
     mgr.save(older_user)
 
     monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
     result = await session_list({})
-    assert [item["id"] for item in result["sessions"]][0] == "tui:20260610_110000_recent"
+    assert [item["id"] for item in result["sessions"]][0] == "tui:20260610_100000_older1"
+
+
+async def test_session_list_counts_runtime_origin_user_rows_as_activity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delegated and runtime-origin content visibly changes its Session."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    injected = mgr.get_or_create("tui:injected")
+    injected.add_message("user", "human at ten", timestamp="2026-06-10T10:00:00")
+    mgr.save(injected)
+    human = mgr.get_or_create("tui:human")
+    human.add_message("user", "human at eleven", timestamp="2026-06-10T11:00:00")
+    mgr.save(human)
+    injected.add_message(
+        "user",
+        "delegated result at noon",
+        timestamp="2026-06-10T12:00:00",
+        origin="runtime",
+        delegated={"kind": "subagent"},
+    )
+    mgr.save(injected)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    rows = (await session_list({}))["sessions"]
+    assert rows[0]["id"] == "tui:injected"
+    assert rows[0]["preview"] == "human at ten"
+    assert rows[0]["last_message_preview"] == "delegated result at noon"
 
 
 async def test_session_compress_persists_what_it_archived(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1550,6 +1649,27 @@ async def test_session_list_previews_the_first_thing_the_user_said(
 
     result = await session_list({})
     assert result["sessions"][0]["preview"] == "summarise the quarterly report"
+
+
+async def test_session_list_keeps_identity_separate_from_latest_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:preview_fields")
+    session.add_message("user", "original question")
+    session.add_message("assistant", "first answer")
+    session.add_message("tool", "internal tool output")
+    session.add_message("assistant", "latest answer")
+    mgr.save(session)
+    monkeypatch.setattr(session_module, "_get_or_build_manager", lambda cfg: mgr)
+
+    [row] = (await session_list({}))["sessions"]
+    assert row["preview"] == "original question"
+    assert row["last_message_preview"] == "latest answer"
 
 
 async def test_session_compress_hands_back_what_the_caller_must_redraw(

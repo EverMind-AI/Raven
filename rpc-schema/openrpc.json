@@ -12,7 +12,7 @@
   "methods": [
     {
       "name": "session.list",
-      "summary": "List tui-channel sessions sorted by updated_at descending.",
+      "summary": "List selected session channels by latest conversational activity.",
       "params": [
         {
           "name": "limit",
@@ -20,6 +20,15 @@
           "schema": {
             "type": "integer",
             "description": "Max sessions to return."
+          }
+        },
+        {
+          "name": "channels",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Session channels to include; defaults to tui."
           }
         }
       ],
@@ -6167,18 +6176,29 @@
         "type": "object",
         "description": "One row in the TUI session picker (gatewayTypes.ts SessionListItem).",
         "additionalProperties": false,
-        "required": ["id", "message_count", "preview", "started_at", "title"],
+        "required": ["id", "message_count", "preview", "last_message_preview", "started_at", "updated_at", "title"],
         "properties": {
           "id": {
             "type": "string",
             "description": "Full session_key: <channel>:<chat_id>."
           },
           "message_count": { "type": "integer" },
-          "preview": { "type": "string" },
+          "preview": {
+            "type": "string",
+            "description": "First user message, used as the untitled-session identity fallback."
+          },
+          "last_message_preview": {
+            "type": "string",
+            "description": "Latest non-empty user or assistant message text."
+          },
           "source": { "type": "string" },
           "started_at": {
             "type": "number",
             "description": "Unix timestamp derived from created_at."
+          },
+          "updated_at": {
+            "type": "number",
+            "description": "Unix timestamp of the latest user or assistant message."
           },
           "title": { "type": "string" },
           "pinned": {

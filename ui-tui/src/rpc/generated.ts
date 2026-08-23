@@ -650,12 +650,23 @@ export interface SessionListItem {
    */
   id: string;
   message_count: number;
+  /**
+   * First user message, used as the untitled-session identity fallback.
+   */
   preview: string;
+  /**
+   * Latest non-empty user or assistant message text.
+   */
+  last_message_preview: string;
   source?: string;
   /**
    * Unix timestamp derived from created_at.
    */
   started_at: number;
+  /**
+   * Unix timestamp of the latest user or assistant message.
+   */
+  updated_at: number;
   title: string;
   /**
    * User pinned this session to the top of the picker.
@@ -1449,6 +1460,10 @@ export interface SessionListParams {
    * Max sessions to return.
    */
   limit?: number;
+  /**
+   * Session channels to include; defaults to tui.
+   */
+  channels?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

@@ -15,6 +15,7 @@ rpc.notify.event = (params) => {
     // somebody chose, not a failure -- no red dot for doing what was asked.
     const cancelled = ev.type === 'error' && (ev.payload || {}).reason === 'cancelled_by_client';
     if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(sid); }
+    refreshList();
   }
 };
 

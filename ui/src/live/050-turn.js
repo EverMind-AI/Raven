@@ -56,6 +56,7 @@ function onEvent(ev) {
     /* Read BEFORE busy is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */
     if (!busy && p.content) ask(p.content);
+    if (p.content) touchSession(cur, p.content);
     busy = true; busyCancellable = true; goState(); drawMeter();
     WS.turn += 1;
   } else if (ev.type === 'turn.started') {
@@ -259,7 +260,7 @@ function finishTurn(usage) {
   setCtx(usage.context_used || inTok, usage.context_max);
   const s = sess(cur);
   if (s && live.say.trim()) s.last = live.say.trim().split('\n')[0].slice(0, 60);
-  touchSession(cur);
+  touchSession(cur, live.say);
   // OS notification when the answer lands while the window is in the
   // background; ntfPush itself checks focus and the user's preference.
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || live.say.trim().slice(0, 80));
@@ -298,18 +299,13 @@ async function refreshList() {
   try {
     const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
     const rows = (r.sessions || []).map(rowFrom);
-    const curRow = sess(cur);
-    if (curRow && !rows.find((x) => x.id === cur)) rows.unshift(curRow);
-    // Pins come back from the server now (session metadata), so a refresh must
-    // NOT overlay the old in-memory flag: that would resurrect an unpin. The
-    // running dot is still client state -- set by cron.started, cleared by
-    // cron.finished, not by a list refresh.
-    SESS.forEach((old) => {
-      const nx = rows.find((x) => x.id === old.id);
-      if (!nx) return;
-      if (old.status) nx.status = old.status;
-    });
-    SESS = rows;
-    drawList();
+    // Pins and persisted fields come from the server. Only the running/done
+    // marker is client state; a not-yet-saved current row also survives until
+    // the first list response that contains it.
+    const reconciled = RavenIslands.rail.reconcile(SESS, rows, cur);
+    const currentMissing = reconciled.currentMissing;
+    SESS = reconciled.rows;
+    if (currentMissing) await leaveDeletedSession(cur);
+    else drawList();
   } catch { /* keep the stale list */ }
 }
