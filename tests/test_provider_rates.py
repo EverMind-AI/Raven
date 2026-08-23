@@ -8,6 +8,7 @@ arithmetic on top of it stays with the module that does the arithmetic.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 
@@ -39,6 +40,23 @@ def _reset_catalog_state():
     rates._OPENROUTER_CACHE.clear()
     yield
     rates._OPENROUTER_CACHE.clear()
+
+
+@pytest.fixture
+def minimax_row(monkeypatch):
+    """Pin the one row the assertions below need and the offline table lacks.
+
+    LiteLLM's bundled table carries no `minimax/MiniMax-M3` -- only the
+    bedrock-prefixed MiniMax models -- so the figure these two read was coming
+    from the table LiteLLM fetches remotely. Pinned here, what they exercise is
+    the resolution ladder rather than what MiniMax published this morning.
+    `minimax/` and not `minimax-global/`: `_candidates` maps the plan-billed
+    prefix onto the direct one before the table is consulted.
+    """
+    litellm = import_litellm()
+    monkeypatch.setattr(
+        litellm, "model_cost", {**litellm.model_cost, "minimax/MiniMax-M3": {"max_input_tokens": 1_000_000}}
+    )
 
 
 def _patch_openrouter(monkeypatch, handler):
@@ -87,6 +105,18 @@ _DEEPSEEK_MODELS = [
 
 
 # --- The tier LiteLLM answers (see `rates.token_rates` for the order) ---
+
+
+def test_the_suite_reads_litellms_table_offline():
+    """The table has to be a fixed input, not whatever a vendor published today.
+
+    LiteLLM fetches it at import unless this is set, and setting it after the
+    import is too late, so the value is published from `conftest` before any test
+    module loads. Asserted rather than assumed: without it a row appearing
+    upstream answers a lookup the tests below arrange to miss, and they fail on
+    numbers no commit here touched.
+    """
+    assert os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP") == "True"
 
 
 def test_a_litellm_mapped_model_is_priced_without_touching_the_network(monkeypatch):
@@ -588,7 +618,7 @@ def test_plan_billing_is_declared_not_inferred_from_oauth():
     assert plan_billed == {"openai_codex", "github_copilot", "minimax_global", "minimax_cn"}
 
 
-def test_a_plan_billed_provider_still_reports_a_window():
+def test_a_plan_billed_provider_still_reports_a_window(minimax_row):
     """Occupancy is the measure that means something on a subscription, so the
     window resolves even where no per-token figure describes the call."""
     for model in ("github_copilot/gpt-4o", "openai-codex/gpt-5.3-codex", "minimax-global/MiniMax-M3"):
@@ -606,7 +636,7 @@ def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it():
     assert resolve_context_window("openrouter/deepseek/deepseek-chat") == 65_536
 
 
-def test_the_window_those_families_report_is_the_vendors_own():
+def test_the_window_those_families_report_is_the_vendors_own(minimax_row):
     """Read from LiteLLM's table offline, so this is the number, not a default."""
     assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex") == 128_000
     assert rates._try_litellm_context_window("minimax-global/MiniMax-M3") == 1_000_000
