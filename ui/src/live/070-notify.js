@@ -33,117 +33,18 @@ rpc.notify['confirm.request'] = (p) => {
   approveSheet(p.prompt || '', () => say(true), () => say(false), p.conversation_id);
 };
 
-const SKIP_ANSWER = () => T('gui.clarify.skipped_msg');
+/* The question the agent asks mid-turn. The sheet is the island's
+   (features/composer/clarify.ts); what is left here is the transport and the
+   step marking -- it answers with one string, whichever control the reader
+   used, including the skip, whose wording is the sheet's copy.
 
+   No echo row: the asking tool's own row renders the full question-to-answer
+   exchange in its detail once the tool returns, so a separate answered line
+   would say the same thing twice. The step is still marked hasQA so the
+   exchange keeps its own step instead of merging into a silent work run. */
 rpc.notify['clarify.request'] = (p) => {
-  /* The server names the conversation it is asking on behalf of, which is not
-     always the one on screen: a question can arrive for a turn the reader
-     stepped away from. Its own answer beats "wherever the reader happens to
-     be", and the fallback is only for a frame that predates the field. */
-  const owner = p.conversation_id || sheetSession();
-  sheetDropClass('csheet', owner);
-  const sheet = mk('div', 'csheet');
-  sheet.setAttribute('role', 'dialog');
-  sheet.setAttribute('aria-label', T('gui.clarify.aria'));
-
-  /* No echo row here: the asking tool's own row (询问) renders the full
-     question -> answer exchange in its detail once the tool returns, so a
-     separate 已回答 line would say the same thing twice. The step is still
-     marked hasQA so the exchange keeps its own step instead of merging
-     into a silent work run. */
-  const markQA = () => { if (live.st) live.st.hasQA = true; };
-  const done = (text) => {
-    rpc.call('clarify.respond', { request_id: p.request_id, answer: text }).catch(() => {});
-    cleanup();
-    markQA();
-  };
-  const skip = () => {
-    rpc.call('clarify.respond', { request_id: p.request_id, answer: SKIP_ANSWER() }).catch(() => {});
-    cleanup();
-    markQA();
-  };
-
-  const head = mk('div', 'hd');
-  const q = mk('div', 'q', p.question || '');
-  const fold = mk('button', 'ic tipdn');
-  fold.appendChild(ico('M6.5 10 12 15.5 17.5 10', 'cv'));
-  const setFold = (v) => {
-    sheet.dataset.fold = String(v);
-    const lb = T(v ? 'gui.clarify.unfold' : 'gui.clarify.fold');
-    fold.dataset.tip = lb;
-    fold.setAttribute('aria-label', lb);
-  };
-  fold.onclick = () => setFold(sheet.dataset.fold !== 'true');
-  setFold(false);
-  q.onclick = () => { if (sheet.dataset.fold === 'true') setFold(false); };
-  const x = mk('button', 'ic tipdn');
-  x.appendChild(ico('M7 7l10 10M17 7 7 17'));
-  x.dataset.tip = T('gui.clarify.skip');
-  x.setAttribute('aria-label', T('gui.clarify.skip_aria'));
-  x.onclick = skip;
-  head.append(q, fold, x);
-  sheet.appendChild(head);
-
-  const body = mk('div', 'body');
-  const choices = p.choices || [];
-  choices.forEach((c, i) => {
-    const b = mk('button', 'opt');
-    b.append(mk('span', 'n', String(i + 1)), mk('span', null, c));
-    b.onclick = () => done(c);
-    body.appendChild(b);
+  clarifySheet(p, (answer) => {
+    rpc.call('clarify.respond', { request_id: p.request_id, answer }).catch(() => {});
+    if (live.st) live.st.hasQA = true;
   });
-
-  const other = mk('div', 'other');
-  other.appendChild(mk('span', 'n', String(choices.length + 1)));
-  const inp = mk('input');
-  inp.placeholder = T(choices.length ? 'gui.clarify.other_ph' : 'gui.clarify.ph');
-  other.appendChild(inp);
-  body.appendChild(other);
-  sheet.appendChild(body);
-
-  const foot = mk('div', 'foot');
-  const skipBtn = mk('button', 'btn', T('gui.clarify.skip'));
-  skipBtn.onclick = skip;
-  const submit = mk('button', 'btn key', T('gui.clarify.submit'));
-  submit.disabled = true;
-  submit.onclick = () => { if (inp.value.trim()) done(inp.value.trim()); };
-  foot.append(skipBtn, submit);
-  sheet.appendChild(foot);
-
-  inp.oninput = () => { submit.disabled = !inp.value.trim(); };
-  inp.onkeydown = (e) => {
-    e.stopPropagation();
-    if (composing(e)) return;
-    if (e.key === 'Enter' && inp.value.trim()) done(inp.value.trim());
-  };
-
-  // Number keys pick an option while focus is outside the input.
-  const onKey = (e) => {
-    // Parked with another conversation, this sheet is still on the document's
-    // keydown; only the mounted one may be answered by number.
-    if (!sheet.isConnected || document.activeElement === inp || composing(e)) return;
-    const n = Number(e.key);
-    if (n >= 1 && n <= choices.length) { e.preventDefault(); done(choices[n - 1]); }
-    if (n === choices.length + 1) { e.preventDefault(); setFold(false); inp.focus(); }
-  };
-  document.addEventListener('keydown', onKey, true);
-
-  /* The sheet is absolutely positioned, so growing it does not change the
-     dock's own height and the dock's ResizeObserver never fires -- dockLift()
-     has to be called by hand here. It reads the sheet out of the DOM, so
-     folding or resizing only needs to re-measure. */
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(dockLift) : null;
-
-  function cleanup() {
-    document.removeEventListener('keydown', onKey, true);
-    if (ro) ro.disconnect();
-    sheetRemove(sheet);
-  }
-
-  sheetAdd(sheet, owner);
-  if (ro) ro.observe(sheet);
-  // Only when the question is the one on screen: focusing a field inside a
-  // detached element steals the caret out of the composer the reader is using.
-  if (sheet.isConnected) inp.focus();
 };
-

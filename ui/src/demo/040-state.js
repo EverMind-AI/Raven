@@ -127,7 +127,7 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    parts are an IIFE nested in this script, and the four of them that raise or
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-  approveSheet } = RavenIslands.composer;
+  approveSheet, clarifySheet } = RavenIslands.composer;
 
 
 /* Preview without an engine: __approve('rm -rf build/'). */
