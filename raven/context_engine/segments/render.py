@@ -290,13 +290,32 @@ def render_router_skills(hits: list[Any]) -> str:
     return "\n\n".join(parts)
 
 
+# What a declared surface means for the person reading the reply. Glossed rather
+# than reported as a bare word because the name alone does not tell the model
+# what it may suggest: a served page and a terminal share the ``tui`` channel, so
+# without this an agent answering a browser reader offers to exit with Ctrl+C.
+_SURFACE_GLOSS: dict[str, str] = {
+    "page": "a page in a web browser -- no terminal, no keys to press, and closing the tab is how it ends",
+    "shell": "a desktop window wrapping the same page -- no terminal for the reader",
+    "tui": "a terminal running the interactive client",
+}
+
+
 def build_runtime_context(
     now_fn: Callable[[], datetime],
     channel: str | None,
     chat_id: str | None,
+    surface: str | None = None,
     tool_notices: list[str] | None = None,
 ) -> str:
     """Untrusted runtime metadata block injected before the user message.
+
+    ``surface`` names the front end this turn came from when the connection
+    declared one at handshake. It is reported alongside the channel rather than
+    instead of it: the channel is where a reply is delivered, the surface is what
+    the reader is looking at, and the served page shares the ``tui`` channel with
+    the terminal, so the channel alone has the agent telling a browser reader to
+    press Ctrl+C.
 
     ``tool_notices`` are host-side facts about the tool surface the definitions
     themselves cannot carry -- e.g. an installed MCP plugin whose tools are
@@ -311,6 +330,9 @@ def build_runtime_context(
     lines = [f"Current Time: {now} ({tz})"]
     if channel and chat_id:
         lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
+    if surface:
+        gloss = _SURFACE_GLOSS.get(surface)
+        lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
     if tool_notices:
         lines += tool_notices
     return RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)

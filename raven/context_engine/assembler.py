@@ -98,6 +98,7 @@ class ContextAssembler(ContextEngine):
             describe_tool=turn.describe_tool,
             channel=turn.channel,
             chat_id=turn.chat_id,
+            surface=turn.surface,
             session_messages=session_messages,
             budget=budget,
         )
@@ -193,7 +194,9 @@ class ContextAssembler(ContextEngine):
         single-newline join and the collapse of any blank lines within.
         """
         notices = self.get_tool_notices() if self.get_tool_notices is not None else None
-        runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id, tool_notices=notices)
+        runtime_ctx = render.build_runtime_context(
+            self._now_fn, ctx.channel, ctx.chat_id, surface=ctx.surface, tool_notices=notices
+        )
         if ctx.scent_text:
             scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())
             runtime_ctx = f"{runtime_ctx}\n{scent}"
