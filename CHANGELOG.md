@@ -94,6 +94,18 @@ All notable changes to Raven are documented here.
   not stored; a todo-list write labelled `exec` was wrong, and an unlisted name is rendered
   from the name itself.
 
+- An `openai`-backed sub-agent's conversation now holds the middle of its run, not just the
+  question and the answer. An endpoint that reports its own steps -- a deep-research model
+  sending `reasoning_steps` -- has those searches, fetches and thoughts written into the
+  instance log as tool calls and their results, and its token cost recorded, where before
+  the backend published none of it and a call left two rows and no cost. Measured on one
+  captured research call: two rows became nine. Each step keeps the endpoint's own name for
+  what it did and its own argument keys, so `fetch_url_content` is not reported as Raven's
+  `web_fetch` -- it fetches and then runs an extraction, which is a different tool. Buffered
+  and streamed responses differ in shape, a streamed thought arriving as token fragments,
+  and both produce the same rows; a streamed run republishes on every step, so a panel
+  watching it sees the run progress rather than only its result.
+
 ### Breaking Changes
 
 - `raven onboard --skip-deep-research` is now `--skip-subagents`, because step 5 is the

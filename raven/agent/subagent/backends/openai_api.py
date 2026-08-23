@@ -5,7 +5,9 @@ Each call is one Chat Completions request. A resumed instance replays its
 prior ``history`` as the leading messages instead of the endpoint holding any
 session state itself; see ``run``'s ``history``/``on_messages`` pair. The API
 key lives in config; the raw JSON is read directly so provider extension
-fields survive.
+fields survive. ``reasoning_steps`` is one of those: it is how a deep-research
+endpoint reports the work behind an answer, and it reaches the run's own record
+through :mod:`raven.agent.subagent.openai_steps`.
 """
 
 from __future__ import annotations
@@ -18,7 +20,10 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from loguru import logger
 
+from raven.agent.subagent import activity
+from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta
+from raven.agent.subagent.openai_steps import OpenAIStepReader
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -91,6 +96,7 @@ class OpenAIApiBackend:
         headers: dict[str, str],
         timeout: "aiohttp.ClientTimeout",
         on_delta: Callable[[str], Awaitable[None]],
+        reader: OpenAIStepReader,
     ) -> str:
         """Consume a Chat Completions SSE response, returning the assembled text.
 
@@ -102,9 +108,14 @@ class OpenAIApiBackend:
         and one keep-alive comment must not fail a turn that is answering fine.
         A stream that yields nothing at all still returns "", which ``run``
         treats exactly as an empty non-streamed reply.
+
+        ``reader`` is the caller's rather than one built here: ``run`` owns one
+        per call, so the transcript this loop republishes as the stream runs and
+        the settled one published after it are built from one accumulator.
         """
         content: list[str] = []
         reasoning: list[str] = []
+        usage: Any = None
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.post(url, json=payload, headers=headers) as resp:
                 await self._raise_for_status(resp)
@@ -119,7 +130,18 @@ class OpenAIApiBackend:
                         frame = jsonlib.loads(data)
                     except ValueError:
                         continue
-                    choices = frame.get("choices") if isinstance(frame, dict) else None
+                    if not isinstance(frame, dict):
+                        continue
+                    # Read before the delta guard below, which drops a frame
+                    # carrying no choices -- and OpenAI's own `include_usage`
+                    # frame is exactly that. Kept rather than reported here
+                    # because `note_usage` sums: a provider that repeats its
+                    # cumulative total on every frame would have the run's cost
+                    # multiplied by the frame count, so the last report wins and
+                    # is published once the stream ends.
+                    if frame.get("usage"):
+                        usage = frame["usage"]
+                    choices = frame.get("choices")
                     first = (choices or [{}])[0]
                     delta = first.get("delta") if isinstance(first, dict) else None
                     if not isinstance(delta, dict):
@@ -131,6 +153,17 @@ class OpenAIApiBackend:
                     thought = delta.get("reasoning_content") or delta.get("reasoning")
                     if thought:
                         reasoning.append(str(thought))
+                    # A different field from the two above, serving a different
+                    # purpose: those are the answer's fallback, these are the work
+                    # that produced it. Republished per step rather than once at
+                    # the end, because a panel watching the run reads the activity
+                    # and a transcript that only exists after the answer is not a
+                    # live view of anything.
+                    steps = delta.get("reasoning_steps")
+                    for step in steps if isinstance(steps, list) else []:
+                        reader.feed_delta(step)
+                        activity.note_transcript(turn_rows.rows(reader.events()))
+        activity.note_usage(usage)
         # Same fallback as the non-streamed path: some reasoning models put the
         # answer only in a reasoning field. It is collected but never streamed --
         # the wire's reasoning event carries no instance tag, so a direct chat's
@@ -186,6 +219,7 @@ class OpenAIApiBackend:
         # a slow response body, which `total=None` still allows.
         client_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
 
+        reader = OpenAIStepReader()
         if on_delta is not None:
             content: Any = await self._stream_chat(
                 url,
@@ -193,6 +227,7 @@ class OpenAIApiBackend:
                 headers=headers,
                 timeout=client_timeout,
                 on_delta=bounded_delta(on_delta, self.max_output_chars),
+                reader=reader,
             )
         else:
             data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
@@ -204,6 +239,12 @@ class OpenAIApiBackend:
             if not content:
                 # Some reasoning models put the answer only in a reasoning field.
                 content = message.get("reasoning_content") or message.get("reasoning") or ""
+            reader.feed_steps(message.get("reasoning_steps"))
+            activity.note_usage(data.get("usage"))
+        # The answer is deliberately not among these rows: the record keeps it and
+        # its reader appends it as the closing message, the same contract the acp
+        # lane follows.
+        activity.note_transcript(turn_rows.rows(reader.events()))
         reply = str(content).strip()[: self.max_output_chars]
         if on_messages is not None:
             on_messages([*messages, {"role": "assistant", "content": reply}])

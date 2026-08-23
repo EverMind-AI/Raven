@@ -100,7 +100,7 @@ Event vocabulary, transport-neutral: `say(text)`, `thought(text, at)`,
 `call(id, name, arguments_json, at)`, `result(id, text, ok, at)`.
 
 `rows(events, *, in_flight_answer=None)` reproduces the algorithm
-`AcpCollector.messages()` runs today, verbatim:
+`_TurnCollector.messages()` runs today, verbatim:
 
 - a `call` emits one assistant row wearing the thought that preceded it:
   `{role, content: <narration>, tool_calls: [{id, type: "function", function:
@@ -118,7 +118,7 @@ emits none, so `content` is `""` on every call row it produces - the same value
 the `acp` lane writes for a turn that did not narrate.
 
 The module must not import `acp_dialects`: a `call` event carries a name and an
-`arguments_json` string, not a `ToolCall`. `AcpCollector.messages()` becomes a
+`arguments_json` string, not a `ToolCall`. `_TurnCollector.messages()` becomes a
 thin call into it.
 
 This is the whole point of the change. The value of matching the `acp` row shape

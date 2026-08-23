@@ -38,6 +38,7 @@ from raven.agent.acp.pool import get_pool
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
 from raven.agent.subagent import activity
 from raven.agent.subagent.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
+from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
@@ -291,70 +292,36 @@ class _TurnCollector:
     def messages(self, *, in_flight: bool = False) -> list[dict[str, Any]]:
         """The ordered events as provider-shaped messages.
 
-        One assistant message per tool call, wearing whatever thought preceded
-        it, followed by a ``role="tool"`` result matched through the call id --
-        the exact shape ``session.resume`` stores, so the client renders a
-        delegated run with the renderer it already has. Each message carries the
-        wall clock of the event that opened it, which is what lets the renderer
-        fold a finished stretch with a real duration.
-
-        The final answer is NOT in the settled shape: the record keeps it in
-        ``out.md``, and the reader appends it as the closing message.
-        ``in_flight`` appends whatever answer text has streamed in so far
-        instead, because a live view has no record to read it from.
+        The shape itself lives in
+        :mod:`raven.agent.subagent.backends.turn_rows`, shared with the OpenAI
+        Step Dialect: one implementation is what keeps the two transports'
+        conversations readable by one renderer. This maps ACP's events onto that
+        vocabulary and nothing else.
         """
-        msgs: list[dict[str, Any]] = []
-        pending: list[str] = []
-        pending_at: str | None = None
-        narration: list[str] = []
+        events: list[dict[str, Any]] = []
         for ev in self.events:
-            if ev["t"] == "say":
-                narration.append(ev["text"])
-            elif ev["t"] == "thought":
-                if not pending:
-                    pending_at = ev.get("at")
-                pending.append(ev["text"])
-            elif ev["t"] == "call":
-                call: ToolCall = ev["call"]
-                entry: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": "".join(narration).strip(),
-                    "tool_calls": [
-                        {
-                            "id": ev["id"],
-                            "type": "function",
-                            "function": {"name": call.name, "arguments": call.arguments_json()},
-                        }
-                    ],
-                }
-                if at := (pending_at or ev.get("at")):
-                    entry["timestamp"] = at
-                if pending:
-                    entry["reasoning_content"] = "".join(pending)
-                    pending = []
-                    pending_at = None
-                narration = []
-                msgs.append(entry)
-            elif ev["t"] == "result":
-                result: dict[str, Any] = {
-                    "role": "tool",
-                    "tool_call_id": ev["id"],
-                    "content": ev["text"] if ev["ok"] else f"[failed] {ev['text']}".strip(),
-                }
-                if at := ev.get("at"):
-                    result["timestamp"] = at
-                msgs.append(result)
-        if pending:
-            trailing: dict[str, Any] = {"role": "assistant", "content": "", "reasoning_content": "".join(pending)}
-            if pending_at:
-                trailing["timestamp"] = pending_at
-            msgs.append(trailing)
-        if in_flight and (streamed := self.closing_text):
-            streaming: dict[str, Any] = {"role": "assistant", "content": streamed}
-            if self.answer_at:
-                streaming["timestamp"] = self.answer_at
-            msgs.append(streaming)
-        return msgs
+            kind = ev["t"]
+            if kind == "say":
+                events.append(turn_rows.say(ev["text"]))
+            elif kind == "thought":
+                events.append(turn_rows.thought(ev["text"], at=ev.get("at")))
+            elif kind == "call":
+                acp_call: ToolCall = ev["call"]
+                events.append(
+                    turn_rows.call(
+                        id=ev["id"],
+                        name=acp_call.name,
+                        arguments_json=acp_call.arguments_json(),
+                        at=ev.get("at"),
+                    )
+                )
+            elif kind == "result":
+                events.append(turn_rows.result(id=ev["id"], text=ev["text"], ok=ev["ok"], at=ev.get("at")))
+        return turn_rows.rows(
+            events,
+            in_flight_answer=self.closing_text if in_flight else None,
+            in_flight_answer_at=self.answer_at if in_flight else None,
+        )
 
 
 class AcpAgentBackend:
