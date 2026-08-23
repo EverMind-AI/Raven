@@ -161,7 +161,7 @@ def main() -> None:
     (dist / "index.html").write_text(out, encoding="utf-8")
     print(f"built dist/index.html ({len(out):,} bytes)")
 
-    # Binary assets stay files rather than data: URIs -- inlining 320 KB of
+    # Static assets stay files rather than data: URIs -- inlining 320 KB of
     # artwork would grow the page by a third again in base64 and re-download it
     # on every load. The server mounts dist/assets at /assets, and the release
     # wheel force-includes the whole dist directory.
@@ -170,6 +170,7 @@ def main() -> None:
         out_assets = dist / "assets"
         shutil.rmtree(out_assets, ignore_errors=True)
         shutil.copytree(src_assets, out_assets)
+        shutil.copy2(ROOT / "icon" / "raven.svg", out_assets / "raven.svg")
         total = sum(p.stat().st_size for p in out_assets.rglob("*") if p.is_file())
         print(f"copied dist/assets ({total:,} bytes)")
 
