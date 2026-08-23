@@ -743,9 +743,7 @@ class TestAGlobalOptionValueIsNotASubcommand:
             "nice -n 10 rm -rf build",
         ],
     )
-    def test_a_command_a_runner_was_handed_is_still_classified(
-        self, asking: ShellCommandPolicy, command: str
-    ) -> None:
+    def test_a_command_a_runner_was_handed_is_still_classified(self, asking: ShellCommandPolicy, command: str) -> None:
         assert asking.evaluate(command) is not CommandDecision.ALLOW
 
     def test_a_runner_holding_a_power_command_is_still_refused(self, asking: ShellCommandPolicy) -> None:
