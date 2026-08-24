@@ -41,8 +41,7 @@ DS.onboard = {
       .then((fresh) => { if (fresh && fresh.update_available) showUpNote('ver', fresh.latest_version); })
       .catch(() => {});
     await loadSessions();
-    listReady = true;
-    drawList();
+    RavenIslands.rail.release();
     /* Home is the new-task screen, never the last session: opening straight
        into someone else's half-finished transcript is a worse first frame
        than an empty composer, and the rail is one click away. A draft writes

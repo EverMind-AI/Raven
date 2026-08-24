@@ -1,5 +1,5 @@
 /* ══ module 1b: the conversation ══════════════════════════════════ */
-function openSession(s) {
+function openDemoSession(s) {
   parkDraft(); loadDraft(s.id);
   // Opening it IS reading it: the finished marker has done its job and the
   // row goes back to carrying its timestamp.

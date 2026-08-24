@@ -10,13 +10,12 @@ import type { SessRow } from './types'
 import type { JSX, KeyboardEvent, MouseEvent } from 'react'
 import { term as findTerm } from '../../shell/find'
 
-/* The row's context/⋯ menu. Opening a session still leaves through the shell
-   by name; the current pointer is page-scoped modern state. Actions ON a
-   session go through the source instead, so
+/* The row's context/⋯ menu. Opening and acting on a session go through the
+   source, while the current pointer is page-scoped modern state, so
    what happens is whatever the installed source can actually do. */
 function togglePin(s: SessRow): void {
   s.pin = !s.pin
-  shell().drawList?.()
+  store.draw()
   shell().toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
   store.pin(s.id, !!s.pin)
 }
@@ -34,7 +33,7 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
         const cur = current()
         if (s.id !== cur) {
           setCurrent(s.id)
-          sh.openSession?.(s)
+          store.open(s)
         }
         store.rename()
       }
@@ -81,7 +80,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     const now = current()
     if (s.id !== now) {
       setCurrent(s.id)
-      sh.openSession?.(s)
+      store.open(s)
     }
   }
   const beginEdit = (e: MouseEvent): void => {
@@ -289,7 +288,7 @@ export function RailApp(): JSX.Element | null {
     )
   }
 
-  // Straight through, in the order SESS already holds: newest last activity
+  // Straight through, in the order the source already holds: newest last activity
   // first, which is the same value each row's clock shows.
   const rest = rows.filter(x => !x.pin && x.from !== 'cron')
   return (

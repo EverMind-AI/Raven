@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { open as openUrl } from '../../shell/open-url'
-import { deleteAll as deleteAllSessions } from '../rail/store'
+import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
 import type { SettingsState } from './store'
@@ -1126,7 +1126,7 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
           onClick={() =>
             /* A session operation offered from the settings page, so it is
                the session source's, not this page's. */
-            sh.confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sh.sessionCount?.() ?? 0 }), t('gui.set.delete_all_yes'), () =>
+            sh.confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
               deleteAllSessions(),
             )
           }

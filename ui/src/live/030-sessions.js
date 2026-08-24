@@ -71,8 +71,8 @@ function touchSession(id, preview) {
   if (last) s.last = last;
   s.at = Math.floor(Date.now() / 1000);
   s.when = whenLabel(s.at);
-  SESS.sort((a, b) => (b.at || 0) - (a.at || 0));
-  drawList();
+  sessionRows().sort((a, b) => (b.at || 0) - (a.at || 0));
+  sessionDraw();
 }
 
 const SESS_CHANNELS = ['tui', 'cron'];
@@ -80,7 +80,7 @@ const SESS_CHANNELS = ['tui', 'cron'];
 async function loadSessions() {
   await loadCronNames();
   const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
-  SESS = (r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0));
+  sessionReplace((r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0)));
 }
 
 /* Tool results arrive wrapped in prompt-injection guards

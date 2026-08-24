@@ -30,7 +30,7 @@ const SLASH = [
       const s = sess(sessionCurrent());
       $('#stage').innerHTML = ''; pitch();
       if (s) { s.run = null; s.last = T('gui.sess.not_started'); }
-      use = null; drawMeter(); drawList();
+      use = null; drawMeter(); sessionDraw();
     }) }
 ];
 
@@ -53,13 +53,13 @@ function send(text) {
   const p = $('#stage').querySelector('.pitch'); if (p) p.remove();
   ask(text);
   turn.dispatch({ type: 'send' }); use = null;
-  drawMeter(); goState(); drawList();
+  drawMeter(); goState(); sessionDraw();
   const run = pickRun(text);
   const s = sess(sessionCurrent());
   if (s && !s.run) {
     s.run = run.key; s.status = null;
     if (s.title === '新任务') { s.title = run.title; $('#title').textContent = plainTitle(s.title); }
-    drawList();
+    sessionDraw();
   }
   replay(run, false);
 }
@@ -67,5 +67,5 @@ function send(text) {
 function halt() {
   stop_(); turn.dispatch({ type: 'idle' });
   noteRow('已中断 · 上面的步骤保留', '', { quiet: true, host: $('#stage') });
-  drawMeter(); goState(); drawList();
+  drawMeter(); goState(); sessionDraw();
 }

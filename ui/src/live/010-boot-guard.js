@@ -33,21 +33,19 @@ window.__liveBoot = 1;
    rail on every refresh. */
 (() => { const r = document.querySelector('.rail'); if (r) r.dataset.counts = 'pending'; })();
 
-/* The demo shell has already seeded and painted its mock data by the time this
-   runs. Clear the shared session and schedule containers synchronously, blank
-   the conversation, and hold the rail on skeleton rows until the real list
-   lands. Skills and plugins now read live-owned source rows instead. */
-SESS = []; sessionSet(null);
+/* The demo shell has already painted by the time this runs. Install the empty
+   live session source synchronously, blank the conversation, and hold the rail
+   on skeleton rows until the real list lands. */
+let liveSessionRows = [];
+DS.sessions = {
+  snapshot: () => ({ rows: liveSessionRows, cur: sessionCurrent(), busy: turn.busy() }),
+  replace: (rows) => { liveSessionRows = rows; },
+  open: (s) => openLiveSession(s),
+};
+RavenIslands.rail.hold();
+sessionSet(null);
 CRONS.length = 0;
 $('#stage').innerHTML = '';
 $('#flash').textContent = '';
 $('#title').textContent = T('gui.new_task');
-let listReady = false;
-{
-  const origDrawList = drawList;
-  drawList = function () {
-    if (listReady) { origDrawList(); return; }
-    RavenIslands.rail.skeleton();
-  };
-  drawList();
-}
+sessionDraw();

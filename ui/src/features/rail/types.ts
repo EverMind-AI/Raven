@@ -1,8 +1,6 @@
-/* A row of the session rail. The objects themselves live in the shared
- * SESS array the legacy layers keep mutating in place (the turn machinery
- * flips `status`, the schedule pages unshift rows, settings wipes it), so
- * every field is the loose shape those writers actually produce.
- */
+/* A row of the session rail. The objects themselves live in the active
+ * session source (fixture or live), and the page layers mutate them in place,
+ * so every field is the loose shape those writers actually produce. */
 export interface SessRow {
   id: string
   title: string
@@ -32,6 +30,8 @@ export interface RailSnapshot {
 
 export interface RailSource {
   snapshot(): RailSnapshot
+  replace(rows: SessRow[]): void
+  open(s: SessRow): void | Promise<void>
 
   /* The things a reader can do TO a session, rather than read about one.
      All optional, and the reason is that the offline demo has an answer for

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { install, term, toggle } from './find'
+import { install, onChange, term, toggle } from './find'
 
 import type { Shell } from './bridge'
 
@@ -27,11 +27,11 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    drawList: () => {
-      draws += 1
-    },
   }
   window.RavenShell = shell
+  onChange(() => {
+    draws += 1
+  })
   install()
 }
 
@@ -51,6 +51,7 @@ const key = (name: string, over: Partial<KeyboardEventInit> = {}): boolean =>
 beforeEach(wire)
 
 afterEach(() => {
+  onChange(() => {})
   delete window.RavenShell
   document.body.innerHTML = ''
 })

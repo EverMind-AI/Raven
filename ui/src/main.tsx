@@ -152,6 +152,7 @@ session.onChange(() => {
   dagSheet.sync()
   rail.draw()
 })
+find.onChange(rail.draw)
 
 /* The prose renderer, called by name from eight legacy render sites: the
    replay (demo/080 x3), history restore (live/040 x3) and the turn machine
@@ -227,7 +228,8 @@ window.RavenIslands = {
   },
   rail: {
     draw: rail.draw,
-    skeleton: rail.skeleton,
+    hold: rail.hold,
+    release: rail.release,
     markNew: rail.markNew,
     remove: rail.remove,
     rename: rail.rename,

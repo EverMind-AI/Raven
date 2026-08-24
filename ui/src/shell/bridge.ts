@@ -96,13 +96,7 @@ export interface Shell {
   attImageSet?(path: string, url: string): void
   slashName?(id: string): string
   slashHelp?(id: string): string
-  /* Rail island verbs, all optional for the same reason. They are late-bound
-     closures over legacy names the live layer rebinds (openSession) or wraps
-     (drawList during the live boot), which is why the island calls back out
-     instead of acting locally. What is done TO a session -- delete, rename,
-     pin, delete-everything -- left this bridge for DS.sessions. */
-  drawList?(): void
-  openSession?(s: unknown): void
+  /* Rail island verbs that still belong to page chrome or draft storage. */
   dropDraft?(id: string): void
   openCron?(): void
   /* What markNew needs of the chrome's page registry: the NAV_OF keys and the
@@ -138,7 +132,6 @@ export interface Shell {
      which unmounts nothing, so the island cannot answer this from its own
      state. */
   setIsOpen?(): boolean
-  sessionCount?(): number
   look?: { get(): LookState; set(patch: Partial<LookState>): void }
   ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
 }

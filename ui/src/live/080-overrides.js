@@ -23,18 +23,18 @@ rpc.onReconnect = async () => {
   for (const k of Object.keys(subBySession)) delete subBySession[k];
   for (const k of Object.keys(subSession)) delete subSession[k];
   live.subId = null;
-  SESS.forEach((s) => { if (s.status === 'run') s.status = null; });
+  sessionRows().forEach((s) => { if (s.status === 'run') s.status = null; });
   /* Re-subscribing is not enough: events emitted while the socket was down
      are gone, and if the turn ENDED in that gap the client would keep its
      busy spinner forever. Reload the whole session from disk instead -- the
      transcript is persisted server-side, so a full re-open is lossless, and
      a turn that is genuinely still running keeps streaming into the fresh
-     subscription that openSession sets up. */
+     subscription that sessionOpen sets up. */
   const current = sessionCurrent();
   if (current && !draft) {
     turn.dispatch({ type: 'idle' });
     const title = $('#title').textContent;
-    await openSession({ id: current, title });
+    await sessionOpen({ id: current, title });
     showStatus(T('gui.reconnected'));
     setTimeout(killStatus, 2500);
   } else if (current) {
@@ -65,10 +65,10 @@ function startDraft() {
   resetView();
   draft = true; sessionSet(null);
   $('#title').textContent = T('gui.new_task');
-  pitch(); drawList(); ta.focus();
+  pitch(); sessionDraw(); ta.focus();
 }
 
-openSession = async function (s) {
+async function openLiveSession(s) {
   parkTurn();
   // Same as startDraft: while session.resume is in flight the old session
   // may still be streaming, and a stale live.subId would paint its events
@@ -77,7 +77,7 @@ openSession = async function (s) {
   parkDraft(); loadDraft(s.id);
   draft = false;
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
-  // reconnect path, so clear the flag on the row in SESS, not on the arg.
+  // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
   const row = sess(s.id);
   if (row && row.status === 'done') row.status = null;
   markNewCurrent();
@@ -107,7 +107,7 @@ openSession = async function (s) {
     /* resume hands back the canonical id, so the row rendered from the listed
        id no longer matches the current pointer -- without this redraw the rail shows nothing
        selected until the reader clicks a session themselves. */
-    drawList();
+    sessionDraw();
     const u = (r.info && r.info.usage) || {};
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
@@ -125,7 +125,7 @@ openSession = async function (s) {
     pitch();
     toast(`打开会话失败：${e.message || e}`);
   }
-};
+}
 
 /* The attachment note baked into the message is the record of what was handed
    over -- the reader's own bubble renders its chips from it, and it is what
@@ -155,7 +155,7 @@ function liveSend(text) {
   ask(text);
   turn.dispatch({ type: 'send' });
   resetTurnState();
-  drawMeter(); goState(); drawList();
+  drawMeter(); goState(); sessionDraw();
   const failed = (e) => {
     killStatus();
     turn.dispatch({ type: 'idle' });
@@ -176,13 +176,13 @@ function liveSend(text) {
     const r = await rpc.call('session.create', {});
     const s = { id: r.session_id, title: T('gui.new_task'), last: rowPreview(text) || T('gui.sess.not_started'),
       when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
-    SESS.unshift(s); sessionSet(s.id); draft = false;
+    sessionRows().unshift(s); sessionSet(s.id); draft = false;
     turnOwner = sessionCurrent();
     // The composer was owned by 'new' until this point; keep later keystrokes
     // filed under the session that just came into being.
     if (draftOwner === 'new') draftOwner = sessionCurrent();
     titleFromFirstMessage(text);
-    drawList();
+    sessionDraw();
     await subscribe(s.id);
     await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
   })().catch(failed);
@@ -208,7 +208,7 @@ function softStop(keepCancelling) {
   /* A stopped turn still produced what it produced. */
   RavenIslands.transcript.artifacts(WS.turn);
   resetTurnState();
-  drawMeter(); goState(); drawList();
+  drawMeter(); goState(); sessionDraw();
 }
 
 /* Queued messages were waiting for the engine, and a stop is the engine coming
@@ -235,10 +235,10 @@ DS.composer.stop = function () {
   rpc.call('turn.cancel', { session_key: owner })
     .then(() => {
       transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); drawList(); drainQueue(); }
+      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
     }, () => {
       transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); drawList(); }
+      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); }
     });
   softStop(true);
 };
@@ -261,12 +261,12 @@ async function leaveDeletedSession(sessionId) {
   forgetSubscription(sessionId);
   sheetsForget(sessionId);
   RavenIslands.dag.forget(sessionId);
-  const transition = RavenIslands.rail.removeRow(SESS, sessionCurrent(), sessionId);
-  SESS = transition.rows;
-  if (transition.kind === 'unchanged') { drawList(); return; }
+  const transition = RavenIslands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
+  sessionReplace(transition.rows);
+  if (transition.kind === 'unchanged') { sessionDraw(); return; }
   if (transition.kind === 'open') {
     sessionSet(transition.next.id);
-    await openSession(transition.next);
+    await sessionOpen(transition.next);
     return;
   }
   $('#ta').value = '';
@@ -274,12 +274,12 @@ async function leaveDeletedSession(sessionId) {
 }
 
 async function leaveArchivedSession(sessionId) {
-  const transition = RavenIslands.rail.removeRow(SESS, sessionCurrent(), sessionId);
-  SESS = transition.rows;
-  if (transition.kind === 'unchanged') { drawList(); return; }
+  const transition = RavenIslands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId);
+  sessionReplace(transition.rows);
+  if (transition.kind === 'unchanged') { sessionDraw(); return; }
   if (transition.kind === 'open') {
     sessionSet(transition.next.id);
-    await openSession(transition.next);
+    await sessionOpen(transition.next);
     return;
   }
   $('#ta').value = '';
@@ -299,7 +299,7 @@ DS.sessions.remove = function (s) {
 
 DS.sessions.archive = async function (s) {
   try {
-    const at = SESS.findIndex(row => row.id === s.id);
+    const at = sessionRows().findIndex(row => row.id === s.id);
     const result = await rpc.call('session.archive', { session_id: s.id, archived: true });
     if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`);
     await leaveArchivedSession(s.id);
@@ -311,8 +311,8 @@ DS.sessions.archive = async function (s) {
           if (restored.archived || restored.session_key !== s.id) {
             throw new Error(`session ${s.id} was not restored`);
           }
-          if (!SESS.some(row => row.id === s.id)) SESS.splice(Math.max(0, Math.min(at, SESS.length)), 0, s);
-          drawList();
+          if (!sessionRows().some(row => row.id === s.id)) sessionRows().splice(Math.max(0, Math.min(at, sessionRows().length)), 0, s);
+          sessionDraw();
         } catch (e) {
           toast(T('gui.sess.restore_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
         }

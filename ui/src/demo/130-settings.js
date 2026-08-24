@@ -28,7 +28,7 @@ let APP_VERSION = null;
    layer either way: the list and the current session are page bindings, and an
    island cannot reassign one. */
 DS.sessions.deleteAll = () => {
-  SESS = []; sessionSet(null); drawList(); $('#stage').innerHTML = '';
+  sessionReplace([]); sessionSet(null); sessionDraw(); $('#stage').innerHTML = '';
   $('#title').textContent = T('gui.new_task'); pitch();
 };
 
@@ -107,7 +107,7 @@ function lookSet(patch) {
    this one is never consulted there. */
 function langPickDemo(v) {
   langSet(v);
-  drawList(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
+  sessionDraw(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
 }
 
 /* ---- notifications ---------------------------------------------------

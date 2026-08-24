@@ -58,7 +58,7 @@ document.addEventListener('keydown', (e) => {
 $('#newBtn').onclick = () => {
   showPage(null);
   const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', run: null };
-  SESS.unshift(s); sessionSet(s.id); drawList(); openSession(s); ta.focus();
+  sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); ta.focus();
 };
 $('#renameBtn').onclick = () => renameTitle();
 
