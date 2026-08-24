@@ -146,6 +146,9 @@ class AcpDialect:
     key = ""
     """Substring of ``agentInfo.name`` that selects this dialect."""
 
+    plan_tool_name = "plan"
+    """What to call the tool behind a ``sessionUpdate: "plan"`` frame."""
+
     def tool_name(self, update: dict[str, Any]) -> str:
         """The transport's own name for the call, at the finest grain it gives.
 
@@ -195,6 +198,61 @@ class AcpDialect:
         if raw is None:
             return ""
         return json.dumps(raw, ensure_ascii=False, default=str)
+
+    def names_call(self, update: dict[str, Any]) -> bool:
+        """Whether this frame carries enough to name the call it revises.
+
+        A ``tool_call_update`` replaces the fields it carries, and codex-acp
+        does not repeat ``kind`` on one. Re-reading the name from such a frame
+        returned :data:`_FALLBACK_TOOL` and overwrote a name the opening frame
+        had right -- measured, ``kind: "search"`` became ``tool_call``.
+        """
+        kind = update.get("kind")
+        return isinstance(kind, str) and bool(kind)
+
+    def subject_from_result(self, update: dict[str, Any], *, name: str | None = None) -> str | None:
+        """A subject that exists only in the completed frame, if this adapter has one.
+
+        ``name`` is the call's own name from its opening frame, offered because
+        the completed frame this reads usually cannot supply it itself --
+        measured, codex's own completing frames repeat none of ``tool_name``'s
+        discriminators. An override that only applies to specific tools reads
+        this to gate itself; an unnamed call is the safe default and returns
+        ``None``, so a caller must supply the name to get any match at all.
+        """
+        return None
+
+    def permission_command(self, params: dict[str, Any]) -> str | None:
+        """The command a ``session/request_permission`` says the call will run.
+
+        The spec puts it on the embedded tool call. Its value here is that an
+        adapter may badge a call as something other than what it ran; this is
+        the frame that still has the command.
+        """
+        command = _dict(_dict(params.get("toolCall")).get("rawInput")).get("command")
+        return command.strip() if isinstance(command, str) and command.strip() else None
+
+    def plan_rows(self, update: dict[str, Any]) -> tuple[str, str]:
+        """One plan snapshot as a subject and a checklist.
+
+        The frame is the whole list every time, so a reader shows the current
+        state rather than a diff. The subject is the step being worked on,
+        because that is the one thing a folded row can usefully say.
+        """
+        entries = update.get("entries")
+        rows: list[str] = []
+        current = ""
+        for entry in entries if isinstance(entries, list) else []:
+            fields = _dict(entry)
+            content = fields.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            status = fields.get("status")
+            mark = {"completed": "x", "in_progress": ">"}.get(status if isinstance(status, str) else "", " ")
+            if mark == ">" and not current:
+                current = content.strip()
+            rows.append(f"[{mark}] {content.strip()}")
+        return current or (f"{len(rows)} steps" if rows else ""), "\n".join(rows)
 
     def call(self, update: dict[str, Any]) -> ToolCall:
         title = update.get("title")

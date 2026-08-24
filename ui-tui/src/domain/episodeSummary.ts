@@ -5,12 +5,13 @@
 import type { Episode, EpisodeTool } from '../types.js'
 
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
+import { codexRule } from './codexTools.js'
 
 // Per-tool phrasing. `style` decides how a run of the same tool collapses:
 //   count  — homogeneous info tools -> "read 6 files"; single -> the target
 //   target — heterogeneous/mutating tools -> show the target; many -> "ran 3 commands"
 // Verbs are deliberately Raven's own plain lowercase (not Claude Code's labels).
-interface VerbRule {
+export interface VerbRule {
   verb: string
   unit: string
   style: 'count' | 'target'
@@ -43,11 +44,12 @@ const OVERRIDES: Record<string, VerbRule> = {
 // "image_generate" -> "image generate". Never misleading, always maintenance-free.
 const humanize = (name: string) => name.split('_').filter(Boolean).join(' ')
 
-// The rule for any tool: its override if we have one, else a generic rule built
-// from the humanized name. This is what keeps the table from needing a row per
-// tool — unknown tools get a real label ("image generate"), not a wrong "ran".
+// The rule for any tool: its override if we have one, else codex's own table,
+// else a generic rule built from the humanized name. Codex is consulted second
+// rather than merged into OVERRIDES because the two are keyed by different
+// vocabularies -- OVERRIDES by Raven's names, CODEX_VERBS by codex's.
 const ruleFor = (name: string): VerbRule =>
-  OVERRIDES[name] ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
+  OVERRIDES[name] ?? codexRule(name) ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
 
 // Search-like tools read better with the needle quoted: searched "DeviceFlow".
 const QUOTED = new Set(['grep', 'find', 'web_search'])
@@ -190,7 +192,17 @@ export const execLabel = (command: string): string => {
 // Only path-like arguments are clipped from the LEFT (a path's meaning lives in
 // its tail). Questions, commands and prose must keep their head, or the row
 // becomes unreadable ("…体是指哪个？").
-const PATHY = new Set(['read_file', 'write_file', 'edit_file', 'list_dir'])
+const PATHY = new Set([
+  'read_file',
+  'write_file',
+  'edit_file',
+  'list_dir',
+  'apply_patch',
+  'fileChange',
+  'imageView',
+  'commandExecution.read',
+  'commandExecution.listFiles'
+])
 
 const titleName = (name: string) =>
   name
@@ -228,7 +240,7 @@ const target = (tool: EpisodeTool, budget?: number): string => {
     return `"${clip(raw, Math.min(budget ?? 40, 72))}"`
   }
 
-  if (tool.name === 'exec') {
+  if (tool.name === 'exec' || tool.name === 'commandExecution') {
     return execLabel(raw)
   }
 

@@ -157,4 +157,45 @@ describe('foldDirectTurns', () => {
 
     expect(msgs[0]!.text).toBe('part one\n\npart two')
   })
+
+  it('folds a codex turn keeping codex names on every row', () => {
+    const turns = [
+      turn({ role: 'user', content: 'fix the bug', call_id: 'c1', at_ms: 1 }),
+      turn({
+        role: 'assistant', call_id: 'c1', at_ms: 2,
+        tool_calls: [call('t1', 'commandExecution.read', { path: '/w/calc.py' })]
+      }),
+      turn({ role: 'tool', content: 'def add(a, b):', call_id: 'c1', tool_call_id: 't1', at_ms: 3 }),
+      turn({
+        role: 'assistant', call_id: 'c1', at_ms: 4,
+        tool_calls: [call('t2', 'apply_patch', { path: 'calc.py' })]
+      }),
+      turn({ role: 'tool', content: 'Success. Updated the following files:', call_id: 'c1', tool_call_id: 't2', at_ms: 5 })
+    ]
+
+    const msgs = foldDirectTurns(turns)
+    const episodes = msgs.find(m => m.kind === 'episodes')!.episodes!
+    const names = episodes.flatMap(e => e.tools.map(t => t.name))
+
+    expect(names).toEqual(['commandExecution.read', 'apply_patch'])
+    expect(episodes[1]!.tools[0]!.summary).toBe('calc.py')
+  })
+
+  it('folds a stored apply_patch row to the filename, not the tool name', () => {
+    // The shape the runtime now stores after `_backfill_subject` drops the
+    // `command` that duplicated `apply_patch`'s own name: `path` first, `cwd`
+    // trailing behind it.
+    const msgs = foldDirectTurns([
+      turn({ role: 'user', content: 'fix add()' }),
+      turn({
+        role: 'assistant',
+        tool_calls: [call('t1', 'apply_patch', { path: 'calc.py', cwd: '/tmp/codexprobe/ws' })]
+      }),
+      turn({ role: 'tool', tool_call_id: 't1', content: 'Success. Updated the following files:' }),
+      turn({ role: 'assistant', content: 'Fixed.' })
+    ])
+
+    const episodes = msgs.find(m => m.kind === 'episodes')!.episodes!
+    expect(episodes[0]!.tools[0]!.summary).toBe('calc.py')
+  })
 })

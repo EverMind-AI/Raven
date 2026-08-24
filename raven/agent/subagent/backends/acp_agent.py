@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.acp.capabilities import CapabilitySnapshot
+from raven.agent.acp.permissions import PERMISSION_METHOD
 from raven.agent.acp.pool import get_pool
 from raven.agent.acp.protocol import AcpError, AcpRemoteError
 from raven.agent.subagent import activity
@@ -66,6 +67,13 @@ _THOUGHT_UPDATES = ("agent_thought_chunk",)
 # breaking on one would split a single reply mid-sentence.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
+
+# One synthetic id for the turn's plan. The frame carries no call id of its
+# own, and a plan frame re-sends the whole list on every change -- five times
+# for one plan in codex's capture, the only adapter measured sending one -- so
+# a row per frame would be five near-identical rows. The branch this feeds is
+# dialect-independent: any adapter's plan frame lands here.
+_PLAN_CALL_ID = "acp-plan"
 
 
 class AcpEmptyTurnError(RuntimeError):
@@ -133,6 +141,16 @@ class _TurnCollector:
         return datetime.now().isoformat()
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
+        if method == PERMISSION_METHOD:
+            # Subject only, never the name: this frame reports `kind: "execute"`
+            # even for a call the session update badged `read`, and reading it
+            # for a name would erase the distinction codex drew.
+            command = self._dialect.permission_command(params)
+            tool = params.get("toolCall")
+            call_id = str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
+            if command and call_id:
+                self._backfill_permission_command(call_id, command)
+            return
         update = params.get("update")
         if not isinstance(update, dict):
             return
@@ -199,12 +217,15 @@ class _TurnCollector:
                             "at": self._now(),
                         }
                     )
+                    self._backfill_subject(str(update.get("toolCallId") or ""), update)
+        elif kind == "plan":
+            self._plan(update)
         elif kind == "usage_update":
             self.usage = {k: v for k, v in update.items() if k != "sessionUpdate"}
         # Republished on every update rather than once at the end: the live
         # index is how a panel watches the run, and a transcript that only
         # exists after the answer is not a live view of anything.
-        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, "tool_call", "tool_call_update"):
+        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
 
     def _revise_call(self, update: dict[str, Any]) -> None:
@@ -222,7 +243,8 @@ class _TurnCollector:
         adapter that revises an argument has revised what the tool actually ran
         with. The whole call is re-parsed rather than only its input, since the
         same frame also carries the ``kind`` and ``_meta`` a dialect names the
-        tool from.
+        tool from -- but only when it does: ``names_call`` is what decides, and
+        a frame that answers False leaves the name alone.
         """
         if not self._dialect.revises_call(update):
             return
@@ -233,7 +255,10 @@ class _TurnCollector:
                 previous: ToolCall = event["call"]
                 event["call"] = ToolCall(
                     id=previous.id,
-                    name=revised.name,
+                    # Guarded like the fields below it: a frame that carries no
+                    # kind cannot name the call, and reading one anyway is what
+                    # renamed codex's searches to the fallback.
+                    name=revised.name if self._dialect.names_call(update) else previous.name,
                     argument=revised.argument or previous.argument,
                     # An update need not repeat the title, and losing it would
                     # leave a no-argument call with nothing to show at all.
@@ -241,6 +266,111 @@ class _TurnCollector:
                     raw_input=revised.raw_input or previous.raw_input,
                 )
                 return
+
+    def _backfill_subject(self, call_id: str, update: dict[str, Any]) -> None:
+        """Set a call's subject from its own result.
+
+        The frame that opened the call did not have it: codex sends
+        ``apply_patch`` as the command and names the files it patched only in
+        the output. Never overwrites a subject already known -- a later frame
+        revising an argument is ``_revise_call``'s business, not this.
+
+        Passes the call's own name, established when it opened, into
+        ``subject_from_result`` as the tool the completed frame belongs to: that
+        frame typically carries none of ``tool_name``'s own discriminators, so
+        without it a dialect could not tell an ``apply_patch`` completion from
+        any other tool's own -- including one whose output merely looks like an
+        apply_patch envelope.
+        """
+        for event in reversed(self.events):
+            if event.get("t") == "call" and event.get("id") == call_id:
+                previous: ToolCall = event["call"]
+                if previous.argument:
+                    return
+                subject = self._dialect.subject_from_result(update, name=previous.name)
+                if not subject:
+                    return
+                # The new subject must win a `path` collision -- an
+                # `imageGeneration` call's own `rawInput` can already carry one
+                # -- so it seeds the dict and `previous.raw_input` is copied in
+                # behind it, the same order `CodexDialect.call` merges with.
+                raw_input = {"path": subject}
+                for key, value in previous.raw_input.items():
+                    if key == "path":
+                        continue
+                    # `apply_patch`'s own `command` is the tool's name, not an
+                    # argument -- a reader that picks a subject by scanning
+                    # known key names rather than by position (as
+                    # `ui-tui`'s `callSubject` does) would otherwise take it
+                    # over the subject just recovered here. A real recovered
+                    # command never equals the call's own name, so this never
+                    # drops one.
+                    if key == "command" and value == previous.name:
+                        continue
+                    raw_input[key] = value
+                event["call"] = ToolCall(
+                    id=previous.id,
+                    name=previous.name,
+                    argument=subject,
+                    title=previous.title,
+                    raw_input=raw_input,
+                )
+                return
+
+    def _backfill_permission_command(self, call_id: str, command: str) -> None:
+        """Set a call's subject to the command a permission request recovered.
+
+        Guarded on ``raw_input`` already carrying a ``command`` key rather than
+        on ``argument`` being non-empty: a ``commandExecution.read`` opens with
+        its ``locations`` path already filling ``argument``, and that
+        placeholder is exactly what this must replace. A real
+        ``commandExecution`` -- and ``apply_patch``, whose ``rawInput.command``
+        is its own name -- already carry their command there, and overwriting
+        either would either restate the same value or, for ``apply_patch``,
+        block the file-derived subject its own result still owes it.
+        """
+        for event in reversed(self.events):
+            if event.get("t") == "call" and event.get("id") == call_id:
+                previous: ToolCall = event["call"]
+                if previous.raw_input.get("command"):
+                    return
+                event["call"] = ToolCall(
+                    id=previous.id,
+                    name=previous.name,
+                    argument=command,
+                    title=previous.title,
+                    raw_input={"command": command, **previous.raw_input},
+                )
+                return
+
+    def _plan(self, update: dict[str, Any]) -> None:
+        """Open the turn's plan row, or move the one already open.
+
+        Only the opening frame breaks the message. A revision that broke it too
+        would split the narration around a plan that changes four times.
+        """
+        subject, checklist = self._dialect.plan_rows(update)
+        if not checklist:
+            return
+        call = ToolCall(
+            id=_PLAN_CALL_ID,
+            name=self._dialect.plan_tool_name,
+            argument=subject,
+            title="",
+            raw_input={"argument": subject} if subject else {},
+        )
+        for event in self.events:
+            if event.get("t") == "call" and event.get("id") == _PLAN_CALL_ID:
+                event["call"] = call
+                break
+        else:
+            self._tool_ran = True
+            self.events.append({"t": "call", "id": _PLAN_CALL_ID, "call": call, "at": self._now()})
+        for event in self.events:
+            if event.get("t") == "result" and event.get("id") == _PLAN_CALL_ID:
+                event["text"] = checklist
+                return
+        self.events.append({"t": "result", "id": _PLAN_CALL_ID, "ok": True, "text": checklist, "at": self._now()})
 
     @property
     def calls(self) -> list[ToolCall]:

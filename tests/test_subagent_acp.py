@@ -1498,6 +1498,20 @@ async def test_the_approver_leaves_unsupported_methods_refused() -> None:
     assert await handle("fs/read_text_file", {"path": "/etc/hostname"}) is UNHANDLED
 
 
+async def test_an_observer_that_raises_still_yields_the_approval() -> None:
+    """An unanswered permission request cancels the whole turn."""
+    from raven.agent.acp.permissions import auto_approver
+    from tests import acp_frames
+
+    async def boom(method: str, params: dict[str, object]) -> None:
+        raise RuntimeError("observer is broken")
+
+    handle = auto_approver("codex", observe=boom)
+    answer = await handle("session/request_permission", acp_frames.CODEX_READ_PERMISSION)
+
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "allow_always"}}
+
+
 # ---- cancelling a turn on the agent, not only locally -----------------------
 
 
@@ -2086,3 +2100,246 @@ async def test_tool_results_arrive_without_their_transport_wrapping(tmp_path: Pa
     result = next(m for m in did.transcript if m.get("role") == "tool")
     assert result["content"] == "the file says hello"
     assert not result["content"].startswith("[failed]")
+
+
+import pytest
+
+from raven.agent.subagent.acp_dialects import CodexDialect
+from raven.agent.subagent.backends.acp_agent import _TurnCollector
+from tests import acp_frames
+
+
+@pytest.mark.asyncio
+async def test_a_completing_frame_does_not_rename_the_call() -> None:
+    """The name survives a completing frame, open to close.
+
+    Not proof of the `names_call` guard by itself: both `CODEX_WEBSEARCH_OPEN`
+    and `CODEX_WEBSEARCH_DONE` carry `rawInput.type == "webSearch"`, so
+    `tool_name` already resolves `webSearch` on either frame regardless of
+    `kind`, and the guard's decision is never observed here. It is observed on
+    the MCP shape below, where the completing frame carries no discriminator at
+    all.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_WEBSEARCH_OPEN})
+    await collector("session/update", {"update": acp_frames.CODEX_WEBSEARCH_DONE})
+
+    assert [c.name for c in collector.calls] == ["webSearch"]
+
+
+@pytest.mark.asyncio
+async def test_a_kindless_mcp_completion_does_not_rename_the_call() -> None:
+    """The shape where the `names_call` guard is the reason the name survives.
+
+    An MCP completion carries neither `kind` nor `_meta`: `revises_call` is
+    True (there is a non-empty `rawInput`) but `names_call` is False, so the
+    guard is what keeps the opening frame's `mcp.fs.read` instead of falling
+    through to the base dialect's fallback `tool_call` -- the pre-Task-1 bug.
+    Synthetic frames, shaped from the adapter's `createMcpToolCallUpdate`
+    (open) and `completeItemEvent`'s `mcpToolCall` arm (completion); no capture
+    reached this branch, so these are not in `tests/acp_frames.py`.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    mcp_open = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "mcp-1",
+        "kind": "execute",
+        "status": "in_progress",
+        "_meta": {"is_mcp_tool_call": True},
+        "rawInput": {"server": "fs", "tool": "read", "arguments": {}},
+    }
+    mcp_done = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "mcp-1",
+        "status": "completed",
+        "rawInput": {"server": "fs", "tool": "read", "arguments": {}},
+    }
+
+    await collector("session/update", {"update": mcp_open})
+    await collector("session/update", {"update": mcp_done})
+
+    assert [c.name for c in collector.calls] == ["mcp.fs.read"]
+
+
+@pytest.mark.asyncio
+async def test_a_patch_row_names_the_file_it_changed() -> None:
+    """Two edits rendered identically as `exec apply_patch` before this."""
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_PATCH_OPEN})
+    await collector("session/update", {"update": acp_frames.CODEX_PATCH_DONE})
+
+    call = collector.calls[0]
+    assert call.name == "apply_patch"
+    assert call.subject == "calc.py"
+
+
+@pytest.mark.asyncio
+async def test_a_patch_rows_stored_command_does_not_shadow_its_subject() -> None:
+    """`rawInput.command` on `apply_patch` is the tool's own name, not an argument.
+
+    `_TurnCollector._backfill_subject` must drop it once the file subject is
+    known, or the stored record still reads `{"path": "calc.py", "command":
+    "apply_patch", ...}` -- correct by insertion order, but a reader that picks
+    a subject by scanning known key names instead (``ui-tui``'s
+    ``callSubject``) finds ``command`` first and shows the tool's own name.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_PATCH_OPEN})
+    await collector("session/update", {"update": acp_frames.CODEX_PATCH_DONE})
+
+    stored = json.loads(collector.calls[0].arguments_json())
+    assert "command" not in stored
+    assert next(iter(stored)) == "path"
+    assert stored["path"] == "calc.py"
+
+
+@pytest.mark.asyncio
+async def test_a_search_row_keeps_its_own_subject_despite_a_patch_shaped_result() -> None:
+    """`subject_from_result` is scoped to `apply_patch`/`imageGeneration`.
+
+    Without that gate, a `commandExecution.search` row is exposed to any result
+    whose output happens to contain a patch-envelope-shaped line: nothing on
+    the completed frame identifies which tool it belongs to (`tool_name` falls
+    through to the base fallback on it, the same gap `_backfill_subject`'s own
+    docstring notes), so an ungated match would silently relabel this row's
+    subject with the injected path instead of leaving it alone.
+
+    Synthetic frames, shaped from the adapter's `createCommandActionEvent`
+    `search` arm (`ParsedCommand::Search` carries no `rawInput` on either
+    frame); no capture reached a `.search` row, so these are not in
+    `tests/acp_frames.py`.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    search_open = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "exec-search-1",
+        "status": "in_progress",
+        "kind": "search",
+        "title": "Searching for 'Update File' in .",
+    }
+    search_done = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "exec-search-1",
+        "status": "completed",
+        "rawOutput": {"formatted_output": "*** Update File: sneaky.py\n", "exit_code": 0},
+    }
+
+    await collector("session/update", {"update": search_open})
+    await collector("session/update", {"update": search_done})
+
+    call = collector.calls[0]
+    assert call.name == "commandExecution.search"
+    assert call.subject == "Searching for 'Update File' in ."
+
+
+@pytest.mark.asyncio
+async def test_a_permission_frame_restores_the_command_a_read_hid() -> None:
+    """codex badges `sed -n ... calc.py` as a read and drops the command.
+
+    The permission request for the same toolCallId still has it.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_READ_OPEN})
+    await collector("session/request_permission", acp_frames.CODEX_READ_PERMISSION)
+
+    call = collector.calls[0]
+    assert call.name == "commandExecution.read"
+    assert call.subject == "sed -n '1,200p' calc.py"
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_read_command_survives_the_apply_patch_guard() -> None:
+    """The `apply_patch` guard must not over-drop a real recovered command.
+
+    `commandExecution.read`'s `command` comes from the permission frame and is
+    the actual shell command, never the call's own name, so the guard added
+    for `apply_patch` -- drop `command` only when it equals `previous.name` --
+    must leave it in place.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_READ_OPEN})
+    await collector("session/request_permission", acp_frames.CODEX_READ_PERMISSION)
+
+    stored = json.loads(collector.calls[0].arguments_json())
+    assert stored["command"] == "sed -n '1,200p' calc.py"
+
+
+@pytest.mark.asyncio
+async def test_a_plan_is_one_row_that_moves() -> None:
+    """Five snapshots for one plan; one row per frame would be five rows."""
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_PLAN_FIRST})
+    await collector("session/update", {"update": acp_frames.CODEX_PLAN_SECOND})
+
+    assert [c.name for c in collector.calls] == ["update_plan"]
+    assert collector.calls[0].subject == "Fix add() using the patch tool"
+
+    rows = collector.messages()
+    results = [r for r in rows if r.get("role") == "tool"]
+    assert len(results) == 1
+    assert results[0]["content"] == (
+        "[x] Show the contents of calc.py with a shell command\n[>] Fix add() using the patch tool"
+    )
+
+
+@pytest.mark.asyncio
+async def test_only_the_first_plan_frame_breaks_the_message() -> None:
+    """A moving plan must not fragment the narration around it."""
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    await collector("session/update", {"update": acp_frames.CODEX_PLAN_FIRST})
+    await collector(
+        "session/update",
+        {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working on it."}}},
+    )
+    await collector("session/update", {"update": acp_frames.CODEX_PLAN_SECOND})
+    await collector(
+        "session/update",
+        {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Nearly done."}}},
+    )
+
+    assert collector.text == "Working on it. Nearly done."
+
+
+@pytest.mark.asyncio
+async def test_a_backfilled_subject_overwrites_a_colliding_raw_input_key() -> None:
+    """The recovered subject must win a `raw_input["path"]` collision, not lose to it.
+
+    An `imageGeneration` call's own `rawInput` can already carry a `path` of its
+    own; the completed frame's `savedPath` must replace it, not be shadowed by
+    it once the two are merged into one dict. Synthetic -- no capture carries a
+    colliding `path`. Shape from the adapter's `imageGenerationRawOutput`, the
+    same source as the dialect-level fixture in `test_acp_dialects.py`.
+    """
+    collector = _TurnCollector(dialect=CodexDialect())
+
+    image_open = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "img-1",
+        "kind": "other",
+        "status": "in_progress",
+        "title": "Image generation",
+        "rawInput": {"prompt": "a red bicycle", "path": "/tmp/codexprobe/ws/reference.png"},
+    }
+    image_done = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "img-1",
+        "status": "completed",
+        "rawOutput": {"revisedPrompt": "a red bicycle", "savedPath": "/w/bike.png"},
+    }
+
+    await collector("session/update", {"update": image_open})
+    await collector("session/update", {"update": image_done})
+
+    call = collector.calls[0]
+    assert call.name == "imageGeneration"
+    assert call.subject == "/w/bike.png"
+    assert json.loads(call.arguments_json())["path"] == "/w/bike.png"

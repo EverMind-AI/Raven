@@ -989,6 +989,18 @@ through `exit_code` inside `rawOutput`.
 _Avoid_: reading `title` as the tool name - it is a label, and for one adapter it is the
 entire command.
 
+**Dialect discriminator** -- the field on an ACP frame that identifies which of
+one adapter's tools a call is, when the spec's `kind` cannot. codex-acp sends
+five `kind` values for eleven tools, and separates them with `rawInput.type`,
+`_meta.is_mcp_tool_call`, `_meta.codex.collaboration`, `_meta.codex.subagent`
+and `_meta.contextCompaction`. Read by `acp_dialects/codex.py`.
+
+**Subject back-fill** -- setting a tool call's subject from a frame later than
+the one that opened it. Three frames can supply one: a `tool_call_update`
+revising `rawInput` (`_revise_call`), a completed result carrying the subject in
+its output (`_backfill_subject`, used by codex's `apply_patch`), and a
+`session/request_permission` carrying the command a re-badged call really ran.
+
 **Tool Vocabulary** (`raven/agent/subagent/tool_vocabulary.py`):
 Raven's own tool names (`exec`, `read_file`, ...), and the mapping into them applied when a
 delegated run's rows go on the wire. A record carries the transport's name because

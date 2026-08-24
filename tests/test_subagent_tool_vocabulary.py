@@ -142,3 +142,22 @@ def test_a_subject_under_an_unenumerated_key_still_reaches_the_tools_key() -> No
     fn = out["tool_calls"][0]["function"]
     assert fn["name"] == "exec"
     assert json.loads(fn["arguments"]) == {"command": "foo"}
+
+
+def test_codex_names_are_not_renamed_at_the_read_boundary() -> None:
+    """Codex's vocabulary is not raven's, so nothing in RAVEN_NAME matches it."""
+    row = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "exec-1",
+                "type": "function",
+                "function": {"name": "commandExecution.read", "arguments": '{"path": "/tmp/a.py"}'},
+            }
+        ],
+    }
+
+    out = normalize_row(row)
+
+    assert out["tool_calls"][0]["function"]["name"] == "commandExecution.read"
+    assert json.loads(out["tool_calls"][0]["function"]["arguments"])["path"] == "/tmp/a.py"

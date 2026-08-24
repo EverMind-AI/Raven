@@ -293,3 +293,36 @@ describe('episodeFailed', () => {
     expect(episodeFailed(episodes[0]!)).toBe(false)
   })
 })
+
+describe('codex tool rows', () => {
+  it('keeps codex names as the verb so the conversation reads as codex', () => {
+    expect(toolParts(tool('apply_patch', 'calc.py')).verb).toBe('apply_patch')
+    expect(toolParts(tool('webSearch', 'gpt-5 codex')).verb).toBe('webSearch')
+    expect(toolParts(tool('update_plan', '4 steps')).verb).toBe('update_plan')
+  })
+
+  it('folds a run of codex reads under the table verb and a files unit, not the generic calls fallback', () => {
+    const reads = [
+      tool('commandExecution.read', "sed -n '1,200p' a.py"),
+      tool('commandExecution.read', "sed -n '1,200p' b.py"),
+      tool('commandExecution.read', "sed -n '1,200p' c.py")
+    ]
+
+    expect(toolsPhrase(reads)).toBe('commandExecution.read 3 files')
+  })
+
+  it('keeps the filename of a long commandExecution.read path, the way raven paths do', () => {
+    const long = `/tmp/everme/server/internal/controller/${'nested/'.repeat(12)}memory/agent_memory.go`
+    const { detail } = toolParts(tool('commandExecution.read', long))
+
+    expect(detail.startsWith('…')).toBe(true)
+    expect(detail.endsWith('agent_memory.go')).toBe(true)
+  })
+
+  it('names the program a codex command ran, not the whole pipeline', () => {
+    const detail = toolParts(tool('commandExecution', 'cat x | python3 -c "import sys"')).detail
+
+    expect(detail).toContain('python3')
+    expect(detail).not.toContain('import sys')
+  })
+})
