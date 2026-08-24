@@ -19,15 +19,6 @@ export interface WsPanelView {
   picked: boolean
 }
 
-/* What the appearance page reads and writes: per-front-end look plus the
-   shared config.language. */
-export interface LookState {
-  theme: string
-  codeFont: string
-  motion: string
-  lang: string
-}
-
 export interface Shell {
   /* `fallback` mirrors the legacy T(): what to show when the catalogue has no
      entry for the key (the connections form labels schema-declared fields). */
@@ -62,9 +53,6 @@ export interface Shell {
   openXa?(): void
   openConn?(): void
   markNew?(): void
-  /* Remembers a theme pick: the preference belongs to the legacy look store,
-     which also persists it and repaints the appearance page. */
-  themeSet?(next: 'dark' | 'light'): void
   /* Republishes the offset the docked composer stands at; a panel drag moves
      the column the composer lives in. */
   plugRedraw?(): void
@@ -76,8 +64,6 @@ export interface Shell {
      which unmounts nothing, so the island cannot answer this from its own
      state. */
   setIsOpen?(): boolean
-  look?: { get(): LookState; set(patch: Partial<LookState>): void }
-  ntf?: { get(): boolean; set(on: boolean): void; push(title: string): void }
 }
 
 declare global {

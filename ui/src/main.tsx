@@ -47,8 +47,10 @@ import * as find from './shell/find'
 import * as failureWriter from './shell/failure'
 import * as foot from './shell/foot'
 import * as lightbox from './shell/lightbox'
+import * as look from './shell/look'
 import * as menuWriter from './shell/menu'
 import * as navfly from './shell/navfly'
+import * as notifications from './shell/notifications'
 import * as urlAction from './shell/open-url'
 import * as panes from './shell/panes'
 import * as perm from './shell/perm'
@@ -73,6 +75,8 @@ declare global {
     workGlyphSvg?: typeof composer.workGlyphSvg
     plainTitle?: typeof plainTitle
     toggleTheme?: typeof toggleTheme
+    lookLoad?: typeof look.load
+    ntfPush?: typeof notifications.show
     toggleFind?: typeof find.toggle
     drawBanner?: typeof banner.draw
     setMemFault?: typeof banner.setFault
@@ -110,6 +114,11 @@ window.plainTitle = plainTitle
    toggleFind does have one: the chrome's Cmd+F handler opens the row after
    showing the rail, and that handler stays legacy for now. */
 window.toggleTheme = toggleTheme
+/* Boot restores appearance through this name; a live turn raises its desktop
+   notice through the other. The callers remain concat code, but both stores
+   and all of their decisions live in the modern modules now. */
+window.lookLoad = look.load
+window.ntfPush = notifications.show
 window.toggleFind = find.toggle
 window.paneLoad = panes.load
 window.drawFoot = foot.draw

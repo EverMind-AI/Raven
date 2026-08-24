@@ -22,7 +22,6 @@ window.RavenShell = {
   openXa: () => openXa(),
   openConn: () => openConn(),
   markNew: () => markNewCurrent(),
-  themeSet: (next) => { CFG.theme = next; lookSave(); shellTheme(); if (setIsOpen()) drawSettings(); },
   plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
 
@@ -33,5 +32,3 @@ if (typeof openSet === 'function') window.RavenShell.openSet = () => openSet();
 if (typeof closeSet === 'function') window.RavenShell.closeSet = () => closeSet();
 if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOpen();
 if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();
-if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
-if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };

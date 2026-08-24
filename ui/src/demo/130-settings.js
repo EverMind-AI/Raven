@@ -1,8 +1,8 @@
 /* ══ module 3: settings page ══════════════════════════════════════
    The renderer is the settings island (ui/src/features/settings/); what
    remains here is its shell face -- the names the chrome, the boot list,
-   the capabilities rows and the live layer's redrawAll still call -- the
-   look/notification plumbing other parts share, and the fixture source. */
+   the capabilities rows and the live layer's redrawAll still call -- and the
+   fixture source. */
 
 /* The fixture provider rows. Live mode owns the rows fetched from its model
    source, so it never refills this demo list in place. */
@@ -49,57 +49,6 @@ function nlSay(el, reset, msg) {
 }
 const notLive = () => toast(T('gui.set.not_live'));
 
-/* ---- appearance -----------------------------------------------------
-   Each front end's own business, so it persists here rather than in the
-   shared config. Language is the exception, it goes to config.language
-   because the TUI and the agent's replies follow it. */
-const LOOK_KEY = 'raven.gui.look';
-/* Tells the desktop shell what ground colour this window actually shows, so
-   its native launch splash can match on the NEXT run -- the page's theme
-   lives in this origin's localStorage, which the shell cannot read before
-   the page is up. No-op outside the shell. */
-function shellTheme() {
-  try {
-    const t = document.documentElement.dataset.theme
-      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    window.webkit.messageHandlers.raven.postMessage({ type: 'theme', value: t });
-  } catch { /* not the shell */ }
-}
-function applyLook() {
-  const d = document.documentElement.dataset;
-  if (CFG.theme === 'system') delete d.theme; else d.theme = CFG.theme;
-  d.motion = CFG.motion;
-  d.font = CFG.codeFont;
-  shellTheme();
-}
-function lookSave() {
-  try {
-    localStorage.setItem(LOOK_KEY, JSON.stringify(
-      { theme: CFG.theme, codeFont: CFG.codeFont, motion: CFG.motion }));
-  } catch { /* private mode or quota: this tab only */ }
-}
-function lookLoad() {
-  try {
-    const o = JSON.parse(localStorage.getItem(LOOK_KEY) || 'null');
-    if (o && typeof o === 'object') {
-      if (o.theme) CFG.theme = o.theme;
-      if (o.codeFont) CFG.codeFont = o.codeFont;
-      if (o.motion) CFG.motion = o.motion;
-    }
-  } catch { /* fall back to the defaults in CFG */ }
-  applyLook();
-}
-/* The island's appearance page reads and writes through these two. */
-function lookGet() {
-  return { theme: CFG.theme, codeFont: CFG.codeFont, motion: CFG.motion, lang: LANG };
-}
-function lookSet(patch) {
-  if (patch.theme) CFG.theme = patch.theme;
-  if (patch.codeFont) CFG.codeFont = patch.codeFont;
-  if (patch.motion) CFG.motion = patch.motion;
-  applyLook();
-  lookSave();
-}
 /* The fixture half of the island's language pick: flip the catalogue and
    repaint what this layer draws itself. Nothing is persisted, because a page
    with no gateway behind it has nowhere to persist to -- which is the honest
@@ -108,25 +57,6 @@ function lookSet(patch) {
 function langPickDemo(v) {
   langSet(v);
   sessionDraw(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
-}
-
-/* ---- notifications ---------------------------------------------------
-   Front-end only: the OS notification fires when a turn finishes while the
-   window is in the background. Preference persists per front end. */
-const NTF_KEY = 'raven.gui.ntf';
-const NTF = { on: false };
-try {
-  const o = JSON.parse(localStorage.getItem(NTF_KEY) || 'null');
-  if (o && typeof o === 'object') NTF.on = !!o.on;
-} catch { /* default off */ }
-function ntfSave() {
-  try { localStorage.setItem(NTF_KEY, JSON.stringify(NTF)); } catch { /* private mode */ }
-}
-function ntfPush(title, body, opts) {
-  if (!NTF.on || !('Notification' in window) || Notification.permission !== 'granted') return;
-  /* Only when the reader is away: a toast already covers the foreground. */
-  if (!(opts && opts.force) && document.hasFocus()) return;
-  try { new Notification(title, body ? { body } : undefined); } catch { /* platform quirk */ }
 }
 
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
