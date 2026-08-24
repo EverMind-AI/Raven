@@ -6835,6 +6835,10 @@
               "tool_call_id": { "type": "string" },
               "result_preview": { "type": "string" },
               "truncated": { "type": "boolean" },
+              "ok": {
+                "type": "boolean",
+                "description": "Whether the tool call succeeded, by the emit site's verdict."
+              },
               "metadata": {
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }

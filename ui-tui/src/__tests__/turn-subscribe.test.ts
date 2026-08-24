@@ -221,6 +221,27 @@ describe('createChatStream', () => {
     expect(getTurnState().tools.some(t => t.id === 'tc-1')).toBe(false)
   })
 
+  it('marks a failed tool row failed from the wire verdict', async () => {
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+    await stream.send('run a failing command')
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 0 } })
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { tool_call_id: 'tc-2', name: 'shell.exec', arguments: { command: 'false' } }
+    })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: { tool_call_id: 'tc-2', result_preview: 'stdout', truncated: false, ok: false }
+    })
+
+    expect(getTurnState().tools.some(t => t.id === 'tc-2')).toBe(false)
+    // The episode record carries the authoritative verdict, not a text guess.
+    expect(JSON.stringify(getTurnState().episodes)).toContain('"ok":false')
+  })
+
   it('surfaces non-cancellation errors and restores input prompt', async () => {
     const fake = makeFakeRpc()
     const sysCalls: string[] = []

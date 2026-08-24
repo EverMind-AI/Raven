@@ -122,7 +122,9 @@ function onEvent(ev) {
     if (!o) return;
     live.open.delete(p.tool_call_id);
     const preview = cleanPreview(p.result_preview).split('\n').map((l) => l.slice(0, 160)).join('\n');
-    const ok = okOf(o.name || '', preview);
+    // The emit site's verdict is authoritative; the text heuristic survived
+    // only as the backstop for an old server that does not send the field.
+    const ok = typeof p.ok === 'boolean' ? p.ok : okOf(o.name || '', preview);
     const took = Date.now() - o.t0;
     o.h.done(ok, preview, took, null, p.truncated);
     /* p.diff is the real change on disk -- the only place a whole-file write's

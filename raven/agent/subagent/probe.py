@@ -423,6 +423,87 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 
 
+_SCHEDULED = False
+"""One auto-verify per process. Manual Test runs and probe=true listings are
+peer paths to this backfill, not causes to run it again."""
+
+_VERIFY_TASKS: set[asyncio.Task] = set()
+"""The running backfill task, if any. Kept by reference: asyncio holds only a
+weak reference to a task it did not create, and an unrefed task can be collected
+mid-run with a "Task was destroyed but it is pending!" warning at exit."""
+
+
+def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
+    """Verify every enabled acp agent that has no fresh capability snapshot.
+
+    Before this, the snapshot -- the record an acp row's ``stateful`` and
+    ``can_resume`` are read from -- was written only by the UI Test button and a
+    ``probe: true`` listing, so a fresh install reported zero stateful rows and
+    the ``/new-instance`` picker hid those agents until someone opened a page
+    and clicked. Backgrounded so a slow adapter (a first ``npx`` fetch) cannot
+    delay startup; fire-and-forget, because a failure leaves the row stateless
+    with the snapshot's own detail rather than breaking the boot. Verification
+    costs no model tokens (handshake plus a throwaway ``session/new``).
+    """
+    global _SCHEDULED
+    if _SCHEDULED:
+        return None
+    registry = getattr(manager, "registry", None)
+    if registry is None:
+        # A mounted stack's subagents implementation is not the manager this
+        # backfill was written against (tests substitute a stub without one);
+        # scheduling nothing is the correct degradation, not a missing feature.
+        return None
+    _SCHEDULED = True
+    rows = [
+        row
+        for row in registry.rows()
+        if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)
+    ]
+    if not rows:
+        return None
+    task = asyncio.create_task(_verify_missing_snapshots(manager, rows))
+    _VERIFY_TASKS.add(task)
+    task.add_done_callback(_VERIFY_TASKS.discard)
+    return task
+
+
+async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
+    """One verification per missing or stale row, sequentially, never raising.
+
+    Sequential, not concurrent: every acp verify spawns a child process, and a
+    machine with a slow adapter among several would otherwise launch them all at
+    once at boot. After the run the table is refreshed so the rows rebuilt at
+    startup pick up the snapshots this task just recorded -- the alternative is
+    a roster that reports an agent stateful and dispatches it stateless until
+    the next restart or hot-apply.
+    """
+    store = SnapshotStore()
+    recorded = False
+    for row in rows:
+        cfg = getattr(row, "config", None)
+        if cfg is None:
+            continue
+        try:
+            snapshot = acp_snapshot_for(cfg)
+            if snapshot is not None and not snapshot.stale:
+                continue
+            result = await verify_agent(cfg)
+            if result.status == "ready":
+                store.record(result)
+                recorded = True
+            logger.info("acp agent {!r}: auto-verify {}", getattr(row, "name", ""), result.status)
+        except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest
+            logger.warning("acp agent {!r}: auto-verify failed: {}", getattr(row, "name", ""), exc)
+    if recorded:
+        refresh = getattr(manager, "refresh_agents", None)
+        if refresh is not None:
+            try:
+                refresh()
+            except Exception as exc:  # noqa: BLE001 - a refresh failure is not worth the boot
+                logger.warning("acp: refreshing the agent table after auto-verify failed: {}", exc)
+
+
 __all__ = [
     "PROBE_PROMPT",
     "ProbeResult",
@@ -433,4 +514,5 @@ __all__ = [
     "probe_all",
     "probe_one",
     "run_test",
+    "schedule_snapshot_verification",
 ]

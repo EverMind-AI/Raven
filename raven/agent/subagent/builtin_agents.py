@@ -3,7 +3,10 @@
 There is exactly one: the in-process raven loop, on the same table as the
 external agents so that ``spawn`` and a DAG node pick from one roster -- a
 built-in agent only reachable by omitting the ``subagent`` argument is an agent
-the model cannot be told about.
+the model cannot be told about. The transport is the seed's, with one deliberate
+exception: a config row of a seed's name with ``kind: "acp"`` redeclares it as
+the host's own ``raven acp`` (see :func:`merge_builtin_seeds`), which is the
+established way to run the generic agent's work outside the main process.
 
 It is a seed rather than a default-in-a-field: the row exists whether or not
 config mentions it, and a config row of the same name is a *field-level*
@@ -29,6 +32,11 @@ whose only content is a description is a label the table lends false authority t
 
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -63,7 +71,9 @@ _SEEDS: tuple[dict[str, Any], ...] = (
 
 BUILTIN_AGENT_NAMES: frozenset[str] = frozenset(seed["name"] for seed in _SEEDS)
 """Names the package seeds. Used to tell an override from an addition, and by the
-write paths that must not let a caller change a seed row's transport.
+write paths that guard a seed row's transport: a seed may be redeclared as
+``acp`` (the host's own raven over ACP -- see :func:`merge_builtin_seeds`), but
+a cli / openai row may not claim one of these names.
 
 Match against it with :func:`is_builtin_agent_name`, never with ``in`` directly:
 a stored name may be a legacy alias, and a guard that misses one lets a config row
@@ -205,11 +215,17 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
     (see :data:`LEGACY_AGENT_ALIASES`); if config declares both spellings, the
     current one wins and the legacy row is dropped with a warning.
 
-    A non-builtin row that claims a seed's name takes the slot, with a warning:
-    two rows of one name is the ambiguity ``SubagentsConfig._dedupe_names`` exists
-    to remove, and between the two the one the user wrote by hand is the one they
-    meant. The seed is not recoverable except by renaming that row, which the
-    warning says.
+    A cli / openai row that claims a seed's name does not take the slot, with a
+    warning: two rows of one name is the ambiguity ``SubagentsConfig._dedupe_names``
+    exists to remove, and between the two the one the user wrote by hand is the one
+    they meant -- except that a seed row is mandatory, and an unnamed ``spawn``
+    and a dag node with no ``subagent`` both resolve to this one, so letting a
+    cli / openai row take the slot would silently put an external backend behind
+    every such dispatch. An ``acp`` row of a seed's name is exactly that tradeoff
+    named by the user, so it wins: the generic agent is then served by a spawned
+    ``raven acp`` (see :func:`host_raven_acp_command`), not the in-process loop.
+    The seed is not recoverable either way except by renaming that row, which
+    the warning says.
     """
     by_name: dict[str, Any] = {}
     order: list[str] = []
@@ -231,19 +247,23 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
             by_name[name] = cfg
             order.append(name)
             continue
+        if getattr(cfg, "kind", None) == "acp":
+            # A deliberate transport switch: the generic agent is served over
+            # ACP, so every dispatch to it -- an unnamed ``spawn``, a dag node
+            # with no ``subagent`` -- spawns the host's own ``raven acp``. The
+            # row takes the seed's slot wholesale rather than field-by-field: the
+            # seed's fields are in-process-loop fields (``model``, ``tools``,
+            # ``skills``) and a third of an acp row would not run.
+            by_name[name] = _acp_host_override(cfg, name=name)
+            logger.info(
+                "sub-agent {!r} is served over acp: the built-in row's transport has been overridden "
+                "to this raven's own `raven acp`",
+                name,
+            )
+            continue
         if getattr(cfg, "kind", None) != "builtin":
-            # The seed wins, and the configured row is dropped from the table. It
-            # used to be the other way round, on the reading that a hand-written row
-            # is the one the user meant -- but a seed row is mandatory now, and an
-            # unnamed ``spawn`` and a dag node with no ``subagent`` both resolve to
-            # this one. Letting config displace it puts an external backend behind
-            # every such dispatch, silently, which is worse than losing one row.
-            #
-            # Reachable without anyone doing anything wrong: ``Raven`` was a legal
-            # third-party name until the generic row was renamed to it, because the
-            # write guard reserved only the lowercase spelling. Nothing is lost --
-            # config is untouched, so renaming the entry brings it straight back,
-            # which is what this says.
+            # The seed wins, and the configured row is dropped from the table as
+            # before -- see the docstring for which kinds and why.
             logger.warning(
                 "sub-agent {!r} is declared as kind {!r} but that name belongs to a built-in agent; "
                 "the built-in row wins and this entry is ignored -- rename it in config to keep both",
@@ -256,12 +276,70 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
     return [by_name[name] for name in order]
 
 
+def host_raven_acp_command() -> str:
+    """This installation's own ``raven acp`` command line, or "" if it cannot be resolved.
+
+    The console script beside the running interpreter wins -- an editable
+    checkout's ``.venv/bin/raven`` -- with ``$PATH`` as the fallback, so an acp
+    redeclaration of a seed row names the raven build that is actually running,
+    not whichever ``raven`` comes first on the login shell's PATH. ``shlex.quote``
+    keeps a path with a space one argv token.
+    """
+    exe = "raven.exe" if os.name == "nt" else "raven"
+    candidate = Path(sys.executable).with_name(exe)
+    if candidate.is_file():
+        return f"{shlex.quote(str(candidate))} acp"
+    found = shutil.which(exe)
+    return f"{shlex.quote(found)} acp" if found else ""
+
+
+_ACP_HOST_DESCRIPTION = (
+    "Raven's own agent served over ACP: this raven as a separate process, on the same config and "
+    "model, with its own sub-agent delegation."
+)
+
+
+def _acp_host_override(cfg: Any, *, name: str) -> Any:
+    """An acp row that takes a seed's slot, with the host defaults filled in.
+
+    The config row brings the transport choice and nothing else: ``command``
+    defaults to this install's own ``raven acp``, ``env`` carries the host's
+    ``RAVEN_HOME`` (unless the row sets one) so the child engine reads the same
+    config and provider the host does, and a blank ``description`` gets the
+    host-raven line rather than leaving the roster entry with the in-process
+    description that no longer applies.
+    """
+    home = os.environ.get("RAVEN_HOME", "").strip() or str(Path.home() / ".raven")
+    env = dict(getattr(cfg, "env", None) or {})
+    env.setdefault("RAVEN_HOME", home)
+    command = str(getattr(cfg, "command", "") or "").strip()
+    if not command:
+        command = host_raven_acp_command()
+        if not command:
+            logger.warning(
+                "sub-agent {!r}: acp redeclaration has no command and this install's own `raven` "
+                "could not be resolved; the row will fail at dispatch",
+                name,
+            )
+    description = str(getattr(cfg, "description", "") or "").strip()
+    if not description:
+        description = _ACP_HOST_DESCRIPTION
+    update: dict[str, Any] = {
+        "name": name,
+        "command": command,
+        "env": env,
+        "description": description,
+    }
+    return cfg.model_copy(update=update)
+
+
 __all__ = [
     "BUILTIN_AGENT_NAMES",
     "GENERIC_AGENT",
     "LEGACY_AGENT_ALIASES",
     "builtin_agent_seeds",
     "canonical_agent_name",
+    "host_raven_acp_command",
     "is_builtin_agent_name",
     "merge_builtin_seeds",
 ]

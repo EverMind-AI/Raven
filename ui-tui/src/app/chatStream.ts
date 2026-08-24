@@ -389,9 +389,12 @@ const onToolStart = (state: InternalState, ev: ToolStartEvent): void => {
 }
 
 const onToolComplete = (state: InternalState, ev: ToolCompleteEvent): void => {
-  const { tool_call_id, result_preview, truncated } = ev.payload
+  const { tool_call_id, result_preview, truncated, ok } = ev.payload
   const summary = truncated ? `${result_preview}${TOOL_PREVIEW_TRUNCATED_SUFFIX}` : result_preview
-  turnController.recordToolComplete(tool_call_id, undefined, undefined, summary)
+  // The emit site's verdict is authoritative; absent (an old server) the row
+  // stays successful, which is the historical behaviour.
+  const error = typeof ok === 'boolean' && !ok ? 'tool failed' : undefined
+  turnController.recordToolComplete(tool_call_id, undefined, error, summary)
   deliveryFiles(ev.payload.metadata).forEach(file => addUnique(state.artifacts.deliveries, file))
 }
 

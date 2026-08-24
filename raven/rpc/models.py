@@ -443,6 +443,11 @@ class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
     truncated: bool
+    ok: bool = True
+    """Whether the tool call succeeded, by the emit site's verdict. A client
+    that draws a failure row differently needs this; the preview alone cannot
+    be classified, because a tool that writes a friendly error message is
+    indistinguishable from one that succeeded."""
     metadata: dict[str, JsonValue] | None = None
     diff: str | None = Field(
         default=None,

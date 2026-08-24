@@ -156,7 +156,11 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # one. They are reported as ``source == "builtin"`` rather than "config",
     # because "configured" drives the delete button and a seed row cannot be
     # deleted: not writing one is what "use the default" means.
-    from raven.agent.subagent.builtin_agents import merge_builtin_seeds
+    from raven.agent.subagent.builtin_agents import (
+        canonical_agent_name,
+        is_builtin_agent_name,
+        merge_builtin_seeds,
+    )
     from raven.agent.subagent.vendored_agents import (
         discover_vendored_rows,
         merge_vendored_seeds,
@@ -175,20 +179,28 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     unready = vendored_state()
     merged = merge_vendored_seeds(configured, vendored)
 
-    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
-
-    builtin_cfgs = [c for c in merge_builtin_seeds(merged) if getattr(c, "kind", None) == "builtin"]
-    # Filtered by the same rule the table applies, not merely split on kind. Every
-    # name the generic row answers to is reserved, and a non-builtin entry spelled
-    # that way is ignored at runtime -- so listing it here put a second row of that
-    # name on the roster, indistinguishable from a live agent and reported enabled.
-    # A view that keys by name then opens whichever came first.
+    # One merge, so the rows rendered here are the rows the runtime dispatches
+    # against -- including an acp row of a built-in name, where the merge fills
+    # the host's `raven acp` command and the list must show that command, not the
+    # empty one the config file holds. The Test button probes the command it is
+    # shown, so a view that keeps the empty one would test a different launch.
+    merged_all = merge_builtin_seeds(merged)
+    builtin_cfgs = [c for c in merged_all if getattr(c, "kind", None) == "builtin"]
+    # Filtered by the rule the table applies, not merely split on kind. A built-in
+    # name with a cli / openai kind is ignored at runtime (``merge_builtin_seeds``
+    # refuses to displace the mandatory seed), so listing it here put a second row
+    # of that name on the roster, indistinguishable from a live agent and reported
+    # enabled. An acp row of a built-in name is the supported transport switch and
+    # IS live, so it is listed as config.
     external = [
         c
-        for c in merged
-        if getattr(c, "kind", None) != "builtin" and not is_builtin_agent_name(getattr(c, "name", "") or "")
+        for c in merged_all
+        if getattr(c, "kind", None) != "builtin"
+        and not (
+            is_builtin_agent_name(getattr(c, "name", "") or "") and getattr(c, "kind", None) in ("cli", "openai")
+        )
     ]
-    configured_names = {getattr(c, "name", "") for c in configured}
+    configured_names = {canonical_agent_name(getattr(c, "name", "")) for c in configured}
 
     entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
     # A discovered row is reported as its own source, not as "config": there is no
@@ -409,21 +421,25 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     """Set `enabled` on one entry - the flag the roster filter reads."""
     name = params.get("name")
     enabled = bool(params.get("enabled"))
-    # Checked before the lookup, not after: a built-in row may also exist in config
-    # (as a field-level override of the seed), and writing the switch onto that row
-    # would report success for a change ``merge_builtin_seeds`` then discards.
-    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
-
-    if name and is_builtin_agent_name(name):
-        raise ConfigFieldReadonlyError(
-            f"sub-agent {name!r} is a built-in agent and cannot be switched off: an unnamed spawn "
-            "and a dag node with no sub-agent both dispatch to it",
-            data={"field": "enabled", "name": name},
-        )
     try:
         entries = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
+    # A built-in row may also exist in config (as a field-level override of the
+    # seed), and writing the switch onto that row would report success for a
+    # change ``merge_builtin_seeds`` then discards -- a seed row's switch is the
+    # package's. The one exception is the acp redeclaration, which is a real
+    # config row with its own switch.
+    from raven.agent.subagent.builtin_agents import is_builtin_agent_name
+
+    if name and is_builtin_agent_name(name):
+        target = next((e for e in entries if e.get("name") == name), None)
+        if target is None or target.get("kind") != "acp":
+            raise ConfigFieldReadonlyError(
+                f"sub-agent {name!r} is a built-in agent and cannot be switched off: an unnamed spawn "
+                "and a dag node with no sub-agent both dispatch to it",
+                data={"field": "enabled", "name": name},
+            )
     target = next((e for e in entries if e.get("name") == name), None)
     if target is None:
         raise SubagentNotFoundError(f"no configured sub-agent named {name!r}", data={"name": name})

@@ -65,12 +65,17 @@ def agent_capabilities() -> dict[str, Any]:
         # mechanism for a session to bring its own. Declaring http/sse here
         # would invite exactly the request that has to be refused.
         "mcpCapabilities": {"http": False, "sse": False},
-        # ``list`` only, and an empty object is how the schema spells "supported"
-        # for it. resume / close / delete / additionalDirectories stay undeclared:
-        # all four are stable, all four are objects rather than booleans, Zed uses
-        # none of them, and each one declared is a method that must then work. See
-        # the compatibility matrix.
-        "sessionCapabilities": {"list": {}},
+        # ``list``, ``resume``, ``close`` and ``delete``, and an empty object is
+        # how the schema spells "supported". Each one is declared because the
+        # method behind it exists and is honoured: ``_session_resume`` reopens a
+        # stored session without replaying the transcript (what a raven as this
+        # agent's client reads to report the row resumable, which makes an
+        # instance handle mean something), and ``_session_close`` /
+        # ``_session_delete`` drop a session from this connection and from
+        # storage. additionalDirectories stays undeclared: it is an object and
+        # each one declared is a method that must then work. See the
+        # compatibility matrix.
+        "sessionCapabilities": {"list": {}, "resume": {}, "close": {}, "delete": {}},
         # No auth: authMethods is empty, so there is nothing to log out of
         # either. Declaring auth.logout would put a method on the wire whose
         # only honest answer is that there was no session to end.

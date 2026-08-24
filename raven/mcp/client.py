@@ -69,7 +69,7 @@ class MCPToolWrapper(Tool):
             )
         except asyncio.TimeoutError:
             logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
-            return f"(MCP tool call timed out after {self._tool_timeout}s)"
+            return ToolResult(model_text=f"(MCP tool call timed out after {self._tool_timeout}s)", ok=False)
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
             # Re-raise only if our task was externally cancelled (e.g. /stop).
@@ -77,7 +77,7 @@ class MCPToolWrapper(Tool):
             if task is not None and task.cancelling() > 0:
                 raise
             logger.warning("MCP tool '{}' was cancelled by server/SDK", self._name)
-            return "(MCP tool call was cancelled)"
+            return ToolResult(model_text="(MCP tool call was cancelled)", ok=False)
         except Exception as exc:
             logger.exception(
                 "MCP tool '{}' failed: {}: {}",
@@ -85,16 +85,22 @@ class MCPToolWrapper(Tool):
                 type(exc).__name__,
                 exc,
             )
-            return f"(MCP tool call failed: {type(exc).__name__})"
+            return ToolResult(model_text=f"(MCP tool call failed: {type(exc).__name__})", ok=False)
 
         # str(block) on a pydantic model yields its repr, so an ImageContent used
         # to put its entire base64 payload into the prompt as prose -- the model
         # saw gibberish instead of a picture and nothing errored. Convert per
         # content type instead, and never stringify a payload-bearing block.
+        ok = not bool(getattr(result, "isError", False))
         text, blocks = media.blocks_from_mcp_content(result.content)
         if blocks:
-            return ToolResult(model_text=text or "(no output)", blocks=blocks)
-        return text or "(no output)"
+            return ToolResult(model_text=text or "(no output)", blocks=blocks, ok=ok)
+        if ok:
+            return text or "(no output)"
+        # The kind of failure this describes (isError) is not an exception: its
+        # text looks like any other output, so the verdict must ride on the
+        # result rather than be derived from a prefix.
+        return ToolResult(model_text=text or "(no output)", ok=False)
 
 
 @dataclass(frozen=True)

@@ -278,7 +278,7 @@ class TestHandshakeGate:
 
     async def test_the_unbuilt_stable_methods_answer_method_not_found(self, rig):
         await rig.handshake()
-        for method in ("session/set_mode", "logout", "session/delete", "session/resume", "session/close"):
+        for method in ("session/set_mode", "logout"):
             response = await rig.call(method, {})
 
             assert response["error"]["code"] == protocol.METHOD_NOT_FOUND, method
@@ -407,7 +407,7 @@ class TestSessionLoad:
 
         assert response["result"] == {}
         kinds = [u["sessionUpdate"] for u in rig.updates()]
-        assert kinds == ["user_message_chunk", "agent_message_chunk"]
+        assert kinds == ["user_message_chunk", "agent_message_chunk", "available_commands_update"]
         for frame in rig.written:
             validate_outbound(frame)
 
@@ -504,6 +504,257 @@ class TestSessionLoad:
         assert relative["error"]["data"]["field"] == "cwd"
         assert servers["error"]["data"]["field"] == "mcpServers"
         assert missing["error"]["data"]["field"] == "sessionId"
+
+
+class TestSessionResume:
+    """``session/resume`` continues a session a client already knows about.
+
+    The point of the method -- and the thing that distinguishes it from
+    ``session/load`` -- is that nothing is replayed: the transcript stays where
+    the client has it and the session becomes promptable again. Declared in
+    ``sessionCapabilities.resume``, which is also what a raven acting as this
+    agent's client reads to report the row resumable.
+    """
+
+    async def test_it_reopens_without_replaying_anything(self, rig):
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "what changed?"},
+            {"role": "assistant", "text": "One file."},
+        ]
+        await rig.handshake()
+
+        response = await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project")})
+
+        assert response["result"] == {}
+        content = [u for u in rig.updates() if u.get("sessionUpdate") != "available_commands_update"]
+        assert content == [], "resume must not repaint a transcript the client already has"
+        for frame in rig.written:
+            validate_outbound(frame)
+
+    async def test_the_session_becomes_promptable(self, rig):
+        """A resume that did not register the session would answer -32002 at the
+        next prompt, which is a client told its resumed conversation is gone."""
+        rig.stack.stored["acp:old"] = [{"role": "user", "text": "hi"}]
+        await rig.handshake()
+
+        await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "p")})
+
+        session = rig.translator.get("acp:old")
+        assert session is not None
+        assert session.subscription_id, "without a subscription the next turn streams nowhere"
+
+    async def test_an_unknown_session_is_refused_rather_than_silently_replaced(self, rig):
+        await rig.handshake()
+
+        response = await rig.call("session/resume", {"sessionId": "acp:gone", "cwd": str(rig.tmp_path / "p")})
+
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+    async def test_the_working_directory_is_bound_in_both_places(self, rig):
+        rig.stack.stored["acp:old"] = []
+        await rig.handshake()
+        moved = rig.tmp_path / "moved"
+
+        await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(moved)})
+
+        assert rig.translator.get("acp:old").cwd == str(moved)
+        assert rig.engine.sessions.get_or_create("acp:old").metadata["workdir"] == str(moved)
+
+    async def test_resuming_a_live_session_does_not_double_its_stream(self, rig):
+        """Two mappings to one session would double every later frame."""
+        rig.stack.stored["acp:old"] = [{"role": "user", "text": "hi"}]
+        await rig.handshake()
+        await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "a")})
+        first = rig.translator.get("acp:old").subscription_id
+
+        await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "b")})
+
+        assert rig.translator.get("acp:old").subscription_id == first
+        assert rig.translator.get("acp:old").cwd == str(rig.tmp_path / "b")
+        assert sum(1 for name, _ in rig.stack.calls if name == "turn.subscribe") == 1
+
+    async def test_a_missing_cwd_is_refused_like_a_fresh_session(self, rig):
+        await rig.handshake()
+        rig.stack.stored["acp:old"] = []
+
+        response = await rig.call("session/resume", {"sessionId": "acp:old"})
+
+        assert response["error"]["data"]["field"] == "cwd"
+
+
+class TestSessionClose:
+    """``session/close`` drops a session from this connection."""
+
+    async def test_it_drops_the_session_from_the_translator(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        response = await rig.call("session/close", {"sessionId": session_id})
+
+        assert response["result"] == {}
+        assert rig.translator.get(session_id) is None
+
+    async def test_a_later_prompt_is_refused(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        await rig.call("session/close", {"sessionId": session_id})
+
+        response = await rig.call("session/prompt", {"sessionId": session_id, "prompt": []})
+
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+    async def test_a_running_turn_is_cancelled_not_left_hanging(self, rig):
+        """The spec says close must behave as if session/cancel was called."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+        response = await rig.call("session/close", {"sessionId": session_id})
+        assert response["result"] == {}
+
+        result = await task
+        assert result["result"] == {"stopReason": "cancelled"}
+        assert ("turn.cancel", {"session_key": session_id}) in [(n, p) for n, p in rig.stack.calls]
+
+    async def test_an_unknown_session_is_refused(self, rig):
+        await rig.handshake()
+
+        response = await rig.call("session/close", {"sessionId": "acp:gone"})
+
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+    async def test_a_missing_id_is_a_param_error(self, rig):
+        await rig.handshake()
+
+        response = await rig.call("session/close", {})
+
+        assert response["error"]["data"]["field"] == "sessionId"
+
+
+class TestSessionDelete:
+    async def test_it_removes_a_stored_session(self, rig):
+        rig.engine.sessions.get_or_create("acp:gone").metadata["workdir"] = str(rig.tmp_path / "p")
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:gone"})
+
+        assert response["result"] == {}
+        assert rig.engine.sessions.exists("acp:gone") is False
+
+    async def test_it_drops_a_held_session_from_the_connection(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        await rig.call("session/delete", {"sessionId": session_id})
+
+        assert rig.translator.get(session_id) is None
+        assert rig.engine.sessions.exists(session_id) is False
+
+    async def test_an_unknown_session_is_refused(self, rig):
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:gone"})
+
+        assert response["error"]["code"] == protocol.RESOURCE_NOT_FOUND
+
+    async def test_a_running_turn_is_cancelled_before_the_store_is_touched(self, rig):
+        """The cancel path drains the turn and the loop persists a broken-turn
+        marker while unwinding -- deleting the file first and cancelling after
+        lets the unwind recreate the conversation the delete just removed."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+        response = await rig.call("session/delete", {"sessionId": session_id})
+        assert response["result"] == {}
+        assert ("turn.cancel", {"session_key": session_id}) in [(n, p) for n, p in rig.stack.calls]
+
+        result = await task
+        assert result["result"] == {"stopReason": "cancelled"}
+        assert rig.translator.get(session_id) is None
+
+    async def test_deleting_a_session_keeps_its_lazy_cache_out_of_the_listing(self, rig):
+        """A session minted and never prompted has no file, yet must still be
+        deletable -- the cache is what ``session/list`` shows next."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+        assert rig.engine.sessions.exists(session_id) is False
+
+        await rig.call("session/delete", {"sessionId": session_id})
+
+        assert rig.engine.sessions.peek(session_id) is None
+
+
+class TestSessionInfoUpdate:
+    async def test_a_change_of_title_is_announced_after_the_turn(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.engine.sessions.get_or_create(session_id).metadata["title"] = "Hi there"
+
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        rig.translator.settle_turn(session_id, "end_turn")
+        await task
+
+        titles = [
+            u for u in rig.updates() if u.get("sessionUpdate") == "session_info_update"
+        ]
+        assert [t["title"] for t in titles] == ["Hi there"]
+
+    async def test_an_unchanged_title_is_not_reannounced(self, rig):
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.engine.sessions.get_or_create(session_id).metadata["title"] = "Same"
+
+        for _ in range(2):
+            task = asyncio.create_task(
+                rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "a"}]})
+            )
+            for _ in range(4):
+                await asyncio.sleep(0)
+            rig.translator.settle_turn(session_id, "end_turn")
+            await task
+
+        shown = sum(1 for u in rig.updates() if u.get("sessionUpdate") == "session_info_update")
+        assert shown == 1, "the second turn found the same title and must not repaint it"
+
+
+class TestAvailableCommands:
+    async def test_a_new_session_gets_the_command_menu(self, rig):
+        await rig.handshake()
+
+        await rig.new_session()
+
+        menus = [u for u in rig.updates() if u.get("sessionUpdate") == "available_commands_update"]
+        assert len(menus) == 1
+        names = [c["name"] for c in menus[0]["availableCommands"]]
+        assert "deep-research" in names and "playbook" in names
+        for frame in rig.written:
+            if frame.get("method") == "session/update":
+                validate_outbound(frame)
+
+    async def test_a_loaded_or_resumed_session_gets_the_menu_too(self, rig):
+        rig.stack.stored["acp:old"] = [{"role": "user", "text": "hi"}]
+        await rig.handshake()
+
+        await rig.call("session/load", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "p"), "mcpServers": []})
+        await rig.call("session/resume", {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "p")})
+
+        menus = [u for u in rig.updates() if u.get("sessionUpdate") == "available_commands_update"]
+        assert len(menus) == 2
 
 
 class TestSessionList:
@@ -867,7 +1118,7 @@ class TestPrompt:
         )
 
         assert response["result"] == {"stopReason": "end_turn"}
-        assert any("could not start" in u["content"]["text"] for u in rig.updates())
+        assert any("could not start" in str(u.get("content") or {}) for u in rig.updates())
 
     async def test_the_turn_slot_is_released_after_a_refused_turn(self, rig):
         """Otherwise the session is wedged: every later prompt is refused as

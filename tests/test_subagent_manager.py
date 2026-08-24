@@ -1166,3 +1166,20 @@ class TestTraceSourceWiring:
         assert session_id.startswith("trace:Coder:")
         assert turn[0]["role"] == "user" and turn[0]["content"] == "read it"
         assert turn[-1]["content"] == "no readme"
+
+
+def test_refresh_keeps_the_hot_applied_configs() -> None:
+    """The snapshot backfill refreshes asynchronously; it must not roll the live
+    table back to the startup list after a user hot-applied a new one."""
+    startup = ThirdPartyAcpSubagentConfig.model_validate({"name": "startup", "kind": "acp", "command": ""})
+    hot = ThirdPartyAcpSubagentConfig.model_validate({"name": "hot-applied", "kind": "acp", "command": ""})
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), agents=[startup])
+    assert {r.name for r in mgr.registry.rows()} == {GENERIC_AGENT, "startup"}
+
+    mgr.apply_agents([hot])
+    assert {r.name for r in mgr.registry.rows()} == {GENERIC_AGENT, "hot-applied"}
+
+    mgr.refresh_agents()
+    assert {r.name for r in mgr.registry.rows()} == {GENERIC_AGENT, "hot-applied"}, (
+        "refresh must reapply the last-applied configs, not the startup list"
+    )
