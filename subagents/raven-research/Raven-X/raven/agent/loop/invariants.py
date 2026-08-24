@@ -76,6 +76,7 @@ def turn_invariants(
     declared_tools: Iterable[str],
     metadata: dict[str, Any] | None = None,
     closing_tag_required: bool = False,
+    awaiting_user: bool = False,
 ) -> dict[str, Any]:
     """Check the turn's terminal state against four invariants.
 
@@ -124,7 +125,15 @@ def turn_invariants(
     # one; a salvage carries none because the reasoning was already folded away,
     # which is exactly why it must be marked. Anything else is a chain of thought
     # about to be scored as an answer.
-    if final_content and not answer and salvage_committed == 0:
+    #
+    # dr@3.4-askuser adds a third accounted-for shape: a clarify turn's reply is
+    # the questions, rendered by the harness, so it carries no think tag on any
+    # stack. Passed in rather than read off ``turn_end`` so this stays a pure
+    # function of its arguments. Without it, every clarify turn on a
+    # closing-tag-required profile logs an error - and this file exists because
+    # five real defects were missed after everyone had learned to ignore a red
+    # light that was always on.
+    if final_content and not answer and salvage_committed == 0 and not awaiting_user:
         violations.append("answer_shape_unaccounted")
     # "An empty outcome must be RECORDED as empty" — not "a gate must have fired".
     # Keying this on ``force_finalize`` would make it arm-correlated by
@@ -147,6 +156,12 @@ def turn_invariants(
         "tool_results": tool_results,
         "answer_chars": len(answer),
         "salvage_committed": salvage_committed,
+        # Both exemptions from ``answer_shape_unaccounted`` are stamped, for the
+        # reason ``salvage_committed`` already was: a reader of this stamp has to
+        # be able to tell "the shape was accounted for" from "the check stood
+        # down", and an exemption that leaves no trace here is indistinguishable
+        # from an invariant that never applied.
+        "awaiting_user": bool(awaiting_user),
     }
     if violations:
         stamp["violations"] = violations

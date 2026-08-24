@@ -9,7 +9,11 @@ registration useless, and this wrapper exists to absorb both:
   prose. The answer is read out of the turn's session JSONL instead.
 - **exit 0 does not mean an answer was produced.** Only a config or credential
   error maps to a non-zero code; an answerless run still exits 0. Success is
-  therefore decided by finding a committed answer, not by the exit status.
+  therefore decided by finding a committed answer, not by the exit status. That
+  bucket gained a member upstream - a memory backend with
+  `require_service=true` that finds no usable service also exits 1 - which is
+  unreachable on this config, where the knob is unset and a missing everos
+  degrades to a warning.
 
 The same `--session <id>` across calls is one conversation. This build keeps a
 session under the *workspace* it ran in (`<workspace>/sessions/cli/<id>.jsonl`),
@@ -18,10 +22,10 @@ workspace would file every turn under a fresh session and lose the history that
 `drFlow.conversation` exists to use. Distinct ids therefore still get distinct
 workspaces, which is what keeps concurrent conversations from interleaving.
 
-stdout carries the answer and nothing else. Raven's CLI backend uses the whole
-of a child's output as the subagent's reply (stdout plus stderr when stderr is
-non-empty), so any progress or diagnostic line printed here would be pasted into
-the conversation as if the agent had said it. Diagnostics go to `launcher.log`
+stdout carries the answer and the research trail, and nothing else. Raven's CLI
+backend uses the whole of a child's output as the subagent's reply (stdout plus
+stderr when stderr is non-empty), so any progress or diagnostic line printed
+here would be pasted into the conversation as if the agent had said it. Diagnostics go to `launcher.log`
 inside the run workspace instead; `--verbose` additionally mirrors them to
 stderr for a human running this by hand.
 """
@@ -128,6 +132,56 @@ def recommended_llm() -> str:
     except (OSError, ValueError):
         return "unrecorded"
     return f"{rec.get('model', '?')} via {rec.get('apiBase') or rec.get('provider', '?')}"
+
+
+def manifest_output_cap() -> int | None:
+    """This agent's reply cap from subagent.json, or None when unreadable.
+
+    Raven's CLI backend reads the whole of a child's stdout as the reply and
+    tail-truncates it to this many chars (cli_agent.py). None means the
+    manifest cannot be read and no reservation is possible.
+    """
+    try:
+        return int(json.loads((HERE / "subagent.json").read_text(encoding="utf-8"))["maxOutputChars"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+_TRAIL_TRUNC_NOTE = "\n\n[report truncated to preserve the research trail]"
+_TRAIL_DROP_NOTE = "\n\n[research trail dropped: exceeds the host's output cap]"
+
+
+def compose_reply(answer: str, trail: str, cap: int | None) -> tuple[str, bool]:
+    """Fit the answer and the trail under the host's output cap.
+
+    Raven's CLI backend reads the whole of this stdout as the subagent reply
+    and tail-truncates it to ``maxOutputChars``, and the trail is appended
+    after the answer, so at the cap the host would cut the record clean away.
+    Reserve room for it the way cli_agent.py reserves for its warning:
+    shorten the answer (and say so) so the trail survives; when even the trail
+    cannot fit, keep the answer and say it was dropped.
+
+    The blank line before the trail is deliberate: the rendered trail opens
+    with "\\n---\\n\\n", and markdown reads a `---` directly under text as a
+    setext H2 rather than a rule.
+    """
+    body = answer.strip()
+    if not trail:
+        return body, False
+    trail = trail.strip()
+    if not trail:
+        return body, False
+    if cap is None:
+        return f"{body}\n\n{trail}", True
+    # The unmodified pair decides first: a report that fits the cap unchanged
+    # is left alone, however the notice budget would have cut it.
+    if len(body) + 2 + len(trail) <= cap:
+        return f"{body}\n\n{trail}", True
+    room = cap - 2 - len(trail) - len(_TRAIL_TRUNC_NOTE)
+    if room > 0:
+        return f"{body[:room].rstrip()}{_TRAIL_TRUNC_NOTE}\n\n{trail}", True
+    drop = _TRAIL_DROP_NOTE
+    return f"{body[: max(0, cap - len(drop))].rstrip()}{drop}", False
 
 
 def inherit_llm(config: dict, host: dict) -> str:
@@ -278,6 +332,28 @@ def count_lines(path: Path) -> int:
 # turn whose entire 27k-character reply sat inside an unclosed think block.
 _WRAPUP_FLAGS = ("synthesized_on_truncation", "synthesized_on_exhaustion")
 
+# A clarify handoff is the third shape of committed reply, and it arrives by the same
+# route as the wrap-ups: `AskUserGate` short-circuits `before_execute_tools`, and the
+# loop commits the questions through `add_assistant_message` with no `finish_reason`.
+# So the two tests above discard it, and turn one of an `askUser` profile reports
+# answerless while holding a perfectly good reply - the questions the user has to
+# answer before research can start.
+#
+# Recognised through `observers`, not a message flag, because the signal already lives
+# there: the loop stamps the turn's observer payload onto its last non-empty assistant
+# message, which on a clarify turn IS the handoff.
+#
+# Read from `turn_end`, not from `ask_user.asked`, because a clarify arrives by TWO
+# routes and only one of them is the tool. When the model writes its questions as
+# ordinary prose instead of calling `ask_user`, `ClarifyExemptHook` stamps the same
+# commit marker but leaves `asked` false - and that reply carries a normal
+# `finish_reason == "stop"`, so keying on `asked` would file a page of questions as a
+# finished research report. `turn_end.awaiting_user` is set on both routes and is the
+# key the flow stamps for exactly this reader ("so a reader of `turn_end` alone can
+# tell the two apart"); `awaiting_user_source` says which route it was.
+_CLARIFY_OBSERVER = ("turn_end", "awaiting_user")
+_CLARIFY_SOURCE = ("turn_end", "awaiting_user_source")
+
 
 def extract_answer(log: Path, skip_lines: int = 0) -> tuple[str | None, str | None, dict]:
     """Return the committed answer, how it was produced, and the flow's account of the turn.
@@ -312,7 +388,15 @@ def extract_answer(log: Path, skip_lines: int = 0) -> tuple[str | None, str | No
         content = row.get("content")
         if not (isinstance(content, str) and content.strip()):
             continue
-        if row.get("finish_reason") == "stop":
+        # Clarify is tested FIRST: the prose route carries an ordinary
+        # `finish_reason == "stop"`, so the "completed" branch would swallow it and
+        # the questions would ship as a finished report.
+        if (obs := (row.get("observers") or {})).get(_CLARIFY_OBSERVER[0], {}).get(
+            _CLARIFY_OBSERVER[1]
+        ):
+            route = obs.get(_CLARIFY_SOURCE[0], {}).get(_CLARIFY_SOURCE[1]) or "unknown"
+            answer, source = content, f"clarify_requested:{route}"
+        elif row.get("finish_reason") == "stop":
             answer, source = content, "completed"
         elif flag := next((f for f in _WRAPUP_FLAGS if row.get(f)), None):
             answer, source = content, flag
@@ -381,15 +465,23 @@ def main() -> int:
         # this is a fact.
         "--session", f"cli:{conversation}",
         "--no-markdown",
-        # Without this the process exits as soon as the answer is ready and
-        # interpreter shutdown cancels the in-flight everos extraction, so
-        # nothing reaches long-term memory.
+        # Inert upstream since the everos v2 write path landed, and kept only
+        # because dropping a flag from a call site is not free: the two builds
+        # either side of a swap have to accept the same argv. Blocking on the
+        # detached writes is now unconditional (`drain_backend_stores`).
         "--wait-skill-extract",
-        # And without the flush, extraction never runs at all: a lone `-m` turn
-        # does not trip a boundary on its own, and a one-question spawn is
-        # exactly that. The cost is one extraction pass per turn rather than one
-        # per detected boundary. Conversation continuity is unaffected - it
-        # lives in the transcript, not in everos's buffer.
+        # Live again, and the reason it is still passed: a lone `-m` turn does
+        # not trip a boundary on its own, and a one-question spawn is exactly
+        # that, so without a promotion nothing this run captured is ever
+        # derived from. Two costs, both accepted deliberately. It blocks on one
+        # request bounded by the adapter's `flush_timeout_s`, inside this
+        # launcher's own `--timeout`; and on turn two of a conversation it
+        # promotes a trajectory that is not finished, because the turns share
+        # one backend-side session and this launcher has no "last turn" signal
+        # to hold it back for - the gateway spawns one process per turn and
+        # never says which is the last. Upstream's advice (promote on the last
+        # `-m` only) therefore has no addressee here; the alternative is not
+        # "promote later", it is "never".
         "--flush-skill-buffer",
         "-m", question,
     ]
@@ -429,6 +521,10 @@ def main() -> int:
         return 1
 
     answer, source, observers = extract_answer(transcript, pre_lines)
+    # Taken out before the observers line is logged: this is prose measured in
+    # kilobytes and the rest of that payload is counters, so leaving it in makes the
+    # one line a reader actually greps unreadable.
+    trail = observers.pop("research_trail", "") if isinstance(observers, dict) else ""
     log(f"[run] session_log={transcript} exit={rc} elapsed={elapsed}s")
     if observers:
         log(f"[run] observers={json.dumps(observers, ensure_ascii=False)}")
@@ -437,6 +533,13 @@ def main() -> int:
         # already reached and not to reason further, so the answer is real but thinner
         # than a completed one.
         log(f"[run] answer came from the loop's wrap-up ({source}), not a normal completion")
+    elif source and source.startswith("clarify_requested"):
+        # Louder than the wrap-up note, because this reply is not an answer at all: it
+        # is the questions, and research has not started. A caller that files it as a
+        # report files the questions as findings. Resuming the same `--session` with the
+        # user's reply is what turns it into one.
+        log("[run] reply is a clarify handoff, NOT a research answer - resume this "
+            "session with the user's answers to continue")
 
     if answer is None:
         log("[run] FAILED: the run committed no answer (exit 0 does not imply one)")
@@ -444,8 +547,25 @@ def main() -> int:
         return 0 if args.keep_going else 1
 
     log(f"[run] answer_chars={len(answer)}")
-    # stdout is the answer, verbatim and alone.
-    print(answer.strip(), flush=True)
+    # The report template tells the model NOT to close with a list of sources,
+    # promising that "the reply is followed by the full record of what was searched
+    # and opened". On this path that record never arrived: the flow appends it to the
+    # value its CLI returns, and this launcher reads the persisted message instead
+    # (the CLI's stdout is rendered for a human and cannot be parsed). So the model
+    # was made to omit its sources in exchange for a substitute the caller never got
+    # - measured at 17 pages read and 8 cited on one live turn, with the other 9
+    # recorded nowhere.
+    #
+    # Appended here, to the one string the host uses for BOTH the recorded `out.md`
+    # and the reply it shows, so the record and the reader see the same sources. It
+    # is derived, not generated: no tokens were spent on it and there is nothing in
+    # it to invent.
+    body, trail_kept = compose_reply(answer, trail, manifest_output_cap())
+    if trail:
+        log(f"[run] research trail {'appended' if trail_kept else 'dropped'} "
+            f"({len(trail.strip())} chars)")
+    # stdout is the answer plus that record, and nothing else.
+    print(body, flush=True)
     return 0
 
 

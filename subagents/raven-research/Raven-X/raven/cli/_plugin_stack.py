@@ -132,6 +132,21 @@ def maybe_build_memory_backend(
     if registry is None:
         registry = build_plugin_registry(config)
     plugin_slice = _resolve_plugin_config_slice(registry, config, name)
+    # Both checks are diagnostics only: they run before construction and never
+    # change what the factory receives. A backend whose config is wrong still
+    # builds, because refusing to boot over a config warning is a worse
+    # failure than the one being reported.
+    plugin_id = _plugin_id_for_backend(registry, name)
+    manifest = registry.manifest_for(plugin_id) if plugin_id is not None else None
+    if manifest is not None:
+        for problem in validate_plugin_config_slice(
+            plugin_slice,
+            manifest.config_schema,
+            label=f"plugins.config.{plugin_id}",
+        ):
+            logger.warning(problem)
+    for problem in warn_on_memory_identity_mismatch(config, plugin_slice):
+        logger.warning(problem)
     services = ServiceLocator(workspace=workspace)
     try:
         backend = registry.build_memory_backend(
@@ -245,6 +260,112 @@ def _resolve_plugin_config_slice(
     return {}
 
 
+_SCHEMA_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "boolean": (bool,),
+    # bool is an int subclass, so an accidental ``true`` would satisfy a
+    # numeric declaration; it is excluded at the check instead of here.
+    "integer": (int,),
+    "number": (int, float),
+    "array": (list,),
+    "object": (dict,),
+}
+
+
+def validate_plugin_config_slice(
+    slice_: dict,
+    schema: dict,
+    *,
+    label: str,
+) -> list[str]:
+    """Check a plugin's config slice against its manifest ``config_schema``.
+
+    Returns human-readable problems; an empty list means nothing to say. The
+    caller logs them. Nothing raises: a wrong key is worth a warning at boot,
+    not a dead host, and a batch must not die mid-run over a stray field.
+
+    This exists because the slice is passed to the factory verbatim. Every key
+    a plugin does not read is silently inert, so a typo (``deffer_extraction``)
+    reads as "the setting had no effect" and the config still looks right. An
+    empty ``schema`` declares nothing and therefore validates nothing, which is
+    how a plugin opts out.
+    """
+    if not schema:
+        return []
+    problems: list[str] = []
+    for key, value in sorted(slice_.items()):
+        declared = schema.get(key)
+        if declared is None:
+            near = _closest_key(key, schema)
+            hint = f"; did you mean {near!r}?" if near else ""
+            problems.append(
+                f"{label}: {key!r} is not declared in the plugin's "
+                f"config_schema and is ignored{hint}",
+            )
+            continue
+        if not isinstance(declared, dict):
+            continue
+        expected = declared.get("type")
+        allowed = _SCHEMA_TYPES.get(expected) if isinstance(expected, str) else None
+        if allowed is None or value is None:
+            continue
+        if isinstance(value, bool) and expected in ("integer", "number"):
+            problems.append(
+                f"{label}: {key!r} is declared {expected} but got a boolean",
+            )
+            continue
+        if not isinstance(value, allowed):
+            problems.append(
+                f"{label}: {key!r} is declared {expected} but got "
+                f"{type(value).__name__}",
+            )
+    return problems
+
+
+def _closest_key(key: str, schema: dict) -> str | None:
+    """Nearest declared key, for the "did you mean" hint. ``None`` when nothing
+    is close enough to be worth guessing at."""
+    import difflib
+
+    matches = difflib.get_close_matches(key, list(schema), n=1, cutoff=0.8)
+    return matches[0] if matches else None
+
+
+def warn_on_memory_identity_mismatch(config: "RavenConfig", slice_: dict) -> list[str]:
+    """Compare the host's recall identities against the plugin's write ones.
+
+    ``memory.userId`` / ``memory.agentId`` are what the host passes to
+    ``backend.recall``; the plugin slice's ``user_id`` / ``agent_id`` are
+    stamped as the sender on everything it writes. EverOS routes by sender, so
+    a mismatch writes under one owner and reads under another: recall comes
+    back permanently empty with no error on either side. Both sides default to
+    ``"default"``, which is why setting neither works and setting one does not.
+
+    Only reported when recall is actually on. In the store-only profile
+    (``recall_enabled: false``) nothing reads, so a difference costs nothing
+    today -- warning there would fire on every measurement arm, which is how a
+    real warning gets tuned out.
+    """
+    if not slice_.get("recall_enabled", True):
+        return []
+    problems: list[str] = []
+    for host_value, plugin_key, host_key, lane in (
+        (config.memory.user_id, "user_id", "memory.userId", "recall_memory_enabled"),
+        (config.memory.agent_id, "agent_id", "memory.agentId", "recall_skills_enabled"),
+    ):
+        if not slice_.get(lane, True):
+            continue
+        plugin_value = slice_.get(plugin_key)
+        if plugin_value is not None and plugin_value != host_value:
+            problems.append(
+                f"{host_key}={host_value!r} does not match the plugin's "
+                f"{plugin_key}={plugin_value!r}: writes are stamped with the "
+                f"plugin id and recall asks for the host one, so this lane "
+                f"returns nothing. Set both to the same value.",
+            )
+    return problems
+
+
 def _plugin_id_for_backend(
     registry: PluginRegistry,
     backend_name: str,
@@ -265,8 +386,55 @@ def _plugin_id_for_backend(
     return None
 
 
+async def shutdown_memory_backend(
+    agent_loop,
+    backend,
+    *,
+    promote: bool,
+    log: logging.Logger | None = None,
+    surface: str = "cli",
+) -> None:
+    """Drain, optionally promote, then stop — the teardown ordering contract.
+
+    Three steps that must happen in this order, and each of which must not be
+    able to skip the next:
+
+    1. **drain** — the after-turn store is detached under a turn budget, so
+       exiting on top of it loses exactly the turns that were slowest to index.
+    2. **promote** — only when ``memory.flush_on_task_end`` is on. After the
+       drain, because a deferred-capture backend learns each session's
+       backend-side id inside ``store``.
+    3. **stop** — releases the HTTP pool / embedded index lock. It must run
+       even if 1 or 2 raised, or the next process cannot start.
+
+    Hence one ``try`` per step rather than one around all three. Shared by the
+    surfaces whose only task boundary is exit (TUI, gateway); ``raven agent``
+    keeps its own path because it promotes the single session it wrote rather
+    than every session the process captured.
+    """
+    if backend is None:
+        return
+    log = log or logger
+    try:
+        await agent_loop.drain_backend_stores()
+    except Exception:
+        log.exception("%s: backend store drain failed; continuing shutdown", surface)
+    if promote:
+        try:
+            await agent_loop.promote_all_backend_sessions()
+        except Exception:
+            log.exception("%s: backend promotion failed; continuing shutdown", surface)
+    try:
+        await backend.stop()
+    except Exception:
+        log.exception("%s: memory backend stop failed; continuing shutdown", surface)
+
+
 __all__ = [
     "build_plugin_registry",
     "build_plugin_tools",
     "maybe_build_memory_backend",
+    "shutdown_memory_backend",
+    "validate_plugin_config_slice",
+    "warn_on_memory_identity_mismatch",
 ]

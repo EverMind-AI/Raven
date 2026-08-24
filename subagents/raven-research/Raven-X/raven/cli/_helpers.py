@@ -293,6 +293,26 @@ def send_probe(
     return (response.content or "").strip(), tokens, elapsed
 
 
+def exit_memory_service_unavailable(error: Exception) -> "typer.Exit":
+    """Render an opted-in memory-service failure and exit 1.
+
+    ``require_service=true`` is a configuration statement -- "this run exists
+    to write memory, so a memory service that cannot take writes is a failed
+    run" -- so it belongs with the other exit-1 causes rather than surfacing as
+    a bare traceback out of ``asyncio.run``.
+
+    Returns the exception for the caller to ``raise``, so the failure is
+    visible at the call site instead of hidden inside a helper.
+    """
+    console.print(f"\n[red]Error: {error}[/red]")
+    console.print(
+        "  [dim]·[/dim] Start the service, or set "
+        "[cyan]require_service=false[/cyan] in the backend's plugin config to "
+        "degrade instead of failing."
+    )
+    return typer.Exit(1)
+
+
 def print_probe_troubleshooting(provider: str | None) -> None:
     """Common-case hints when a probe fails.
 

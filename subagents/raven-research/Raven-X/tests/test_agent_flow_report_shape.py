@@ -1,4 +1,4 @@
-"""dr@3.7 report-shape reminder and bar.
+"""dr@3.4 report-shape reminder and bar.
 
 Two halves, and the second one is why this file is not just unit tests of
 ``ReportShape``. The reminder is injected in one ``AgentLoop`` method and
@@ -396,7 +396,7 @@ class _Loop:
     def __init__(self, flow=None):
         self._dr_flow = flow
         self._now_fn = datetime.now
-        self._flow_version = "dr@3.7/test"
+        self._flow_version = "dr@3.4/test"
 
     inject = AgentLoop._inject_report_reminder
     save = AgentLoop._save_turn

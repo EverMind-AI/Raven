@@ -7,6 +7,21 @@ declaration.
 from __future__ import annotations
 
 import importlib
+import os
+
+# Set before anything can import LiteLLM: the flag is read at import time.
+#
+# LiteLLM's model cost map is FETCHED FROM THE NETWORK by default, so the prices
+# and context windows the suite asserts against are whatever the remote table says
+# today. 16 tests in test_provider_rates.py failed the day that table started
+# pricing deepseek/deepseek-v4-pro, because their premise - "LiteLLM does not know
+# this model, so the resolver must fall back" - had quietly become false. Nothing
+# in the repo changed. A suite whose result depends on the date and on a network
+# round trip cannot answer "is this branch green", which is the only question it
+# exists to answer.
+#
+# ``setdefault``, so a caller can still run against the remote table on purpose.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import pytest
 
@@ -184,3 +199,37 @@ def _no_openrouter_network(tmp_path):
         model_catalog_cache._CACHE_PATH = original_path
         rates._OPENROUTER_CACHE.clear()
         rates._OPENROUTER_CACHE_TIME = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_language_directive():
+    """Render prompt bytes as a machine with no configured reply language would.
+
+    ``render._language_directive()`` reads ``load_config().language`` lazily, at
+    prompt-assembly time, from ``~/.raven/config.json`` - the developer's own
+    file, not a fixture. Set to ``zh`` it prepends 103 characters to the identity
+    block, which lands in the DR mode segment too (``dr.py`` imports the helper
+    inside its build method).
+
+    Eight tests asserted prompt bytes against that ambient value. Measured on a
+    host with ``"language": "zh"``: the bench-arm contract renders 3,588 chars /
+    ``03eee405dc41d5e5`` against the stamped 3,485 / ``593c46c416c3f4cf``, and the
+    two identity paths stop agreeing - ``identity_text`` carries the directive and
+    ``ContextBuilder._get_identity`` does not. So the suite's answer to "is this
+    branch green" depended on a file outside the repo, which is the same failure
+    mode as the LiteLLM network fetch at the top of this file.
+
+    This pins the premise those tests already state rather than changing what they
+    check: ``test_the_two_identity_paths_agree`` says "while no language directive
+    is configured" in its own docstring, and no test anywhere asserts the directive
+    IS present. A test that wants the configured-language path must patch the
+    helper back explicitly - it is a prompt change, and it should have to say so.
+    """
+    from raven.context_engine.segments import render
+
+    prev = render._language_directive
+    render._language_directive = lambda: ""
+    try:
+        yield
+    finally:
+        render._language_directive = prev

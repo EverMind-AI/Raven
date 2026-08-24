@@ -22,6 +22,8 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.flow import (
+    ask_user,
+    ask_user_tool,
     budget_note,
     dr,
     fetch_floor,
@@ -47,12 +49,20 @@ from raven.context_engine.segments import render
 #   · ``render.RAVEN_GUIDELINES`` is the identity guideline block, now defined once
 #     and imported by ``ContextBuilder`` (it used to exist twice, byte-identical).
 #
-# 20260819 added ``report_shape`` (dr@3.7). Its reminder rides the END of the current
+# 20260819 added ``report_shape`` (dr@3.4). Its reminder rides the END of the current
 # user message, which makes it the highest-recency prompt text this build emits - the
 # position a model is likeliest to echo, and echoed text is exactly what a detector
 # then matches. Clean today; in scope from now on.
+# 20260820 added ``ask_user_tool`` (dr@3.4-askuser). Its ``description`` and
+# ``parameters`` are prompt text - they enter the tool schema the model reads - and
+# both are PROPERTIES, so listing the module only catches its two fallback strings.
+# The rendered pair is appended in ``_prompt_texts`` for that reason.
+# ``ask_user`` (dr@3.4-askuser) alongside it: the handoff lead-in becomes the
+# turn's reply and then this session's HISTORY, and history is the strongest thing
+# a model echoes - which is what a detector then matches.
 _PROMPT_MODULES = (
-    dr, finalize, verify, fetch_floor, budget_note, web, tool_registry, render, report_shape
+    dr, finalize, verify, fetch_floor, budget_note, web, tool_registry, render, report_shape,
+    ask_user_tool, ask_user,
 )
 
 # Detector vocabularies: every list of literals matched against text the model
@@ -100,6 +110,35 @@ def _prompt_texts() -> list[tuple[str, str]]:
     out.append(("agent.context.ContextBuilder._get_identity",
                 ContextBuilder(workspace=pathlib.Path("/tmp/ws"),
                                start_watcher=False)._get_identity()))
+    # dr@3.4-askuser. Three surfaces a module-constant scan cannot see:
+    #   · the on-state segment, whose identity is REWRITTEN rather than appended to,
+    #     so the substituted sentences exist in no module-level string;
+    #   · ``_ASK_USER_IDENTITY_SUBS``, a tuple of tuples - ``vars()`` yields the
+    #     tuple, and ``isinstance(value, str)`` skips it;
+    #   · the tool's ``description`` / ``parameters``, both properties.
+    # Every one of them is text the model reads, and none of them was in scope.
+    import asyncio
+    import json
+
+    # The rendered handoff and brief, not just their constants: both are assembled
+    # from a lead-in plus model text, so a constant scan sees the lead-in and not
+    # the block that reaches the model.
+    pending = ask_user.PendingClarify(
+        original_question="the original question",
+        questions=[{"question": "which entity?", "options": ["a", "b"]}],
+        outline=[{"goal": "g", "evidence": "e", "why": "w"}],
+    )
+    out.append(("flow.ask_user.render_handoff()", ask_user.render_handoff(pending)))
+    out.append(("flow.ask_user.render_brief()", ask_user.render_brief(pending, "a")))
+    for outline in (True, False):
+        seg = asyncio.run(
+            dr.DRModeSegmentBuilder(ask_user=True, ask_user_outline=outline).build(None)
+        )
+        out.append((f"flow.dr on-state segment (outline={outline})", seg.text))
+        tool = ask_user_tool.DRAskUserTool(outline=outline)
+        out.append((f"flow.ask_user_tool.description (outline={outline})", tool.description))
+        out.append((f"flow.ask_user_tool.parameters (outline={outline})",
+                    json.dumps(tool.parameters, ensure_ascii=False)))
     return out
 
 
@@ -170,7 +209,21 @@ def test_the_two_identity_paths_agree() -> None:
 
 def test_the_dr_prompt_replaces_the_instructions_it_drops() -> None:
     """DR mode drops the identity segment, so its replacement must carry the
-    parts that were load-bearing and none of the parts that named absent tools."""
+    parts that were load-bearing and none of the parts that named absent tools.
+
+    Two states since dr@3.4-askuser. The intent of this test is "the prompt must
+    not name a tool this arm does not have", and ``ask_user`` became a tool an arm
+    CAN have. Asserting only the module constants would keep passing literally
+    while measuring nothing: the clause and the identity rewrite both happen at
+    build time, so the constants stay clean either way. The on state therefore
+    asserts the pairing directly - the rendered segment names the tool AND the
+    assembly admits it to the allowlist.
+    """
+    import asyncio
+
+    from raven.agent.flow.dr import DRModeSegmentBuilder, build_dr_flow
+    from raven.config.raven import DRFlowConfig
+
     dr_text = dr._DR_IDENTITY + "\n" + dr._DR_PROMPT_SECTION
 
     # Load-bearing, must survive the swap.
@@ -180,6 +233,26 @@ def test_the_dr_prompt_replaces_the_instructions_it_drops() -> None:
     # Named a tool no DR arm has; must not come back.
     for absent in ("ask_user", "## Workspace", "Platform Policy", "'message' tool", "user_memory"):
         assert absent not in dr_text, f"DR prompt names {absent!r}, which no DR arm provides"
+
+    # Off state: the rendered segment, not just the constants.
+    off = asyncio.run(DRModeSegmentBuilder(ask_user=False).build(None))
+    assert "ask_user" not in off.text
+    assert "nobody to consult" in off.text
+
+    # On state: named in the prompt and present in the tool surface, together.
+    on = asyncio.run(DRModeSegmentBuilder(ask_user=True).build(None))
+    assert "`ask_user`" in on.text
+    assert "nobody to consult" not in on.text
+    asm = build_dr_flow(
+        DRFlowConfig(
+            enabled=True,
+            ask_user={"enabled": True},
+            conversation={"enabled": True},
+        ),
+        None, 20, 200_000,
+    )
+    assert "ask_user" in asm.tools_allowlist
+    assert asm.ask_user_tool is not None and asm.ask_user_tool.name == "ask_user"
 
     assert "identity" in dr._MINIMAL_CONTEXT_DROPPED_SEGMENTS
 
@@ -240,34 +313,42 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     # describing a prompt no batch has ever run. The rule the failure teaches: an
     # artifact that reproduces a published reading must state the whole switch state,
     # because "the rest are off" is a fact about today's defaults, not about the batch.
+    # dr@3.4-askuser added a third; ``ask_user=False`` is written out here for the
+    # same reason, even though its default is off today.
     measured = asyncio.run(
-        DRModeSegmentBuilder(require_answer_marker=False, report_structure=False).build(None)
+        DRModeSegmentBuilder(
+            require_answer_marker=False, report_structure=False, ask_user=False
+        ).build(None)
     )
     assert sha(measured.text) == "593c46c416c3f4cf"
     assert len(measured.text) == 3485
 
     # The dr@2.6 product surface: the same bytes plus one appended clause.
     marker_only = asyncio.run(
-        DRModeSegmentBuilder(require_answer_marker=True, report_structure=False).build(None)
+        DRModeSegmentBuilder(
+            require_answer_marker=True, report_structure=False, ask_user=False
+        ).build(None)
     )
     assert sha(marker_only.text) == "7ad4b42cc78aec62"
     assert marker_only.text.startswith(measured.text.rstrip())
 
     # The product surface: both clauses, still purely appended. This pin moves
-    # with every report-clause rewrite: dr@3.5 replaced the dr@2.8 ordered-prose
+    # with every report-clause rewrite: the fold replaced dr@2.8's ordered-prose
     # value (41d7d4d2b582bd55, the dr@2.8-3.4 live-web batches) with the fixed
-    # template (93ab746e00264baf), and dr@3.6 added the format-override rule.
+    # template (93ab746e00264baf), and the same label added the format-override rule.
     # Superseded readings reproduce from their own arm_env.json stamps, not from
     # this build.
-    seg = asyncio.run(DRModeSegmentBuilder().build(None))
+    seg = asyncio.run(DRModeSegmentBuilder(ask_user=False).build(None))
     assert sha(seg.text) == "75d2ad71c15aacc0"
     assert seg.text.startswith(marker_only.text.rstrip())
 
-    # The dr@3.5 surface stays reachable: the override passage rides its own
-    # switch, and the off state must reproduce the superseded label's bytes -
-    # this pin is what makes dr@3.5 runs comparable against a same-batch arm
+    # The pre-override surface stays reachable: the override passage rides its own
+    # switch, and the off state must reproduce the pre-override bytes -
+    # this pin is what makes pre-override runs comparable against a same-batch arm
     # cut from this build rather than only against their own _src_snapshot.
-    no_override = asyncio.run(DRModeSegmentBuilder(report_format_override=False).build(None))
+    no_override = asyncio.run(
+        DRModeSegmentBuilder(report_format_override=False, ask_user=False).build(None)
+    )
     assert sha(no_override.text) == "93ab746e00264baf"
     assert no_override.text.startswith(marker_only.text.rstrip())
 
@@ -276,7 +357,8 @@ def test_the_dr_prompt_bytes_match_the_batch_that_measured_them() -> None:
     # ablation having changed size.
     off = asyncio.run(
         DRModeSegmentBuilder(
-            measured_guidance=False, require_answer_marker=False, report_structure=False
+            measured_guidance=False, require_answer_marker=False,
+            report_structure=False, ask_user=False,
         ).build(None)
     )
     assert len(off.text) == 2622

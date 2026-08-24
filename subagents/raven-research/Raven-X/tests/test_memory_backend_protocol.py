@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from raven.memory_engine import Memory, MemoryBackend
+from raven.memory_engine import FlushableBackend, Memory, MemoryBackend
 
 # ---------------------------------------------------------------------------
 # Memory dataclass
@@ -83,6 +83,16 @@ class _IncompleteBackend:
         return None
 
 
+class _FlushableBackend(_CompleteBackend):
+    """The five required methods plus the optional flush capability."""
+
+    def __init__(self) -> None:
+        self.flushed: list[str] = []
+
+    async def flush(self, session_id):
+        self.flushed.append(session_id)
+
+
 class TestProtocolRuntimeCheck:
     def test_complete_backend_satisfies_protocol(self) -> None:
         assert isinstance(_CompleteBackend(), MemoryBackend)
@@ -91,6 +101,28 @@ class TestProtocolRuntimeCheck:
         # @runtime_checkable Protocols check attribute presence —
         # a missing method must reject.
         assert not isinstance(_IncompleteBackend(), MemoryBackend)
+
+
+class TestFlushableCapability:
+    """``flush`` is an opt-in capability, deliberately NOT a sixth
+    member of :class:`MemoryBackend`."""
+
+    def test_backend_without_flush_is_still_a_memory_backend(self) -> None:
+        # The reason flush lives in its own Protocol: folding it into
+        # MemoryBackend would strip protocol identity from every adapter
+        # that never implements it.
+        assert isinstance(_CompleteBackend(), MemoryBackend)
+        assert not isinstance(_CompleteBackend(), FlushableBackend)
+
+    def test_flushable_backend_satisfies_both(self) -> None:
+        b = _FlushableBackend()
+        assert isinstance(b, MemoryBackend)
+        assert isinstance(b, FlushableBackend)
+
+    async def test_flush_is_awaitable_and_takes_a_session_id(self) -> None:
+        b = _FlushableBackend()
+        assert await b.flush("sess-1") is None
+        assert b.flushed == ["sess-1"]
 
 
 # ---------------------------------------------------------------------------

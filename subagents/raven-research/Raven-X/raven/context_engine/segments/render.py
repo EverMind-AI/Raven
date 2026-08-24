@@ -166,6 +166,18 @@ def render_router_skills(hits: list[Any]) -> str:
     bundled files. Inline ``[qualified_id]`` after the name is the only
     new piece: it lets the after-turn feedback dispatcher correlate shown
     vs used skills. Empty hits → ``""``.
+
+    Bodies from any source other than ``local`` are fenced as untrusted. The
+    criterion is authorship, not retrieval quality: a local skill is a file in
+    this repo, reviewed like code, whereas an everos skill is distilled from
+    past conversations (which may themselves have carried injected web text)
+    and a Hub skill is written by a stranger. Both land in the system prompt,
+    the most privileged position in the context, so they get the boundary that
+    tool results and recalled memory already get. Phrased as "not local"
+    rather than a list of untrusted sources so a source added later is fenced
+    by default instead of silently trusted. Headers stay outside the fence —
+    they are host-rendered, and the qualified id has to remain readable for
+    feedback correlation.
     """
     if not hits:
         return ""
@@ -188,6 +200,9 @@ def render_router_skills(hits: list[Any]) -> str:
         parts.append(header)
         content = (getattr(h, "content", "") or "").strip()
         if content:
+            source = str(meta.get("source") or "")
+            if source != "local":
+                content = wrap_untrusted(content, source=f"{source or 'unknown'} skill")
             parts.append(content)
     return "\n\n".join(parts)
 

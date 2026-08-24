@@ -274,9 +274,12 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     # wiring (snake_case, verbatim pass-through to the plugin factory).
     assert data["plugins"]["config"]["everos-memory"] == {
         "mode": "embedded",
-        "base_url": "http://localhost:1995",
+        "base_url": "http://127.0.0.1:8000",
+        "api_version": "auto",
         "user_id": "default",
         "agent_id": "default",
+        "defer_extraction": False,
+        "recall_enabled": True,
     }
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}

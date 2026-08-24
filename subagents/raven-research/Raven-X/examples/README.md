@@ -9,6 +9,7 @@ keys replaced by placeholders. Copy one, fill in the placeholders, pass it with 
 | `dr_multi_turn.json` | The same thing as a **conversation**: follow-ups decide for themselves whether they need new research. | same as above |
 | `dr_pinned_corpus.json` | DR Flow over a fixed corpus instead of the live web. Reproduces our controlled measurements. | LLM endpoint, a corpus service on `:8765` |
 | `anchor_flow_off.json` | The **measurement anchor** (`drFlow.enabled=false`). Not a product configuration — see README "Measurement anchor". | same as above |
+| `everos_memory.json` | **Memory, not DR.** Wiring the EverOS backend so captured turns land. Recall ships off; one key turns it on. | LLM key, an EverOS service on `:8000` |
 
 **Name the real gateway in `providers`, not `custom`.** The two OpenRouter configs use a
 `providers.openrouter` slot; the two self-hosted ones use `custom`, which is the correct slot for an
@@ -39,7 +40,7 @@ configs because that is the combination our published numbers were measured on.
 | `fetchFloor` | Nudges when the agent keeps searching without ever opening a page. |
 | `verify.strictRejectOnly` | The draft reviewer may only reject on a hard failure; it must not rewrite or blank an answer. |
 | `digest.verbatimHeadChars: 800` | `web_fetch` returns a digest, keeping the first 800 characters verbatim. |
-| `memory.backend: null` | Persistent user memory off, in all four configs. A memory backend carries content *across sessions*, which would make two runs of the same question non-independent. `dr_multi_turn.json` keeps it off for the same reason: what it adds is memory *within* one conversation, which is a different thing and does not need a backend. |
+| `memory.backend: null` | Persistent user memory off, in all four DR configs. A memory backend carries content *across sessions*, which would make two runs of the same question non-independent. `dr_multi_turn.json` keeps it off for the same reason: what it adds is memory *within* one conversation, which is a different thing and does not need a backend. Note the field defaults to `"everos"`, so **omitting the block enables it** — the `null` is doing work. Memory has its own example; see below. |
 
 Four knobs deserve a warning:
 
@@ -92,6 +93,61 @@ Four knobs deserve a warning:
   benchmarked reached 31 real web pages out of a pinned corpus using `exec` plus `curl`. Note
   that `toolsAllowlist` only applies when the flow is **on**, so for `anchor_flow_off.json`
   the denylist is the only fence there is.
+
+## Wiring the memory backend (`everos_memory.json`)
+
+The other four configs are DR runs with memory off. This one is the opposite: no flow, a real
+backend. It runs against an [EverOS](https://github.com/EverMind-AI/EverOS) service on `:8000`
+in the eager profile — every turn is written and promoted as it happens, so there is nothing to
+run afterwards to see episodes and cases appear.
+
+```bash
+raven agent -w ./ws --config examples/everos_memory.json -s cli:demo -m "I work mostly in Rust."
+raven agent -w ./ws --config examples/everos_memory.json -s cli:demo -m "And I dislike ORMs."
+```
+
+**Recall ships off** (`recall_enabled: false`). That is the deliberate default: recall changes
+what the model reads, and an example that hands you a prompt-altering setting switched on is the
+wrong default to copy. Turn it on with that one key when you want retrieval; the two `recall_*`
+lanes below it are already set, so nothing else has to change.
+
+Four things here are load-bearing, and three of them fail *silently* — an empty
+`# Recalled memory` block and no error anywhere:
+
+- **`recall_enabled: false` is a real mode, not just "off".** It keeps the after-turn write and
+  takes the backend out of the context engine — the **store-only** profile. That is how a
+  measurement arm captures trajectories while its prompt bytes stay identical to
+  `memory.backend: null`, which is what lets the write path ride along without a
+  `drFlow.version` bump.
+
+- **The two identity pairs have to match** once recall is on. `memory.userId` / `memory.agentId`
+  are the *read* side (what the host passes to `backend.recall`); the plugin slice's `user_id` /
+  `agent_id` are the *write* side (stamped as the sender on every captured message). EverOS
+  routes by sender, so a mismatch writes to one owner and reads from another. Both sides default
+  to `"default"`, which is why setting neither works and setting one does not. Raven warns at
+  startup when they diverge and recall is on.
+
+- **With the DR flow on, recall is inert by default.** `drFlow.minimalContext` (default `true`)
+  drops the `memory`, `skills` and `active_skills` segments, so `recall_enabled: true` under
+  `drFlow.enabled: true` retrieves hits that never reach the prompt. This example sidesteps it by
+  leaving the flow off; combining the two means setting `minimalContext: false`, which is a
+  distribution change and needs its own `drFlow.version`.
+
+- **`defer_extraction: false` is what makes this example self-contained.** In the deferred profile
+  (`true`) `/add` only appends to a server-side buffer and *nothing* is derived until something
+  asks: pass `--flush-skill-buffer` on the last run of a session, or promote out of band with
+  `scripts/everos_flush_batch.py`. `memory.flushOnTaskEnd` does the same per run — and does
+  nothing at all in the eager profile, which has nothing buffered to promote. A capture that is
+  buffered but never promoted is indistinguishable from a backend that is not working.
+
+`require_service: true` is set here on purpose: it turns a missing service into exit 1 instead of
+a logged warning and a silently memory-less run. The default is `false`, which is right for a
+measurement arm that must not die on an infra blip and wrong for a demo whose entire subject is
+the backend.
+
+**Authenticating to a remote service:** set `EVEROS_API_KEY` in the environment. The plugin's
+`api_key` config key still works and takes precedence, but the environment is preferred for the
+same reason as the web-tool keys — a config file can then be shared without carrying a secret.
 
 ## Running a conversation (`dr_multi_turn.json`)
 

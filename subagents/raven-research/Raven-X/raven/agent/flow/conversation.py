@@ -190,6 +190,7 @@ class ConversationGate:
         timeout_seconds: float = 20.0,
         history_messages: int = 6,
         history_chars: int = 4000,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
@@ -197,6 +198,7 @@ class ConversationGate:
         self._timeout_seconds = timeout_seconds
         self._history_messages = history_messages
         self._history_chars = history_chars
+        self._reasoning_effort = reasoning_effort
 
     async def decide(self, question: str, history: list[dict[str, Any]]) -> TurnMode:
         """Classify one follow-up. Never raises; every failure is a research turn."""
@@ -211,6 +213,7 @@ class ConversationGate:
                     model=self._model,
                     max_tokens=self._max_tokens,
                     temperature=0.0,
+                    reasoning_effort=self._reasoning_effort,
                 ),
                 timeout=self._timeout_seconds,
             )

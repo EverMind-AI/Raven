@@ -374,7 +374,7 @@ def test_the_cap_clears_the_sum_of_the_installed_observers_budgets():
     within-budget worst case turns into phantom entries in the ledger - a
     ``bounces`` count for a rollback that never ran, readable only by joining
     ``rollbacks_refused``. The number was justified by an enumeration in the
-    comment beside it, that enumeration omitted the verify gate, and dr@3.7's
+    comment beside it, that enumeration omitted the verify gate, and dr@3.4's
     shape bar was the sixth claimant on a cap sized for four.
     """
     worst_case = {
@@ -383,7 +383,7 @@ def test_the_cap_clears_the_sum_of_the_installed_observers_budgets():
         "spin_breaker": 1,
         "force_finalize": 1,
         "verify_gate": 1,
-        "report_shape": 1,      # dr@3.7
+        "report_shape": 1,      # dr@3.4
     }
     # RefusalObserver also rolls back (budget 1) but nothing installs it outside
     # tests; the day something does, it belongs in this sum.
@@ -491,3 +491,43 @@ async def test_terminal_seam_fail_open_leaves_the_turn_alone(workspace):
     assert hook.calls == 1
     assert final == "still weighing the candidates</think>"
     assert "salvaged" not in messages[-1].get("observers", {}).get("turn_end", {})
+
+
+class _InjectingRollbackHook(AgentHook):
+    """Rolls back once and injects both roles, like the verify gate does."""
+
+    async def after_iteration(self, ctx):
+        if ctx.metadata.get("rolled"):
+            return HookDecision()
+        ctx.metadata["rolled"] = True
+        return HookDecision(
+            rollback=True,
+            rollback_inject=[
+                {"role": "assistant", "content": "the rejected draft"},
+                {"role": "user", "content": "A reviewer rejected the draft above."},
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_injected_user_turns_are_marked_flow_synthetic(workspace):
+    """A hook rollback is the harness re-prompting itself.
+
+    Marked at the application site rather than in each observer, so it holds
+    for the verify gate, the finalize gate, the spin breaker and anything added
+    later. The capture path reads this mark to keep harness text off the user
+    track; the assistant half is genuine model output and stays unmarked.
+    """
+    agent = _make_agent(_ConstantProvider(), workspace, _InjectingRollbackHook(), max_iterations=2)
+
+    _, _, messages, _ = await agent._run_agent_loop([{"role": "user", "content": "go"}])
+
+    wanted = ("the rejected draft", "A reviewer rejected the draft above.")
+    injected = [m for m in messages if m.get("content") in wanted]
+    assert len(injected) == 2, messages
+    by_role = {m["role"]: m for m in injected}
+    assert by_role["user"].get("_flow_synthetic") is True
+    assert "_flow_synthetic" not in by_role["assistant"]
+    # The real user turn is not marked: it did not arrive via a rollback.
+    real = [m for m in messages if m.get("content") == "go"]
+    assert real and "_flow_synthetic" not in real[0]

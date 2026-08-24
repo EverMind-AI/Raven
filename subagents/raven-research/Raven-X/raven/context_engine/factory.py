@@ -73,6 +73,8 @@ def build_context_engine(
     get_tool_definitions: Callable[[], list[dict]],
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
+    recall_memory: bool = True,
+    recall_skills: bool = True,
     memory_config: "MemoryConfig | None" = None,
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
@@ -87,6 +89,11 @@ def build_context_engine(
     back-compat but is ignored here. ``builder`` is used only as the
     holder of the shared ``MemoryStore`` / ``LocalSkillCatalog`` until it
     is retired.
+
+    ``recall_memory`` / ``recall_skills`` split the one ``backend`` across its
+    two consumers — the ``# Memory`` lane and :class:`EverosSkillSource`. Both
+    default True so a caller that only passes ``backend`` keeps both lanes;
+    ``backend=None`` still disables everything, which is the coarse gate.
     """
     from raven.config.raven import (
         MemoryConfig as _MemoryConfig,
@@ -102,7 +109,7 @@ def build_context_engine(
 
     router = _build_router(
         builder=builder,
-        backend=backend,
+        backend=backend if recall_skills else None,
         memory_config=memory_config,
         skill_forge_router_config=skill_forge_router_config,
         skill_hub_client=skill_hub_client,
@@ -119,7 +126,7 @@ def build_context_engine(
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
-            backend,
+            backend if recall_memory else None,
             user_id=memory_config.user_id,
             memory_top_k=memory_config.memory_top_k,
         ),
@@ -186,6 +193,9 @@ def _build_router(
         everos_source = EverosSkillSource(
             backend=backend,
             agent_id=memory_config.agent_id,
+            min_confidence=float(
+                getattr(skill_forge_router_config, "everos_min_confidence", 0.0) or 0.0,
+            ),
         )
         if "everos" in weights:
             everos_source.weight = float(weights["everos"])

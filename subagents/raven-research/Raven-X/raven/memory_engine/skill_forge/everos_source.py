@@ -70,9 +70,35 @@ class EverosSkillSource:
         self,
         backend: "MemoryBackend",
         agent_id: str,
+        min_confidence: float = 0.0,
     ) -> None:
         self._backend = backend
         self._agent_id = agent_id
+        self._min_confidence = min_confidence
+
+    def _dropped_by_confidence(self, m: Any) -> bool:
+        """Whether a hit falls below the configured maturity floor.
+
+        Client-side because the server's own ``min_score`` is a *relevance*
+        floor consumed only by the episode hybrid path — the agent lane
+        ignores it, so a floor sent on the wire would silently do nothing.
+        Confidence is a different axis anyway: it says how many trajectories
+        agreed on a skill, not how well it matches this query.
+
+        A hit with no confidence at all is kept. EverOS has no skill
+        retirement, so a floor is the only pressure against a space filling
+        with one-off distillations — but dropping unlabelled hits would also
+        drop every agent *case*, which never carries the field.
+        """
+        if self._min_confidence <= 0.0:
+            return False
+        raw = (m.metadata or {}).get("confidence")
+        if raw is None:
+            return False
+        try:
+            return float(raw) < self._min_confidence
+        except (TypeError, ValueError):
+            return False
 
     async def search(
         self,
@@ -95,6 +121,8 @@ class EverosSkillSource:
 
         out: list[RouterHit] = []
         for m in hits:
+            if self._dropped_by_confidence(m):
+                continue
             native_id = (m.metadata.get("id") if m.metadata else None) or _stable_id_for(m.text)
             name = (m.metadata.get("name") if m.metadata else None) or _short_name_for(m.text)
             out.append(

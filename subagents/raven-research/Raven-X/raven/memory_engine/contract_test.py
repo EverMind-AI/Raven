@@ -131,6 +131,46 @@ class MemoryBackendContractTests:
         assert isinstance(hits, list)
 
 
+class FlushableContractTests:
+    """Opt-in contract for a backend that buffers capture and defers
+    extraction, so promotion is an explicit act.
+
+    Separate base class because ``flush`` is an optional capability:
+    :class:`FlushableBackend` is a one-method ``runtime_checkable``
+    Protocol precisely so an eagerly-extracting backend keeps its
+    Protocol identity without implementing it.
+
+    Worth having beyond the ``isinstance`` gate the host uses:
+    ``runtime_checkable`` only checks that the attribute exists, so a
+    plain function -- or ``flush = 1`` -- passes the host's check and
+    then fails at the await. For a contract offered to third-party
+    plugins, "it is a coroutine function" is the part worth pinning.
+    """
+
+    async def make_backend(self) -> MemoryBackend:
+        raise NotImplementedError
+
+    async def test_flush_is_recognised_as_flushable(self) -> None:
+        from raven.memory_engine.backend import FlushableBackend
+
+        b = await self.make_backend()
+        assert isinstance(b, FlushableBackend)
+
+    async def test_flush_is_awaitable(self) -> None:
+        import inspect
+
+        b = await self.make_backend()
+        assert inspect.iscoroutinefunction(b.flush), (
+            "flush must be an async def -- the host awaits it, and runtime_checkable only proves it exists"
+        )
+
+    async def test_flush_of_an_unknown_session_does_not_raise(self) -> None:
+        """The host promotes whatever session key it wrote under; a backend
+        that never saw it must degrade, not raise into the exit path."""
+        b = await self.make_backend()
+        await b.flush("never-written-contract-test")
+
+
 class LifecycleContractTests:
     """Lifecycle tests run **without** the ``backend`` fixture so they
     can poke the raw ``start``/``stop`` pair directly. Separate base
@@ -156,6 +196,7 @@ class LifecycleContractTests:
 
 
 __all__ = [
+    "FlushableContractTests",
     "LifecycleContractTests",
     "MemoryBackendContractTests",
 ]

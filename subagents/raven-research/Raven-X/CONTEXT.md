@@ -114,16 +114,56 @@ artifact from the **process appendix**, which is display-only and must never rea
 _Avoid_: "session memory" — the memo is per conversation and carries retrieval, not findings,
 and it is unrelated to the cross-session Memory Engine.
 
+**Clarify turn** (`agent/flow/ask_user.py`, config `drFlow.askUser`):
+A turn that ends in an `ask_user` handoff and deliberately produces no answer: the model's
+questions become the turn's reply and the user's next message carries the answer. Nothing
+blocks — the tool call is the signal and the turn boundary is the transport, so the short
+circuit happens in `before_execute_tools` and `after_iteration` never runs. Stamped
+`turn_end.awaiting_user`, which is a boolean beside `status` and never a fourth value for it:
+in every downstream consumer's eyes a clarify turn is a normally completed turn. Product
+surface only, and structurally unreachable from a bench arm.
+_Avoid_: "clarification round" — that collides with the verify gate's revision round; and
+"answerless turn", which is the failure this one is deliberately distinguished from.
+
+**Mandated clarify turn** (`drFlow.askUser.mode = "first_turn"`, the default):
+Turn one of a conversation, on which the contract asks for a clarify round unconditionally
+rather than only when something is undecidable. A request and not a guarantee — nothing can
+make a model emit a tool call — so `observers.ask_user.asked` on such a turn is a compliance
+rate, and `first_turn` / `ask_required` mark it so those turns stay separable from turns where
+asking was merely permitted. The clause text is the same on every turn: it states both regimes
+at once, because the system prompt heads the cached prefix and varying it per turn re-bills the
+conversation at uncached rates.
+_Avoid_: "forced" — nothing is forced, and no turn is re-sampled for failing to ask.
+
+**Clarify chain**:
+The span from one handoff to the first following turn that asks nothing further.
+`drFlow.askUser.maxRounds` bounds THIS, not a session: the count passes **through** the turn
+that consumes a pending, and the chain closes — discarding the count — as soon as a turn
+researches normally. A session-scoped budget would spend it on a conversation's first
+research question and silently refuse its second, unrelated one.
+_Avoid_: calling it a session — different scope, and conflating the two is the error this
+scoping exists to fix.
+
+**Research brief** (`agent/flow/ask_user.py`, `render_brief`):
+The deterministic block prepended to the turn that answers a clarify handoff: the original
+question, the questions asked, and the user's reply **transcribed verbatim**, never restated
+as "the answer is X". Computed from the pending state rather than asked of the model, and
+stripped before persist like the research memo and the report reminder — the outermost of the
+three prefix blocks, which is what lets the memo's own prefix-anchored stripper still match.
+The verbatim rule is what caps the cost of a misread reply at one stale paragraph instead of
+a fabricated question-answer pair.
+_Avoid_: "plan" — that is the outline / search plan; the brief is the task definition.
+
 **Report template** (`agent/flow/dr.py`, `_DR_REPORT_STRUCTURE_CLAUSE`, knob
 `drFlow.finalShape.reportStructure`):
 The fixed markdown shape the DR contract asks the model for when the knob is on:
 `## Answer` / `## Findings` / `## Limitations`, exact headings, all three present every
-time, no other headings. Since `dr@3.6` the template also overrides any formatting
+time, no other headings. Since `dr@3.4` the template also overrides any formatting
 instructions carried by the question itself — a question asking for one word, a JSON
 object, or a table is still answered as the three-section report on that question's topic,
 with the requested shape satisfied inside the report where it fits; the override passage
 rides its own sub-switch, `finalShape.reportFormatOverride` (default on; off restores the
-`dr@3.5` clause byte for byte). Since `dr@3.7` two mechanisms back the clause up, both inert
+pre-override clause byte for byte). Also in `dr@3.4` two mechanisms back the clause up, both inert
 without it: a per-turn **reminder** (`reportReminder`, on) that restates the template on the
 current user message and is stripped before persist, and a **shape bar**
 (`reportBounce`, off — `flow/report_shape.py`) that bounces a draft missing a section back
@@ -377,15 +417,84 @@ and injects into the main agent's system prompt so evicted facts stay present.
 Raven's default bundled memory-backend plugin (`everos-memory`; ships enabled, works
 out of the box). Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
-SkillForge's three sources at RRF weight 0.9). The name refers to the external package
-[EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
-adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
+SkillForge's three sources at RRF weight 0.9) — plus the after-turn write path
+(`backend.store` → `/memory/add`, HTTP mode negotiating `/api/v2` with a `/api/v1`
+fallback). Writes are addressed by four **scope keys**: `app_id` / `project_id` (hard
+isolation — on-disk path segments; a search never crosses them), `agent_id` (soft owner
+selector within a scope), and `session_id` (unprocessed-buffer key; one per task, never
+shared between writers — EverOS fans agent cases out across every assistant sender in a
+cell). With `session_id_prefix` set the backend mints `<prefix>_<uuid4hex>` per host
+session key and persists the mapping in `<workspace>/.everos_session_map.json`, so the
+same host key resolves to the same EverOS session in a later process — several `raven
+agent -m` calls sharing one `-s` are one conversation to the host and have to be one
+buffer to EverOS. Two write profiles: eager (default; `flush_every_turns` cadence) and
+**deferred capture** (`defer_extraction=true`; `/add` is a buffer-only write with no
+extraction LLM in the turn, promotion happens via an explicit flush —
+`scripts/everos_flush_batch.py` after a measurement batch). A *successful* promotion is
+idempotent (measured on everos 1.2.3: a second `/flush` answers `no_extraction` in
+~10 ms), so `memory.flush_on_task_end` and the post-batch script can both be on. A
+*failed* one is not retryable, which is the asymmetry to plan around: `/flush` runs
+boundary detection and the user-track episode LLM inside the request under the server's
+`memorize.session_lock_timeout_seconds`, while the agent track is dispatched to a
+background queue. When the server hits that cap it has already committed the memcells and
+drained the buffer, so cases and skills still land minutes later out of band, the episodes
+never do, and the retry answers `no_extraction` — measured once at 70 buffered items
+against a 360 s cap. Hence `flush_timeout_s` (and `everos_flush_batch.py`'s
+`--flush-timeout-s`) must stay **above** the server's cap: equal budgets are the bad case,
+because the server's timer starts after routing and fires first, turning an answer into a
+500. Acceptance on a promotion compares the `users/` and `agents/` trees under the memory
+root; the flush status alone cannot see this.
+`recall_enabled=false` is the **store-only gate**: the host
+keeps the backend on the after-turn store dispatch and out of the context engine, so
+prompt bytes stay identical to `memory.backend=null` (what lets the write path ride on a
+measurement arm without a `drFlow.version` bump). Per-call latency does not: the
+after-turn store is detached under `_STORE_TURN_BUDGET_S` (5 s), so a turn still pays up
+to that. Inside the gate,
+`recall_memory_enabled` / `recall_skills_enabled` pick which lane earns its cost. What the
+backend receives is cleaned by the same `AgentLoop._clean_turn_messages` pass that feeds the
+session log, so the runtime-context envelope, the research memo and recovery scaffolding
+never reach extraction; out-of-band reasoning is dropped unless `capture_reasoning` is on,
+which folds it into tool-calling assistant rows only. The one place the two consumers
+diverge is **flow-injected user turns**: a hook rollback (`rollback_inject` with
+`role=user` — a verify-gate rejection, a `[finalize]` commit nudge, a spin-breaker
+checkpoint) is the harness re-prompting itself, marked `_flow_synthetic` at the
+application site in `_hook_rollback`. The log keeps them, because a revision with no
+reason recorded above it is unreadable; capture drops them (`for_capture=True`), because
+a `user` role there is a claim about the person — EverOS routes by sender, so they would
+build episodes and a profile out of harness text and inflate the user-message count the
+agent-case filter reads as evidence of a real correction. A genuine mid-turn user message
+arrives through `drain()` (BusyPolicy.INJECT) and is unmarked, so it is still captured. `start()` probes `/health` once and
+names what a reachable-but-degraded server cannot do (a 200 stopped implying a working
+install at everos 1.2.1); that is a warning unless `require_service` is set, which raises
+`MemoryServiceUnavailableError` instead — surfaced only by `raven agent` (as exit 1, with
+the backend released), since an interactive session should degrade rather than refuse to
+start; and inert outside `mode=http`, which is warned about rather than left silent.
+Promotion at a task boundary is `memory.flush_on_task_end`: `raven agent` promotes the
+one session it wrote, while the TUI and the gateway have no per-run boundary and promote
+every session the process captured at exit (`AgentLoop.promote_all_backend_sessions`). The name refers to
+the external package [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the
+in-tree code is only an adapter. The same plugin also contributes the `understand_media`
+multimodal-parsing tool.
+_Avoid_: sharing one `session_id` between a parent agent and sub-agents (cross-copies
+cases); encoding the writer into `project_id` (that is `agent_id`'s job — hard isolation
+is irreversible at write time).
 
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
 — typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
 with optional LLM gating and query rewriting before injecting them into the agent prompt.
+Bodies from any source other than `local` are fenced with `wrap_untrusted` on the way in:
+the criterion is authorship, not retrieval quality — a local skill is a reviewed file in
+this repo, while an everos skill is distilled from past conversations and a Hub skill is
+written by a stranger, and both land in the system prompt. The fence is system-prompt
+bytes, so it is a distribution change wherever it can fire — but it can only fire on a
+turn that injects a non-local skill, which needs either `hub.endpoint` set or EverOS
+recall on, and **turning either on is itself a distribution change** needing its own
+`drFlow.version` and anchor pair. So the fence never independently invalidates a measured
+arm; it rides along with the change that makes it observable. `router.everos_min_confidence`
+is a client-side maturity floor on everos hits (the server's `min_score` is a relevance
+floor only the episode path reads); hits without the field, which is every agent case, pass.
 Skill distillation/evolution is handled by the embedded EverOS extraction pipeline
 (`skillForge.everos`), not by SkillForge itself — there is no feedback-driven evolution or
 versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days`) are

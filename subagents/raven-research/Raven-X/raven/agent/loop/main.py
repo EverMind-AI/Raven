@@ -284,6 +284,28 @@ _TRANSIENT_FAILURE_MARKERS = (
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
+# How long a turn is willing to wait on plugin-side indexing before letting the
+# write finish on its own. A budget, not a deadline: the task keeps running.
+_STORE_TURN_BUDGET_S: float = 5.0
+# Ceiling on concurrently detached writes. At the ceiling a turn waits for one to
+# land, so a slow memory service cannot grow an unbounded queue behind a fast
+# typist; if none lands, this turn's write is refused before it starts.
+_STORE_MAX_INFLIGHT: int = 4
+# Teardown's total budget for letting those writes finish.
+_STORE_DRAIN_BUDGET_S: float = 15.0
+# Teardown's total budget for promoting every session this process captured, and
+# how many promotions may be in flight at once.
+#
+# The budget has to clear ONE backend-side promotion, or it cancels every
+# promotion it starts and the setting it implements becomes a no-op. A promotion
+# is a single request whose own budget the backend owns (EverOS:
+# ``flush_timeout_s``, which must itself exceed the server's in-request cap), so
+# this is deliberately larger than that. It bounds a pathological teardown, it
+# does not pace a healthy one -- sessions promote concurrently, so the common
+# case finishes in one promotion's time regardless of how many there are.
+_PROMOTE_ALL_BUDGET_S: float = 1200.0
+_PROMOTE_MAX_CONCURRENCY: int = 4
+
 
 def _text_of(content: object) -> str:
     """Flatten a message's content to the text a classifier can read.
@@ -403,7 +425,7 @@ class AgentLoop:
     # dup-query 2 (both installed by default) + spin-breaker 1 + force-finalize 1
     # + verify 1 + report-shape 1 on a fully-on DR arm. The enumeration is the
     # whole justification for the number, so it has to be complete: it omitted
-    # the verify gate and sat at 6, which the dr@3.7 shape bar would have pushed
+    # the verify gate and sat at 6, which the dr@3.4 shape bar would have pushed
     # past. Past the cap a gate has already booked its bounce before being
     # refused, so the ledger reads one bounce that never happened - only
     # ``rollbacks_refused`` says otherwise.
@@ -614,6 +636,16 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
+        # Writes that outran their turn budget and are still running. Held so
+        # teardown can drain them instead of dropping whatever was slowest.
+        self._store_inflight: set[asyncio.Task] = set()
+        # Writes refused because indexing never caught up. Reported at teardown:
+        # a dropped write is a turn the user will not be able to recall.
+        self._store_dropped = 0
+        # Session keys this process actually dispatched a write for. The set a
+        # multi-session surface (gateway / TUI) has to promote at teardown, since
+        # it has no per-run "the task is over" seam the way ``raven agent`` does.
+        self._store_sessions: set[str] = set()
 
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
@@ -676,6 +708,28 @@ class AgentLoop:
             skill_forge_router_config,
         )
 
+        # Store-only gate: a backend that opts out of recall
+        # (``recall_enabled=false`` in its plugin config) serves the
+        # after-turn ``_dispatch_backend_store`` only. The context engine
+        # gets ``None`` so neither the ``# Memory`` recall lane nor the
+        # Everos skill source is assembled — prompt *bytes* stay identical
+        # to ``memory.backend=null``, which is what lets a write-only
+        # capture profile ride on the measurement anchor without a
+        # flow-version bump. Latency does not: the after-turn store still
+        # costs the turn up to ``_STORE_TURN_BUDGET_S``.
+        recall_backend = (
+            backend if backend is None or getattr(backend, "recall_enabled", True) else None
+        )
+        # Per-lane refinement inside that gate. Separate from it on purpose:
+        # ``recall_enabled=false`` is the byte-identical-to-memory-off state
+        # the measurement anchor depends on, while these two only choose which
+        # lane earns its cost once recall is on at all.
+        recall_memory = getattr(backend, "recall_memory_enabled", True)
+        recall_skills = getattr(backend, "recall_skills_enabled", True)
+        # Kept so a teardown path can ask whether this run promotes on exit
+        # without re-loading RavenConfig from a nested closure.
+        self.memory_config = memory_config
+
         self.context_engine: "ContextEngine" = build_context_engine(
             workspace=workspace,
             config=context_config,
@@ -691,7 +745,9 @@ class AgentLoop:
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
             # SkillForgeRouter + EverOS recall lane.
-            backend=backend,
+            backend=recall_backend,
+            recall_memory=bool(recall_memory),
+            recall_skills=bool(recall_skills),
             memory_config=memory_config,
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
@@ -1015,7 +1071,15 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
-        self.tools.register(AskUserTool())
+        #
+        # dr@3.4-askuser registers a different class under the same name: DR mode's
+        # ask_user never blocks (AskUserGate, phase 2, turns the proposed call into
+        # the turn's reply), and one class cannot carry both blocking semantics
+        # under one tool name. Registered HERE rather than after the allowlist pass
+        # on purpose - ``_apply_disabled_tools`` runs next and must still be able
+        # to remove it - the layer every bench profile already pins.
+        ask_user_tool = getattr(self._dr_flow, "ask_user_tool", None)
+        self.tools.register(ask_user_tool or AskUserTool())
         if self.cron_service:
             # Lazy import: CronTool lives under raven.proactive_engine.schedulers.cron.tool
             # which (a) imports raven.agent.tools.base, triggering raven.agent.__init__,
@@ -1148,19 +1212,55 @@ class AgentLoop:
         loop - which is what makes "is there a conversation yet" answerable here
         without a counter that could drift.
         """
+        from raven.agent.flow.ask_user import (
+            clarify_verdict,
+            set_chain_round,
+            set_clarify_verdict,
+            set_first_turn,
+            set_turn_brief,
+        )
         from raven.agent.flow.conversation import TurnMode, set_research_turn
 
         self._turn_mode = None
+        # Cleared first and unconditionally, before any early return, for the
+        # reason ``set_prior_sources`` states in its own comment: a turn that
+        # inherited the previous one's chain count would be refused a legitimate
+        # first question, and a turn that inherited a brief would prepend a stale
+        # Q/A pair to an unrelated question. Both failures are silent.
+        set_chain_round(0)
+        set_turn_brief("")
+        set_clarify_verdict(None)
+        set_first_turn(False)
         if not getattr(self._dr_flow, "conversation_enabled", False):
             return
+        self._consume_pending_clarify(session, content)
         prior = [m for m in session.messages if m.get("role") in ("user", "assistant")]
         gate = getattr(self._dr_flow, "conversation_gate", None)
+        # ``askUser.mode="first_turn"`` mandates a clarify round on exactly this
+        # turn, and the gate cannot see it: ``AgentHookContext`` carries a
+        # session_key, not the Session. Same reason as the chain count.
+        set_first_turn(not prior)
         if not prior:
             # The first message is the one the user opened the product to ask, and
             # there is no conversation for a classifier to read. It follows the
             # config, which is also what makes every bench trajectory - always a
             # single turn - unreachable from the gate.
             mode = TurnMode(True, "first_turn")
+        elif (_verdict := clarify_verdict()) is not None and _verdict[0] == "answered":
+            # This message answers questions THIS flow asked before researching, so
+            # the research it was gating has not happened yet. Consult the commit
+            # marker rather than letting the classifier re-derive it from the text:
+            # a clarify answer reads exactly like the shapes the gate is told mean
+            # research=false ("a correction of tone or scope", conversational), and
+            # under ``askUser.mode="first_turn"`` this is not an edge case - it is
+            # every run's research turn. Classified non-research, the tools come out
+            # of the schema and the model answers a never-researched question from
+            # memory, with nothing in the record saying so.
+            #
+            # Same discipline as ``clarify_requested``: the flow already decided,
+            # so nothing downstream re-derives the decision. Skipping the gate also
+            # saves its LLM call and its first-token latency on this turn.
+            mode = TurnMode(True, "clarify_answer")
         elif gate is None:
             mode = TurnMode(True, "config_always")
         else:
@@ -1170,6 +1270,91 @@ class AgentLoop:
         self._turn_mode = mode
         if not mode.research:
             logger.info("conversation-gate: answering from context ({}) - {}", mode.source, mode.why)
+
+    def _consume_pending_clarify(self, session: Session, content: Any) -> None:
+        """Take this session's open clarify round, if any, and decide what it means.
+
+        Popped, not read: exactly one turn may consume a pending, and the pop is
+        the only place that guarantee lives. Leaving it would inject the same
+        brief into every later turn of the session.
+
+        The chain count passes THROUGH the consume rather than resetting - see
+        ``flow/ask_user.py``. Zeroing here would make ``maxRounds > 1``
+        structurally unreachable.
+
+        ``is_reply_to`` decides only whether the brief is injected. It does NOT
+        decide whether the turn runs research: that stays with the conversation
+        gate below, which exists for the "reformat what you just wrote" follow-up
+        this coarse predicate would misread.
+        """
+        from raven.agent.flow.ask_user import (
+            PendingClarify,
+            is_reply_to,
+            render_brief,
+            reply_overlap,
+            set_chain_round,
+            set_clarify_verdict,
+            set_turn_brief,
+        )
+
+        raw = session.metadata.pop("dr_pending_clarify", None)
+        pending = PendingClarify.from_metadata(raw)
+        if pending is None:
+            return
+        set_chain_round(pending.chain_round)
+        text = content if isinstance(content, str) else _text_of(content)
+        answered = True
+        if getattr(self._dr_flow, "ask_user_brief_requires_answer_check", True):
+            answered = is_reply_to(
+                pending,
+                text,
+                threshold=getattr(self._dr_flow, "ask_user_reply_overlap_threshold", 0.05),
+            )
+        # The overlap is recorded, not just used: the threshold behind the verdict
+        # has a script-dependent background rate (see ``reply_overlap``), and the
+        # design states ``pending_verdict`` must be re-computable offline from the
+        # session. Without the number, re-computing means re-implementing.
+        set_clarify_verdict(
+            "answered" if answered else "new_request",
+            round(reply_overlap(pending, text), 4),
+        )
+        if not answered:
+            # The chain is abandoned: the round trip was a pure loss and the count
+            # goes with the pending. Recorded as a label rather than inferred later,
+            # because "asked and never answered" and "never asked" are the two
+            # numbers the default-on decision rests on.
+            set_chain_round(0)
+            logger.info("ask_user: pending clarify abandoned - the message reads as a new request")
+            return
+        if getattr(self._dr_flow, "ask_user_brief", False):
+            set_turn_brief(render_brief(pending, text))
+
+    def _inject_research_brief(self, messages: list[dict]) -> None:
+        """Prepend the clarify brief to the current user message.
+
+        Injected here rather than rendered as a prompt segment for the reason the
+        memo states: a segment sits in the cached prefix and would re-bill the
+        whole conversation at uncached rates when it changes per turn.
+
+        Call order is load-bearing - memo, then this, then the reminder. This block
+        must end up the OUTERMOST prefix, because ``strip_memo`` is anchored with
+        ``startswith`` and the outer block hides the inner one from it. The block
+        that fails to match is the one that gets persisted, and a persisted block
+        accumulates: turn three would carry turn two's copy as history.
+        """
+        from raven.agent.flow.ask_user import turn_brief
+
+        block = turn_brief()
+        if not block or not messages:
+            return
+        last = messages[-1]
+        if last.get("role") != "user":
+            return
+        content = last.get("content")
+        if isinstance(content, str):
+            last["content"] = f"{block}\n\n{content}"
+        elif isinstance(content, list):
+            last["content"] = [{"type": "text", "text": block}] + content
 
     def _inject_research_memo(self, session: Session, messages: list[dict]) -> None:
         """Prepend this conversation's evidence record to the current user message.
@@ -1266,6 +1451,39 @@ class AgentLoop:
         if memo.empty:
             return
         session.metadata["dr_research_memo"] = memo.to_metadata()
+
+    def _persist_pending_clarify(self, session: Session) -> None:
+        """Move a clarify round the gate opened onto the session.
+
+        The gate cannot do this itself: ``AgentHookContext`` carries a
+        ``session_key`` and not the ``Session``, so the handoff is a ContextVar -
+        the same split ``stash_turn_rows`` / ``take_turn_rows`` exists for, and for
+        the same stated reason (the loop owns the turn's lifetime, the message
+        handler owns the session).
+
+        ``take_*`` clears as it reads. Without that a later turn that asked
+        nothing would re-persist the previous turn's pending and answer it twice.
+        """
+        from raven.agent.flow.ask_user import take_pending_clarify
+
+        pending = take_pending_clarify()
+        if not pending:
+            return
+        pending["asked_at"] = self._now_fn().isoformat()
+        session.metadata["dr_pending_clarify"] = pending
+
+    def _ask_user_supersedes_personalizer(self) -> bool:
+        """Whether the DR clarify round owns this build's clarifying questions.
+
+        Reads the assembly, not the config: the flow-off anchor builds no assembly,
+        so an arm without the flow cannot reach this however its config is written.
+        ``ask_user`` is already resolved against ``conversation.enabled`` there.
+
+        Warned once per turn rather than once per process on purpose - the loop is a
+        long-lived singleton and a start-up-only warning is invisible to whoever
+        reads one turn's log, which is how the regression would go unnoticed.
+        """
+        return bool(getattr(self._dr_flow, "ask_user", False))
 
     def _research_turn(self) -> bool:
         """Whether the turn running in this context should run the DR machine.
@@ -1368,9 +1586,14 @@ class AgentLoop:
         # After the recovery block, so that when both fire the memo is the outer
         # one and ``_save_turn``'s prefix-anchored stripper still finds it.
         self._inject_research_memo(session, messages)
+        # After the memo, so the brief is the outermost prefix and the memo's
+        # ``startswith`` stripper still runs first on the way out. See
+        # ``_inject_research_brief``: whichever prefix block fails to match is the
+        # one that gets persisted and then accumulates.
+        self._inject_research_brief(messages)
         # Last, so it is the last thing the model reads before it answers - the
-        # whole point of it - and so the memo above stays the outermost prefix
-        # that ``_save_turn``'s prefix-anchored stripper looks for.
+        # whole point of it - and so the prefix blocks above stay prefixes that
+        # ``_save_turn``'s anchored strippers can find.
         self._inject_report_reminder(messages)
         return messages
 
@@ -1492,6 +1715,36 @@ class AgentLoop:
             )
 
     @trace.instrument("memory.store", extract=semconv.memory_store)
+    async def _run_backend_store(
+        self,
+        session_key: str,
+        messages_slice: list[dict],
+    ) -> None:
+        """The write itself, as its own span.
+
+        Separate from :meth:`_dispatch_backend_store` so ``memory.store``
+        measures how long the backend took, not how long the turn was willing
+        to wait for it. On the dispatcher those became the same number the
+        moment the write was detached, which hid exactly the latency a dropped
+        write has to be diagnosed from.
+        """
+        try:
+            await self.backend.store(session_key, messages_slice)  # type: ignore[union-attr]
+        except Exception:
+            logger.exception(
+                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
+                session_key,
+            )
+
+    def _store_inflight_count(self) -> int:
+        """Detached writes still running.
+
+        Counted rather than ``len(self._store_inflight)``: the done-callback
+        that discards a finished task runs via ``call_soon``, so a completed
+        task can still be in the set for one loop iteration.
+        """
+        return sum(1 for t in self._store_inflight if not t.done())
+
     async def _dispatch_backend_store(
         self,
         session_key: str,
@@ -1510,16 +1763,198 @@ class AgentLoop:
         the AgentLoop's main pipeline must never abort because the
         plugin-side index failed; the turn is already saved to the
         session log and the host's MEMORY.md compaction will still run.
+
+        Detached under a turn budget rather than awaited to completion:
+        the write is a network round-trip to a service the turn does not
+        depend on, so a slow one must cost the turn a bounded wait, not
+        its own latency. Callers that need the write to have landed —
+        teardown, and :meth:`_dispatch_backend_flush`, which resolves
+        the backend-side session id that ``store`` is what populates —
+        must call :meth:`drain_backend_stores` first.
         """
         if self.backend is None:
             return
         if not messages_slice:
             return
+
+        # Backpressure is decided before the task exists, not after it is
+        # running. A write cancelled mid-flight has already sent some of its
+        # chunks and already advanced the backend's per-session timestamp
+        # floor, so it can be neither retried nor honestly called "dropped" --
+        # it left half a turn in the index. Refusing to start is the only
+        # refusal with one clean meaning.
+        if self._store_inflight_count() >= _STORE_MAX_INFLIGHT:
+            # A service slow enough to accumulate this many outstanding writes
+            # is one whose queue should stop growing, not one to keep feeding.
+            # Bounded by the turn's own budget, so reaching the cap costs one
+            # more budget -- not a wait on whichever write is slowest.
+            await asyncio.wait(set(self._store_inflight), timeout=_STORE_TURN_BUDGET_S)
+            if self._store_inflight_count() >= _STORE_MAX_INFLIGHT:
+                self._store_dropped += 1
+                logger.warning(
+                    "backend.store not started for session {}: {} writes still in flight after {}s",
+                    session_key,
+                    self._store_inflight_count(),
+                    _STORE_TURN_BUDGET_S,
+                )
+                return
+
+        self._store_sessions.add(session_key)
+        task = asyncio.create_task(self._run_backend_store(session_key, messages_slice))
+        self._store_inflight.add(task)
+        task.add_done_callback(self._store_inflight.discard)
+        # Deliberately not cancelled on timeout: the point is to stop *waiting*,
+        # not to abandon the write. A turn that indexes quickly still does so
+        # inline, which keeps ordering intact in the common case. When it does
+        # not, turn N's ``/add`` can reach the service after turn N+1's; the
+        # per-message timestamps the backend stamps are what the service orders
+        # by, so the trajectory still reassembles in order.
+        await asyncio.wait({task}, timeout=_STORE_TURN_BUDGET_S)
+
+    async def drain_backend_stores(self, timeout: float | None = None) -> None:
+        """Let detached writes finish before the process goes away.
+
+        Writes that outran their turn budget are still in flight. Exiting on top
+        of them loses exactly the turns that were slowest to index, which is a
+        silent and biased kind of data loss.
+
+        Also the ordering barrier before a boundary flush: a deferred-capture
+        backend learns a session's backend-side id inside ``store``, so
+        flushing while that write is still detached promotes the wrong id.
+
+        ``timeout`` defaults to ``_STORE_DRAIN_BUDGET_S`` read at call time, not
+        bound at import: a default argument is evaluated once at ``def``, which
+        would make the module constant the only one of the three that cannot be
+        monkeypatched.
+        """
+        if timeout is None:
+            timeout = _STORE_DRAIN_BUDGET_S
+        pending = {t for t in self._store_inflight if not t.done()}
+        if pending:
+            _, still_pending = await asyncio.wait(pending, timeout=timeout)
+            if still_pending:
+                # Counted, because ``backend.stop()`` closes the client pool
+                # moments from now and these will fail against a dead pool with
+                # only the backend's own warning to show for it.
+                self._store_dropped += len(still_pending)
+        if self._store_dropped:
+            logger.warning(
+                "{} turn(s) were not indexed: the memory service never caught up",
+                self._store_dropped,
+            )
+            # Cleared so the count is reported once, not once per drain: the
+            # boundary flush drains before promoting and teardown drains again.
+            self._store_dropped = 0
+
+    async def promote_all_backend_sessions(self, timeout: float | None = None) -> None:
+        """Promote every session this process captured, for surfaces with no
+        per-run boundary.
+
+        ``raven agent`` has one: the run ends, so
+        :meth:`await_pending_extractions` promotes the one session it wrote.
+        The TUI and the gateway do not -- they serve many sessions and exit is
+        the only boundary that will ever arrive, which is precisely the case
+        ``memory.flush_on_task_end`` documents itself for. Without this, that
+        setting was read by ``raven agent`` alone and did nothing on the two
+        surfaces it was written for.
+
+        Bounded twice over, because a gateway can hold many sessions and each
+        promotion is a request the adapter allows minutes for: at most
+        ``_PROMOTE_MAX_CONCURRENCY`` in flight, and ``_PROMOTE_ALL_BUDGET_S``
+        total. Sessions left unpromoted are logged with their count -- they are
+        recoverable out of band from the backend's own sidecar, but only if the
+        operator knows to look.
+        """
+        from raven.memory_engine.backend import FlushableBackend
+
+        if self.backend is None or not self._store_sessions:
+            return
+        if not isinstance(self.backend, FlushableBackend):
+            return
+        if timeout is None:
+            timeout = _PROMOTE_ALL_BUDGET_S
+        # One drain for the whole fan-out rather than one per session: it is the
+        # same barrier every time, and ``_dispatch_backend_flush`` would repeat
+        # it N times.
+        await self.drain_backend_stores()
+        sessions = sorted(self._store_sessions)
+        gate = asyncio.Semaphore(_PROMOTE_MAX_CONCURRENCY)
+
+        async def _promote(key: str) -> None:
+            async with gate:
+                try:
+                    await self.backend.flush(key)  # type: ignore[union-attr]
+                except Exception:
+                    logger.exception(
+                        "backend.flush failed for session {}; captured turns remain buffered backend-side",
+                        key,
+                    )
+
+        tasks = {asyncio.create_task(_promote(k)): k for k in sessions}
+        _, pending = await asyncio.wait(tasks.keys(), timeout=timeout)
+        for t in pending:
+            t.cancel()
+        if pending:
+            # The keys, not just the count: recovering these out of band means
+            # naming them, and after this process exits there is nowhere else to
+            # learn which ones were cut.
+            logger.warning(
+                "{} of {} session(s) were not promoted within {}s and stay buffered; promote them out of band: {}",
+                len(pending),
+                len(sessions),
+                timeout,
+                ", ".join(sorted(tasks[t] for t in pending)),
+            )
+
+    @trace.instrument("memory.flush", extract=semconv.memory_flush)
+    async def _dispatch_backend_flush(self, session_key: str) -> None:
+        """Promote a session's buffered backend writes at a task boundary.
+
+        The boundary counterpart to :meth:`_dispatch_backend_store`. A
+        deferred-capture backend (EverOS ``defer_extraction=true``) only
+        appends to its buffer on store and derives nothing until asked,
+        so without this call a session's turns stay unpromoted until
+        some later writer touches the same session or an out-of-band
+        script (``scripts/everos_flush_batch.py``) picks them up.
+
+        No-op unless a backend is wired and it implements
+        :class:`FlushableBackend` — an eagerly-extracting backend has
+        nothing to promote and doesn't implement the method.
+
+        Awaited, not scheduled: the flush is a network round-trip on a
+        client pool that ``backend.stop()`` closes moments later, so a
+        fire-and-forget task would be cancelled before the request left
+        the process. The adapter owns the budget (EverOS:
+        ``flush_timeout_s``, which is deliberately larger than the server's
+        own in-request cap so the server's answer arrives instead of the
+        client disconnecting first), so this call is unbounded here and can
+        block exit for minutes on a slow promotion.
+
+        Exceptions are logged and swallowed, matching store: the
+        captured turns are already durable backend-side, so a failed
+        promotion costs derived memory, not data.
+        """
+        from raven.memory_engine.backend import FlushableBackend
+
+        if self.backend is None:
+            return
+        if not isinstance(self.backend, FlushableBackend):
+            logger.debug(
+                "backend {} exposes no flush; nothing to promote for session {}",
+                type(self.backend).__name__,
+                session_key,
+            )
+            return
+        # Ordering, not politeness: a deferred-capture backend learns a
+        # session's backend-side id inside ``store``, so promoting while
+        # that write is still detached flushes an id the service never
+        # received, and the captured turns stay buffered.
+        await self.drain_backend_stores()
         try:
-            await self.backend.store(session_key, messages_slice)
+            await self.backend.flush(session_key)
         except Exception:
             logger.exception(
-                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
+                "backend.flush failed for session {}; captured turns remain buffered backend-side and can be promoted out of band",
                 session_key,
             )
 
@@ -2239,6 +2674,18 @@ class AgentLoop:
                 for m in decision.rollback_inject:
                     entry = dict(m)
                     entry.setdefault("timestamp", self._now_fn().isoformat())
+                    if entry.get("role") == "user":
+                        # A hook rollback is the harness re-prompting itself --
+                        # a reviewer rejection, a commit nudge, a force-report
+                        # note. No real user message can arrive this way (a
+                        # mid-turn one comes through ``drain()``), so marking
+                        # here covers every present and future observer instead
+                        # of asking each to remember. The mark is dropped by the
+                        # provider's key whitelist, so the model sees the same
+                        # bytes; what it changes is capture, where a user role
+                        # means "the user said this" and would otherwise build
+                        # episodes and a profile out of harness text.
+                        entry["_flow_synthetic"] = True
                     messages.append(entry)
             iteration -= 1
             pending_gen_overrides = overrides or None
@@ -2797,8 +3244,23 @@ class AgentLoop:
             if hook_ctx is not None
             else False
         )
+        # dr@3.4-askuser: same discipline as ``salvage_committed`` above - consult
+        # the commit flag, never re-derive. A clarify turn's reply IS the questions,
+        # deliberately, and it carries no closing think tag, so recomputing "has an
+        # answer" on it says no and ForcedFinalizeGate fires a salvage call that
+        # rewrites the questions into a fabricated answer. Only the DR gate can set
+        # this, and the flow-off anchor has no gate.
+        clarify_requested = bool(
+            hook_ctx.metadata.get("clarify_requested") if hook_ctx is not None else False
+        )
+        clarify_source = (
+            str(hook_ctx.metadata.get("clarify_source") or "") or None
+            if hook_ctx is not None
+            else None
+        )
         answerless = status == "error" or not (
             salvage_committed
+            or clarify_requested
             # dr@2.9: same discipline as salvage_committed - consult the commit flag,
             # do not re-derive. A wrap-up written by the truncation/exhaustion net above
             # IS an answer, but it is free-form prose that need not carry a closing think
@@ -2844,8 +3306,27 @@ class AgentLoop:
                 # "salvaged" below - which is why the value is refreshed there.
                 "answerless_shape_exempt": not (
                     salvage_committed
+                    # dr@3.4-askuser. Added to the DISJUNCTION, not written as a
+                    # separate True: this key is the corrected value OF
+                    # answerless_shape, so False means "has an answer". A clarify
+                    # turn already computes True here (no closing tag), and setting
+                    # the key to True would change nothing while looking like a fix.
+                    or clarify_requested
                     or visible_answer(final_content, closing_tag_required=True)
                 ),
+                # dr@3.4-askuser: a NEW boolean beside ``status``, never a fourth
+                # value for it. ``status`` is documented as
+                # "completed" | "interrupted" | "error" (:99), ``_checkpoint`` reads
+                # it, and downstream buckets on it - a clarify turn is a normally
+                # completed turn in all of their eyes. Same discipline that put
+                # ``answerless_shape_exempt`` beside ``answerless_shape``.
+                "awaiting_user": clarify_requested,
+                # Beside the boolean, because the boolean means two things. The
+                # tool path stashes a pending clarify and spends a ``maxRounds``
+                # round; the prose path stashes nothing and spends none, so
+                # "awaiting_user implies an open chain" holds on "tool" only. A
+                # reader that buckets on the boolean alone silently mixes them.
+                "awaiting_user_source": clarify_source,
                 # dr@2.9: the wrap-up nets, counted so a repeat firing is VISIBLE.
                 # The 22-over-16 double-fire went unnoticed for a release precisely
                 # because nothing counted it - the only symptom was a ~38% under-report
@@ -2916,6 +3397,7 @@ class AgentLoop:
         # ``outcome.status`` so that pipeline can gate on completion later.
 
         if messages:
+            from raven.agent.flow.ask_user import clarify_verdict
             from raven.agent.hook.observers import terminal_state
             from raven.agent.loop.invariants import turn_invariants
 
@@ -2932,6 +3414,21 @@ class AgentLoop:
             # registered, so gating the checker on it would stop the checks the
             # moment someone prunes the default observers — the failure class the
             # checker is here to catch. Read-only, so both arms get it.
+            # dr@3.4-askuser. Merged into the exported namespace rather than into
+            # ``metadata``: ``terminal_state`` has already run one line up, so a
+            # late write there would be dropped - which is the exact failure that
+            # file's docstring records. Same treatment as ``conversation_gate``
+            # below.
+            #
+            # This pair belongs to the turn that CONSUMED a pending, not to the
+            # turn that asked: the ask is recorded on turn N and its outcome on
+            # turn N+1, and only both together say whether the round trip paid.
+            _verdict = clarify_verdict()
+            if _verdict is not None:
+                ask_state = observers.setdefault("ask_user", {})
+                ask_state["pending_verdict"] = _verdict[0]
+                ask_state["answered_next_turn"] = _verdict[0] == "answered"
+                ask_state["reply_overlap"] = _verdict[1]
             observers["invariants"] = turn_invariants(
                 # Sliced, not the whole list - see ``turn_base``. On a bench run the
                 # slice IS the whole list (history is empty), so no measured stamp
@@ -2944,6 +3441,13 @@ class AgentLoop:
                 # checker judges final_content, so the pair is consistent; on a
                 # stack that switches channels mid-turn this is an approximation.
                 closing_tag_required=self._think_closing_tag_required and not final_reasoning_oob,
+                # dr@3.4-askuser: a clarify turn's reply IS the questions, so it
+                # carries no think tag on any stack. Read off the stamp written
+                # above rather than re-derived, the same discipline the answerless
+                # gate follows. Without it every clarify turn logs an error, and
+                # this checker exists because five real defects were missed after
+                # everyone had learned to ignore an always-on red light.
+                awaiting_user=bool((metadata.get("turn_end") or {}).get("awaiting_user")),
             )
             # Stamped on every turn including a clean one, and outside
             # ``terminal_state`` for the same reason ``invariants`` is: that
@@ -3002,7 +3506,7 @@ class AgentLoop:
                     closing_tag_required=self._think_closing_tag_required and not final_reasoning_oob,
                 )
                 observers["final_shape"] = shaped.counters()
-                # dr@3.7: the delivered report shape, recorded whether or not the
+                # dr@3.4: the delivered report shape, recorded whether or not the
                 # bar that enforces it is installed - that is the whole point.
                 # Pricing ``report_bounce`` needs the malformed rate from arms
                 # that do NOT run it, and the record could not supply one: it
@@ -3079,6 +3583,28 @@ class AgentLoop:
                         observers["process_appendix"] = trail
                         if appendix:
                             final_content = (final_content or "").rstrip() + "\n" + appendix
+                            # The rendered trail, carried where a HOST can reach it.
+                            #
+                            # The appendix above rides on the returned string only, which
+                            # is the whole of its distribution-neutrality: the persisted
+                            # message never carries it, so no model reads it this turn or
+                            # as history next turn. That also means a caller reading the
+                            # session file - which is what a launcher must do, because
+                            # this CLI's stdout is rendered for a human and cannot be
+                            # parsed - had no way to see the trail at all, and the turn's
+                            # ledger is deleted immediately below. Measured on one live
+                            # product turn: 17 pages read, 8 cited, and the record of the
+                            # other 9 built and then dropped.
+                            #
+                            # Kept OUT of ``process_appendix``: those are counters that
+                            # batch tooling reads as a measurement payload, and a
+                            # multi-kilobyte string does not belong beside them.
+                            #
+                            # Safe by construction rather than by convention - the
+                            # provider request sanitizers are allowlist-based
+                            # (``_ALLOWED_MSG_KEYS``), so nothing under ``observers``
+                            # can reach the wire no matter what is put here.
+                            observers["research_trail"] = appendix
                 finally:
                     # dr@2.9: in ``finally`` so a failed render still releases the file -
                     # otherwise one raising turn leaves a trail on disk that no later turn
@@ -3152,18 +3678,26 @@ class AgentLoop:
         *,
         wait: bool = True,
     ) -> None:
-        """No-op retained for CLI / batch-mode call-site compatibility.
+        """Task-boundary hook: promote the backend's buffered writes.
 
-        Previously this flushed the local skill-extraction buffer and
-        blocked on its in-flight tasks. That embedded pipeline was
-        removed — case-to-skill distillation now lives in the
-        :class:`MemoryBackend` plugin (``backend.store`` /
-        ``backend.feedback``), which the after-turn pipeline drives
-        directly. Kept so ``raven agent`` callers don't need changing;
-        the ``flush_session_id`` / ``wait`` knobs are inert.
+        The host's one "the task is over" seam, called by the CLI once
+        per run after the last turn has been delivered. Passing
+        ``flush_session_id`` promotes that session via
+        :meth:`_dispatch_backend_flush`; passing ``None`` does nothing.
+
+        ``wait`` is retained for call-site compatibility and no longer
+        gates anything. It used to choose between blocking on and
+        abandoning the in-flight tasks of a local extraction pipeline;
+        that pipeline is gone, and its replacement — the plugin
+        backend's flush — is a request that must be awaited to reach the
+        service at all (see :meth:`_dispatch_backend_flush`). Extraction
+        past that point runs inside the service's own background queue,
+        which the host cannot observe or wait on.
         """
-        del flush_session_id, wait
-        return None
+        del wait
+        if flush_session_id is None:
+            return
+        await self._dispatch_backend_flush(flush_session_id)
 
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
@@ -3283,7 +3817,32 @@ class AgentLoop:
         # fire a clarification on the announce. Only SUBAGENT skips here (not the
         # wider after-send / user-inbound sets): a Sentinel notice and cron/heartbeat
         # reach this flow today and keep it.
-        if self.enable_personalization and origin is not Origin.SUBAGENT:
+        # dr@3.4-askuser supersedes this flow's clarify branch, unconditionally.
+        # Two owners cannot ask in one turn, and the personalizer's question never
+        # enters the agent loop, so it cannot carry an outline either.
+        #
+        # NOT "supersede only on a research turn": ``_decide_turn_mode`` runs BELOW
+        # this block, so the research flag does not exist yet here. Moving that call
+        # up would make the condition computable and was rejected - it would run the
+        # dr@3.0 conversation gate (an LLM call) on the very turns the personalizer
+        # returns from without entering the loop, and set a research ContextVar for
+        # a turn that never runs.
+        #
+        # Step 2 needs no separate guard: with step 1 skipped, only this branch ever
+        # writes ``pending_clarification``, so there is nothing for it to consume.
+        #
+        # ⚠️ The cost, stated rather than absorbed (R14): turning askUser on turns
+        # the personalizer's clarify capability OFF. That is a regression unrelated
+        # to this feature, which is why it warns once at turn entry instead of being
+        # silent. The right fix, when both must live, is to move the personalizer's
+        # clarify onto this same turn-boundary seam - one gate, one pending carrier -
+        # not to let two owners contend for one turn.
+        if self.enable_personalization and self._ask_user_supersedes_personalizer():
+            logger.warning(
+                "personalization clarify is superseded by drFlow.askUser on this "
+                "build; the personalizer's clarifying question will not be asked"
+            )
+        elif self.enable_personalization and origin is not Origin.SUBAGENT:
             from datetime import datetime as _dt
 
             from raven.agent.personalizer import Personalizer
@@ -3484,6 +4043,7 @@ class AgentLoop:
         # save() serialises. Updating it afterwards would keep the memo one turn
         # behind on disk and lose the last turn's sources entirely on a restart.
         self._update_research_memo(session)
+        self._persist_pending_clarify(session)
         self.sessions.save(session)
         # Only after a successful canonical save — a surviving partial file
         # must always mean "this turn never made it to disk".
@@ -3496,9 +4056,11 @@ class AgentLoop:
             },
         )
         # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
+        # Cleaned like the session log: the backend must index what was said,
+        # not the envelope this turn's prompt was assembled with.
         await self._dispatch_backend_store(
             key,
-            all_msgs[turn_start_idx:],
+            AgentLoop._clean_turn_messages(all_msgs, turn_start_idx, for_capture=True),
         )
         # FB-1: forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
@@ -3546,22 +4108,63 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
 
-    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
-        """Save new-turn messages into session, truncating large tool results."""
+    @classmethod
+    def _clean_turn_messages(
+        cls,
+        messages: list[dict],
+        skip: int,
+        *,
+        for_capture: bool = False,
+    ) -> list[dict]:
+        """Strip host-injected scaffolding from a finished turn's messages.
+
+        Shared by the two consumers of a turn: the session log
+        (:meth:`_save_turn`) and the plugin memory backend
+        (:meth:`_dispatch_backend_store`). They must see the same text.
+        The runtime-context envelope, the research memo and the empty
+        recovery scaffolding are artifacts of assembling *this* turn's
+        prompt — not things the user or the model said — so a memory
+        service that indexes them derives facts about the harness, and
+        keeps deriving them: nothing downstream can tell the envelope
+        apart from user text after the fact.
+
+        ``for_capture`` additionally drops flow-injected user turns
+        (``_flow_synthetic``: a verify-gate rejection, a commit nudge, a
+        force-report note). The two consumers diverge here on purpose.
+        The session log is the record of what the model was actually
+        prompted with, and a revision that has no reason recorded above
+        it is unreadable. Capture answers a different question — who said
+        what — and there a ``user`` role is a claim about the person:
+        EverOS routes by sender, so these would build episodes and a
+        profile out of harness text, and inflate the user-message count
+        the agent-case filter reads as evidence of a real correction.
+
+        A classmethod, and called separately per consumer, both on
+        purpose. Independent of loop state so the detached store path
+        can clean without one; fresh dicts each call so ``_save_turn``'s
+        later truncation cannot mutate a payload already handed to a
+        running store task.
+
+        Log-only concerns stay in ``_save_turn``: tool-result truncation
+        sizes the session file, and the backend applies its own capture
+        budget to a larger one.
+        """
+        from raven.agent.flow.ask_user import BRIEF_OPEN, strip_brief
         from raven.agent.flow.conversation import MEMO_OPEN, strip_memo
         from raven.agent.flow.report_shape import REMINDER_CLOSE, REMINDER_OPEN, strip_reminder
 
+        out: list[dict] = []
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
+            if for_capture and entry.get("_flow_synthetic"):
+                continue
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
-            elif role == "user":
-                # dr@3.7: same accumulate-if-persisted reason as the memo below,
+            if role == "user":
+                # dr@3.4: same accumulate-if-persisted reason as the memo below,
                 # and stripped before it because the two anchor at opposite ends.
                 # Before the runtime-context branch too, and that order is
                 # load-bearing: that branch drops the message entirely when
@@ -3576,6 +4179,20 @@ class AgentLoop:
                 # turn three would carry turn two's memo as history alongside a newly
                 # rendered one listing the same pages. Stripped before the runtime-tag
                 # branch because the memo is the outermost PREFIX on the message.
+                # dr@3.4-askuser: before the memo, because the brief is the OUTER
+                # prefix and ``strip_memo`` is ``startswith``-anchored - with the
+                # brief still attached the memo's own stripper never matches, and
+                # the unmatched block is the one that gets persisted.
+                # ``in``, not ``startswith``: ``strip_brief`` is delimiter-based on
+                # purpose, because which block is outermost is a fact about the
+                # ORDER of the three injection call sites and not about this
+                # message. Gating the call on a prefix match would throw that away
+                # and re-introduce exactly the silent failure it guards - an
+                # unstripped block is a persisted block, and a persisted block
+                # accumulates.
+                if isinstance(content, str) and BRIEF_OPEN in content:
+                    content = strip_brief(content)
+                    entry["content"] = content
                 if isinstance(content, str) and content.startswith(MEMO_OPEN):
                     content = strip_memo(content)
                     entry["content"] = content
@@ -3597,7 +4214,7 @@ class AgentLoop:
                             else:
                                 content = None
                             break
-                        if not para.startswith(self._RECOVERY_TAG):
+                        if not para.startswith(cls._RECOVERY_TAG):
                             break
                     if content is None:
                         continue
@@ -3621,7 +4238,13 @@ class AgentLoop:
                             and isinstance(c.get("text"), str)
                             and c["text"].startswith(REMINDER_OPEN)
                         ):
-                            continue  # dr@3.7: same reason, multimodal shape
+                            continue  # dr@3.4: same reason, multimodal shape
+                        if (
+                            c.get("type") == "text"
+                            and isinstance(c.get("text"), str)
+                            and c["text"].startswith(BRIEF_OPEN)
+                        ):
+                            continue  # dr@3.4-askuser: same reason, multimodal shape
                         if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
                             "data:image/"
                         ):
@@ -3631,6 +4254,15 @@ class AgentLoop:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+            out.append(entry)
+        return out
+
+    def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
+        """Save new-turn messages into session, truncating large tool results."""
+        for entry in AgentLoop._clean_turn_messages(messages, skip):
+            content = entry.get("content")
+            if entry.get("role") == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
+                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             entry.setdefault("timestamp", self._now_fn().isoformat())
             # Version the harness that produced this line: trajectories from
             # different loop builds must stay distinguishable (a behavior
@@ -3713,7 +4345,10 @@ class AgentLoop:
             msg = {"role": "assistant", "content": req.deliver_text}
             self._save_turn(session, [msg], 0)
             self.sessions.save(session)
-            await self._dispatch_backend_store(cid, [msg])
+            await self._dispatch_backend_store(
+                cid,
+                AgentLoop._clean_turn_messages([msg], 0, for_capture=True),
+            )
             await emit(Text(content=req.deliver_text))
             return TurnOutcome(
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),

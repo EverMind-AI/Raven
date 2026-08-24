@@ -94,13 +94,24 @@ def terminal_state(metadata: dict[str, Any]) -> dict[str, Any]:
     budget = metadata.get("budget")
     if budget:
         out["budget"] = {k: v for k, v in budget.items() if isinstance(v, int)}
-    # dr@3.7. Exported whenever the gate ran, not only when it bounced: "the bar
+    # dr@3.4. Exported whenever the gate ran, not only when it bounced: "the bar
     # was installed and every draft cleared it" and "no bar was installed" are
     # different states, and the second one is what every arm without the knob
     # reads as. The delivered shape is stamped separately as ``report_shape``.
     report_shape_gate = metadata.get("report_shape_gate")
     if report_shape_gate:
         out["report_shape_gate"] = _scalar_snapshot(report_shape_gate)
+    # dr@3.4-askuser. Unconditional whenever the gate ran, following
+    # ``fetch_floor`` above rather than the gated namespaces: gating on
+    # ``asked`` would export only the turns that asked, and "how often does it
+    # ask" is the single number the default-on decision rests on - a numerator
+    # with no denominator. All values are already scalars because the gate
+    # reduces the payload to counts before writing; the question text never
+    # enters this namespace, since ``_STAMP_STR_CAP`` would cut it mid-sentence
+    # and its length is unbounded.
+    ask_user = metadata.get("ask_user")
+    if ask_user:
+        out["ask_user"] = _scalar_snapshot(ask_user)
     # Rollbacks the loop REFUSED past its per-turn cap. The requesting gate has
     # already booked its side (the verify gate writes ``reject``+``revisions``
     # before returning), so without this count the trajectory says a bounce
