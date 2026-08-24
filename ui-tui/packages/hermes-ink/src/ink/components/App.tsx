@@ -29,7 +29,7 @@ import {
 import reconciler from '../reconciler.js'
 import { finishSelection, hasSelection, type SelectionState, startSelection } from '../selection.js'
 import { getTerminalFocused, setTerminalFocused } from '../terminal-focus-state.js'
-import { TerminalQuerier, xtversion } from '../terminal-querier.js'
+import { decrqm, TerminalQuerier, xtversion } from '../terminal-querier.js'
 import {
   isExtendedKeysCapableByXtversion,
   isXtermJs,
@@ -44,7 +44,7 @@ import {
   FOCUS_IN,
   FOCUS_OUT
 } from '../termio/csi.js'
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, EBP, EFE, SHOW_CURSOR } from '../termio/dec.js'
+import { DBP, DEC, DFE, DISABLE_MOUSE_TRACKING, EBP, EFE, SHOW_CURSOR } from '../termio/dec.js'
 
 import AppContext from './AppContext.js'
 import { ClockProvider } from './ClockContext.js'
@@ -331,6 +331,12 @@ export default class App extends PureComponent<Props, State> {
         // init sequence completes — avoids interleaving with alt-screen/mouse
         // tracking enable writes that may happen in the same render cycle.
         setImmediate(() => {
+          // Rides the same batch as XTVERSION: the answer tells the key
+          // parser whether paste markers can be trusted, which decides
+          // whether an unmarked byte run is typing or an unmarkable paste.
+          // The reply is routed into keyParseState by the parser itself.
+          void this.querier.send(decrqm(DEC.BRACKETED_PASTE))
+
           void Promise.all([this.querier.send(xtversion()), this.querier.flush()]).then(([r]) => {
             let rePushed = false
 

@@ -206,6 +206,43 @@ export function isLfReturn(sequence: string | undefined): boolean {
   return sequence === '\n'
 }
 
+/**
+ * Layout half of the fast-echo guard: whether writing `text` straight to the
+ * terminal leaves the caret where a re-render would have put it. Exported for
+ * unit testing; the component pairs it with focus / TTY state.
+ *
+ * A wide character is fine here — the terminal advances two cells for it on
+ * its own, and `sw` already carries that width into the column check. What
+ * the terminal cannot do for us is wrap or reflow, so the insert has to land
+ * at the end of a single line that still has room.
+ */
+export function fitsFastAppend(
+  current: string,
+  cursor: number,
+  text: string,
+  lineWidth: number,
+  columns: number
+): boolean {
+  const sw = stringWidth(text)
+
+  if (sw < 1 || sw > 2 || !isSingleGrapheme(text)) {
+    return false
+  }
+
+  return (
+    cursor === current.length &&
+    current.length > 0 &&
+    !current.includes('\n') &&
+    lineWidth + sw < Math.max(1, columns)
+  )
+}
+
+function isSingleGrapheme(text: string): boolean {
+  const it = seg().segment(text)[Symbol.iterator]()
+
+  return it.next().value?.segment === text
+}
+
 function renderWithCursor(value: string, cursor: number, cursorColor?: string) {
   const pos = Math.max(0, Math.min(cursor, value.length))
 
@@ -474,18 +511,8 @@ export function TextInput({
 
   const canFastEchoBase = () => focus && termFocus && !selected && !mask && !!stdout?.isTTY
 
-  const canFastAppend = (current: string, cursor: number, text: string) => {
-    const sw = stringWidth(text)
-
-    return (
-      canFastEchoBase() &&
-      cursor === current.length &&
-      current.length > 0 &&
-      !current.includes('\n') &&
-      sw === text.length &&
-      lineWidthRef.current + sw < Math.max(1, columns)
-    )
-  }
+  const canFastAppend = (current: string, cursor: number, text: string) =>
+    canFastEchoBase() && fitsFastAppend(current, cursor, text, lineWidthRef.current, columns)
 
   const canFastBackspace = (current: string, cursor: number) => {
     if (!canFastEchoBase() || cursor !== current.length || cursor <= 0 || current.includes('\n')) {
