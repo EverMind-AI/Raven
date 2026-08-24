@@ -12,8 +12,8 @@
 //
 // A row reads as what the node was asked, not as its id: the id is generated,
 // is the widest thing on the row, and answers a question nobody scanning a
-// running graph is asking. Clicking the row -- or the node's box -- expands the
-// prompt in full, with the id above it, which is where a reader who wants
+// running graph is asking. Clicking the row -- or the node's box -- opens its
+// trace box, with the id above it, which is where a reader who wants
 // `/dag <node>` will look.
 
 import { Box, Text } from '@hermes/ink'
@@ -29,32 +29,7 @@ import { layoutDagGraph } from '../lib/dagGraphLayout.js'
 import { renderDagGraph } from '../lib/dagGraphRender.js'
 import { $dagOpenNodes, dagNodeKey, dagNodeToggleKey, dagSpanToggleKey, toggleDagNode } from '../lib/dagOpenNodes.js'
 import { DAG_STATUS_GLYPH, dagNodeNames, dagNodeSummary, dagRunHeadline } from '../lib/dagStatus.js'
-
-// The indent the expanded prompt sits at under its row.
-const PROMPT_INDENT = 2
-
-// Bounds what one expanded row can push into the transcript. This block shows
-// the template as authored, where a `{{ ref:<path> }}` is thirty-odd literal
-// characters -- it only becomes the file's contents when the runner renders it
-// -- so reaching this cap takes a genuinely long instruction block rather than
-// an injected file. `/dag <node>` pages the rendered text in full.
-const PROMPT_CHARS = 4000
-
-const NodePrompt = ({ node, t, width }: { node: DagRunNode; t: Theme; width: number }) => {
-  const prompt = node.promptTemplate ?? ''
-
-  return (
-    <Box flexDirection="column" paddingLeft={PROMPT_INDENT} width={Math.max(8, width - PROMPT_INDENT)}>
-      <Text color={t.color.muted} dim>
-        {node.id}
-        {node.outputFile ? ` → ${node.outputFile}` : ''}
-      </Text>
-      <Text color={t.color.text} wrap="wrap">
-        {prompt.length > PROMPT_CHARS ? `${prompt.slice(0, PROMPT_CHARS)}\n…` : prompt}
-      </Text>
-    </Box>
-  )
-}
+import { DagNodeSlot } from './dagNodeTrace.js'
 
 // Only a failed or cancelled node tints its frame. That one has to be findable
 // in a glance across a wide graph; giving every status its own frame colour puts
@@ -158,9 +133,10 @@ const NodeRow = ({
   )
   const summary = dagNodeSummary(node.promptTemplate, room)
 
-  // A row with no template has nothing to expand to -- and it is already showing
-  // its node id, so nothing is hidden either. Asked of the same helper the
-  // picture's boxes use, so a row and its box are never expandable apart.
+  // A row still pending with no template has nothing to expand to; any node
+  // that has started has a trace to show even without one. Asked of the same
+  // helper the picture's boxes use, so a row and its box are never expandable
+  // apart.
   const toggle = dagNodeToggleKey(runId, node)
 
   return (
@@ -211,7 +187,14 @@ const NodeRow = ({
         </Text>
       </Box>
 
-      {open && toggle && <NodePrompt node={node} t={t} width={width} />}
+      <DagNodeSlot
+        node={node}
+        open={open && Boolean(toggle)}
+        ordinal={ordinal}
+        runId={runId}
+        t={t}
+        width={width}
+      />
     </Box>
   )
 }

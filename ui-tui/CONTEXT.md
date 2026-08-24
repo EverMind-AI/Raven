@@ -134,8 +134,19 @@ on `tool.dag`, so a resumed session shows the graph too, just never the
 frame-by-frame replay a live turn drew. The Work Segment holding this call draws
 the panel by default, without a click, and folding that segment back by hand
 still leaves the panel drawn -- only the summary row folds. Clicking a row, or
-the node's box in the graph, expands that node's full prompt; both carry the
+the node's box in the graph, opens that node's **Trace box**; both carry the
 same key, so they cannot disagree about what is open.
+
+**Stream line**: the single row under a running DAG node's row, carrying the
+last line's worth of what its sub-agent has produced, refreshed while it works.
+Not a step ticker: it is a character tail, so it moves.
+_Avoid_: "log line", "tail row".
+
+**Trace box**: the fixed-height bordered block a DAG node row expands into,
+holding the node's conversation trace drawn by the transcript's own renderer.
+Replaces the stream line rather than joining it, and is the same height whatever
+the trace's length.
+_Avoid_: "detail panel", "node output".
 
 **Ordinal** (`DagPanel`, `/dag`):
 The short number (`1..N`) printed inside each graph box and at the head of the

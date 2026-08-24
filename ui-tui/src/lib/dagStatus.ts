@@ -10,7 +10,8 @@ import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun
 import type { DagNodeDetail } from '../rpc/index.js'
 import type { Theme } from '../theme.js'
 
-import { clipToWidth } from './text.js'
+import { callSubject } from '../domain/episodeFold.js'
+import { clipToWidth, compactPreview, formatToolCall } from './text.js'
 
 /** Glyph + tone per status. A `Record` over the union rather than a lookup with
  * a fallback, so adding a status without styling it is a type error instead of a
@@ -140,13 +141,66 @@ export const dagRunHeadline = (run: DagRunState): string => {
   return parts.join(' · ')
 }
 
+// One line per thing the node did, for the command that is the only way to
+// read a trace longer than the panel's box. Flat text on purpose: this goes
+// into the transcript as a system message, which has no structure to render
+// into.
+//
+// The transcript's first and last entries are usually the prompt and the
+// output themselves -- `_with_messages` in raven/rpc/methods/dag.py brackets a
+// node's real turns with them so the ordinary renderer has bubbles either side
+// to draw -- and both already print below under their own headings. Skipped
+// here by content, not just position, so a transcript that genuinely opens or
+// closes with something else keeps every line, and a node with no prompt or no
+// output loses nothing.
+const traceLines = (detail: DagNodeDetail): string[] => {
+  const messages = detail.messages ?? []
+  const lastIndex = messages.length - 1
+  const expectedOutput = detail.output ?? detail.error
+  const echoesPrompt = (i: number) =>
+    i === 0 && detail.prompt !== undefined && messages[i].role === 'user' && messages[i].text === detail.prompt
+  const echoesOutput = (i: number) =>
+    i === lastIndex &&
+    expectedOutput !== undefined &&
+    messages[i].role === 'assistant' &&
+    messages[i].text === expectedOutput
+  const out: string[] = []
+
+  messages.forEach((msg, i) => {
+    if (echoesPrompt(i) || echoesOutput(i)) {
+      return
+    }
+
+    if (msg.reasoning_content?.trim()) {
+      out.push(`  (thought) ${compactPreview(msg.reasoning_content, 200)}`)
+    }
+
+    if (msg.text?.trim() && msg.role !== 'tool') {
+      out.push(`  ${compactPreview(msg.text, 300)}`)
+    }
+
+    for (const call of msg.tool_calls ?? []) {
+      out.push(`  > ${formatToolCall(call.name, callSubject(call.arguments))}`)
+    }
+
+    if (msg.role === 'tool' && msg.text?.trim()) {
+      out.push(`    ${compactPreview(msg.text, 200)}`)
+    }
+  })
+
+  return out
+}
+
 /**
- * One node's rendered prompt and output, as a transcript block.
+ * One node's rendered prompt, its trace, and its output, as a transcript block.
  *
  * The *rendered* prompt is the point: it is the text the sub-agent actually
  * received, with the upstream nodes' outputs already substituted in, which is
  * what makes a surprising result explainable. Neither field reaches the client
  * any other way -- the manifest inlines only the leaf nodes' text.
+ *
+ * Between prompt and output sits the trace: every step the node took to get
+ * from one to the other, or nothing at all when it took none.
  */
 export const formatDagNodeDetail = (detail: DagNodeDetail): string => {
   const size = detail.output_truncated
@@ -154,11 +208,13 @@ export const formatDagNodeDetail = (detail: DagNodeDetail): string => {
     : detail.output_chars > 0
       ? ` (${detail.output_chars} chars)`
       : ''
+  const trace = traceLines(detail)
 
   return [
     `── ${detail.node} @ ${detail.run_id}${size} ──`,
     'prompt:',
     detail.prompt ?? '  (no prompt — the node never ran)',
+    ...(trace.length > 0 ? ['trace:', ...trace] : []),
     'output:',
     detail.output ?? '  (no output)'
   ].join('\n')

@@ -86,6 +86,40 @@ export const clipToWidth = (raw: string, width: number) => {
   return `${out}…`
 }
 
+// The mirror of `clipToWidth`: keep the *end* and mark the cut at the front.
+// For a tail that is being refreshed in place, where the newest characters are
+// the ones worth the cells.
+export const clipToWidthFromEnd = (raw: string, width: number) => {
+  const one = raw.replace(WS_RE, ' ').trim()
+
+  if (width <= 0) {
+    return ''
+  }
+
+  if (stringWidth(one) <= width) {
+    return one
+  }
+
+  const chars = [...one]
+  let out = ''
+  let w = 0
+
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const ch = chars[i]!
+    const cw = stringWidth(ch)
+
+    if (w + cw > width - 1) {
+      break
+    }
+
+    out = ch + out
+    w += cw
+  }
+
+  // The cut often lands on a space, and `… bbbb` spends a cell saying nothing.
+  return `…${out.replace(/^ /, '')}`
+}
+
 export const TOOL_RESULT_PREVIEW_CHARS = 200
 
 // A tool's inline result preview. Cutting on a raw character budget alone split

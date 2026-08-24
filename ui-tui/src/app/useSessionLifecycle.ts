@@ -25,6 +25,7 @@ import { hydrateDagRuns, introMsg, toTranscriptMessages } from '../domain/messag
 import { ZERO } from '../domain/usage.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { asRpcResult } from '../lib/rpc.js'
+import { resetDagNodeTraces } from './dagNodeStore.js'
 import { resetDirectChat } from './directChatStore.js'
 import { resetFolds } from './foldStore.js'
 import { patchOverlayState } from './overlayStore.js'
@@ -146,9 +147,12 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
     // session being left; carrying them over would show the new session chips
     // it never used. The folds go with them: they are keyed by view and by
     // message, and both of those die with the session, so a set left behind only
-    // grows for as long as the process lives.
+    // grows for as long as the process lives. Each watched dag node's trace goes
+    // too: a trace belongs to the conversation on screen, and a resumed one is a
+    // different conversation.
     resetDirectChat()
     resetFolds()
+    resetDagNodeTraces()
     setHistoryItems([])
     setLastUserMsg('')
     setStickyPrompt('')

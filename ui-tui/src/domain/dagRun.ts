@@ -16,6 +16,7 @@ import type {
   DagRunSnapshot,
   DagRunStartedEvent
 } from '../rpc/index.js'
+import type { Msg } from '../types.js'
 
 /** Any of the three progress events a DAG run emits. */
 export type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunStartedEvent
@@ -206,3 +207,28 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
     }
   })
 })
+
+/**
+ * A run pinned onto its tool row in the transcript, one entry per `runId`.
+ *
+ * Two different moments populate `tool.dag`: `recordDagEvent` pins a run as
+ * its turn progresses, and `hydrateDagRuns` (`domain/messages.ts`) pins one
+ * fetched fresh after a resume. Either way, this is what lets a run still be
+ * found once `turnStore`'s live list has moved past it -- at turn end for the
+ * first, always for the second.
+ */
+export const dagRunsFromHistory = (history: readonly Msg[]): DagRunState[] => {
+  const byRunId = new Map<string, DagRunState>()
+
+  for (const msg of history) {
+    for (const episode of msg.episodes ?? []) {
+      for (const tool of episode.tools) {
+        if (tool.dag) {
+          byRunId.set(tool.dag.runId, tool.dag)
+        }
+      }
+    }
+  }
+
+  return [...byRunId.values()]
+}

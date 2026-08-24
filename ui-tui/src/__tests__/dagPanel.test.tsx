@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 
 import { DagPanel } from '../components/dagPanel.js'
-import { $dagOpenNodes, dagNodeKey, dagSpanToggleKey, toggleDagNode } from '../lib/dagOpenNodes.js'
+import { $dagOpenNodes, dagNodeKey, dagNodeToggleKey, dagSpanToggleKey, toggleDagNode } from '../lib/dagOpenNodes.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
@@ -99,7 +99,13 @@ describe('DagPanel', () => {
 
   it('keeps sibling rows adjacent and their join below them', () => {
     const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
-    const lines = f.split('\n').map(line => line.trim())
+    // parse_a is running, so its own stream line adds an extra line between the
+    // two rows; filtered out here since it names no node and would throw off
+    // the count.
+    const lines = f
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => !line.includes('working'))
     const rowOf = (id: string) => lines.findIndex(line => line.includes(id))
 
     // parse_a and parse_b are siblings, so they are adjacent and above report.
@@ -241,14 +247,20 @@ describe('DagPanel node rows', () => {
     expect(f).not.toContain('BBB_BODY')
   })
 
-  it('has nothing to expand for a node with no template', () => {
-    // Such a row is already showing its node id, so an expanded block would add
-    // nothing -- and the row is left unclickable rather than swallowing a click.
-    const closed = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+  it('has nothing to expand for a pending node with no template', () => {
+    // Such a node has neither a template nor a trace yet, so an expanded block
+    // would add nothing -- the row is left unclickable rather than swallowing
+    // a click. A node that has started is a different story: see the node-slot
+    // tests below.
+    // No running node in this fixture: one's stream line carries a spinner that
+    // picks a new random frame on every mount, which would make two renders of
+    // it differ for a reason that has nothing to do with this toggle.
+    const run: DagRunState = { ...DIAMOND, nodes: [node('later', 'pending')] }
+    const closed = frame(<DagPanel run={run} t={DEFAULT_THEME} />)
 
-    toggleDagNode(dagNodeKey(DIAMOND.runId, 'fetch'))
+    toggleDagNode(dagNodeKey(DIAMOND.runId, 'later'))
 
-    expect(frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)).toBe(closed)
+    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toBe(closed)
   })
 
   it('keys expansion by run as well as node, so two runs cannot share a toggle', () => {
@@ -308,5 +320,29 @@ describe('dagSpanToggleKey', () => {
 
   it('opens nothing for a node absent from the run', () => {
     expect(dagSpanToggleKey('dag-6', { kind: 'label', nodeId: 'ghost', text: 'x' }, nodes)).toBeNull()
+  })
+})
+
+describe('DagPanel node slot', () => {
+  it('draws a stream line under a running node without a click', () => {
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('working…')
+  })
+
+  it('expands a node that has no prompt template', () => {
+    // Before the trace existed, the template was the only thing a click could
+    // reveal, so a node without one was not clickable. There is a trace now.
+    const bare: DagRunState = { ...DIAMOND, nodes: [node('solo', 'completed')] }
+
+    expect(dagNodeToggleKey('r1', bare.nodes[0]!)).toBe(dagNodeKey('r1', 'solo'))
+  })
+
+  it('still refuses a pending node with nothing to show', () => {
+    expect(dagNodeToggleKey('r1', node('later', 'pending'))).toBeNull()
+  })
+
+  it('expands a pending node that does carry a template', () => {
+    expect(dagNodeToggleKey('r1', { ...node('later', 'pending'), promptTemplate: 'do it' })).not.toBeNull()
   })
 })
