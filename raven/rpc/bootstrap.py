@@ -184,6 +184,7 @@ async def build_rpc_stack(
         default_channel=channel,
     )
 
+    backend_start: asyncio.Task[None] | None = None
     if agent_loop is not None and agent_loop.backend is not None:
         # Backgrounded because it may spawn a server and take tens of seconds;
         # a first render must not wait on the memory path.
@@ -193,7 +194,12 @@ async def build_rpc_stack(
             except Exception:
                 logger.exception("rpc: memory backend start failed; continuing with degraded memory path")
 
-        asyncio.create_task(_start_backend())
+        # Held, not fire-and-forget: teardown has to settle it before it stops
+        # the backend, or a client that connects and closes while EverOS is
+        # still starting leaves the service running behind a stack that has
+        # already reported itself closed -- holding the embedded index lock the
+        # next process needs.
+        backend_start = asyncio.create_task(_start_backend())
 
     async def teardown() -> None:
         # Pending UI waits are released before the transport goes away.
@@ -201,6 +207,10 @@ async def build_rpc_stack(
         # an ordinary confirm keeps its configured default.
         confirm_broker.cancel_all()
         approval_broker.cancel_all()
+        # The third broker on the same transport. Without this an ask_user
+        # outside an active Spine turn survives the disconnect and stays alive
+        # until the broker's own default timeout, which is ten minutes.
+        question_broker.cancel_all()
         if agent_loop is not None and agent_loop.cron_service is not None:
             try:
                 agent_loop.cron_service.stop()
@@ -215,6 +225,19 @@ async def build_rpc_stack(
         # turn wrote and has not persisted, and the stop releases the embedded
         # index lock the next process needs. Stopping without draining loses the
         # last turn's memory writes silently.
+        if backend_start is not None and not backend_start.done():
+            # Cancelled rather than awaited: start may take tens of seconds and
+            # teardown is on the exit path. ``stop`` is contractually safe after
+            # a failed start (MemoryBackend.stop cleans up partial-init state),
+            # so cancel-then-stop releases what a half-finished start created --
+            # while running the two concurrently would have stop racing it.
+            backend_start.cancel()
+            try:
+                await backend_start
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("rpc: memory backend start failed during teardown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 await agent_loop.drain_backend_stores()

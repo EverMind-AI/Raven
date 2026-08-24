@@ -64,6 +64,28 @@ class _FakeBackend:
         self.stopped = True
 
 
+class _GatedBackend(_FakeBackend):
+    """A backend whose ``start`` parks until released, so a test can hold the
+    stack in the state a client closing mid-boot puts it in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.entered = asyncio.Event()
+        self.events: list[str] = []
+
+    async def start(self) -> None:
+        self.events.append("start-enter")
+        self.entered.set()
+        await self.gate.wait()
+        self.events.append("start-finish")
+        self.started = True
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+        self.stopped = True
+
+
 class _FakeTools(dict):
     """A tool registry thin enough for the assembly, plus the one attribute the
     session handlers read back through the factory."""
@@ -435,3 +457,66 @@ async def test_a_builder_that_returns_nothing_is_not_an_error(monkeypatch) -> No
         assert result["result"]["session_id"].startswith("tui:")
     finally:
         await stack.teardown()
+
+
+async def test_teardown_settles_a_start_still_in_flight_before_it_stops(monkeypatch) -> None:
+    """A client can connect and close while EverOS is still coming up. The start
+    task was fire-and-forget, so teardown drained, stopped and returned with
+    start still inside ``backend.start()`` -- the service outliving the stack
+    that reported itself closed, and holding the index lock the next process
+    needs. Cancel-then-stop is the order: ``MemoryBackend.stop`` is contractually
+    safe after a failed start, so it cleans up whatever a half-finished start
+    created."""
+    from raven.cli import tui_commands
+
+    backend = _GatedBackend()
+    loop = _FakeLoop(backend=backend)
+    monkeypatch.setattr(tui_commands, "_build_tui_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await asyncio.wait_for(backend.entered.wait(), timeout=5)
+
+    await stack.teardown()
+
+    assert backend.events == ["start-enter", "stop"], backend.events
+    assert loop.drained is True
+    assert backend.stopped is True
+
+    # Releasing the gate afterwards proves the task is settled and not merely
+    # unobserved: an uncancelled start would append start-finish here.
+    backend.gate.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert backend.events == ["start-enter", "stop"], backend.events
+
+
+async def test_teardown_releases_a_pending_question(monkeypatch) -> None:
+    """The third broker on the same transport. An ask raised outside an active
+    Spine turn is not cancelled by the turn teardown, so before this it survived
+    the disconnect and stayed alive until the broker's own default timeout --
+    ten minutes of a wait nobody can answer, because the client is gone."""
+    from raven.cli import tui_commands
+
+    loop = _FakeLoop()
+    monkeypatch.setattr(tui_commands, "_build_tui_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    waiting = asyncio.create_task(
+        stack.question_broker.await_question(
+            "session-a",
+            prompt="keep going?",
+            default="no",
+            timeout_s=600,
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    await stack.teardown()
+    await asyncio.sleep(0)
+
+    # Done, not merely answerable: ``await_question`` returns its default on
+    # cancellation too, so waiting on the task would report success even when
+    # nothing released it -- the cancellation would do the releasing.
+    assert waiting.done(), "teardown must release the wait, not leave it to its own timeout"
+    assert waiting.result() == "no", "a released wait fails safe to its default"
