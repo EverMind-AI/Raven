@@ -40,6 +40,7 @@ def build_span(
     session_key: str | None = None,
     channel: str | None = None,
     chat_id: str | None = None,
+    attempt_id: str | None = None,
     start_time: str,
     end_time: str | None = None,
     status_code: str = "OK",
@@ -58,6 +59,9 @@ def build_span(
         "channel": channel,
         "channel.id": channel,
         "chat_id": chat_id,
+        # Stable trajectory address: equals the trace id for a single-turn
+        # attempt; an explicit attempt groups several turns under one id.
+        "attempt.id": attempt_id or trace_id,
         "audit.schema_version": SCHEMA_VERSION,
     }
     if attributes:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -283,6 +284,7 @@ def test_standard_span_required_attributes(trace_dir):
         usage = None
         finish_reason = "stop"
         reasoning_content = None
+        thinking_blocks = [{"type": "thinking", "thinking": "structured"}]
 
     with trace.span("llm.call") as s:
         semconv.llm_call(s, {"self": None, "messages": [], "tools": None, "model": "openrouter/x"}, _Resp(), None)
@@ -292,6 +294,8 @@ def test_standard_span_required_attributes(trace_dir):
     assert by["llm.call"]["attributes"]["llm.provider"]
     assert by["llm.call"]["attributes"]["llm.model"]
     assert by["tool.call"]["attributes"]["tool.name"] == "grep"
+    output_path = Path(by["llm.call"]["attributes"]["llm.output.artifact_path"])
+    assert json.loads(output_path.read_text(encoding="utf-8"))["thinking_blocks"] == _Resp.thinking_blocks
 
 
 def test_tracing_disabled_is_passthrough(monkeypatch):
@@ -347,3 +351,99 @@ def test_provider_label_reports_the_normalized_route_prefix() -> None:
     # A bare id names no backend, so the class is all there is to report.
     assert _provider_label("claude-opus-4-5", "AnthropicProvider") == "AnthropicProvider"
     assert _provider_label(None, "AnthropicProvider") == "AnthropicProvider"
+
+
+def test_attempt_id_defaults_to_trace_id(trace_dir):
+    """Without an open attempt, every turn is its own single-turn attempt."""
+    with trace.span("session.turn", session_key="cli:a"):
+        with trace.span("llm.call"):
+            pass
+
+    spans = _spans_written(trace_dir)
+    trace_ids = {sp["traceId"] for sp in spans}
+    assert len(trace_ids) == 1
+    for sp in spans:
+        assert sp["attributes"]["attempt.id"] == sp["traceId"]
+
+
+def test_explicit_attempt_groups_turns_under_one_id(trace_dir):
+    """begin_attempt groups several turns' spans; end_attempt restores per-turn ids."""
+    aid = trace.begin_attempt("cli:a")
+    try:
+        with trace.span("session.turn", session_key="cli:a"):
+            with trace.span("tool.call"):
+                pass
+        with trace.span("session.turn", session_key="cli:a"):
+            pass
+        # An unrelated session is not captured by cli:a's attempt.
+        with trace.span("session.turn", session_key="cli:b") as other:
+            assert other.attempt_id == other.trace_id
+    finally:
+        assert trace.end_attempt("cli:a") == aid
+
+    with trace.span("session.turn", session_key="cli:a") as after:
+        assert after.attempt_id == after.trace_id
+
+    spans = _spans_written(trace_dir)
+    grouped = [sp for sp in spans if sp["attributes"]["attempt.id"] == aid]
+    assert len(grouped) == 3  # two turns + one tool call
+    assert len({sp["traceId"] for sp in grouped}) == 2  # across two traces
+    assert aid.startswith("att-")
+
+
+def test_attempt_id_survives_detached_and_checkpoint(trace_dir):
+    aid = trace.begin_attempt("cli:c")
+    try:
+        with trace.span("session.turn", session_key="cli:c") as root:
+            root.checkpoint()
+            with trace.span("skill.inject", detached=True):
+                pass
+    finally:
+        trace.end_attempt("cli:c")
+    for sp in _spans_written(trace_dir):
+        assert sp["attributes"]["attempt.id"] == aid
+
+
+def test_suppress_silences_only_its_own_block(trace_dir):
+    with trace.span("session.turn", session_key="cli:s"):
+        pass
+    with trace.suppress():
+        assert not trace.enabled()
+        with trace.span("session.turn", session_key="cli:s"):
+            with trace.span("llm.call"):
+                pass
+    assert trace.enabled()
+    with trace.span("tool.call"):
+        pass
+
+    names = [sp["name"] for sp in _spans_written(trace_dir)]
+    assert names == ["session.turn", "tool.call"], "suppressed spans must not be emitted"
+
+
+def test_suppress_is_task_local(trace_dir):
+    """A concurrent task keeps tracing while another task suppresses —
+    the contract that lets a replay run beside real turns in one process."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def suppressed_task():
+        with trace.suppress():
+            started.set()
+            await release.wait()
+            with trace.span("llm.call"):
+                pass
+
+    async def live_task():
+        await started.wait()
+        with trace.span("session.turn", session_key="cli:live"):
+            pass
+        release.set()
+
+    async def main():
+        await asyncio.gather(suppressed_task(), live_task())
+
+    asyncio.run(main())
+
+    names = [sp["name"] for sp in _spans_written(trace_dir)]
+    assert names == ["session.turn"], "only the live task's span may be emitted"

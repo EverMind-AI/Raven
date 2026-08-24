@@ -1852,7 +1852,14 @@ class AgentLoop:
             tool_calls=tool_calls,
         )
 
-        finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
+        # When the upstream never said why the stream ended (a gateway that
+        # omits the terminal reason, or a stream that died without one), say so
+        # instead of impersonating a normal finish: a fabricated "stop" makes a
+        # cut-off stream indistinguishable from a completed one in recorded
+        # trajectories, and nothing downstream branches on "stop"/"tool_calls"
+        # from this path (consumers only test for "error"; truncation flagging
+        # reads the raw upstream value above).
+        finish_reason = upstream_finish_reason or "unknown"
 
         content = "".join(content_buf)
         reasoning_content = "".join(reasoning_buf) or None

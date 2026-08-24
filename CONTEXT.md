@@ -572,6 +572,92 @@ The three-state outcome an EvalJudge returns: `completed` (goal addressed), `fai
 (visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
 writes completed/failed (never unknown) into `HISTORY.md`.
 
+### Trajectory
+
+**Attempt**:
+One task try, possibly spanning several turns — the stable address of a trajectory.
+Every span carries `attempt.id` (`raven/tracing/spans.py`); without an explicitly
+opened attempt (`trace.begin_attempt(session_key)`) each turn is its own single-turn
+attempt whose id equals the trace id, so every trace is addressable as an attempt.
+_Avoid_: "run id" / "task id" — neither is bound to span records.
+
+**Trajectory Verdict** (`raven/trajectory/verdict.py`):
+The task-outcome label for one Attempt: `pass` / `fail` (agent failure) / `infra`
+(environment or harness crash, excluded from diagnosis), plus the judging `source`.
+Appended to `verdicts.jsonl` beside the trace logs by whoever can judge; deliberately
+outside tracing — `status.code` says whether code crashed, a verdict says whether the
+task succeeded.
+_Avoid_: confusing with JudgeVerdict (the EvalEngine's completed/failed/unknown).
+
+**Trajectory Pin** (`raven/trajectory/store.py`):
+The retention promise for an Attempt or trace id, recorded in `pins.json` in the trace
+state dir: pinned ids are corpus, not diagnostics — purge tooling must never delete
+their spans or the artifacts those spans reference.
+
+**Trajectory Bundle** (`raven/trajectory/bundle.py`):
+The self-contained offline directory `collect_bundle` / `raven trajectory save` packs
+for one Attempt: `manifest.json` + `spans.jsonl` (artifact references rewritten to
+bundle-relative paths) + `artifacts/` + the session's conversation record + its
+verdicts. Bundling declares the trajectory corpus, so the id is auto-pinned.
+_Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
+**Trajectory Redaction** (`raven/trajectory/redact.py`):
+The three-layer sanitization `redact_bundle` applies to a **copy** of a Trajectory
+Bundle (the original is never modified): exact replacement of known secret values
+(secret-typed config fields + credential-shaped env vars, stable
+`[REDACTED:<source>]` placeholders, JSON-escaped spellings included), regex fallback
+for common credential shapes, and a residual scan that flags high-entropy leftovers
+for human review without rewriting. Non-UTF-8 files are excluded from the copy.
+_Avoid_: "masking"/"anonymization" — redaction removes credentials, it does not
+de-identify the user.
+
+**Trajectory Report** (`raven/trajectory/report.py`):
+The shippable form of a trajectory produced by `raven trajectory report`: the
+redacted copy of its Bundle plus `redaction.json` (per-layer replacement counts,
+residual findings, binary policy) packed into a `.tar.gz`, delivered through the
+pluggable `Uploader` protocol (v1 backend: `local` — the tarball itself, nothing
+is sent anywhere).
+_Avoid_: calling the unredacted Bundle a "report" — only the redacted tarball leaves
+the machine.
+
+**Trajectory Replay** (`raven/trajectory/replay.py`):
+Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
+recorded model replies (`llm.output`) and tool results (`tool.output`) are fed back
+in recording order through a `ReplayProvider` and a `ReplayToolRegistry` while the
+live agent-loop code runs for real. No real tool ever executes, and the replay run
+emits no spans (tracing is disabled for its duration).
+_Avoid_: confusing with a real re-run against live models/tools — that is evolver
+evaluation, not replay.
+
+**Replay Divergence** (`raven/trajectory/replay.py`):
+The point where the live harness's request stops matching the recording — the
+expected outcome once a bug is fixed, not an error. Detected per model call
+(model id, message roles/contents, tool-call names+arguments, offered tool names,
+under nonce/timestamp/cache-control normalization) and per tool call (name +
+arguments). Policy `strict` halts at the first divergence; `warn` reports and
+keeps feeding by order. Each divergence carries the structured `expected`/`actual`
+values of its field, and the replay report captures every live request
+(`llm_requests`/`tool_requests`) for programmatic assertions.
+
+**Trajectory Cassette** (`raven/trajectory/cassette.py`):
+The committable form of a Trajectory Bundle, produced by `minimize_bundle` /
+`raven trajectory minimize`: same directory layout, but shrunk to the exact
+surface `load_recording` consumes (consumed spans/artifacts/fields only,
+system-prompt content replaced by a placeholder, the session record sliced to
+the pre-attempt history) and passed through Trajectory Redaction. Payloads are
+never truncated — a field is kept whole or dropped whole.
+_Avoid_: "minimized bundle" as a distinct term — a cassette *is* a bundle to
+the replay layer.
+
+**Trajectory Regression Case** (`raven/trajectory/regression.py`, `tests/trajectories/`):
+One directory pinning a fixed harness bug into CI: a Trajectory Cassette
+(`cassette/`) plus an expectation file (`expect.yaml`) declaring where the
+replay's first Replay Divergence must land and what the live side must do
+there (message contains/not-contains/equals, tool name/params checks).
+Discovered and run by `tests/test_trajectory_regressions.py`; asserting
+"divergence at the expected call, live value = fixed behavior" is the normal
+shape — zero divergence is the special case guarding faithful reproduction.
+
 ### Workspace & Onboarding
 
 **Workspace**:
