@@ -186,3 +186,38 @@ describe('EpisodeMessage fold scope', () => {
     expect(messageFrame(grown)).toContain('AAA-thought')
   })
 })
+
+describe('a content-driven default', () => {
+  it('resolves an untouched fold to the default it was given', () => {
+    resetFolds()
+
+    expect(isFoldOpen('s', 'seg:1', true)).toBe(true)
+    expect(isFoldOpen('s', 'seg:1', false)).toBe(false)
+  })
+
+  it('remembers a close against a default-open fold', () => {
+    // The reason the store needs three states: with open ids alone, closing a
+    // default-open stretch is indistinguishable from never having touched it,
+    // so the next remount reopens what the reader just shut.
+    resetFolds()
+    toggleFold('s', 'seg:1', true)
+
+    expect(isFoldOpen('s', 'seg:1', true)).toBe(false)
+  })
+
+  it('clears both sets', () => {
+    resetFolds()
+    // A scope of its own, not `s` -- the sibling tests above already leave
+    // `seg:1` sitting in `s`'s `closed` set, and reusing it here would let a
+    // `resetFolds` that forgets `closed` still toggle these keys into the
+    // sets this test expects, passing by accident. One key lands in
+    // `closed`, the other in `open`, so clearing only one set leaves the
+    // other assertion able to catch it.
+    toggleFold('reset-proof', 'seg:1', true)
+    toggleFold('reset-proof', 'seg:2', false)
+    resetFolds()
+
+    expect(isFoldOpen('reset-proof', 'seg:1', true)).toBe(true)
+    expect(isFoldOpen('reset-proof', 'seg:2', false)).toBe(false)
+  })
+})

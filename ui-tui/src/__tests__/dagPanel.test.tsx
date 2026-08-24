@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
 
 import { DagPanel } from '../components/dagPanel.js'
-import { $dagOpenNodes, dagNodeKey, toggleDagNode } from '../lib/dagOpenNodes.js'
+import { $dagOpenNodes, dagNodeKey, dagSpanToggleKey, toggleDagNode } from '../lib/dagOpenNodes.js'
 import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
@@ -51,15 +51,53 @@ describe('DagPanel', () => {
     expect(frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)).toContain('4 nodes · 1 done · 1 running')
   })
 
-  it('names each node dependencies so the topology is readable', () => {
-    // A terminal cannot route edges, so the edges are spelled out. Without them
-    // the drawing is just an indented list and the graph shape is lost.
+  it('draws the topology as a graph above the rows', () => {
+    const lines = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />).split('\n')
+
+    expect(lines.some(line => line.includes('\u256d') && line.includes('\u256e'))).toBe(true)
+    expect(lines.findIndex(line => line.includes('\u25b8'))).toBeLessThan(
+      lines.findIndex(line => line.includes('parse_a'))
+    )
+  })
+
+  it('numbers the rows so a box can be matched to one', () => {
     const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
 
+    expect(f).toMatch(/1 .*fetch/)
+    expect(f).toMatch(/4 .*report/)
+  })
+
+  it('stops naming a dependency the picture drew', () => {
+    // Saying it twice is the state this graph replaced.
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
+
+    // Paired with the positives: a panel that rendered nothing at all would
+    // satisfy the absence on its own.
+    expect(f).toContain('\u256d')
+    expect(f).toContain('report')
+    expect(f).not.toContain('parse_a, parse_b')
+  })
+
+  it('still names a dependency from an earlier run, which has no box', () => {
+    const run: DagRunState = {
+      runId: 'dag-x',
+      done: false,
+      nodes: [node('only', 'pending', ['from_an_earlier_run'])]
+    }
+
+    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('from_an_earlier_run')
+  })
+
+  it('drops the picture rather than overflow a narrow terminal', () => {
+    // Boxes plus gutters need more cells than this, in either label style, so the
+    // rows carry the topology in words instead.
+    const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} width={24} />)
+
+    expect(f).not.toContain('\u256d')
     expect(f).toContain('parse_a, parse_b')
   })
 
-  it('groups independent nodes onto the same level', () => {
+  it('keeps sibling rows adjacent and their join below them', () => {
     const f = frame(<DagPanel run={DIAMOND} t={DEFAULT_THEME} />)
     const lines = f.split('\n').map(line => line.trim())
     const rowOf = (id: string) => lines.findIndex(line => line.includes(id))
@@ -241,5 +279,34 @@ describe('toggleDagNode', () => {
     toggleDagNode('r/a')
 
     expect($dagOpenNodes.get()).not.toBe(before)
+  })
+})
+
+describe('dagSpanToggleKey', () => {
+  const nodes = [
+    { ...node('a', 'running', [], 'Coder'), promptTemplate: 'first line\nBODY' },
+    node('b', 'pending', ['a'], 'Coder')
+  ]
+
+  it('opens the same block the node row opens', () => {
+    // The box is the bigger target and the thing a reader is already looking at,
+    // so it must not open a second, separate disclosure.
+    expect(dagSpanToggleKey('dag-6', { kind: 'border', nodeId: 'a', text: '\u256d\u2500\u256e' }, nodes)).toBe(
+      dagNodeKey('dag-6', 'a')
+    )
+  })
+
+  it('opens nothing for a wire span, which belongs to no node', () => {
+    expect(dagSpanToggleKey('dag-6', { kind: 'wire', text: '\u2500\u252c\u2500' }, nodes)).toBeNull()
+  })
+
+  it('opens nothing for a node with no template, rather than swallowing the click', () => {
+    // Such a box has nothing to reveal; a dead affordance that eats a click is
+    // worse than no affordance.
+    expect(dagSpanToggleKey('dag-6', { kind: 'label', nodeId: 'b', text: '2 \u25cb Coder' }, nodes)).toBeNull()
+  })
+
+  it('opens nothing for a node absent from the run', () => {
+    expect(dagSpanToggleKey('dag-6', { kind: 'label', nodeId: 'ghost', text: 'x' }, nodes)).toBeNull()
   })
 })

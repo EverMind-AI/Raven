@@ -16,20 +16,43 @@
 
 import { atom } from 'nanostores'
 
-/** Open fold ids, per scope. A scope is one transcript view. */
-export const $folds = atom<Record<string, readonly string[]>>({})
+interface Scope {
+  closed: readonly string[]
+  open: readonly string[]
+}
 
-export const isFoldOpen = (scope: string, key: string): boolean => ($folds.get()[scope] ?? []).includes(key)
+/** Folds the reader has decided about, per scope. A scope is one transcript view. */
+export const $folds = atom<Record<string, Scope>>({})
 
-export const openFolds = (scope: string): readonly string[] => $folds.get()[scope] ?? []
+const scopeOf = (scope: string): Scope => $folds.get()[scope] ?? { closed: [], open: [] }
 
-export const toggleFold = (scope: string, key: string): void => {
+/**
+ * Whether a fold is open.
+ *
+ * `defaultOpen` decides the untouched case, so a stretch can open itself on what
+ * it contains. Holding closed ids as well as open ones is what keeps that
+ * default from overriding the reader: without it, "closed" and "never seen" are
+ * one value, and a row rebuilt mid-turn reopens what they just shut.
+ */
+export const isFoldOpen = (scope: string, key: string, defaultOpen = false): boolean => {
+  const { closed, open } = scopeOf(scope)
+
+  return open.includes(key) ? true : closed.includes(key) ? false : defaultOpen
+}
+
+export const openFolds = (scope: string): readonly string[] => scopeOf(scope).open
+
+export const toggleFold = (scope: string, key: string, defaultOpen = false): void => {
   const all = $folds.get()
-  const current = all[scope] ?? []
+  const { closed, open } = scopeOf(scope)
+  const nowOpen = !isFoldOpen(scope, key, defaultOpen)
 
   $folds.set({
     ...all,
-    [scope]: current.includes(key) ? current.filter(k => k !== key) : [...current, key]
+    [scope]: {
+      closed: nowOpen ? closed.filter(k => k !== key) : [...closed.filter(k => k !== key), key],
+      open: nowOpen ? [...open.filter(k => k !== key), key] : open.filter(k => k !== key)
+    }
   })
 }
 

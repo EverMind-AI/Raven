@@ -3,9 +3,10 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { Msg } from '../types.js'
+import type { EpisodeTool, Msg } from '../types.js'
 
 import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { layoutDagGraph } from './dagGraphLayout.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
 import { boundedHistoryRenderText } from './text.js'
@@ -32,9 +33,15 @@ export const messageHeightKey = (msg: Msg) => {
 
   // Episodes drive the height for `kind: 'episodes'`, so they must be part of
   // the cache key — otherwise a stale height survives a step-count change.
+  // A DAG call's own graph can change shape (nodes finish, the run completes)
+  // without `foldedPreviewRows` noticing, so it gets its own signature too.
+  const dagSig = (dag: EpisodeTool['dag']) => (dag ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}` : '')
   const epSig =
     msg.episodes
-      ?.map(ep => `${ep.narration?.length ?? 0}:${ep.tools.map(tool => foldedPreviewRows(tool) + 1).join(',')}`)
+      ?.map(
+        ep =>
+          `${ep.narration?.length ?? 0}:${ep.tools.map(tool => `${foldedPreviewRows(tool) + 1}${dagSig(tool.dag)}`).join(',')}`
+      )
       .join('\u0001') ?? ''
 
   return [
@@ -48,6 +55,28 @@ export const wrappedLines = (text: string, width: number) => {
   const w = Math.max(1, width)
 
   return text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / w)), 0)
+}
+
+// Mirrors episodeView.tsx's own INDENT/STEP. Kept local rather than shared
+// across the lib/component boundary -- this estimator is the only other place
+// that needs them.
+const INDENT = 2
+const STEP = 2
+
+/**
+ * Row count for one DAG call's panel: a header, the optional ascii picture,
+ * one row per node, and an outputs line once the run is done -- exactly
+ * `DagPanel`'s own structure. Reuses the same layout function the panel
+ * renders from, so the estimate cannot drift from what it actually draws.
+ */
+const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number): number => {
+  if (run.nodes.length === 0) {
+    return 0
+  }
+
+  const picture = layoutDagGraph(run.nodes, { width })
+
+  return 1 + (picture?.height ?? 0) + run.nodes.length + (run.done && run.dir ? 1 : 0)
 }
 
 export const estimatedMsgHeight = (
@@ -101,7 +130,30 @@ export const estimatedMsgHeight = (
       h += i > 0 ? 1 : 0
 
       if (seg.kind === 'work') {
-        h++
+        const dagTools = seg.tools.filter(tool => tool.dag)
+
+        if (dagTools.length === 0) {
+          h++
+          continue
+        }
+
+        // A DAG call's graph renders under its own row at every fold depth,
+        // including the folded default -- see dagFor/WorkSegment in
+        // episodeView.tsx -- so this mirrors that instead of the one-row
+        // approximation below. depth/width match episodeView's own
+        // INDENT/STEP and width formula so the two cannot drift apart.
+        const dagWidth = cols ? Math.max(20, cols - 4) : 116
+
+        if (seg.tools.length === 1) {
+          h += 1 + dagPanelRows(dagTools[0]!.dag!, Math.max(24, dagWidth - (INDENT + STEP)))
+        } else {
+          h += 1 + seg.tools.length
+
+          for (const tool of dagTools) {
+            h += dagPanelRows(tool.dag!, Math.max(24, dagWidth - (INDENT + STEP * 2)))
+          }
+        }
+
         continue
       }
 

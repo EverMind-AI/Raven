@@ -2,12 +2,13 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 //
-// Assign a DAG's nodes to dependency levels for a top-to-bottom drawing.
+// Assign a DAG's nodes to dependency levels.
 //
-// A terminal cannot route edges the way a canvas can, so the drawing shows the
-// topology as levels plus each node's named dependencies. That makes the level
-// assignment the whole of the layout: a node must sit below *every* dependency,
-// or the named edge points back up the page.
+// A level is longest-path depth: a node sits one below *every* dependency, not
+// just its first. `dagGraphLayout` consumes these as the columns of the drawn
+// graph, which is why the "below every dependency" part is load-bearing -- a
+// node placed one past its shallowest dependency would need an edge pointing
+// leftwards, and the picture only routes rightwards.
 
 import type { DagRunNode } from '../domain/dagRun.js'
 
