@@ -1052,6 +1052,126 @@ class TestConnectMcpSandboxGuard:
 
         assert reached == ["mcp-server"]
 
+    async def test_streamable_failure_does_not_cancel_following_server(self, monkeypatch):
+        """A transport task failure is isolated to the server being initialized."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+        from types import SimpleNamespace
+
+        import anyio
+        import mcp
+        import mcp.client.streamable_http
+
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        attempted = []
+
+        @asynccontextmanager
+        async def fake_streamable_http_client(url, http_client):
+            attempted.append(url)
+            if url == "https://bad.example/mcp":
+                async with anyio.create_task_group() as group:
+
+                    async def fail_transport():
+                        await anyio.sleep(0)
+                        raise RuntimeError("transport failed")
+
+                    group.start_soon(fail_transport)
+                    yield url, object(), None
+            else:
+                yield url, object(), None
+
+        class FakeSession:
+            def __init__(self, read, write):
+                self.read = read
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def initialize(self):
+                if self.read == "https://bad.example/mcp":
+                    await asyncio.Event().wait()
+
+            async def list_tools(self):
+                return SimpleNamespace(tools=[])
+
+        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+        monkeypatch.setattr(
+            mcp.client.streamable_http,
+            "streamable_http_client",
+            fake_streamable_http_client,
+        )
+
+        def config(url):
+            return SimpleNamespace(type="streamableHttp", url=url, headers=None, tool_timeout=30)
+
+        async with AsyncExitStack() as stack:
+            await connect_mcp_servers(
+                {
+                    "bad": config("https://bad.example/mcp"),
+                    "good": config("https://good.example/mcp"),
+                },
+                ToolRegistry(),
+                stack,
+            )
+
+        assert attempted == ["https://bad.example/mcp", "https://good.example/mcp"]
+        assert asyncio.current_task().cancelling() == 0
+
+    async def test_streamable_external_cancellation_propagates(self, monkeypatch):
+        """Cancellation of Raven's connection task is not treated as a server failure."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+        from types import SimpleNamespace
+
+        import mcp
+        import mcp.client.streamable_http
+
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        entered = asyncio.Event()
+
+        @asynccontextmanager
+        async def fake_streamable_http_client(url, http_client):
+            yield object(), object(), None
+
+        class FakeSession:
+            def __init__(self, read, write):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def initialize(self):
+                entered.set()
+                await asyncio.Event().wait()
+
+        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+        monkeypatch.setattr(
+            mcp.client.streamable_http,
+            "streamable_http_client",
+            fake_streamable_http_client,
+        )
+
+        cfg = SimpleNamespace(
+            type="streamableHttp",
+            url="https://wait.example/mcp",
+            headers=None,
+            tool_timeout=30,
+        )
+        task = asyncio.create_task(connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack()))
+        await entered.wait()
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
     async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack

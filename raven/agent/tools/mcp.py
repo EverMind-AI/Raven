@@ -1,7 +1,7 @@
 """MCP client: connects to MCP servers and wraps their tools as native Raven tools."""
 
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -14,6 +14,54 @@ from raven.sandbox import SandboxInitError
 
 if TYPE_CHECKING:
     from raven.sandbox import SandboxExecutor
+
+
+@asynccontextmanager
+async def _mcp_server_connection(cfg, transport_type: str, executor: "SandboxExecutor | None"):
+    async with AsyncExitStack() as stack:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.sse import sse_client
+        from mcp.client.stdio import stdio_client
+        from mcp.client.streamable_http import streamable_http_client
+
+        if transport_type == "stdio":
+            if executor is not None and executor.supports_process_spawning:
+                read, write = await executor.start_process(cfg.command, cfg.args, env=cfg.env or None)
+            else:
+                params = StdioServerParameters(command=cfg.command, args=cfg.args, env=cfg.env or None)
+                read, write = await stack.enter_async_context(stdio_client(params))
+        elif transport_type == "sse":
+
+            def httpx_client_factory(
+                headers: dict[str, str] | None = None,
+                timeout: httpx.Timeout | None = None,
+                auth: httpx.Auth | None = None,
+            ) -> httpx.AsyncClient:
+                merged_headers = {**(cfg.headers or {}), **(headers or {})}
+                return httpx.AsyncClient(
+                    headers=merged_headers or None,
+                    follow_redirects=True,
+                    timeout=timeout,
+                    auth=auth,
+                )
+
+            read, write = await stack.enter_async_context(
+                sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
+            )
+        else:
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers=cfg.headers or None,
+                    follow_redirects=True,
+                    timeout=None,
+                )
+            )
+            read, write, _ = await stack.enter_async_context(streamable_http_client(cfg.url, http_client=http_client))
+
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        tools = await session.list_tools()
+        yield session, tools
 
 
 class MCPToolWrapper(Tool):
@@ -110,55 +158,12 @@ async def connect_mcp_servers(
                 "Either switch to an HTTP/SSE MCP server or set sandbox.backend='none'."
             )
 
+        if transport_type not in {"stdio", "sse", "streamableHttp"}:
+            logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+            continue
+
         try:
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.sse import sse_client
-            from mcp.client.stdio import stdio_client
-            from mcp.client.streamable_http import streamable_http_client
-
-            if transport_type == "stdio":
-                if executor is not None and executor.supports_process_spawning:
-                    read, write = await executor.start_process(cfg.command, cfg.args, env=cfg.env or None)
-                else:
-                    params = StdioServerParameters(command=cfg.command, args=cfg.args, env=cfg.env or None)
-                    read, write = await stack.enter_async_context(stdio_client(params))
-            elif transport_type == "sse":
-
-                def httpx_client_factory(
-                    headers: dict[str, str] | None = None,
-                    timeout: httpx.Timeout | None = None,
-                    auth: httpx.Auth | None = None,
-                ) -> httpx.AsyncClient:
-                    merged_headers = {**(cfg.headers or {}), **(headers or {})}
-                    return httpx.AsyncClient(
-                        headers=merged_headers or None,
-                        follow_redirects=True,
-                        timeout=timeout,
-                        auth=auth,
-                    )
-
-                read, write = await stack.enter_async_context(
-                    sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
-                )
-            elif transport_type == "streamableHttp":
-                http_client = await stack.enter_async_context(
-                    httpx.AsyncClient(
-                        headers=cfg.headers or None,
-                        follow_redirects=True,
-                        timeout=None,
-                    )
-                )
-                read, write, _ = await stack.enter_async_context(
-                    streamable_http_client(cfg.url, http_client=http_client)
-                )
-            else:
-                logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
-                continue
-
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-
-            tools = await session.list_tools()
+            session, tools = await stack.enter_async_context(_mcp_server_connection(cfg, transport_type, executor))
             for tool_def in tools.tools:
                 wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
                 registry.register(wrapper)
