@@ -207,24 +207,19 @@ def test_generated_playbook_lands_in_the_user_layer(tmp_path):
     assert store.origin_of("competitor-scan") == "user"
 
 
-def test_shipped_builtins_load_and_validate(tmp_path):
-    """The packaged library is not exempt from its own rules: every shipped
-    playbook loads, passes the field definition, and has a trigger vocabulary."""
+def test_the_packaged_library_ships_no_playbooks(tmp_path):
+    """The builtin layer is a mechanism, not a shipped catalogue.
+
+    A playbook is user-layer product: written on the machine that runs it, by
+    ``raven playbook create`` or the ``create_playbook`` tool. Packaging
+    examples put demo content into every install and into the public release,
+    so the layer stays wired up and empty. The layer's own behaviour is
+    covered against a temporary root, so nothing here needs a shipped file.
+    """
     from raven.playbook.store import BUILTIN_ROOT
-    from raven.playbook.validate import validate_structure
 
     store = PlaybookStore(tmp_path / "empty-user", builtin_root=BUILTIN_ROOT)
-    names = store.list_ids()
-    assert names == ["deep-dive", "topic-briefing"]
-    modes = set()
-    for name in names:
-        spec = store.load(name)
-        assert store.origin_of(name) == "builtin"
-        assert validate_structure(spec) == [], name
-        assert spec.triggers.keywords, name
-        modes.add(spec.mode)
-    # One of each mode, so both execution paths ship a worked example.
-    assert modes == {"dag", "prompt"}
+    assert store.list_ids() == []
 
 
 @pytest.mark.parametrize("name", ["../escape", "/tmp/absolute", "UPPER", "a b", ""])

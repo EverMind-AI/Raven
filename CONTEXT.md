@@ -632,8 +632,10 @@ directory under a playbook root, in three regions — a two-field frontmatter
 `yaml playbook-spec` block holding every machine field. Being under a root is
 what makes it a playbook, so no marker field can disagree with where the file
 sits — one directory, one file, no sidecar and no lifecycle fields. The library
-is two such roots layered: `raven/playbook/builtin/` ships with the package and
-has no write path, and `<agent_home>/playbooks/` (override: `playbooks.dir`) is
+is two such roots layered: `raven/playbook/builtin/` ships with the package,
+has no write path, and ships empty — the layer is what lets a release carry a
+playbook, not a bundled catalogue — while `<agent_home>/playbooks/` (override:
+`playbooks.dir`) is
 where both creation entries — `raven playbook create` and the `create_playbook`
 tool — land their product, disabled for review; a user directory reusing a
 builtin's name shadows it, with a load warning. A generator's open questions and
