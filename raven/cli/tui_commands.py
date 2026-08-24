@@ -486,6 +486,7 @@ def _build_tui_agent_loop():
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,

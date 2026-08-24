@@ -516,7 +516,17 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'clarify.request':
         patchOverlayState({
-          clarify: { choices: ev.payload.choices, question: ev.payload.question, requestId: ev.payload.request_id }
+          clarify: {
+            batch: ev.payload.batch,
+            choices: ev.payload.choices,
+            header: ev.payload.header,
+            index: ev.payload.index,
+            question: ev.payload.question,
+            recommended: ev.payload.recommended,
+            requestId: ev.payload.request_id,
+            timeoutS: ev.payload.timeout_s,
+            total: ev.payload.total
+          }
         })
         setStatus('waiting for input…')
 
