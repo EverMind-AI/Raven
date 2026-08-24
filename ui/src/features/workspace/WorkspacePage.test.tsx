@@ -50,7 +50,6 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
     menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
-    copyToClip: (text, done) => shellCalls.push(['copyToClip', `${text} -> ${done}`]),
     wsView: () => view,
     showWorkspace: (tab) => {
       shellCalls.push(['showWorkspace', tab])

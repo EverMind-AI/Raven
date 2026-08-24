@@ -161,6 +161,7 @@ DS.settings ??= {
   usage: async () => null,
   provider: async () => { throw { notLive: true }; },
   model: () => modelCurrent(),
+  version: () => APP_VERSION,
   checkUpdate: () => notLive(),
   setLang: (v) => langPickDemo(v),
 };

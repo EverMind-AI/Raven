@@ -106,6 +106,7 @@ DS.settings = {
     return settingsSnapshot();
   },
   model: () => modelCurrent(),
+  version: () => APP_VERSION,
   /* The version check the rail-foot notice already does, on demand. No new
      backend: system.version carries the answer. */
   checkUpdate: async (btn) => {

@@ -55,10 +55,8 @@ export interface Shell {
   closeDetail?(): void
   /* Optional verbs: each exists once an island needs it and the shell half
      (demo/155-bridge.js) publishes it. */
-  copyToClip?(text: string, done: string): void
   showWorkspace?(tab: string): void
   wsShows?(tab: string): boolean
-  lang?(): string
   wsView?(): WsPanelView
   wsPick?(tab: string): void
   /* Transcript island verbs: the attachment marker the history reader needs. */
@@ -89,11 +87,6 @@ export interface Shell {
   /* Remembers a theme pick: the preference belongs to the legacy look store,
      which also persists it and repaints the appearance page. */
   themeSet?(next: 'dark' | 'light'): void
-  /* What the foot row says: the running build, and how this platform spells
-     the settings shortcut. */
-  appVersion?(): string | null
-  modKey?(): string
-  isMac?(): boolean
   /* Republishes the offset the docked composer stands at; a panel drag moves
      the column the composer lives in. */
   plugRedraw?(): void

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
+import { copy } from '../../shell/clipboard'
+import { language } from '../../shell/platform'
 import * as store from './store'
 
 import type { BrowserState } from './store'
@@ -62,7 +64,7 @@ function LinkRow({ u, src }: { u: UrlRow; src: LinksSource }): JSX.Element {
     if (!el) return
     ;(el as HTMLButtonElement & { _ctx?: () => unknown })._ctx = () => [
       { label: t('gui.ws.open_url'), fn: () => src.openUrl(u.url) },
-      { label: t('gui.ws.copy_url'), fn: () => shell().copyToClip?.(u.url, t('gui.ws.copied_url')) },
+      { label: t('gui.ws.copy_url'), fn: () => copy(u.url, t('gui.ws.copied_url')) },
     ]
   }
   return (
@@ -148,7 +150,7 @@ function BBar({ s, strip }: { s: BrowserState; strip: boolean }): JSX.Element {
       (!/\s/.test(v) &&
         (/^localhost(:\d+)?([/?#]|$)/i.test(v) || /^[\w-]+(\.[\w-]+)+/.test(v) || /^\d{1,3}(\.\d{1,3}){3}/.test(v)))
     const search =
-      shell().lang?.() === 'zh'
+      language() === 'zh'
         ? `https://www.baidu.com/s?wd=${encodeURIComponent(v)}`
         : `https://duckduckgo.com/?q=${encodeURIComponent(v)}`
     void store.open(urlish ? v : search)

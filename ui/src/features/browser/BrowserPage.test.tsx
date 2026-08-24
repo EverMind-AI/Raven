@@ -18,16 +18,19 @@ const shellCalls: Array<[string, unknown]> = []
    keys, not translations) and a source on window.DS.browser. */
 function wire(source: BrowserSource, lang = 'en'): void {
   shellCalls.length = 0
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: (text: string) => { shellCalls.push(['copy', text]); return Promise.resolve() } },
+  })
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     toast: () => {},
     menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    copyToClip: (text, done) => shellCalls.push(['copy', `${text}|${done}`]),
     showWorkspace: (tab) => shellCalls.push(['showWorkspace', tab]),
     wsShows: () => true,
-    lang: () => lang,
   }
   window.RavenShell = fakeShell
   window.DS = { browser: source }
@@ -116,7 +119,7 @@ describe('browser island, links shape (the fixture source)', () => {
     const items = row._ctx!()
     expect(items).toHaveLength(2)
     items[1]!.fn()
-    expect(shellCalls).toContainEqual(['copy', 'https://a.example/x|gui.ws.copied_url'])
+    expect(shellCalls).toContainEqual(['copy', 'https://a.example/x'])
   })
 })
 
@@ -181,6 +184,12 @@ describe('browser island, embedded shape (the rpc source)', () => {
       fireEvent.keyDown(bar, { key: 'Enter' })
     })
     expect(calls).toContainEqual(['open', { url: 'https://duckduckgo.com/?q=rate%20limits' }])
+    document.documentElement.lang = 'zh-CN'
+    bar.value = '天气'
+    await act(async () => {
+      fireEvent.keyDown(bar, { key: 'Enter' })
+    })
+    expect(calls).toContainEqual(['open', { url: 'https://www.baidu.com/s?wd=%E5%A4%A9%E6%B0%94' }])
   })
 
   it('clears the address bar in the same tick the page closes', async () => {

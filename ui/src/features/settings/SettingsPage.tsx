@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { open as openUrl } from '../../shell/open-url'
+import { isMac, modKey } from '../../shell/platform'
 import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
@@ -90,8 +91,6 @@ const onoff = (v: boolean): string => t(v ? 'gui.set.on' : 'gui.set.off')
 const shortModel = (m: string): string => String(m || '').split('/').pop() ?? ''
 const kindLabel = (kind?: string): string => t('gui.model.kind.' + (kind || 'key'), undefined, t('gui.model.kind.key'))
 const loginCmd = (slug: string): string => `raven provider login ${String(slug).replace(/_/g, '-')}`
-const isMac = (): boolean => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
-const modKey = (): string => (isMac() ? '⌘' : 'Ctrl +')
 const OFF_HEAD = 5
 
 /* The in-row refusal (the legacy nlSay): a tagged control never renders the
@@ -599,8 +598,7 @@ function KeysPage(): JSX.Element {
 /* ---- about ----------------------------------------------------------- */
 
 function AboutPage(): JSX.Element {
-  const sh = shell()
-  const ver = sh.appVersion?.() ?? null
+  const ver = store.source().version()
   return (
     <>
       <Scard>

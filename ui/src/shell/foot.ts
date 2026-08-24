@@ -10,19 +10,21 @@
  * applyI18n over the static attributes.
  */
 
-import { shell } from './bridge'
+import { ds } from './bridge'
+import { isMac, modKey } from './platform'
+
+import type { SettingsSource } from '../features/settings/types'
 
 export function draw(): void {
-  const sh = shell()
-  const version = sh.appVersion?.()
+  const version = ds<SettingsSource>('settings').version()
   const sub = document.getElementById('meSub')
   if (sub) sub.textContent = `Raven ${version ? 'v' + version : '--'}`
   const kbd = document.getElementById('meKbd')
   /* Mac spells the modifier as a glyph that reads as one key with the comma;
      every other platform needs the gap. */
   if (kbd) {
-    const mod = sh.modKey ? sh.modKey() : ''
-    const mac = sh.isMac ? sh.isMac() : true
+    const mod = modKey()
+    const mac = isMac()
     kbd.textContent = `${mod}${mac ? '' : ' '},`
   }
 }

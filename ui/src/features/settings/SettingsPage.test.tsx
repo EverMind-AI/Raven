@@ -62,6 +62,7 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
       return data
     },
     model: () => data.model,
+    version: () => null,
     checkUpdate: (btn) => { calls.push(['checkUpdate', btn]) },
     /* On the source now, not the shell: what a language flip means differs
        between the modes, so the source answers the pick. */
@@ -225,11 +226,12 @@ describe('settings island', () => {
   })
 
   it('asks the settings source to check for an update, from the about page', async () => {
-    const { calls } = install()
+    const { calls } = install(snap(), { version: () => '0.1.7' })
     await mount()
     await act(async () => {
       screen.getByText('gui.set.pg.about').click()
     })
+    expect(screen.getByText('0.1.7')).toBeTruthy()
     const btn = screen.getByText<HTMLButtonElement>('gui.set.check_update')
     await act(async () => {
       btn.click()
