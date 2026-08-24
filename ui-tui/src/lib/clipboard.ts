@@ -248,11 +248,7 @@ export function copyOnSelectNotice(charCount: number, path: ClipboardPath, first
  * is whatever identifies the current session to the caller; a resumed session
  * reaching the same key has already had its caveat and does not repeat it.
  */
-export function createCopyOnSelectReporter(): (
-  charCount: number,
-  path: ClipboardPath,
-  sessionKey: string
-) => string {
+export function createCopyOnSelectReporter(): (charCount: number, path: ClipboardPath, sessionKey: string) => string {
   const told = new Set<string>()
 
   return (charCount, path, sessionKey) => {
