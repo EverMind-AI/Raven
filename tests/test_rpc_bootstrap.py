@@ -11,6 +11,7 @@ that renders a question or a progress stream.
 from __future__ import annotations
 
 import asyncio
+import inspect
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
@@ -202,3 +203,58 @@ def test_the_confirm_broker_is_conversation_scoped() -> None:
 
     src = inspect.getsource(bootstrap.build_rpc_stack)
     assert "ConfirmBroker(send_frame=conversation_scoped(send_frame))" in src
+
+
+async def test_the_channel_reaches_both_collaborators_or_nothing_is_delivered(monkeypatch) -> None:
+    """One name, two consumers, and getting one of them wrong loses every turn.
+
+    ``build_rpc_spine`` registers its delivery outlet under the channel name, and
+    ``register_turn_methods`` stamps it on every turn ``turn.send`` submits as
+    ``source.channel``. ``spine/turn.py`` says outright that the default channel
+    MUST match the channel the outlet was registered under or the reply is
+    dropped -- so a ``channel`` argument that reached only one of them would be
+    worse than none: the turn runs, produces output, and delivers it to a channel
+    with no outlet, with nothing anywhere reporting a problem.
+    """
+    from raven.cli import tui_commands
+    from raven.rpc import methods as methods_module
+    from raven.rpc import spine as spine_module
+
+    seen: dict[str, object] = {}
+    real_spine = spine_module.build_rpc_spine
+
+    def _spy_spine(agent_loop, emitter, *, channel="tui", **kwargs):
+        seen["outlet_channel"] = channel
+        return real_spine(agent_loop, emitter, channel=channel, **kwargs)
+
+    # Patched on the umbrella and not on ``methods.turn``: the umbrella imported
+    # the function into its own namespace at import time, so a patch on the
+    # defining module is never consulted -- and the test would pass while
+    # asserting nothing.
+    real_register = methods_module.register_turn_methods
+
+    def _spy_register(dispatcher, *, default_channel="tui", **kwargs):
+        seen["turn_channel"] = default_channel
+        return real_register(dispatcher, default_channel=default_channel, **kwargs)
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", _spy_spine)
+    monkeypatch.setattr(methods_module, "register_turn_methods", _spy_register)
+    monkeypatch.setattr(tui_commands, "_build_agent_loop", lambda: _FakeLoop())
+
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=_FakeLoop(), channel="acp")
+    try:
+        assert seen["outlet_channel"] == "acp"
+        assert seen["turn_channel"] == "acp", "an outlet on 'acp' fed by turns stamped 'tui' delivers nothing"
+    finally:
+        await stack.teardown()
+
+
+async def test_the_channel_defaults_to_the_one_both_sides_already_used() -> None:
+    """Every existing caller passes no channel, so the default has to be the
+    value the two sides independently defaulted to before it was a parameter."""
+    from raven.rpc.methods.turn import register_turn_methods
+    from raven.rpc.spine import build_rpc_spine
+
+    assert inspect.signature(build_rpc_spine).parameters["channel"].default == "tui"
+    assert inspect.signature(register_turn_methods).parameters["default_channel"].default == "tui"
+    assert inspect.signature(bootstrap.build_rpc_stack).parameters["channel"].default == "tui"

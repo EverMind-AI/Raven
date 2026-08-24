@@ -390,6 +390,14 @@ class ToolStartPayload(_Strict):
     name: str
     arguments: dict[str, JsonValue]
     display: str | None = None
+    blocking: bool = Field(
+        default=False,
+        description=(
+            "The call is a blocking interaction, so it has no automatic deadline and may emit "
+            "nothing for as long as it runs. A client that clocks the event stream for liveness "
+            "must suspend that clock while it is in flight, or it declares a sub-agent run dead."
+        ),
+    )
 
 
 class ToolStartEvent(_Strict):
@@ -407,6 +415,30 @@ class ToolProgressEvent(_Strict):
     payload: ToolProgressPayload
 
 
+class FileChange(_Strict):
+    """One file a tool call wrote, as contents rather than as a rendering of them.
+
+    Beside ``ToolCompletePayload.diff`` rather than instead of it. A client that
+    draws its own diff needs the text: a unified diff cannot be turned back into
+    the file, its context is limited, and an oversized rewrite is dropped from it
+    entirely. The ACP surface needs exactly this shape -- its ``Diff`` content
+    block is ``{path, newText, oldText}`` -- so the rendered string cannot serve
+    it at all.
+    """
+
+    path: str = Field(description="Absolute path of the file that was written.")
+    after: str = Field(description="The file's full contents after the write.")
+    before: str | None = Field(
+        default=None,
+        description=(
+            "The contents the write replaced. Absent when the file did not exist, so a client "
+            "renders a creation differently from a rewrite; an empty string means the file "
+            "existed and was empty. This is why the field cannot use a falsy-means-absent "
+            "shortcut -- an empty file has the same emptiness."
+        ),
+    )
+
+
 class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
@@ -420,6 +452,7 @@ class ToolCompletePayload(_Strict):
             "content and nothing else, so a client without this draws an overwrite as all additions."
         ),
     )
+    file_change: FileChange | None = None
 
 
 class ToolCompleteEvent(_Strict):
@@ -440,6 +473,13 @@ class MessageCompleteEvent(_Strict):
 
 class ErrorEventPayload(_Strict):
     code: int
+    turn_id: str = Field(
+        "",
+        description=(
+            "The turn this failure belongs to. Empty when the emitter did not know it; "
+            "a consumer that correlates a request to a turn must not treat an empty value as its own."
+        ),
+    )
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
@@ -670,6 +710,47 @@ class CronMissedPayload(_Strict):
     items: list[CronMissedItem]
 
 
+class MediaItem(_Strict):
+    """One file the agent produced as part of its reply, by local path."""
+
+    path: str = Field(description="Absolute path of the file on the machine the agent runs on.")
+    mime: str = Field(
+        description=(
+            "MIME type as declared by the emit site. Every producer declares "
+            "application/octet-stream today, so a client that needs the real type should sniff "
+            "the extension rather than trust this."
+        )
+    )
+    kind: str = Field(description='Coarse media class; "file" is the only value emitted today.')
+
+
+class MediaPayload(_Strict):
+    items: list[MediaItem] = Field(
+        description=(
+            "The files, in the order the turn produced them. Never empty: an event with nothing "
+            "to deliver is not emitted."
+        )
+    )
+
+
+class MediaEvent(_Strict):
+    """Files the reply carried, as paths rather than bytes.
+
+    A separate event rather than a field on ``message.complete``: media is emitted
+    before the reply text (the loop's own order) and a turn can produce it without
+    producing text at all, so hanging it off the completion would reorder it and
+    lose the text-free case.
+
+    Paths and not contents because both ends of this wire are on one machine --
+    the terminal is a child process, and an ACP client spawns the agent itself.
+    A client that is not local cannot use this event, which is the same
+    constraint every other path-carrying field on this contract already has.
+    """
+
+    type: Literal["media"]
+    payload: MediaPayload
+
+
 class CronMissedEvent(_Strict):
     type: Literal["cron.missed"]
     payload: CronMissedPayload
@@ -693,6 +774,7 @@ TurnEvent = Annotated[
         DagNodeUpdatedEvent,
         DagRunCompletedEvent,
         CronMissedEvent,
+        MediaEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -3064,6 +3146,7 @@ __all__ = [
     "ToolStartEvent",
     "ToolProgressEvent",
     "ToolCompleteEvent",
+    "FileChange",
     "MessageCompleteEvent",
     "ErrorEvent",
     "CronDeliveredEvent",
@@ -3108,6 +3191,9 @@ __all__ = [
     "SkillhubSearchResult",
     "SkillhubSubscores",
     "CronMissedEvent",
+    "MediaEvent",
+    "MediaItem",
+    "MediaPayload",
     "CronMissedItem",
     "CronMissedPayload",
     # registry

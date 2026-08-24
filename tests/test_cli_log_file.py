@@ -163,6 +163,37 @@ def test_file_sink_does_not_dump_local_variable_values(tmp_logs: Path) -> None:
     assert "SECRET-TOKEN-9z9z9z" not in content
 
 
+def test_terminal_sink_does_not_dump_local_variable_values(tmp_logs: Path, capsys) -> None:
+    """The mirror of the test above, for the sink two lines below it in the source.
+
+    The file sink was configured ``backtrace=False, diagnose=False`` and said why;
+    the stderr sink beside it took loguru's defaults, which are both ``True``.
+    Measured before the fix: a token bound in the failing frame appeared six times
+    across twenty-seven lines of stderr.
+
+    stderr matters more here rather than less. ``raven acp`` runs as an editor's
+    subprocess and the editor displays that stream, so a traceback annotated with
+    every local's value is rendered into somebody's UI rather than into a file
+    only they can read.
+    """
+    from loguru import logger
+
+    redirect_loguru_to_file("gateway.log", terminal_level="ERROR")
+    api_token = "SECRET-TOKEN-8y8y8y"
+    try:
+        raise RuntimeError(api_token[:0] or "boom")
+    except RuntimeError:
+        logger.exception("processing failed")
+
+    err = capsys.readouterr().err
+    assert "processing failed" in err, "the record itself must still reach the terminal"
+    assert "SECRET-TOKEN-8y8y8y" not in err
+    # A frame-by-frame annotated traceback is also just noise on a protocol
+    # channel's neighbour; the interpreter's own excepthook still prints the
+    # plain one, so nothing diagnosable is lost.
+    assert err.count("\n") < 20, f"the terminal traceback should be compact, got:\n{err}"
+
+
 # ---------------------------------------------------------------------------
 # Root-logger TTY StreamHandler stripping
 # ---------------------------------------------------------------------------

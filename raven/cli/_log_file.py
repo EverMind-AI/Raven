@@ -58,7 +58,14 @@ def redirect_loguru_to_file(
         diagnose=False,
     )
     if terminal_level is not None:
-        logger.add(sys.stderr, level=terminal_level)
+        # Same two flags as the file sink, for the same reason plus one. loguru
+        # defaults both to True, so this sink was rendering every frame of every
+        # traceback annotated with the value of every local -- the leak the file
+        # sink above is explicitly configured to avoid, on a stream that is more
+        # exposed rather than less: ``raven acp`` runs as an editor's subprocess
+        # and the editor displays its stderr. The interpreter's own excepthook
+        # still prints the plain traceback, so nothing diagnosable is lost.
+        logger.add(sys.stderr, level=terminal_level, backtrace=False, diagnose=False)
     if os.environ.get("RAVEN_CLI_DEBUG"):
         logger.add(sys.stderr, level="DEBUG")
 
