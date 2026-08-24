@@ -17,7 +17,7 @@ const rpcHas = (name) => !RPC_ABSENT.has(name);
 
 DS.browser = {
   embedded: true,
-  urls: () => WS.urls,
+  urls: () => RavenIslands.workspace.urls(),
   openUrl: (u) => RavenIslands.chrome.openUrl(u),
   frame: (p) => rpc.call('browser.frame', p),
   open: (p) => rpc.call('browser.open', p),

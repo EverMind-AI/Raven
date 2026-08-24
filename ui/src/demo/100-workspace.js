@@ -8,25 +8,18 @@
    badge on the header chip does the asking. And it is never the only place a
    fact appears, so collapsing it can't lose information.
 
-   The renderer is the workspace island (ui/src/features/workspace/); what
-   stays here is the shared state every layer mutates, the tool-event
-   bookkeeping the hooks feed, the panel chrome outside #wsBody, and the
-   fixture DS source. */
+   The renderer and shared state are owned by the workspace island
+   (ui/src/features/workspace/); what stays here is the tool-event bookkeeping
+   the fixture hooks feed, the panel chrome outside #wsBody, and the fixture DS
+   source. */
 let wsTab = 'diff', wsOpen = false, wsWide = false, wsPicked = false;
 
-const WS = {
-  changes: [],   // { key, path, kind:'edit'|'write', add, del, hunks, turn, open }
-  urls: [],      // { url, kind:'fetch'|'search', at }
-  file: null,    // files view: opened file  { path, lines, ro, truncated }
-  turn: 0,       // bumped per turn so Changes can group "this turn" vs earlier
-  unseen: 0      // changes arrived while the panel was closed or on another view
-};
+const WS = RavenIslands.workspace.shared();
 
 function wsReset() {
-  WS.changes = []; WS.urls = []; WS.file = null; WS.turn = 0; WS.unseen = 0;
   wsTab = 'diff'; wsPicked = false;
-  /* A different session is a different workspace state: the island drops the
-     file tree listings it read before the switch. */
+  /* A different session is a different workspace state: the island clears the
+     record and drops the file tree listings it read before the switch. */
   RavenIslands.workspace.reset();
   /* Subagents belong to the session that spawned them, so they leave with it
      -- carrying the list into the next conversation would attribute one
