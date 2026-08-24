@@ -298,11 +298,17 @@ export async function setClipboard(text: string): Promise<ClipboardResult> {
   // OSC 52, but it can be silently dropped without that setting).
   // Native also fires when the user has disabled OSC 52 emission via
   // RAVEN_TUI_FORCE_OSC52=0 (otherwise the clipboard write becomes a
-  // complete no-op). Fire-and-forget, but `nativeAttempted` tells us
-  // whether ANY native path will be tried.
-  const nativeAttempted = shouldUseNativeClipboard(process.env, envModule.terminal) && copyNative(text)
+  // complete no-op). The spawn stays fire-and-forget; what is awaited is
+  // only whether a tool exists to spawn, which on Linux's first copy is
+  // not known until the probe settles.
+  // Started before the await, resolved after it: on Linux's first copy the tool
+  // is not known yet, and reporting a native write before the probe settles
+  // claims a copy that no tool performed. The probe now runs alongside
+  // load-buffer instead of ahead of the report.
+  const nativePending = shouldUseNativeClipboard(process.env, envModule.terminal) && copyNative(text)
 
   const tmuxBufferLoaded = await tmuxLoadBuffer(text)
+  const nativeAttempted = await nativePending
 
   // Inner OSC uses BEL directly (not osc()) — ST's ESC would need doubling
   // too, and BEL works everywhere for OSC 52.
@@ -373,8 +379,13 @@ async function probeLinuxCopy(): Promise<'wl-copy' | 'xclip' | 'xsel' | null> {
  * Linux behaviour: if DISPLAY and WAYLAND_DISPLAY are both unset, native
  * clipboard tools cannot work (they need a display server). In that case
  * we skip probing entirely and treat linuxCopy as permanently null.
+ *
+ * The first Linux call answers with a promise, because until the probe settles
+ * there is no answer to give: a display server says a tool could exist, not
+ * that one does. Every other call answers synchronously, so only that first
+ * copy pays for it, and the caller starts this before its own await.
  */
-function copyNative(text: string): boolean {
+function copyNative(text: string): boolean | Promise<boolean> {
   const opts = { input: text, useCwd: false, timeout: 2000 }
 
   switch (process.platform) {
@@ -406,11 +417,12 @@ function copyNative(text: string): boolean {
 
         return false
       }
-      // First call: probe in the background and cache the result for future copies.
-      // We don't await — this is fire-and-forget. Treat as an attempt:
-      // the probe will discover a tool and spawn it. If probing finds
-      // nothing, the NEXT copy will short-circuit above.
-      void (async () => {
+      // First call: probe, cache the result for future copies, and answer with
+      // whether a tool was actually found. A display server means a tool could
+      // exist, not that one does, so answering true here would report a copy
+      // that nothing performed. The copy itself already waited on this probe --
+      // only the report used to run ahead of it.
+      return (async () => {
         const winner = await probeLinuxCopy()
         linuxCopy = winner
 
@@ -422,9 +434,9 @@ function copyNative(text: string): boolean {
         if (winner) {
           void execFileNoThrow(winner, winner === 'wl-copy' ? [] : ['-selection', 'clipboard'], opts)
         }
-      })()
 
-      return true
+        return winner !== null
+      })()
     }
 
     case 'win32':

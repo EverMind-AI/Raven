@@ -257,6 +257,7 @@ describe('setClipboard path reporting', () => {
   // both have TMUX set. So it has to come from the call, which means driving
   // the real one with `tmux` stubbed rather than asserting on a predictor.
   const run = vi.mocked(execFileNoThrow)
+  const realPlatform = process.platform
 
   beforeEach(() => {
     run.mockReset()
@@ -269,6 +270,9 @@ describe('setClipboard path reporting', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs()
+    // One case forces the platform; restore it so the rest of the file, and any
+    // runner that is not Linux, are not left with it.
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true })
   })
 
   it('names the tmux buffer when load-buffer succeeds', async () => {
@@ -288,6 +292,21 @@ describe('setClipboard path reporting', () => {
     expect(result.success).toBe(true)
     expect(result.path).toBe('osc52')
     expect(result.sequence).toContain(']52;c;')
+  })
+
+  it('waits for the first Linux probe before claiming a native path', async () => {
+    // A display server says a native tool could exist, not that one does. The
+    // first call used to report `native` while the probe was still running, so
+    // a machine with DISPLAY and no wl-copy/xclip/xsel was told its very first
+    // copy landed. Nothing had been written.
+    vi.stubEnv('DISPLAY', ':0')
+    vi.stubEnv('TMUX', '')
+    vi.stubEnv('SSH_CONNECTION', '')
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '0')
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    run.mockResolvedValue({ stdout: '', stderr: 'not found', code: 1 })
+
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: false, path: null })
   })
 
   it('reports no path when nothing took the text', async () => {
