@@ -2,6 +2,8 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { show as menuAt } from '../../shell/menu'
+import { show as toast } from '../../shell/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
 
@@ -180,7 +182,7 @@ function CronRow({ j }: { j: CronJob }): JSX.Element {
           aria-label={t('gui.cron.menu_aria', { name: j.name })}
           onClick={(e) => {
             const b = e.currentTarget.getBoundingClientRect()
-            shell().menuAt(b.right - 150, b.bottom + 6, [
+            menuAt(b.right - 150, b.bottom + 6, [
               { label: t('gui.cron.run_now'), fn: () => void store.source().runNow(j).then(() => store.refresh()) },
               { label: t('gui.cron.history'), fn: () => store.openDetail(j) },
               { label: t('gui.cron.open_session'), fn: () => void store.source().openRun(j) },
@@ -230,7 +232,7 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
       .save(draft)
       .then((saved) => {
         store.viewSaved(saved)
-        shell().toast(t('gui.cron.saved'))
+        toast(t('gui.cron.saved'))
       })
       .catch((e: unknown) => jobRefuse(draft, e))
   }
@@ -492,7 +494,7 @@ function JobSheet({ draft }: { draft: CronDraft }): JSX.Element | null {
       .save(draft)
       .then((saved) => {
         store.closeSheet()
-        shell().toast(t('gui.job.saved_x', { name: saved.name }), {
+        toast(t('gui.job.saved_x', { name: saved.name }), {
           label: t('gui.job.run_once'),
           fn: () => void store.source().runNow(saved).then(() => store.refresh()),
         })

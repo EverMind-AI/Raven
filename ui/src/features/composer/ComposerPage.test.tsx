@@ -15,8 +15,12 @@ import type { Shell } from '../../shell/bridge'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
+const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
 vi.mock('../transcript/mount', () => ({
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
+}))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { toastWriter.items.push(text) },
 }))
 
 interface Calls {
@@ -75,13 +79,12 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
   const calls: Calls = {
     sent: [], halted: 0, notes: directNotes, toasts: [],
   }
+  toastWriter.items = calls.toasts
   const fakeShell: Shell = {
     T: (key, vars) => {
       const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
       return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
     },
-    toast: (text) => { calls.toasts.push(text) },
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     slashName: (id) => id.replace(/^gui\./, ''),

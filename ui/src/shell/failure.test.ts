@@ -7,8 +7,6 @@ import { bootError, show } from './failure'
 function wire(): void {
   const shell: Shell = {
     T: (key, vars) => key === 'gui.boot_fail' ? `${vars?.where}:${vars?.err}` : key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

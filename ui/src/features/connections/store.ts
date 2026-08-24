@@ -1,4 +1,5 @@
 import { ds, shell } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { ConnChannel, ConnSource } from './types'
 
@@ -42,7 +43,7 @@ export async function refresh(initial = false): Promise<void> {
     const rows = await source().rows(initial)
     set({ rows, loaded: true })
   } catch (e) {
-    shell().toast(`加载失败：${(e as Error).message || e}`)
+    toast(`加载失败：${(e as Error).message || e}`)
     set({ loaded: true })
   }
 }

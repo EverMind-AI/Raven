@@ -23,8 +23,6 @@ function wire(): void {
   draws = 0
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

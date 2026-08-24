@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { shell, t } from '../../shell/bridge'
 import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
+import { show as toast } from '../../shell/toast'
 import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
 
@@ -290,7 +291,7 @@ function WPick({ k, opts, val }: { k: string; opts: Array<[string, string, strin
       val={val}
       onPick={(v) => {
         void store.write(k, v).then((r) => {
-          if (r === 'notlive') shell().toast(t('gui.set.not_live'))
+          if (r === 'notlive') toast(t('gui.set.not_live'))
         })
       }}
     />
@@ -464,13 +465,13 @@ function NotifyPage(): JSX.Element {
       if (r !== 'granted') {
         sh.ntf?.set(false)
         store.redraw()
-        sh.toast(t('gui.set.ntf.denied'))
+        toast(t('gui.set.ntf.denied'))
         return
       }
     }
     sh.ntf?.set(v && canNtf)
     store.redraw()
-    if (v && !canNtf) sh.toast(t('gui.set.ntf.denied'))
+    if (v && !canNtf) toast(t('gui.set.ntf.denied'))
   }
   return (
     <Scard title={t('gui.set.ntf.all')}>
@@ -1211,7 +1212,7 @@ function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>;
                  state React does not hold. */
               row.on = !row.on
               store.redraw()
-              shell().toast(t(row.on ? 'gui.caps.enabled_x' : 'gui.caps.disabled_x', { name: row.name }))
+              toast(t(row.on ? 'gui.caps.enabled_x' : 'gui.caps.disabled_x', { name: row.name }))
             }}
           />
         )}

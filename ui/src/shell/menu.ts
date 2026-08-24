@@ -1,6 +1,10 @@
 /* The one context menu shared by rows and action buttons across the page. */
 
-import type { MenuItem } from './bridge'
+export interface MenuItem {
+  label: string
+  fn: () => void
+  bad?: boolean
+}
 
 const host = (): HTMLElement | null => document.getElementById('menu')
 

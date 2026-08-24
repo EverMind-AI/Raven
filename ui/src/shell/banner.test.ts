@@ -14,8 +14,6 @@ function wire(needsWebsearch = false, withSource = true): Wired {
   const w: Wired = { opened: 0 }
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
     openWebsearch: () => {

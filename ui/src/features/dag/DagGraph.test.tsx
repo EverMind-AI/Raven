@@ -35,8 +35,6 @@ let textMeasure: PropertyDescriptor | undefined
 beforeEach(() => {
   window.RavenShell = {
     T: (key, vars) => key + (vars ? ` ${JSON.stringify(vars)}` : ''),
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   } satisfies Shell

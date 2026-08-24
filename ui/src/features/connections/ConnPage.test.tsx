@@ -34,8 +34,6 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   const fakeShell: Shell = {
     T: (key, vars, fallback) =>
       key.startsWith('gui.connf.') ? (fallback ?? key) : vars ? `${key} ${JSON.stringify(vars)}` : key,
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     /* Confirms immediately: the dialog itself is legacy chrome, not island. */
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),

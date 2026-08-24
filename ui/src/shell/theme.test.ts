@@ -12,8 +12,6 @@ function install(withStore = true): { picked: string[] } {
   const picked: string[] = []
   const fake: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
   }

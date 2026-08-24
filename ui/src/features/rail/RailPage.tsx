@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 import { current, setCurrent } from '../../shell/session'
 import * as store from './store'
 import { plainTitle } from './title'
 
-import type { MenuItem } from '../../shell/bridge'
+import type { MenuItem } from '../../shell/menu'
 import type { SessRow } from './types'
 import type { JSX, KeyboardEvent, MouseEvent } from 'react'
 import { term as findTerm } from '../../shell/find'
@@ -16,7 +17,7 @@ import { term as findTerm } from '../../shell/find'
 function togglePin(s: SessRow): void {
   s.pin = !s.pin
   store.draw()
-  shell().toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
+  toast(t(s.pin ? 'gui.pinned_ok' : 'gui.unpinned_ok'))
   store.pin(s.id, !!s.pin)
 }
 

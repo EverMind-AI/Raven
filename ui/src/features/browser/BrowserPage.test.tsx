@@ -25,8 +25,6 @@ function wire(source: BrowserSource, lang = 'en'): void {
   })
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     showWorkspace: (tab) => shellCalls.push(['showWorkspace', tab]),

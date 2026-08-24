@@ -23,8 +23,6 @@ function wire(source: AgentsSource): void {
   paints.length = 0
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     wsShows: (tab) => tab === 'agents',

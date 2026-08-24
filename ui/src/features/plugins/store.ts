@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type {
   DetailEntry,
@@ -330,7 +331,7 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
         if (pending.has(entry.id)) {
           if (it) it.installed = false
           if (!authWait[entry.id] && !progShows(entry.id)) {
-            shell().toast(t('gui.plug.wait_auth', { name: entry.name }))
+            toast(t('gui.plug.wait_auth', { name: entry.name }))
           }
         }
       } else {
@@ -340,13 +341,13 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
         if (st === 'connected') {
           progDone((r.mcp && r.mcp.tool_count) || 0)
           if (!progShows(entry.id)) {
-            shell().toast(
+            toast(
               t('gui.plug.installed_ok', { name: entry.name, n: (r.mcp && r.mcp.tool_count) || 0 }),
             )
           }
         } else {
           if (state.prog && state.prog.id === entry.id) progDone(null)
-          if (!progShows(entry.id)) shell().toast(t('gui.plug.installed_conn', { name: entry.name }))
+          if (!progShows(entry.id)) toast(t('gui.plug.installed_conn', { name: entry.name }))
         }
       }
       set({ form: false, confirm: false })
@@ -358,7 +359,7 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
       pending.delete(entry.id)
       const err = msg(e)
       if (state.prog && state.prog.id === entry.id) progFail(err)
-      if (!progShows(entry.id)) shell().toast(t('gui.plug.op_failed', { err }))
+      if (!progShows(entry.id)) toast(t('gui.plug.op_failed', { err }))
       return source()
         .reload()
         .catch(() => {})
@@ -390,7 +391,7 @@ export function quickInstall(it: MarketItem): void {
     })
     .catch((e: unknown) => {
       set({ busy: null })
-      if (!isHandled(e)) shell().toast(t('gui.plug.op_failed', { err: msg(e) }))
+      if (!isHandled(e)) toast(t('gui.plug.op_failed', { err: msg(e) }))
       sync()
     })
 }
@@ -406,7 +407,7 @@ export function pendingFail(name: string, why: string): void {
   /* The cause travels with the failure: "the authorization window closed"
      tells the reader what to do differently on the retry. */
   if (state.prog && state.prog.id === name) progFail(why || '')
-  if (!progShows(name)) shell().toast(t('gui.plug.auth_fail_rm', { name: it ? it.name : name }))
+  if (!progShows(name)) toast(t('gui.plug.auth_fail_rm', { name: it ? it.name : name }))
   source()
     .remove(name)
     .catch(() => {})
@@ -425,11 +426,11 @@ export function remove(name: string, label: string): void {
       delete authWait[name]
       // Cancel/uninstall ends the install story outright.
       if (state.prog && state.prog.id === name) set({ prog: null })
-      shell().toast(t('gui.caps.removed_x', { name: label || name }))
+      toast(t('gui.caps.removed_x', { name: label || name }))
       drawerClosed()
     })
     .catch((e: unknown) => {
-      if (!isHandled(e)) shell().toast(t('gui.plug.op_failed', { err: msg(e) }))
+      if (!isHandled(e)) toast(t('gui.plug.op_failed', { err: msg(e) }))
     })
     .finally(() => {
       set({ busy: null })
@@ -503,7 +504,7 @@ export function onEvent(ev: PluginsEvent): void {
         // The install RPC reports its own outcome; only a later async
         // connect (the OAuth round-trip) announces from here.
         if (!inFlight && !progShows(ev.name)) {
-          shell().toast(
+          toast(
             t('gui.plug.installed_ok', { name: it ? it.name : ev.name, n: ev.tool_count || 0 }),
           )
         }
@@ -528,7 +529,7 @@ export function onEvent(ev: PluginsEvent): void {
     /* A background connect found this server unauthorized; say so where the
        reader can act on it -- the rows grow a "reopen" button off authWait. */
     if (!progShows(ev.server)) {
-      shell().toast(
+      toast(
         t(ev.interactive === false ? 'gui.plug.auth_needed' : 'gui.plug.auth_opened', {
           host: hostOf(ev.url),
           name: ev.server,
@@ -551,7 +552,7 @@ export function onEvent(ev: PluginsEvent): void {
       if (state.busy !== ev.server) pendingFail(ev.server, why)
       return
     }
-    shell().toast(why || t('gui.plug.auth_fail', { name: ev.server }))
+    toast(why || t('gui.plug.auth_fail', { name: ev.server }))
   }
   sync()
 }

@@ -11,7 +11,9 @@ import {
   setCurrent,
 } from '../../shell/session'
 
-import type { MenuItem, Shell, ToastAction } from '../../shell/bridge'
+import type { Shell } from '../../shell/bridge'
+import type { MenuItem } from '../../shell/menu'
+import type { ToastAction } from '../../shell/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
 
 /* The search term is the find row's, not the snapshot's, so the island reads it
@@ -19,7 +21,11 @@ import type { RailSnapshot, RailSource, SessRow } from './types'
    markup: this file asks what the LIST does with a term, and find.test.ts asks
    how the row produces one. */
 const found = vi.hoisted(() => ({ term: '' }))
+const toastWriter = vi.hoisted(() => ({ items: [] as Array<{ text: string; action?: ToastAction }> }))
 vi.mock('../../shell/find', () => ({ term: () => found.term }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string, action?: ToastAction) => { toastWriter.items.push({ text, action }) },
+}))
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -31,7 +37,6 @@ function row(over: Partial<SessRow> = {}): SessRow {
 interface Harness {
   state: RailSnapshot
   calls: Array<[string, unknown]>
-  menus: Array<Array<MenuItem | '-'>>
   toasts: Array<{ text: string; action?: ToastAction }>
 }
 
@@ -41,12 +46,10 @@ interface Harness {
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
-  const menus: Array<Array<MenuItem | '-'>> = []
   const toasts: Array<{ text: string; action?: ToastAction }> = []
+  toastWriter.items = toasts
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text, action) => toasts.push({ text, action }),
-    menuAt: (_x, _y, items) => menus.push(items),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: id => calls.push(['showPage', id]),
     openCron: () => calls.push(['openCron', null]),
@@ -71,7 +74,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     '<div id="moreFly" data-open="false"></div>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
-  return { state, calls, menus, toasts }
+  return { state, calls, toasts }
 }
 
 /* The installed source, for the cases that add a write verb to it. */

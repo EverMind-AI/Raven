@@ -19,8 +19,6 @@ function install(): void {
       key === 'gui.ctx.tip' && vars
         ? `context ${vars.used}/${vars.max} ${vars.pct}%`
         : key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
   }

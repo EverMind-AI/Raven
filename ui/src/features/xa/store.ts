@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
 
@@ -56,7 +57,7 @@ export function open(): void {
     /* Through `failure` like every other rejection here: the rpc client rejects
        with the error frame verbatim, and `String()` on that object is
        "[object Object]" -- not a hard-to-read reason but no reason at all. */
-    .catch((e: unknown) => shell().toast(t('gui.agent.failed', { detail: failure(e) })))
+    .catch((e: unknown) => toast(t('gui.agent.failed', { detail: failure(e) })))
 }
 
 export function close(): void {
@@ -97,7 +98,7 @@ export async function run(op: XaOp | 'probe', row?: XaRow, args?: XaActArgs): Pr
       }
     }
   } catch (e) {
-    shell().toast(t('gui.agent.failed', { detail: failure(e) }))
+    toast(t('gui.agent.failed', { detail: failure(e) }))
   }
   const landed: Partial<XaState> = { rows, epoch: state.epoch + 1 }
   if (renamed && state.sheet === row?.name) landed.sheet = renamed

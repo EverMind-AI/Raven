@@ -11,17 +11,6 @@
  * standalone, and a silent fallback would just move the failure downstream.
  */
 
-export interface ToastAction {
-  label: string
-  fn: () => void
-}
-
-export interface MenuItem {
-  label: string
-  fn: () => void
-  bad?: boolean
-}
-
 /* What the workspace panel's chrome (still legacy: the tab bar, the badge,
    the open/close buttons) currently shows. */
 export interface WsPanelView {
@@ -43,8 +32,6 @@ export interface Shell {
   /* `fallback` mirrors the legacy T(): what to show when the catalogue has no
      entry for the key (the connections form labels schema-declared fields). */
   T(key: string, vars?: Record<string, string | number>, fallback?: string): string
-  toast(text: string, action?: ToastAction): void
-  menuAt(x: number, y: number, items: Array<MenuItem | '-'>): void
   confirmAsk(title: string, body: string, label: string, fn: () => void): void
   showPage(id: string | null): void
   /* Grown by the islands. Optional, so fakes that predate a helper

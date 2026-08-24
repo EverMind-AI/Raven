@@ -7,7 +7,8 @@
  * paints the chosen model in its own tree.
  */
 
-import { shell, ds, t } from '../../shell/bridge'
+import { ds, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { ModelSource, Provider } from './types'
 
@@ -66,7 +67,7 @@ export function open(anchor?: HTMLElement | null, after?: () => void): void {
     .providers()
     .filter((p) => p.on && p.models.length)
   if (!authed.length) {
-    shell().toast(t('gui.picker.no_account'))
+    toast(t('gui.picker.no_account'))
     return
   }
   const host = anchor || document.getElementById('modelChip')
@@ -97,11 +98,11 @@ export async function choose(m: string): Promise<void> {
   after?.()
   try {
     await src.persist(m)
-    shell().toast(`已切换到 ${short(m)}`)
+    toast(`已切换到 ${short(m)}`)
   } catch (e) {
     setCurrent(prev)
     after?.()
-    shell().toast(`切换失败：${detail(e)}`)
+    toast(`切换失败：${detail(e)}`)
   }
 }
 

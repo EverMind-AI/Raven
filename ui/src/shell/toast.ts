@@ -1,6 +1,9 @@
 /* The transient notices appended to the page's standing #toasts host. */
 
-import type { ToastAction } from './bridge'
+export interface ToastAction {
+  label: string
+  fn: () => void
+}
 
 export function show(text: string, action?: ToastAction): void {
   const host = document.getElementById('toasts')
