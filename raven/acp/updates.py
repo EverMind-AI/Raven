@@ -104,6 +104,17 @@ MAX_RESULT_PREVIEW = 64 * 1024
 # that grows for the life of a connection whenever the runtime is busy.
 MAX_DEFERRED_ENDINGS = 8
 
+# Errors that end the SUBSCRIPTION, not just the turn. ``-32016`` is
+# ``SubscriptionCapacityExceededError``: the emitter sends it and then removes
+# the subscription, so it is the last frame this stream will ever carry. It
+# deliberately carries no ``turn_id`` -- its shape is pinned by
+# ``test_overflow_error_event_payload_shape`` -- which makes it invisible to turn
+# correlation, and a prompt waiting for a correlated ending would then wait for
+# something that can no longer be sent. Correlation exists to stop ANOTHER turn's
+# ending from answering this prompt; when the stream itself is gone there is no
+# other ending coming, so answering is the only truthful option left.
+STREAM_TERMINAL_ERROR_CODES = frozenset({-32016})
+
 
 @dataclass(frozen=True)
 class Translated:
@@ -464,6 +475,17 @@ def _event_turn_id(event: Any) -> str:
     return turn_id if isinstance(turn_id, str) else ""
 
 
+def _ends_the_stream(event: Any) -> bool:
+    """Whether this event is the last one its subscription can carry."""
+
+    if not isinstance(event, dict) or event.get("type") != "error":
+        return False
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("code") in STREAM_TERMINAL_ERROR_CODES
+
+
 def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     """A runtime notice. Only ``action_blocked`` reaches the wire at all.
 
@@ -739,6 +761,14 @@ class UpdateTranslator:
         # "mine" is the same defect as not looking at the id at all: the runtime
         # shares this lane (see ``_owns_lane``), and the notice shape carries no
         # id at all, so "absent" cannot mean "this turn's".
+        if _ends_the_stream(event):
+            # Answered rather than correlated, and answered as cancelled because
+            # that is what the spec has for a turn torn down before it finished.
+            # See ``STREAM_TERMINAL_ERROR_CODES``: the subscription is gone, so no
+            # correlated ending can follow, and holding out for one hangs the
+            # client's request for the life of the connection.
+            turn.settle("cancelled")
+            return
         event_turn_id = _event_turn_id(event)
         if turn.turn_id == "":
             # Told there is no id. No correlation is possible, so this behaves the
@@ -785,6 +815,7 @@ class UpdateTranslator:
 __all__ = [
     "KNOWN_EVENT_TYPES",
     "MAX_DEFERRED_ENDINGS",
+    "STREAM_TERMINAL_ERROR_CODES",
     "MAX_MEDIA_ITEMS",
     "MAX_RESULT_PREVIEW",
     "SIDE_CHANNEL_METHODS",

@@ -1684,6 +1684,34 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
 
         assert await future == "end_turn"
 
+    async def test_a_subscription_that_dies_answers_the_prompt(self):
+        """The hang the positive-match rule created, reproduced the way review
+        found it: through a real ``SubscriptionEmitter`` filled past capacity.
+
+        ``_close_overflow`` emits ``-32016`` and then removes the subscription, and
+        that error deliberately carries no ``turn_id`` -- its shape is pinned by
+        ``test_overflow_error_event_payload_shape``. Under correlation alone it
+        read as "not this turn" and was dropped, and because the stream was gone
+        no correlated ending could ever follow, so the prompt stayed unanswered
+        for the life of the connection. Correlation is there to stop another
+        turn's ending from answering this one; when the stream itself ends there
+        is no other ending coming."""
+        from raven.rpc.subscriptions import QUEUE_CAPACITY, SubscriptionEmitter
+
+        translator = UpdateTranslator(emit=lambda f: None)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        subscription_id = await emitter.register("acp:s1")
+        translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id=subscription_id))
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "mine")
+
+        for index in range(QUEUE_CAPACITY + 50):
+            await emitter.emit("acp:s1", {"type": "token.delta", "payload": {"text": f"x{index}"}})
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        assert await asyncio.wait_for(future, timeout=2) == "cancelled"
+
     async def test_the_held_endings_do_not_grow_without_bound(self):
         """The hold exists for one narrow window. A stream of foreign turns must
         not turn it into a leak that lives as long as the connection."""

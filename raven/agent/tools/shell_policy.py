@@ -116,32 +116,105 @@ class CommandDecision(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+# Shell operators, longest first so ``|&`` is not read as ``|`` then ``&``. Split
+# on the RAW command text rather than on tokens: ``shlex`` strips quote
+# provenance, so by the time a token says ``|`` there is no way left to tell the
+# pipeline operator from ``git -C '|' push``, whose repository directory is
+# literally named ``|``. Both used to segment identically, and the second one
+# published without asking.
+_OPERATORS = ("|&", "&&", "||", ";;", ";", "&", "|", "(", ")", "`", "\n")
+# ``{`` and ``}`` are reserved words rather than operators: they separate
+# commands only as whole words (``{ rm x; }``). A brace glued to other characters
+# is an ordinary argument, which is what ``find -exec rm {} \;`` and ``xargs
+# -I{}`` depend on.
+_WORD_OPERATORS = ("{", "}")
+_OPERATOR_ADJACENT = frozenset(" \t\r\n;&|()`")
+
+
+def _operator_at(command: str, index: int) -> str | None:
+    """The operator starting at ``index``, or ``None``.
+
+    Assumes the caller has established that ``index`` is outside quoting.
+    """
+
+    for operator in _OPERATORS:
+        if command.startswith(operator, index):
+            return operator
+    char = command[index]
+    if char in _WORD_OPERATORS:
+        before = command[index - 1] if index else " "
+        after = command[index + 1] if index + 1 < len(command) else " "
+        if before in _OPERATOR_ADJACENT and after in _OPERATOR_ADJACENT:
+            return char
+    return None
+
+
+def _split_on_operators(command: str) -> Iterator[str]:
+    """Yield the command's pieces, split at unquoted operators.
+
+    Quote state is tracked here and nowhere else, because this is the only place
+    that still has it. A single-quoted run is literal; inside double quotes a
+    backslash escapes; outside quotes a backslash escapes the next character. An
+    unterminated quote yields what there is, and the caller's own ``shlex`` pass
+    is what rejects it -- refusing here would make this function decide policy.
+    """
+
+    piece: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            piece.append(char)
+            if char == "\\" and quote == '"' and index + 1 < len(command):
+                piece.append(command[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+            piece.append(char)
+            index += 1
+            continue
+        if char == "\\" and index + 1 < len(command):
+            piece.append(char)
+            piece.append(command[index + 1])
+            index += 2
+            continue
+        operator = _operator_at(command, index)
+        if operator is not None:
+            text = "".join(piece).strip()
+            if text:
+                yield text
+            piece = []
+            index += len(operator)
+            continue
+        piece.append(char)
+        index += 1
+    text = "".join(piece).strip()
+    if text:
+        yield text
+
+
 def _command_segments(command: str) -> Iterator[list[str]]:
     """Yield compound shell commands as independently classified token lists.
 
-    This conservative lexical split catches deletion in common sequence,
-    conditional, and pipeline forms without pretending to evaluate expansions
-    or reproduce the full shell grammar.
+    A conservative lexical split that catches the common sequence, conditional
+    and pipeline forms without pretending to evaluate expansions or reproduce the
+    full shell grammar. The split itself happens on the raw text (see
+    :func:`_split_on_operators`); each piece is then tokenised on its own.
     """
 
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}`\n")
-    lexer.commenters = ""
-    # Newlines must remain visible as command boundaries. Quoted newlines are
-    # still returned inside their quoted token and therefore do not split it.
-    lexer.whitespace = " \t\r"
-    lexer.whitespace_split = True
-    segment: list[str] = []
-    for token in lexer:
-        # A run of newlines is a boundary however long it is; everything else
-        # has to be an operator by name.
-        if token and (token in _COMMAND_OPERATORS or set(token) == {"\n"}):
-            if segment:
-                yield segment
-                segment = []
-            continue
-        segment.append(token)
-    if segment:
-        yield segment
+    for piece in _split_on_operators(command):
+        lexer = shlex.shlex(piece, posix=True)
+        lexer.commenters = ""
+        lexer.whitespace_split = True
+        segment = list(lexer)
+        if segment:
+            yield segment
 
 
 def _embedded_shell_command(segment: list[str]) -> str | None:

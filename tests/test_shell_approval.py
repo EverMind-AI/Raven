@@ -749,6 +749,49 @@ class TestAGlobalOptionValueIsNotASubcommand:
     def test_a_runner_holding_a_power_command_is_still_refused(self, asking: ShellCommandPolicy) -> None:
         assert asking.evaluate("timeout 5 shutdown -h now") is CommandDecision.HARD_DENY
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            # A repository directory literally named ``|``. Review initialized one
+            # and confirmed ``git -C '|' status`` works, so this is a command a
+            # person can run, not a contrivance. Under the whole-token rule this
+            # segmented as [['git', '-C'], ['push', 'origin', 'main']]: the quoted
+            # argument read as a pipeline operator, and the piece holding ``push``
+            # started at a word that is not an executable.
+            "git -C '|' push origin main",
+            # zsh accepts ``|&`` and runs the right-hand side as the pipeline. It
+            # was on no operator list, so the whole thing stayed one token inside
+            # the ``-c`` string and nothing looked past it.
+            "zsh -c 'echo ignored |& git push origin main'",
+            "git -C '&&' push",
+            "sh -c 'true; git push origin main'",
+        ],
+    )
+    def test_a_quoted_operator_is_an_argument_and_a_real_one_is_a_boundary(
+        self, asking: ShellCommandPolicy, command: str
+    ) -> None:
+        """The reason segmentation now reads the raw text instead of tokens.
+
+        ``shlex`` strips quote provenance, so once ``git -C '|' push`` has been
+        tokenised there is no information left that distinguishes the argument
+        from the operator. No rule written over tokens can tell them apart; the
+        fix had to move to where the quoting is still visible.
+        """
+        assert asking.evaluate(command) is CommandDecision.REQUIRE_APPROVAL
+        assert asking.approval_reason(command) == "publish_command"
+
+    @pytest.mark.parametrize(
+        "command",
+        ["echo a|grep b", "make test && echo done", "echo '|' ", "echo 'a && b'"],
+    )
+    def test_the_quoting_rules_do_not_invent_boundaries_or_lose_them(
+        self, asking: ShellCommandPolicy, command: str
+    ) -> None:
+        """Both directions of the same scanner: a real operator still splits, and
+        a quoted one still does not, without either turning ordinary work into a
+        prompt."""
+        assert asking.evaluate(command) is CommandDecision.ALLOW
+
     def test_an_unknown_option_over_reads_rather_than_under_reads(self, asking: ShellCommandPolicy) -> None:
         """No table lists every option of every tool. An unconsumed value becomes
         a candidate word, which can only make the policy ask about more than it
