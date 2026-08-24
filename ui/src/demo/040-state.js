@@ -12,26 +12,7 @@ const CFG = {
 
 const stop_ = () => { timers.forEach(clearTimeout); timers = []; };
 const later = (ms, fn) => timers.push(setTimeout(fn, ms));
-/* Follow the stream only while the reader is at the bottom. Scrolling up to
-   reread must not be undone by the next token; wheel-up releases the anchor,
-   returning to the bottom re-arms it. (wheel, not scroll: the smooth scroll
-   we trigger ourselves fires scroll events mid-flight and would unstick.) */
-let stick = true;
-/* Instant, not smooth: a smooth scroll restarted by every token delta never
-   reaches the bottom — each assignment cancels the animation mid-flight. */
-/* Where transcript nodes land. Normally the chat column; while a subagent's
-   context is being drawn it is that panel's box instead, which is what lets
-   one renderer serve both -- a subagent's run is drawn by the very same code
-   as the main thread, not a lookalike. Only ever set around a SYNCHRONOUS
-   render, so a live event can never land in the wrong column. */
-let stageHost = null;
-const stageBox = () => stageHost || $('#stage');
-const down = () => {
-  /* Drawing into the panel must not yank the conversation to its tail. */
-  if (!stick || stageHost) return;
-  const s = $('#scroll');
-  s.scrollTo({ top: s.scrollHeight, behavior: 'instant' });
-};
+const down = () => RavenIslands.transcript.down();
 const sess = (id) => sessionRows().find((s) => s.id === id);
 
 /* ══ composer drafts ══════════════════════════════════════════════

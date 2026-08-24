@@ -21,14 +21,10 @@ window.RavenShell = {
   wsView: () => wsView(),
   wsPick: (tab) => wsPick(tab),
   agentStagePaint: (box, ctx, opts) => DS.agents.stagePaint?.(box, ctx, opts),
-  down: () => down(),
   attNotes: () => Object.values(I18N.ui['gui.att.note'] || {}),
   hunkFromEdit: (o, n) => hunkFromEdit(o, n),
   hunkFromWrite: (c) => hunkFromWrite(c),
   hunkFromUnified: (l) => hunkFromUnified(l),
-  noteRow: (label, detail) => noteRow(label, detail),
-  stick: () => stick,
-  setStick: (on) => { stick = on; },
   slashName: (id) => slashName(id),
   slashHelp: (id) => slashHelp(id),
   openCron: () => openCron(),
@@ -41,7 +37,6 @@ window.RavenShell = {
   appVersion: () => APP_VERSION,
   modKey: () => modKey(),
   isMac: () => isMac(),
-  dockLift: () => dockLift(),
   plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
 

@@ -6,6 +6,7 @@ import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn'
 import * as attachmentCache from '../../shell/attachment-cache'
+import * as tail from '../transcript/tail'
 
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -13,12 +14,16 @@ import type { Shell } from '../../shell/bridge'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const directNotes = vi.hoisted((): Array<[string, string]> => [])
+vi.mock('../transcript/mount', () => ({
+  note: (label: string, detail: string) => { directNotes.push([label, detail]) },
+}))
+
 interface Calls {
   sent: string[]
   halted: number
   notes: Array<[string, string]>
   toasts: string[]
-  stick: boolean
 }
 
 let lang = 'zh'
@@ -66,8 +71,9 @@ const DOCK = `
   </div>`
 
 function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; calls: Calls } {
+  directNotes.length = 0
   const calls: Calls = {
-    sent: [], halted: 0, notes: [], toasts: [], stick: true,
+    sent: [], halted: 0, notes: directNotes, toasts: [],
   }
   const fakeShell: Shell = {
     T: (key, vars) => {
@@ -78,12 +84,8 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    noteRow: (label, detail) => { calls.notes.push([label, detail]) },
-    stick: () => calls.stick,
-    setStick: (on) => { calls.stick = on },
     slashName: (id) => id.replace(/^gui\./, ''),
     slashHelp: (id) => `help for ${id}`,
-    down: () => {},
   }
   const source: ComposerSource = {
     meter: () => '',
@@ -141,6 +143,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   attachmentCache._resetForTests()
+  tail._resetForTests()
   localStorage.clear()
   turn._resetForTests()
   lang = 'zh'
@@ -413,9 +416,9 @@ describe('the live turn row', () => {
   })
 
   it('paints the meter from the source and shows the pill only away from the tail', () => {
-    const { calls } = wire({ meter: () => '3 calls' })
+    wire({ meter: () => '3 calls' })
     mountLive()
-    calls.stick = false
+    tail.setStuck(false)
     const sc = document.getElementById('scroll')!
     Object.defineProperty(sc, 'scrollHeight', { value: 900, configurable: true })
     Object.defineProperty(sc, 'clientHeight', { value: 300, configurable: true })
@@ -425,7 +428,7 @@ describe('the live turn row', () => {
     const pill = document.getElementById('backpill') as HTMLElement
     expect(pill.hidden).toBe(false)
     expect(pill.dataset.tip).toBe('回到底部')
-    calls.stick = true
+    tail.setStuck(true)
     act(() => { store.drawMeter() })
     expect(pill.hidden).toBe(true)
   })

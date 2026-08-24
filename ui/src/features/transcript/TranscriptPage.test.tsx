@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CARD as dagCARD } from '../dag/graph'
 import * as mount from './mount'
 import * as store from './store'
+import * as tail from './tail'
 import * as attachmentCache from '../../shell/attachment-cache'
 
 import type { Shell } from '../../shell/bridge'
@@ -37,7 +38,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    down: () => {},
     attNotes: () => ['[attachments]'],
     copyToClip: () => {},
     hunkFromEdit: (o, n) => ({ rows: [['del', o], ['add', n]], add: 1, del: 1 }),
@@ -84,6 +84,7 @@ const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
 
 beforeEach(() => {
   store._resetForTests()
+  tail._resetForTests()
   attachmentCache._resetForTests()
   PRODUCED.clear()
   opened.length = 0

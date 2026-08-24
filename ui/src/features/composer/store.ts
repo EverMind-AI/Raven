@@ -2,6 +2,8 @@ import { ds, shell, t } from '../../shell/bridge'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession } from '../../shell/session'
+import { note as transcriptNote } from '../transcript/mount'
+import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
@@ -223,7 +225,7 @@ export function pillPaint(): void {
   const pill = el('backpill')
   if (!sc || !pill) return
   const away = sc.scrollHeight - sc.scrollTop - sc.clientHeight > 120
-  const stuck = verb('stick')()
+  const stuck = tail.isStuck()
   pill.hidden = stuck || !away
   if (pill.hidden) return
   /* The offset must be current the moment it appears, not from whenever the
@@ -234,20 +236,20 @@ export function pillPaint(): void {
 }
 
 export function pillClick(): void {
-  verb('setStick')(true)
-  verb('down')()
+  tail.setStuck(true)
+  tail.down()
   pillPaint()
 }
 
 export function scrolled(): void {
   const sc = scroller()
-  if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4) verb('setStick')(true)
+  if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4) tail.setStuck(true)
   pillPaint()
 }
 
 export function wheeled(up: boolean): void {
   if (!up) return
-  verb('setStick')(false)
+  tail.setStuck(false)
   pillPaint()
 }
 
@@ -432,7 +434,7 @@ export function addFiles(files: ArrayLike<File>): void {
         })
         .catch((e: unknown) => {
           drop()
-          verb('noteRow')(t('gui.att.fail', { name: file.name }), failDetail(e))
+          transcriptNote(t('gui.att.fail', { name: file.name }), failDetail(e))
         })
     }
     reader.onerror = drop
@@ -505,7 +507,7 @@ export function fireSend(): void {
     /* Before the field is cleared, which is a change: the page layer ran this
        same check AFTER this function had already emptied the textarea, so a
        send refused for a still-uploading file took the typed message with it. */
-    shell().noteRow?.(t('gui.att.pending'), t('gui.att.pending_body', { n: pending }))
+    transcriptNote(t('gui.att.pending'), t('gui.att.pending_body', { n: pending }))
     return
   }
   let text = v
