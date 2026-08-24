@@ -26,6 +26,7 @@ several sockets share a dispatcher).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -225,19 +226,33 @@ async def build_rpc_stack(
         # turn wrote and has not persisted, and the stop releases the embedded
         # index lock the next process needs. Stopping without draining loses the
         # last turn's memory writes silently.
-        if backend_start is not None and not backend_start.done():
-            # Cancelled rather than awaited: start may take tens of seconds and
-            # teardown is on the exit path. ``stop`` is contractually safe after
-            # a failed start (MemoryBackend.stop cleans up partial-init state),
-            # so cancel-then-stop releases what a half-finished start created --
-            # while running the two concurrently would have stop racing it.
-            backend_start.cancel()
-            try:
+        if backend_start is not None:
+            # Awaited through, not cancelled, and not on a timer either.
+            # ``EverosBackend.start`` crosses
+            # ``asyncio.to_thread(_start_server_if_unlocked)``, and cancelling an
+            # asyncio task does not stop a worker thread that has already begun:
+            # the await raises while the worker goes on to write the config,
+            # spawn the server and write its pidfile -- after the stop that was
+            # meant to release the lock, and with the handover to ``on_proc``
+            # skipped, so the backend does not even hold the child it just
+            # started.
+            #
+            # Cancelling buys nothing back for it, either. Both shipped clients
+            # reach this through ``asyncio.run``, whose shutdown waits on the
+            # default executor anyway, so the process cannot exit before that
+            # worker finishes no matter what happens here. A cancel only moves
+            # the same unavoidable wait to after ``stop``, which is precisely
+            # where it does damage. The start is bounded by its own budget:
+            # ``ensure_everos_server`` polls health for ten seconds and gives up
+            # early on a child that has already died.
+            #
+            # Nothing but a cancellation can come out of this await:
+            # ``_start_backend`` logs and swallows every exception the start
+            # itself raises, which is what keeps a degraded memory path from
+            # failing the connection. The suppression is for a caller cancelling
+            # teardown, not for the start.
+            with contextlib.suppress(asyncio.CancelledError):
                 await backend_start
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                logger.exception("rpc: memory backend start failed during teardown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 await agent_loop.drain_backend_stores()

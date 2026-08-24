@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
@@ -79,6 +80,39 @@ class _GatedBackend(_FakeBackend):
         self.entered.set()
         await self.gate.wait()
         self.events.append("start-finish")
+        self.started = True
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+        self.stopped = True
+
+
+class _ThreadStartBackend(_FakeBackend):
+    """A backend whose ``start`` crosses a worker thread, as EverOS's does.
+
+    ``_GatedBackend`` above parks on an ``asyncio.Event`` and so cooperates with
+    cancellation -- which is exactly why it cannot cover this: the production
+    path is ``await asyncio.to_thread(_start_server_if_unlocked)``, and
+    cancelling the task leaves that thread running. The side effect here stands
+    in for what the real worker does after the point of no return: write the
+    config, spawn the server, write its pidfile.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = threading.Event()
+        self.entered = threading.Event()
+        self.events: list[str] = []
+
+    def _spawn(self) -> None:
+        self.events.append("thread-enter")
+        self.entered.set()
+        # Bounded so a failing test cannot hang the suite.
+        self.gate.wait(10)
+        self.events.append("thread-side-effect")
+
+    async def start(self) -> None:
+        await asyncio.to_thread(self._spawn)
         self.started = True
 
     async def stop(self) -> None:
@@ -464,9 +498,8 @@ async def test_teardown_settles_a_start_still_in_flight_before_it_stops(monkeypa
     task was fire-and-forget, so teardown drained, stopped and returned with
     start still inside ``backend.start()`` -- the service outliving the stack
     that reported itself closed, and holding the index lock the next process
-    needs. Cancel-then-stop is the order: ``MemoryBackend.stop`` is contractually
-    safe after a failed start, so it cleans up whatever a half-finished start
-    created."""
+    needs. Teardown now waits for the start it finds in flight, so a stop is
+    always a stop of something that finished starting."""
     from raven.cli import tui_commands
 
     backend = _GatedBackend()
@@ -476,18 +509,17 @@ async def test_teardown_settles_a_start_still_in_flight_before_it_stops(monkeypa
     stack = await bootstrap.build_rpc_stack(_sink)
     await asyncio.wait_for(backend.entered.wait(), timeout=5)
 
-    await stack.teardown()
+    teardown = asyncio.create_task(stack.teardown())
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert not teardown.done(), "teardown must not stop a backend that is still starting"
 
-    assert backend.events == ["start-enter", "stop"], backend.events
+    backend.gate.set()
+    await asyncio.wait_for(teardown, timeout=5)
+
+    assert backend.events == ["start-enter", "start-finish", "stop"], backend.events
     assert loop.drained is True
     assert backend.stopped is True
-
-    # Releasing the gate afterwards proves the task is settled and not merely
-    # unobserved: an uncancelled start would append start-finish here.
-    backend.gate.set()
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-    assert backend.events == ["start-enter", "stop"], backend.events
 
 
 async def test_teardown_releases_a_pending_question(monkeypatch) -> None:
@@ -520,3 +552,96 @@ async def test_teardown_releases_a_pending_question(monkeypatch) -> None:
     # nothing released it -- the cancellation would do the releasing.
     assert waiting.done(), "teardown must release the wait, not leave it to its own timeout"
     assert waiting.result() == "no", "a released wait fails safe to its default"
+
+
+async def test_teardown_waits_for_the_part_of_start_it_cannot_interrupt(monkeypatch) -> None:
+    """Cancelling settles the task, not the thread.
+
+    ``EverosBackend.start`` awaits ``asyncio.to_thread(_start_server_if_unlocked)``,
+    and cancelling an asyncio task does not stop a worker that is already inside
+    it. So teardown used to return -- through the stop that releases the index
+    lock -- while that worker went on to write the config, spawn the server and
+    write its pidfile. Worse, cancelling skips the handover to ``on_proc``, so the
+    backend does not even hold the child it just started, and nothing can clean
+    it up.
+    """
+    from raven.cli import tui_commands
+
+    backend = _ThreadStartBackend()
+    loop = _FakeLoop(backend=backend)
+    monkeypatch.setattr(tui_commands, "_build_tui_agent_loop", lambda: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    # Polled rather than waited on: ``threading.Event.wait`` blocks this event
+    # loop, and the loop is what has to run for ``to_thread`` to be scheduled at
+    # all -- so waiting here would deadlock the thing being waited for.
+    for _ in range(500):
+        if backend.entered.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert backend.entered.is_set(), "the worker never started"
+
+    teardown = asyncio.create_task(stack.teardown())
+    await asyncio.sleep(0.05)
+    assert not teardown.done(), "teardown must not return while the worker is mid-spawn"
+
+    backend.gate.set()
+    await asyncio.wait_for(teardown, timeout=10)
+
+    assert backend.events == ["thread-enter", "thread-side-effect", "stop"], backend.events
+
+
+async def test_cancelling_the_start_could_not_have_bought_an_earlier_exit(monkeypatch) -> None:
+    """Why the wait is not on a timer. Both shipped clients reach teardown
+    through ``asyncio.run``, whose shutdown waits on the default executor -- so a
+    worker mid-spawn holds the process open whether or not the task was
+    cancelled. Cancelling only moves that same unavoidable wait to after the
+    stop, which is the one place it does damage. Driven in a real subprocess,
+    because it is loop *shutdown* that is the subject and pytest's loop outlives
+    the test.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    program = textwrap.dedent(
+        """
+        import asyncio, threading, time
+
+        events = []
+        gate = threading.Event()
+
+        def spawn():
+            events.append("thread-enter")
+            time.sleep(0.3)
+            events.append("thread-side-effect")
+
+        async def start():
+            await asyncio.to_thread(spawn)
+
+        async def main():
+            task = asyncio.create_task(start())
+            await asyncio.sleep(0.05)
+            task.cancel()                      # the shape this test rejects
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            events.append("stop")
+
+        began = time.monotonic()
+        asyncio.run(main())
+        # asyncio.run has returned: loop shutdown waited for the worker anyway.
+        print(events, round(time.monotonic() - began, 2) >= 0.3)
+        """
+    )
+    proc = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=60)
+
+    assert proc.returncode == 0, proc.stderr
+    recorded, waited_anyway = proc.stdout.strip().rsplit(" ", 1)
+    # Both halves of the argument, from one run: the side effect landed *after*
+    # the stop -- the ordering the teardown above exists to prevent -- and the
+    # process still did not exit until the worker was done, so cancelling bought
+    # nothing but that ordering.
+    assert recorded == "['thread-enter', 'stop', 'thread-side-effect']", recorded
+    assert waited_anyway == "True", "the runner waited for the worker regardless, so the cancel saved nothing"
