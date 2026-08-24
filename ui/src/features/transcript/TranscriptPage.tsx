@@ -10,6 +10,7 @@ import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
 import * as store from './store'
+import * as tail from './tail'
 
 import type { DagNode } from '../dag/types'
 import type {
@@ -1105,7 +1106,7 @@ export function StageView({ lane }: { lane: Lane }): ReactElement {
   const req = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.scrollReq)
   /* Tail-follow after the commit, so the new height is the one measured. */
   useEffect(() => {
-    if (lane.main) shell().down?.()
+    if (lane.main) tail.down()
   }, [lane, req])
   return (
     <>

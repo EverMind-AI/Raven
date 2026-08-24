@@ -67,9 +67,8 @@ export interface Shell {
      paint -- so the optional call there is the guard, and the island never
      asks without a record anyway. */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
-  /* Transcript island verbs: the tail-follow and the diff builders the
+  /* Transcript island verbs: the attachment marker and the diff builders the
      workspace panel already owns. */
-  down?(): void
   attNotes?(): string[]
   hunkFromEdit?(oldText: string, newText: string): unknown
   hunkFromWrite?(content: string): unknown
@@ -80,9 +79,6 @@ export interface Shell {
      AND reached back into this island for the attachment tray. They are
      DS.composer.send / .stop now, so the island builds the message and the
      source decides what happens to it. */
-  noteRow?(label: string, detail: string): void
-  stick?(): boolean
-  setStick?(on: boolean): void
   slashName?(id: string): string
   slashHelp?(id: string): string
   /* Rail island verbs that still belong to page chrome. */
@@ -110,7 +106,6 @@ export interface Shell {
   isMac?(): boolean
   /* Republishes the offset the docked composer stands at; a panel drag moves
      the column the composer lives in. */
-  dockLift?(): void
   plugRedraw?(): void
   /* Settings-island verbs. Each optional for the same reason, and each
      published by one guarded line in ui/src/demo/155-bridge.js. */

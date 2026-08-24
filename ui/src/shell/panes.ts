@@ -11,7 +11,7 @@
  * component here to own.
  */
 
-import { shell } from './bridge'
+import { dockLift } from '../features/composer/store'
 import { sync } from './scrollbars'
 
 export type PaneName = 'rail' | 'ws'
@@ -87,7 +87,7 @@ export function gripDrag(el: HTMLElement, name: PaneName): void {
     const move = (ev: PointerEvent): void => {
       const d = ev.clientX - startX
       set(name, start + (p.edge === 'right' ? -d : d), false)
-      shell().dockLift?.()
+      dockLift()
     }
     const up = (): void => {
       el.removeEventListener('pointermove', move)

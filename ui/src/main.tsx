@@ -30,6 +30,7 @@ import * as skills from './features/skills/store'
 import * as subagents from './features/subagents/mount'
 import * as subagentsStore from './features/subagents/store'
 import * as transcript from './features/transcript/mount'
+import * as transcriptTail from './features/transcript/tail'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
 import { XaApp } from './features/xa/XaPage'
@@ -441,6 +442,9 @@ window.RavenIslands = {
     nudge: transcript.nudge,
     redraw: transcript.redraw,
     agentStage: transcript.agentStage,
+    down: transcriptTail.down,
+    isStuck: transcriptTail.isStuck,
+    setStuck: transcriptTail.setStuck,
   },
 }
 

@@ -1,29 +1,16 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { PANE, cssPx, gripDrag, install, load, paneMax, set } from './panes'
 
-import type { Shell } from './bridge'
+const lifted = vi.hoisted(() => ({ count: 0 }))
+vi.mock('../features/composer/store', () => ({
+  dockLift: () => { lifted.count += 1 },
+}))
 
 /* The width the grid refuses to take the chat below. A CSS token in the page,
    stated here because happy-dom loads no stylesheet. */
 const CHAT_MIN = 420
-
-function installShell(): { lifts: number } {
-  const seen = { lifts: 0 }
-  const fake: Shell = {
-    T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    dockLift: () => {
-      seen.lifts += 1
-    },
-  }
-  window.RavenShell = fake
-  return seen
-}
 
 function width(px: number): void {
   Object.defineProperty(window, 'innerWidth', { value: px, configurable: true })
@@ -38,7 +25,7 @@ function railBox(px: number): void {
 const grip = (id: string): HTMLElement => document.getElementById(id)!
 
 beforeEach(() => {
-  installShell()
+  lifted.count = 0
   localStorage.clear()
   width(1024)
   document.body.innerHTML =
@@ -48,10 +35,6 @@ beforeEach(() => {
   document.documentElement.style.setProperty('--chat-min', CHAT_MIN + 'px')
   document.documentElement.style.removeProperty(PANE.rail.v)
   document.documentElement.style.removeProperty(PANE.ws.v)
-})
-
-afterEach(() => {
-  delete window.RavenShell
 })
 
 describe('the pane ceiling', () => {
@@ -176,13 +159,12 @@ describe('dragging a grip', () => {
   })
 
   it('keeps the docked composer offset current through the drag', () => {
-    const lifts = installShell()
     const el = grip('railGrip')
     gripDrag(el, 'rail')
     down(el, 500)
     move(el, 520)
     move(el, 540)
-    expect(lifts.lifts).toBe(2)
+    expect(lifted.count).toBe(2)
   })
 
   it('stores the width once, on release, not per frame', () => {

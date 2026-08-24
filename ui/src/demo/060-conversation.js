@@ -66,7 +66,7 @@ function splitAtts(text) {
 function ask(text, when) {
   const ch = document.querySelector('.chat');
   if (ch) delete ch.dataset.fresh;
-  stick = true;                      // sending always snaps back to the tail
+  RavenIslands.transcript.setStuck(true);
   /* The bubble, its attachment chips and its footer are the island's. */
   RavenIslands.transcript.ask(text, when);
 }
