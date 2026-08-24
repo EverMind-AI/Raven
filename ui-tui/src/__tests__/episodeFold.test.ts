@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { FoldRow } from '../domain/episodeFold.js'
 
-import { foldRowsIntoEpisodes } from '../domain/episodeFold.js'
+import { callIntent, foldRowsIntoEpisodes } from '../domain/episodeFold.js'
 
 const row = (over: Partial<FoldRow> & Pick<FoldRow, 'role'>): FoldRow => ({ text: '', ...over })
 
@@ -135,5 +135,20 @@ describe('foldRowsIntoEpisodes', () => {
     const tool = msgs[0]!.episodes![0]!.tools[0]!
 
     expect(tool).toMatchObject({ ok: true, resultPreview: '[failed] not actually stripped here' })
+  })
+})
+
+describe('callIntent', () => {
+  it('reads the description claude code sends beside a command', () => {
+    expect(callIntent('{"command":"ls","description":"List the repo"}')).toBe('List the repo')
+  })
+
+  it('is empty for a call that carries no description', () => {
+    expect(callIntent('{"command":"ls"}')).toBe('')
+  })
+
+  it('is empty for arguments that are not an object', () => {
+    expect(callIntent('not json')).toBe('')
+    expect(callIntent('"a bare string"')).toBe('')
   })
 })

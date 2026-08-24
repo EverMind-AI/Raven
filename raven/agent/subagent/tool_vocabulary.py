@@ -3,8 +3,9 @@
 A delegated run's record carries the transport's own tool name: presentation is
 recoverable from provenance and provenance is not recoverable from
 presentation, and the record is what an extractor reads. The mapping into
-raven's names therefore happens here, on the way to a client, so the wire keeps
-the one vocabulary every renderer's verb table is keyed by.
+raven's names happens here, on the way to a client -- except for codex and
+claude_code, whose own vocabularies are kept on purpose, so a renderer answers
+with one of three verb tables now, keyed by whichever name it is given.
 
 These tables lived in ``acp_dialects`` and were applied when the record was
 written. They are not ACP's -- the main session log stores real raven calls
@@ -31,20 +32,9 @@ RAVEN_NAME = {
     "think": "think",
     "fetch": "web_fetch",
     "switch_mode": "switch_mode",
-    # claude-agent-acp's own tool names, which are finer than `kind`: it cannot
-    # tell `Glob` from `Grep`, and both are `kind: "search"`.
-    "Bash": "exec",
-    "BashOutput": "exec",
-    "Read": "read_file",
-    "Write": "write_file",
-    "Edit": "edit_file",
-    "NotebookEdit": "edit_file",
-    "Glob": "find",
-    "Grep": "grep",
-    "LS": "list_dir",
-    "WebFetch": "web_fetch",
-    "WebSearch": "web_search",
-    "Task": "spawn",
+    # claude-agent-acp's own tool names are deliberately NOT here. A claude_code
+    # row keeps them, so the transcript reads as a Claude Code conversation; the
+    # TUI's table in `ui-tui/src/domain/claudeCodeTools.ts` is keyed by them.
 }
 
 ARGUMENT_KEY = {
@@ -59,6 +49,20 @@ ARGUMENT_KEY = {
     "find": "pattern",
     "web_fetch": "url",
     "web_search": "query",
+    # The claude names, each mapped to the key its old RAVEN_NAME target
+    # resolved to, so dropping the rename changes the displayed name and
+    # nothing about the arguments. `Task` had no entry and gains none.
+    "Bash": "command",
+    "BashOutput": "command",
+    "Read": "path",
+    "Write": "path",
+    "Edit": "path",
+    "NotebookEdit": "path",
+    "LS": "path",
+    "Glob": "pattern",
+    "Grep": "pattern",
+    "WebFetch": "url",
+    "WebSearch": "query",
 }
 
 SUBJECT_KEYS = ("command", "path", "file_path", "abs_path", "filePath", "pattern", "query", "url", "prompt", "argument")

@@ -41,7 +41,14 @@ _Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this
 An entry in `CODEX_VERBS` (`ui-tui/src/domain/codexTools.ts`) giving one codex tool its
 folding style. The verb is codex's own name verbatim — only `unit` and `style` are the
 TUI's. Needed because codex rows deliberately keep codex's vocabulary instead of Raven's,
-so `OVERRIDES` cannot match them.
+so `OVERRIDES` cannot match them. Claude Verb Rule is the same construct for a claude_code
+row.
+
+**Claude Verb Rule**:
+An entry in `CLAUDE_VERBS` (`ui-tui/src/domain/claudeCodeTools.ts`) giving one Claude Code
+tool its folding style. The verb is Claude Code's own name verbatim — only `unit` and
+`style` are the TUI's. Needed because a claude_code row deliberately keeps Claude Code's
+vocabulary instead of Raven's, so `OVERRIDES` cannot match it either.
 
 **Detail Block**:
 A call's full argument and its output, rendered on a filled background (a `▏` rule below

@@ -1,6 +1,6 @@
 """claude-agent-acp: a precise tool name, and a result sent twice.
 
-Two things this adapter does that the spec does not describe:
+Three things this adapter does that the spec does not describe:
 
 - It names the tool it actually ran in ``_meta.claudeCode.toolName`` (``Bash``,
   ``Read``, ...). That is finer than ``kind``, which cannot tell ``Glob`` from
@@ -9,13 +9,17 @@ Two things this adapter does that the spec does not describe:
   ``content`` carries that same text wrapped in a markdown fence. The fence is
   for a client that renders markdown; a transcript row is not one, and the
   literal ```` ```console ```` was appearing in the rendered output.
+- It never emits a ``tool_call`` for ``TodoWrite`` or the Task tools. Their
+  state goes to a ``sessionUpdate: "plan"`` frame instead, so the plan row is
+  the only place they appear, and it is named for the tool that produced it.
 
 ``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0), and any
 other name is reported exactly as sent rather than checked against a list: the
 record keeps the transport's own vocabulary, so a tool this adapter adds or
-renames upstream is recorded for what it is without an entry anywhere. Mapping
-those names into raven's own happens at the read boundary
-(:mod:`raven.agent.subagent.tool_vocabulary`).
+renames upstream is recorded for what it is without an entry anywhere.
+Those names now reach a client unchanged: the read boundary renames only the
+ACP spec kinds, so a claude_code row is rendered under Claude Code's own
+vocabulary.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ def _unfence(text: str) -> str:
 
 class ClaudeCodeDialect(AcpDialect):
     key = "claude-agent-acp"
+    plan_tool_name = "TodoWrite"
 
     def tool_name(self, update: dict[str, Any]) -> str:
         named = _dict(_dict(update.get("_meta")).get("claudeCode")).get("toolName")

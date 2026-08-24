@@ -143,13 +143,16 @@ export function parseInput(input: string): Record<string, unknown> {
  * Get the filepath from the input arguments.
  * @param input
  * @returns The filepath, or ``undefined`` when ``input`` isn't yet a complete
- * JSON object carrying a non-empty ``file_path`` — a tool call's arguments
- * stream in as partial JSON, and a fragment of ``content`` must never pass for
- * a path.
+ * JSON object carrying a non-empty ``file_path`` or ``path`` — a tool call's
+ * arguments stream in as partial JSON, and a fragment of ``content`` must
+ * never pass for a path. ``file_path`` is the tool's own spelling; ``path`` is
+ * the subject key the read boundary promotes a claude_code row's input onto
+ * (``raven/agent/subagent/tool_vocabulary.py``), so both must resolve here.
  */
 export function tryGetFilePath(input: string): string | undefined {
-	const { file_path } = parseInput(input) as { file_path?: unknown };
-	return typeof file_path === 'string' && file_path.length > 0 ? file_path : undefined;
+	const { file_path, path } = parseInput(input) as { file_path?: unknown; path?: unknown };
+	const candidate = typeof file_path === 'string' && file_path.length > 0 ? file_path : path;
+	return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
 }
 
 /**
