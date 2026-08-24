@@ -769,6 +769,32 @@ class TestPrompt:
         validate_def("PromptResponse", response["result"])
         assert rig.stack.params_for("turn.send")["content"] == "hi"
 
+    async def test_a_prompt_after_an_overflow_resubscribes_before_running(self, rig):
+        """A session whose stream died is bound to no subscription. Its next
+        prompt must re-subscribe first, or the turn's events have no subscriber
+        left to deliver them and the prompt never answers."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+        session = rig.translator.get(session_id)
+        first_sub = session.subscription_id
+        # The overflow path released the binding (tested at the translator level);
+        # reproduce its result directly here.
+        session.subscription_id = None
+
+        task = asyncio.create_task(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": "hi"}]})
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+        assert session.subscription_id is not None and session.subscription_id != first_sub
+        assert sum(1 for name, _ in rig.stack.calls if name == "turn.subscribe") == 2
+
+        rig.translator.settle_turn(session_id, "end_turn")
+        response = await task
+
+        assert response["result"] == {"stopReason": "end_turn"}
+
     async def test_the_stop_reason_comes_from_the_event_stream(self, rig):
         """The whole point of the translator holding turn state: the reason is
         decided by what the runtime emitted, not by the handler."""

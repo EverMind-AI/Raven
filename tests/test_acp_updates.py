@@ -1711,6 +1711,28 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
             await asyncio.sleep(0)
 
         assert await asyncio.wait_for(future, timeout=2) == "cancelled"
+        # The stream is dead, not only the turn: a session left bound to the
+        # removed subscription would hang its next prompt, which now decides it
+        # must re-subscribe by this field being unset.
+        assert translator.get("acp:s1").subscription_id is None
+
+    async def test_an_overflow_with_no_open_prompt_still_kills_the_stream(self):
+        """Overflow can land while the subscription carries a runtime turn, with
+        no ACP prompt open at all. ``_deliver`` must still release the binding, or
+        the next prompt hangs on a subscription the emitter has already dropped."""
+        from raven.rpc.subscriptions import QUEUE_CAPACITY, SubscriptionEmitter
+
+        translator = UpdateTranslator(emit=lambda f: None)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        subscription_id = await emitter.register("acp:s1")
+        translator.add(AcpSession(session_id="acp:s1", session_key="acp:s1", cwd="/w", subscription_id=subscription_id))
+
+        for index in range(QUEUE_CAPACITY + 50):
+            await emitter.emit("acp:s1", {"type": "token.delta", "payload": {"text": f"x{index}"}})
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        assert translator.get("acp:s1").subscription_id is None
 
     async def test_the_held_endings_do_not_grow_without_bound(self):
         """The hold exists for one narrow window. A stream of foreign turns must

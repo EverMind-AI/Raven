@@ -438,6 +438,13 @@ class AcpMethods:
             # client asked for a turn on an empty prompt, and no turn ran.
             return {"stopReason": "end_turn"}
 
+        if session.subscription_id is None:
+            # The session's stream was closed out from under it (an overflow), so
+            # it is bound to no live subscription. Re-subscribe before the turn
+            # runs: a turn whose events have no subscriber left to deliver them is
+            # a prompt that never answers.
+            await self._rebind_subscription(session)
+
         try:
             future = self._translator.begin_turn(session.session_id)
         except TurnAlreadyRunningError as exc:
@@ -745,6 +752,16 @@ class AcpMethods:
         if not isinstance(subscription_id, str) or not subscription_id:
             raise AcpMethodError(protocol.INTERNAL_ERROR, "turn.subscribe returned no subscription")
         return subscription_id
+
+    async def _rebind_subscription(self, session: AcpSession) -> None:
+        """Open a fresh subscription for a session whose stream died.
+
+        The emitter closed the old subscription when it overflowed, so the session
+        is bound to nothing. This subscribes again and points the translator's
+        binding at the new stream.
+        """
+        subscription_id = await self._subscribe(session.session_key)
+        self._translator.bind_subscription(session.session_id, subscription_id)
 
     async def _call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Invoke a registered RPC method, raising its error as an ACP error.

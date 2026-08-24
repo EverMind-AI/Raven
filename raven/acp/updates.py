@@ -623,6 +623,19 @@ class UpdateTranslator:
         session.subscription_id = subscription_id
         self._by_subscription[subscription_id] = session
 
+    def _mark_stream_dead(self, session: AcpSession) -> None:
+        """Release a session's binding to a subscription the emitter has closed.
+
+        The emitter removes an overflowed subscription from its own indexes, but
+        that does not reach back here: ``AcpSession.subscription_id`` and the
+        ``_by_subscription`` map still name a stream that can no longer deliver.
+        The next prompt decides it must re-subscribe by this field being unset, so
+        the binding is dropped rather than left pointing at a corpse.
+        """
+        if session.subscription_id:
+            self._by_subscription.pop(session.subscription_id, None)
+        session.subscription_id = None
+
     def get(self, session_id: str) -> AcpSession | None:
         return self._by_session_id.get(session_id)
 
@@ -751,6 +764,24 @@ class UpdateTranslator:
         result = translate(event, cwd=session.cwd)
         for update in result.updates:
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
+        if _ends_the_stream(event):
+            # Answered rather than correlated, and answered as cancelled because
+            # that is what the spec has for a turn torn down before it finished.
+            # See ``STREAM_TERMINAL_ERROR_CODES``: the subscription is gone, so no
+            # correlated ending can follow, and holding out for one hangs the
+            # client's request for the life of the connection. The check runs
+            # before the turn bookkeeping below because a runtime turn can
+            # overflow while no ACP prompt is open, and the stream must still be
+            # marked dead for the next prompt.
+            turn = session.turn
+            if turn is not None:
+                turn.settle("cancelled")
+            # The emitter closed the subscription out from under this session, so
+            # the binding that is left points at a stream that can no longer
+            # deliver. A session left bound to it would hang its next prompt: the
+            # emitter has no subscriber left to push that prompt's events to.
+            self._mark_stream_dead(session)
+            return
         turn = session.turn
         if turn is None:
             return
@@ -761,14 +792,6 @@ class UpdateTranslator:
         # "mine" is the same defect as not looking at the id at all: the runtime
         # shares this lane (see ``_owns_lane``), and the notice shape carries no
         # id at all, so "absent" cannot mean "this turn's".
-        if _ends_the_stream(event):
-            # Answered rather than correlated, and answered as cancelled because
-            # that is what the spec has for a turn torn down before it finished.
-            # See ``STREAM_TERMINAL_ERROR_CODES``: the subscription is gone, so no
-            # correlated ending can follow, and holding out for one hangs the
-            # client's request for the life of the connection.
-            turn.settle("cancelled")
-            return
         event_turn_id = _event_turn_id(event)
         if turn.turn_id == "":
             # Told there is no id. No correlation is possible, so this behaves the
