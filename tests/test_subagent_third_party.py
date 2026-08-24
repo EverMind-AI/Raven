@@ -403,7 +403,7 @@ def test_human_failure_is_one_line_even_when_the_field_is_not() -> None:
 
 
 async def test_cli_backend_timeout_raises(tmp_path: Path) -> None:
-    be = CliAgentBackend(name="slow", command="sleep 5", timeout=1)
+    be = CliAgentBackend(name="slow", command="sleep 5", timeout=0.2)
     with pytest.raises(RuntimeError):
         await be.run("x", task_id="t5", workspace=tmp_path, executor=None)
 
@@ -2367,7 +2367,7 @@ async def test_cli_backend_without_timeout_waits(tmp_path: Path) -> None:
 
 async def test_cli_backend_with_timeout_still_kills(tmp_path: Path) -> None:
     # An explicit timeout remains an opt-in backstop.
-    be = CliAgentBackend(name="slow", command="sleep 5", timeout=1)
+    be = CliAgentBackend(name="slow", command="sleep 5", timeout=0.2)
     with pytest.raises(RuntimeError, match="timed out"):
         await be.run("x", task_id="t1", workspace=tmp_path, executor=None)
 
@@ -2392,7 +2392,7 @@ async def test_cli_backend_resume_timeout_leaves_registry_record_intact(tmp_path
         name="flaky",
         command="printf %s {agent_id}",
         resume_command="sleep 5",
-        timeout=1,
+        timeout=0.2,
         registry=reg,
     )
     with pytest.raises(RuntimeError, match="timed out"):

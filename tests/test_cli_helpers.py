@@ -75,7 +75,7 @@ def test_send_probe_timeout_raises(monkeypatch: pytest.MonkeyPatch, stub_load_co
     monkeypatch.setattr(_helpers, "make_provider", lambda _config: _SlowProvider())
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
-        send_probe(timeout_s=1)
+        send_probe(timeout_s=0.05)
 
 
 # ---------------------------------------------------------------------------

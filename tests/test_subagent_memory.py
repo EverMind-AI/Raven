@@ -232,7 +232,10 @@ async def test_no_join_key_writes_no_file_at_all() -> None:
 
 
 @pytest.mark.asyncio
-async def test_polling_stops_once_the_result_stops_growing() -> None:
+async def test_polling_stops_once_the_result_stops_growing(monkeypatch) -> None:
+    # The cost of this case was one real backoff step between the two polls, and
+    # the assertion is on how many polls happen, not on how far apart they are.
+    monkeypatch.setattr("raven.agent.subagent_memory._BACKOFF_S", (0.01, 0.02, 0.04))
     mock = _MockEverOS()
     mock.rows["episode"] = [{"id": "e1", "summary": "First."}]
     written, write = _sink()
@@ -344,7 +347,7 @@ async def test_a_stalled_look_is_cut_off_by_the_remaining_budget() -> None:
         calls["n"] += 1
         if calls["n"] == 1:
             return httpx.Response(200, json={"data": {"episodes": [{"id": "e1", "summary": "First."}]}})
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(2.0)
         return httpx.Response(200, json={"data": {"episodes": []}})
 
     written, write = _sink()
@@ -355,11 +358,14 @@ async def test_a_stalled_look_is_cut_off_by_the_remaining_budget() -> None:
             identity=_identity(agent_id=None),
             resolve_session_id=lambda: _key(),
             write=write,
-            budget_s=3.0,
+            budget_s=1.0,
             client=client,
         )
     elapsed = time.monotonic() - started
-    assert elapsed < 4.5, "a stalled look must not be allowed to run past the budget"
+    # 1s of slack over a 1s budget, not the 1.5s over 3s this replaced: the bound
+    # is on wall time, so the margin that matters is absolute, and scaling it down
+    # with the budget is what would turn a slow case into an intermittent one.
+    assert elapsed < 2.0, "a stalled look must not be allowed to run past the budget"
     payload = json.loads(written[0])
     assert payload["status"] == "settled"
     assert payload["memories"] == [{"type": "episode", "text": "First."}]

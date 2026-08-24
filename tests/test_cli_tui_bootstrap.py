@@ -357,7 +357,7 @@ def test_rpc_handshake_timeout_helper_real(tmp_path, monkeypatch):
     from raven.cli import tui_commands
 
     # Override default handshake timeout for fast test
-    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
 
     # Child that just sleeps without writing anything.
     exit_code = tui_commands.run_subprocess_with_rpc(
@@ -519,7 +519,7 @@ def test_rpc_socket_handshake_timeout_when_child_never_connects(tmp_path, monkey
     handshake deadline, parent must return exit code 3."""
     from raven.cli import tui_commands
 
-    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
 
     # `sleep` ignores the RAVEN_RPC_SOCKET env var — pure timeout path.
     exit_code = tui_commands.run_subprocess_with_rpc(
