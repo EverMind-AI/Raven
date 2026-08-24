@@ -1040,3 +1040,84 @@ def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None
 
     for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
         assert path in result.stdout, f"{path} was broken across a line wrap"
+
+
+def _search_config(tmp_path: Path, *, key: bool, off: bool) -> None:
+    """One cell of the web_search state matrix, persisted.
+
+    ``key`` and ``off`` are independent in production -- a deployment can set
+    neither, either, or both -- so they are independent here.
+    """
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    if key:
+        cfg.tools.web.search.api_key = "sk-serper"
+    if off:
+        cfg.tools.disabled_tools = ["web_search"]
+    save_config(cfg)
+
+
+def _switched_off_search(tmp_path: Path) -> None:
+    """A credentialed web_search that the deployment has switched off by name."""
+    _search_config(tmp_path, key=True, off=True)
+
+
+def test_doctor_says_a_capability_is_switched_off_rather_than_ticking_it(tmp_config: Path, tmp_path: Path) -> None:
+    """A key plus `disabledTools` used to print a green tick for a tool the
+    agent does not hold -- the report claiming a capability is on offer when
+    Raven has removed it."""
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+    # Not the unconfigured path: the key is set, and telling them to set it
+    # again is how a report sends someone in a circle.
+    assert "switch on:" not in result.stdout.split("web_search")[-1][:200]
+
+
+def test_the_switched_off_state_reaches_the_json_output(tmp_config: Path, tmp_path: Path) -> None:
+    _switched_off_search(tmp_path)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(result.stdout)
+
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+    assert row["configured"] is True, "the key is set; calling it unconfigured is the wrong repair"
+    assert row["disabled"] is True
+
+
+@pytest.mark.parametrize("key", [True, False], ids=["keyed", "keyless"])
+def test_the_off_switch_is_named_whether_or_not_a_key_is_set(key: bool, tmp_config: Path, tmp_path: Path) -> None:
+    """The cell the first version of this rendering got wrong.
+
+    With no key, the row used to print only the credential advice -- so a
+    deployer could set `tools.web.search.apiKey`, restart, and still not have
+    search, because `_apply_disabled_tools` removes it either way.
+    """
+    _search_config(tmp_path, key=key, off=True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "tools.disabledTools" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("key", "off", "configured", "disabled"),
+    [(True, True, True, True), (True, False, True, False), (False, True, False, True), (False, False, False, False)],
+    ids=["keyed-off", "keyed-on", "keyless-off", "keyless-on"],
+)
+def test_the_json_row_reports_the_two_states_independently(
+    key: bool, off: bool, configured: bool, disabled: bool, tmp_config: Path, tmp_path: Path
+) -> None:
+    """Both flags, all four combinations. Collapsing either into the other is
+    what made the report tell a deployer to set a key that was already set."""
+    _search_config(tmp_path, key=key, off=off)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["configured"] is configured
+    assert row["disabled"] is disabled

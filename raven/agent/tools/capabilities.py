@@ -150,13 +150,17 @@ def _resolved_media(cap: Capability, config: "Config") -> Any:
 
 
 def is_configured(cap: Capability, config: "Config") -> bool:
-    """Whether this capability would be offered to the model right now.
+    """Whether this capability's credential gate is satisfied.
 
     Delegates to the tool rather than deciding here. The rule for each family
     lives with the tool that owns the credential, so this module cannot become
     a second opinion about configured-ness -- which is the divergence
     ``providers.auth`` exists to prevent on the provider side, and the reason
     an AST invariant guards it there.
+
+    Not the same question as "is it offered", which :func:`is_offered` answers:
+    a deployment can switch a fully credentialed tool off. See
+    :func:`is_disabled`.
     """
     if cap.need is Need.NOTHING:
         return True
@@ -168,6 +172,29 @@ def is_configured(cap: Capability, config: "Config") -> bool:
     from raven.agent.tools.web import WebSearchTool
 
     return WebSearchTool.is_configured(config.tools.web.search.api_key)
+
+
+def is_disabled(cap: Capability, config: "Config") -> bool:
+    """Whether the deployment has switched this tool off by name.
+
+    A separate state from unconfigured, and reported as one: a switched-off
+    tool usually has its credential set, and calling it unconfigured would send
+    the deployer to set a key that is already there.
+
+    ``tools.disabledTools`` is applied after registration
+    (``AgentLoop._apply_disabled_tools``), so this is the only thing standing
+    between a satisfied credential gate and a tool the agent actually holds.
+    """
+    return cap.tool in (config.tools.disabled_tools or [])
+
+
+def is_offered(cap: Capability, config: "Config") -> bool:
+    """Whether the agent ends up holding this tool: credentialed and not off.
+
+    The predicate that matches the final registry, which is what a report about
+    available capabilities has to agree with.
+    """
+    return is_configured(cap, config) and not is_disabled(cap, config)
 
 
 def has_credential(cap: Capability, config: "Config") -> bool:
