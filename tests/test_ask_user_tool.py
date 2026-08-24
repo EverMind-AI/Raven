@@ -228,6 +228,29 @@ async def test_unanswered_question_names_the_recommended_option():
 
 
 @pytest.mark.asyncio
+async def test_recommendation_survives_a_duplicate_earlier_in_the_options():
+    """The index counts the options as submitted, so a duplicate ahead of it must
+    not shift which label the recommendation resolves to."""
+    tool, broker = _tool({"Ship?": "ship"})
+
+    await tool.execute(questions=[{"question": "Ship?", "options": ["a", "a", "b", "c"], "recommended": 2}])
+
+    assert broker.calls[0]["choices"] == ["a", "b", "c"]
+    assert broker.calls[0]["recommended"] == "b"
+
+
+@pytest.mark.asyncio
+async def test_recommendation_past_the_deduped_length_still_resolves():
+    """Dedup shortens the list, so an index valid against the submitted options
+    can fall outside it -- that must not silently drop the recommendation."""
+    tool, broker = _tool({"Ship?": "ship"})
+
+    await tool.execute(questions=[{"question": "Ship?", "options": ["a", "a", "b", "c"], "recommended": 3}])
+
+    assert broker.calls[0]["recommended"] == "c"
+
+
+@pytest.mark.asyncio
 async def test_out_of_range_recommended_index_is_ignored():
     tool, _ = _tool({})
 

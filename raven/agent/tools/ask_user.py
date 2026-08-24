@@ -67,7 +67,8 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
         seen.add(question)
         # A repeated label is a typo with one obvious reading, so drop it; a
         # repeated question would prompt the same human twice, so reject that.
-        options = _dedup([str(option) for option in entry.get("options") or []])
+        submitted = [str(option) for option in entry.get("options") or []]
+        options = _dedup(submitted)
         if len(options) == 1:
             return [], (
                 f'Error: ask_user rejected the call -- question "{question}" has exactly one '
@@ -76,8 +77,13 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
                 "needs two or more options, or none at all for a free-form answer."
             )
         pick = entry.get("recommended")
+        # The index counts the options as submitted, so resolve it before dedup
+        # narrows the list. Dedup keeps every distinct label, so the label this
+        # resolves to is still one of the choices the surface can mark.
         recommended = (
-            options[pick] if isinstance(pick, int) and not isinstance(pick, bool) and 0 <= pick < len(options) else ""
+            submitted[pick]
+            if isinstance(pick, int) and not isinstance(pick, bool) and 0 <= pick < len(submitted)
+            else ""
         )
         prepared.append(
             _Question(
