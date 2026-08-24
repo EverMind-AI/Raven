@@ -40,6 +40,7 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
   const shellCalls: Array<[string, unknown]> = []
   const source: WorkspaceSource = {
     shortPath: (p) => String(p).replace(/^\/repo\//, ''),
+    hostPlatform: () => 'mac',
     openPath: (p) => shellCalls.push(['openPath', p]),
     ...over,
   }
@@ -50,7 +51,6 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     copyToClip: (text, done) => shellCalls.push(['copyToClip', `${text} -> ${done}`]),
-    hostPlatform: () => 'mac',
     wsView: () => view,
     showWorkspace: (tab) => {
       shellCalls.push(['showWorkspace', tab])

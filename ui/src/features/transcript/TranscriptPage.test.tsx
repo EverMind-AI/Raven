@@ -36,7 +36,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    dur: (ms) => `${Math.round(ms / 1000)}s`,
     down: () => {},
     attNotes: () => ['[attachments]'],
     attImage: () => undefined,
@@ -120,7 +119,7 @@ describe('transcript island, history', () => {
     const fold = $('.tfold')
     expect(fold).toBeTruthy()
     expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.done')
-    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3s')
+    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3.0s')
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
     expect((step?.querySelector('.think') as HTMLElement).hidden).toBe(false)

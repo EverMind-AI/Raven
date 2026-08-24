@@ -8,7 +8,8 @@
  * from a test while it lived inside the renderer in the live layer.
  */
 
-import { t, verb } from '../../shell/bridge'
+import { t } from '../../shell/bridge'
+import { formatDuration } from '../../shell/duration'
 
 import type { DagNode, DagRun, DagLayout } from './types'
 
@@ -171,7 +172,5 @@ export function summary(d: DagRun): string {
 export function took(n: DagNode, now: number): string {
   if (!n.started_at) return ''
   const end = n.ended_at || now
-  /* The page's own formatter, not a second one: a duration in the graph has to
-     read the same as the duration on the tool row that spawned it. */
-  return verb('dur')(Math.max(end - n.started_at, 1000))
+  return formatDuration(Math.max(end - n.started_at, 1000))
 }

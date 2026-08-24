@@ -1,5 +1,7 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { formatDuration } from '../../shell/duration'
 import { current as currentSession } from '../../shell/session'
+import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
@@ -90,7 +92,7 @@ export function agentSpan(it: AgentRow): string {
   const t0 = it.started_at ? new Date(it.started_at).getTime() : 0
   if (!t0) return ''
   const t1 = it.ended_at ? new Date(it.ended_at).getTime() : Date.now()
-  return verb('dur')(Math.max(t1 - t0, 1000))
+  return formatDuration(Math.max(t1 - t0, 1000))
 }
 
 /* The anchor a still-running span carries so the clock keeps counting. */
@@ -119,7 +121,7 @@ export function agentCost(it: AgentRow): string {
   return it.tokens >= 1000 ? `${(it.tokens / 1000).toFixed(1)}k` : String(it.tokens)
 }
 
-export const plainTitle = (s: unknown): string => verb('plainTitle')(String(s ?? ''))
+export const plainTitle = stripTitle
 
 /* ── the list ─────────────────────────────────────────────────────────
    Refreshing is three separate judgements, all about what is on screen:

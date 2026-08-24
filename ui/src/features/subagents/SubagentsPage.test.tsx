@@ -28,8 +28,6 @@ function wire(source: AgentsSource): void {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     wsShows: (tab) => tab === 'agents',
-    dur: (ms) => `${Math.round(ms / 1000)}s`,
-    plainTitle: (s) => s.replace(/^\p{Extended_Pictographic}+\s*/u, ''),
     agentStagePaint: (box, ctx, opts) => {
       paints.push({ ctx, opts })
       box.appendChild(document.createElement('p'))
@@ -230,7 +228,7 @@ async function openRun(it: AgentRow): Promise<void> {
 describe('subagents island, the detail', () => {
   it('opens a spawn row into header plus stage, painted from the record', async () => {
     const ctx: AgentCtx = { status: 'ok', agent: 'openclaw', messages: [] }
-    const run: AgentRow = { id: 'a1', label: 'survey', status: 'ok', agent: null, started_at: iso(Date.now() - 9000), ended_at: iso(Date.now() - 2000), tokens: 40 }
+    const run: AgentRow = { id: 'a1', label: '🧭 survey', status: 'ok', agent: null, started_at: iso(Date.now() - 9000), ended_at: iso(Date.now() - 2000), tokens: 40 }
     /* An instance as well, because "back" now returns to the instance list. */
     rows([run], { context: async () => ctx, instances: async () => [inst({ handle: 'h1', status: 'completed' })] })
     await mount()

@@ -74,6 +74,8 @@ export type FtKids = FtEntry[] | { err: string }
    draw the real file view instead of the demo's empty note. */
 export interface WorkspaceSource {
   shortPath(p: string): string
+  /* The gateway host, not the browser: reveal and open-in-app run there. */
+  hostPlatform(): string
   canBrowse?: boolean
   list?(dir: string): Promise<{ root?: string; entries: FtEntry[] }>
   reveal?(path: string): Promise<unknown>

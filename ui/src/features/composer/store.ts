@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { formatDuration } from '../../shell/duration'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
@@ -63,7 +64,7 @@ function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
-export const durText = (ms: number): string => verb('dur')(ms)
+export const durText = formatDuration
 
 /* ── the field ────────────────────────────────────────────────────────── */
 
