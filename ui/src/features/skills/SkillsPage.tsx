@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { text as reachText } from '../../shell/reach'
 import * as store from './store'
 
 import type { SkillsState } from './store'
@@ -363,7 +364,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
   if (!hubId) {
     return (
       <>
-        {header([inst?.src, inst?.reach ? shell().reachText?.(inst.reach) : undefined])}
+        {header([inst?.src, inst?.reach ? reachText(inst.reach) : undefined])}
         {inst?.one ? (
           <div className="pmsec">
             <div className="cap">{t('gui.plug.sec_about')}</div>

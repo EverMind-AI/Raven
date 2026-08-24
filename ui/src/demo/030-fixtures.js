@@ -7,16 +7,6 @@
    Orthogonal to all three: `reach`, shown as a badge on every row.
    "Built in" does not mean "safe" -- exec ships with Raven and rewrites
    your disk -- so the badge is what answers "where does my data go".   */
-/* Vocabulary tables hold catalogue keys, not copy: they are built once at
-   load, before the language is known. */
-const REACH = {
-  local: { t: 'gui.reach.local', hint: 'gui.reach.local_hint' },
-  net:   { t: 'gui.reach.net',   hint: 'gui.reach.net_hint' },
-  auth:  { t: 'gui.reach.auth',  hint: 'gui.reach.auth_hint' }
-};
-const reachText = (r) => T(REACH[r] ? REACH[r].t : 'gui.reach.local');
-const reachHint = (r) => T(REACH[r] ? REACH[r].hint : 'gui.reach.local_hint');
-
 /* ── 工具: built in, fixed list, on/off only ───────────────────────── */
 const TOOL_GROUPS = [
   { id:'file', label:'gui.toolgrp.file', hint:'gui.toolgrp.file_hint' },

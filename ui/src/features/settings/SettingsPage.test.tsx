@@ -84,8 +84,6 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     openSet: () => shellCalls.push(['openSet', null]),
     closeSet: () => shellCalls.push(['closeSet', null]),
     openConn: () => shellCalls.push(['openConn', null]),
-    reachText: (reach) => `reach:${reach}`,
-    reachHint: (reach) => `hint:${reach}`,
   }
   window.RavenShell = fakeShell
   /* The danger card's button is a SESSION operation offered from this page, so
@@ -376,10 +374,10 @@ describe('settings island', () => {
     expect(cards[1]!.querySelector('.ch .d')!.textContent).toBe('gui.caps.tool_on {"on":1,"all":2}')
     expect([...cards[0]!.querySelectorAll('.fset .trow .nm span:first-child')].map((n) => n.textContent))
       .toEqual(['read', 'write'])
-    /* The badge takes both halves from the shell: the text and the tooltip. */
+    /* The badge takes both halves from the shared reach catalogue. */
     const badge = cards[1]!.querySelector<HTMLElement>('.trow .bdgs .kd')!
-    expect(badge.textContent).toBe('reach:net')
-    expect(badge.title).toBe('hint:net')
+    expect(badge.textContent).toBe('gui.reach.net')
+    expect(badge.title).toBe('gui.reach.net_hint')
   })
 
   /* The source row owns the live accessor that writes tools.disabledTools, so
