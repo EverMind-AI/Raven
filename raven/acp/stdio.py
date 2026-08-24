@@ -23,11 +23,22 @@ from typing import Any, BinaryIO
 from raven.agent.acp.protocol import AcpProtocolError, decode, encode
 
 # One ACP frame is not a line of text. ``session/prompt`` carries images and
-# embedded resources, and base64 inflates by about 4/3, so a 4 MB screenshot
-# arrives as a single frame of roughly 5.5 MB. The 1 MiB cap in
+# embedded resources, and base64 inflates by about 4/3. The 1 MiB cap in
 # ``rpc/server.py`` is sized for the TUI's own traffic and would reject input
 # this protocol is specified to accept.
-MAX_FRAME_BYTES = 8 * 1024 * 1024
+#
+# Sized off the ceiling the methods actually advertise, rather than off a
+# plausible screenshot: ``methods.MAX_IMAGE_BYTES`` is 20 MiB, which is 26.7 MiB
+# of base64, so anything smaller than that rejects at the frame boundary an
+# image the prompt handler would have accepted -- and the client is told its
+# request was malformed, which it was not. The remainder is the envelope and the
+# rest of the prompt's blocks.
+#
+# It is one image at the ceiling, not several: a prompt carrying two 20 MiB
+# images is refused here, deliberately, because the alternative is a cap that
+# cannot be stated and a buffer with no bound. The prompt-side limit is per
+# image, so the two ceilings meet at exactly one image.
+MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 _READ_CHUNK = 64 * 1024
 

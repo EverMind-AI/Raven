@@ -674,7 +674,7 @@ class TestConfigOptions:
         assert written["key"] == "model"
         assert written["value"] == "anthropic/opus-5"
 
-    async def test_the_session_key_is_passed_so_a_running_turn_can_refuse_it(self, rig):
+    async def test_the_session_key_is_passed_so_the_switch_stays_scoped_to_it(self, rig):
         await rig.handshake()
         session_id = await rig.new_session()
 
@@ -684,6 +684,37 @@ class TestConfigOptions:
         )
 
         assert rig.stack.params_for("config.set")["session_id"] == session_id
+
+    async def test_the_write_names_the_provider_the_runtime_requires(self, rig):
+        """``config.set`` refuses a model with no provider field -- a model id
+        does not say whose credential serves it -- so every switch through this
+        surface failed before applying anything. Asserted against the params the
+        real dispatcher contract requires, not just against the call happening.
+        """
+        await rig.handshake()
+        session_id = await rig.new_session()
+
+        await rig.call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"},
+        )
+
+        assert rig.stack.params_for("config.set")["provider"] == "anthropic"
+
+    async def test_the_option_is_read_back_for_the_session_that_asked(self, rig):
+        """The switch is session-scoped, so the catalogue has to be asked about
+        that session: answered from the installation default, a switch that had
+        already applied would be reported as though it had not."""
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.stack.calls.clear()
+
+        await rig.call(
+            "session/set_config_option", {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"}
+        )
+
+        asked = [params for method, params in rig.stack.calls if method == "model.options"]
+        assert asked and all(p.get("session_id") == session_id for p in asked), asked
 
     async def test_a_refusal_keeps_its_own_code(self, rig):
         """A typed refusal is something a client can act on. Flattening it to an

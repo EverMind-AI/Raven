@@ -34,21 +34,41 @@ def _raven_bin() -> Path:
     return Path(sys.executable).with_name("raven.exe" if sys.platform == "win32" else "raven")
 
 
-def _run(stdin_bytes: bytes, *, home: Path | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Run the binary against a throwaway agent home.
+def _isolated_env(home: Path | None = None) -> dict[str, str]:
+    """A child environment that cannot reach the developer's own installation.
 
-    The home matters. ``raven acp`` builds a full engine, which starts the cron
-    service and the memory backend against whatever ``RAVEN_HOME`` names -- so a
-    test that inherited the developer's would run their schedules and write into
-    their sessions. Pointed at a temporary directory instead, which also makes the
-    run reproducible: no provider is configured there, so the engine reports a
-    build error rather than depending on local credentials.
+    Three things, not one. ``RAVEN_HOME`` moves the runtime data -- ``raven acp``
+    builds a full engine, which starts the cron service and the memory backend
+    there, so a test that inherited the developer's would run their schedules and
+    write into their sessions. ``HOME`` moves the config file, which
+    ``get_config_path`` reads from ``Path.home()`` whatever ``RAVEN_HOME`` says.
+    And the provider keys are emptied, because a credential in the environment is
+    read before either of those.
+
+    Together they are what makes "no provider is configured, so the engine
+    reports a build error" true of the run rather than only of the temp
+    directory.
     """
+    from raven.providers.registry import PROVIDERS
+
+    root = Path(tempfile.mkdtemp(prefix="acp-smoke-"))
+    user = root / "user"
+    user.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["RAVEN_HOME"] = str(home or root / "raven")
+    env["HOME"] = str(user)
+    # ``Path.home()`` reads this one on Windows.
+    env["USERPROFILE"] = str(user)
+    env.update({spec.env_key: "" for spec in PROVIDERS if getattr(spec, "env_key", None)})
+    return env
+
+
+def _run(stdin_bytes: bytes, *, home: Path | None = None) -> subprocess.CompletedProcess[bytes]:
+    """Run the binary against a throwaway agent home and a throwaway HOME."""
     binary = _raven_bin()
     if not binary.exists():
         pytest.skip(f"raven console script not installed at {binary}")
-    env = dict(os.environ)
-    env["RAVEN_HOME"] = str(home or Path(tempfile.mkdtemp(prefix="acp-smoke-")) / "raven")
+    env = _isolated_env(home)
     return subprocess.run(
         [str(binary), "acp"],
         input=stdin_bytes,

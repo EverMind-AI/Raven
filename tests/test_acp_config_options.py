@@ -78,16 +78,38 @@ class TestTheOffer:
         validate_def("SessionConfigOption", option)
 
     async def test_the_caveats_are_where_a_person_will_read_them(self):
-        """The schema declares ``description`` as text for the client to display.
-        Raven has one model setting per installation, and the switch is refused
-        mid-turn -- neither is inferable from the protocol's shape."""
+        """The schema declares ``description`` as text for the client to display,
+        and what it has to say is the scope: the switch binds this session and
+        leaves the installation default alone, and a turn already running keeps
+        the model it started on. Neither is inferable from the protocol's shape,
+        and the earlier copy said the opposite of both."""
         call, _ = _caller()
 
         option = await model_option(call)
 
         assert option["description"] == MODEL_DESCRIPTION
-        assert "every session" in option["description"]
-        assert "while a turn is running" in option["description"]
+        assert "scoped to this session" in option["description"]
+        assert "during a turn is allowed" in option["description"]
+
+    async def test_the_current_value_is_read_back_for_the_session(self):
+        """The switch is session-scoped, so the value shown has to be the
+        session's. Asked without the id, ``model.options`` answers from the
+        installation default and a switch that applied would report as though it
+        had not."""
+        call, calls = _caller()
+
+        await model_option(call, session_id="acp:s1")
+
+        assert calls == [("model.options", {"session_id": "acp:s1"})]
+
+    async def test_with_no_session_yet_it_asks_for_the_installation_default(self):
+        """``initialize`` has no session to ask about, and sending a null id
+        would be a parameter the runtime has to reject or ignore."""
+        call, calls = _caller()
+
+        await model_option(call)
+
+        assert calls == [("model.options", {})]
 
     async def test_the_current_value_names_its_provider(self):
         """Stored the way every other surface stores it, so the value a client
@@ -302,17 +324,131 @@ class TestApplying:
 
         await set_model(call, session_id="acp:s1", value="anthropic/opus-5")
 
-        assert calls == [("config.set", {"key": "model", "value": "anthropic/opus-5", "session_id": "acp:s1"})]
+        assert calls == [
+            ("model.options", {"session_id": "acp:s1"}),
+            (
+                "config.set",
+                {
+                    "key": "model",
+                    "value": "anthropic/opus-5",
+                    "provider": "anthropic",
+                    "session_id": "acp:s1",
+                },
+            ),
+        ]
 
-    async def test_the_session_id_is_passed_so_a_running_turn_can_refuse_it(self):
-        """``config.set`` guards on ``is_session_busy``. Swapping the provider
-        under a running request is the failure that guard exists for, and this
-        layer must not route around it by omitting the id."""
+    async def test_without_the_provider_every_selection_is_refused(self):
+        """``config.set`` requires the provider as its own field -- a model id
+        does not name whose credential serves it -- so a call that sends only the
+        value fails before applying anything. Every model switch through this
+        surface did."""
+        call, calls = _caller()
+
+        await set_model(call, session_id="acp:s1", value="anthropic/opus-5")
+
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied and applied[0].get("provider"), "the write must name a provider"
+
+    async def test_the_provider_is_looked_up_rather_than_split_off_the_value(self):
+        """A gateway serving a vendor's already-qualified id is the case the
+        runtime's separate field exists for: ``openrouter`` offering
+        ``anthropic/claude-haiku-4-5`` bills OpenRouter, and splitting the string
+        would have named Anthropic and spent a credential nobody chose."""
+        catalogue = {
+            "model": "openrouter/x",
+            "provider": "openrouter",
+            "providers": [
+                {"slug": "openrouter", "authenticated": True, "models": ["anthropic/claude-haiku-4-5"]},
+            ],
+        }
+        call, calls = _caller(catalogue)
+
+        await set_model(call, session_id="acp:s1", value="anthropic/claude-haiku-4-5")
+
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied[0]["provider"] == "openrouter"
+
+    async def test_a_tie_goes_to_the_provider_already_in_use(self):
+        """Two providers can offer the same option value. Of the two, the one the
+        session is already running on is the credential the person picked."""
+        catalogue = {
+            "model": "anthropic/claude-haiku-4-5",
+            "provider": "anthropic",
+            "providers": [
+                {"slug": "openrouter", "authenticated": True, "models": ["anthropic/claude-haiku-4-5"]},
+                {"slug": "anthropic", "authenticated": True, "models": ["claude-haiku-4-5"]},
+            ],
+        }
+        call, calls = _caller(catalogue)
+
+        await set_model(call, session_id="acp:s1", value="anthropic/claude-haiku-4-5")
+
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied[0]["provider"] == "anthropic"
+
+    async def test_a_model_no_provider_offers_is_refused_rather_than_guessed(self):
+        """Inventing a provider here would spend a credential the person never
+        chose, so a value this catalogue cannot place is refused instead."""
+        call, calls = _caller()
+
+        with pytest.raises(ValueError):
+            await set_model(call, session_id="acp:s1", value="nobody/serves-this")
+
+        assert [method for method, _ in calls] == ["model.options"], "nothing was applied"
+
+    async def test_the_current_selection_needs_no_search(self):
+        """Re-picking the model already in use is a real click, and the catalogue
+        already names its provider -- so it is answered from there rather than
+        found again in the group list, which a hand-configured model would not
+        appear in at all."""
+        catalogue = {"model": "some-vendor/exotic-1", "provider": "some-vendor", "providers": []}
+        call, calls = _caller(catalogue)
+
+        await set_model(call, session_id="acp:s1", value="some-vendor/exotic-1")
+
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied[0]["provider"] == "some-vendor"
+
+    async def test_an_unreachable_catalogue_refuses_rather_than_writes(self):
+        """The lookup is the only source of the provider, so losing it has to stop
+        the write: applying without one raises inside the runtime, and applying
+        with a guess spends a credential nobody chose."""
+        call, calls = _caller(error=RuntimeError("provider registry is unreachable"))
+
+        with pytest.raises(ValueError):
+            await set_model(call, session_id="acp:s1", value="anthropic/opus-5")
+
+        assert [method for method, _ in calls] == ["model.options"]
+
+    async def test_a_malformed_catalogue_entry_is_skipped_not_trusted(self):
+        """The catalogue crosses an RPC boundary, so its shape is checked rather
+        than assumed. A junk entry must not become the provider a switch bills."""
+        catalogue = {
+            "model": "anthropic/sonnet-5",
+            "provider": "anthropic",
+            "providers": [
+                "not-a-dict",
+                {"slug": "", "authenticated": True, "models": ["opus-5"]},
+                {"slug": "groq", "authenticated": True, "models": [None, "opus-5"]},
+            ],
+        }
+        call, calls = _caller(catalogue)
+
+        await set_model(call, session_id="acp:s1", value="groq/opus-5")
+
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied[0]["provider"] == "groq"
+
+    async def test_the_session_id_is_passed_so_the_switch_stays_scoped_to_it(self):
+        """``config.set`` with a session_id binds that session and leaves
+        ``agents.defaults`` alone. Omitting it would widen a per-session option
+        into an installation-wide one."""
         call, calls = _caller()
 
         await set_model(call, session_id="acp:busy", value="anthropic/opus-5")
 
-        assert calls[0][1]["session_id"] == "acp:busy"
+        applied = [params for method, params in calls if method == "config.set"]
+        assert applied[0]["session_id"] == "acp:busy"
 
     @pytest.mark.parametrize("value", [None, "", 5, [], {"model": "x"}])
     async def test_an_unusable_value_is_refused_before_the_write(self, value):

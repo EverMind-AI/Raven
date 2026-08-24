@@ -270,7 +270,7 @@ class AcpMethods:
         # Offered at creation so a client can put a model picker in the session
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
-        options = await self._config_options()
+        options = await self._config_options(session.session_key)
         if options:
             result["configOptions"] = options
         return result
@@ -415,11 +415,17 @@ class AcpMethods:
             await set_model(self._call, session_id=session.session_key, value=params.get("value"))
         except ValueError as exc:
             raise AcpMethodError(protocol.INVALID_PARAMS, str(exc), {"field": "value"}) from exc
-        return {"configOptions": await self._config_options()}
+        return {"configOptions": await self._config_options(session.session_key)}
 
-    async def _config_options(self) -> list[dict[str, Any]]:
-        """Every configuration option this agent exposes, currently one."""
-        option = await model_option(self._call)
+    async def _config_options(self, session_id: str | None = None) -> list[dict[str, Any]]:
+        """Every configuration option this agent exposes, currently one.
+
+        ``session_id`` is threaded through so the model's ``currentValue`` is the
+        one this session runs on: the switch is session-scoped, so answering from
+        the installation default would report a change that had already applied
+        as though it had not.
+        """
+        option = await model_option(self._call, session_id=session_id)
         return [] if option is None else [option]
 
     async def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:

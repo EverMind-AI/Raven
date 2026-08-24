@@ -296,6 +296,66 @@ class TestReadFrames:
         assert frames == []
         assert errors == []
 
+    async def test_an_image_at_the_advertised_ceiling_fits_through_framing(self):
+        """The two caps have to be one decision. ``session/prompt`` advertises a
+        20 MiB image, and base64 makes that 26.7 MiB on the wire: a frame cap
+        below it rejects, as malformed, a request the prompt handler would have
+        accepted -- and the client is told its own frame was bad. Measured
+        through ``read_frames`` rather than compared as two constants, because
+        the envelope is part of what has to fit.
+        """
+        import base64
+
+        from raven.acp.methods import MAX_IMAGE_BYTES
+
+        payload = base64.b64encode(b"\xff" * MAX_IMAGE_BYTES).decode("ascii")
+        frame = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session/prompt",
+                "params": {
+                    "sessionId": "acp:1",
+                    "prompt": [{"type": "image", "mimeType": "image/png", "data": payload}],
+                },
+            }
+        ).encode("utf-8")
+        assert len(frame) > MAX_IMAGE_BYTES, "base64 has to have inflated it, or this proves nothing"
+
+        frames, errors = await _collect(frame + b"\n")
+
+        assert errors == [], "an image at the documented ceiling is not a malformed frame"
+        assert [f["id"] for f in frames] == [1]
+
+    async def test_a_second_image_at_the_ceiling_is_refused_at_the_frame(self):
+        """The other half of the same decision, stated rather than discovered: the
+        prompt limit is per image and this cap is per frame, so they meet at
+        exactly one image. Two is refused here, with the answer and the
+        resynchronisation every oversized frame gets."""
+        import base64
+
+        from raven.acp.methods import MAX_IMAGE_BYTES
+
+        block = {
+            "type": "image",
+            "mimeType": "image/png",
+            "data": base64.b64encode(b"\xff" * MAX_IMAGE_BYTES).decode("ascii"),
+        }
+        frame = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session/prompt",
+                "params": {"sessionId": "acp:1", "prompt": [block, block]},
+            }
+        ).encode("utf-8")
+
+        frames, errors = await _collect(frame + b'\n{"jsonrpc":"2.0","id":2}\n')
+
+        assert [f["id"] for f in frames] == [2], "the frame after the oversized one was lost"
+        assert len(errors) == 1
+        assert errors[0]["error"]["code"] == INVALID_REQUEST
+
 
 class TestInvalidUtf8:
     async def test_invalid_utf8_is_reported_rather_than_substituted(self):

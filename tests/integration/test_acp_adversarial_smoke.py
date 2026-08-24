@@ -12,6 +12,14 @@ reproducible, and it puts the "a turn could not start" path -- which must still
 answer with a stop reason rather than an error -- on the happy path of the test
 instead of behind a credential.
 
+Isolating it takes three things, not one. ``RAVEN_HOME`` moves only tracing and
+runtime data; ``get_config_path`` reads ``Path.home() / ".raven/config.json"``
+whatever it says, and a provider key in the environment is read before either.
+With only ``RAVEN_HOME`` set, this file loaded the operator's own configuration,
+sent its ``hello`` prompt to a real provider, and hung until the case timed out
+-- a test that advertises itself as credential-free spending somebody's key, and
+answering differently on every machine.
+
 Marked ``integration`` because it spawns the binary.
 """
 
@@ -28,11 +36,36 @@ from tests.acp_stub_client import raven_binary, stub_client
 pytestmark = pytest.mark.integration
 
 
+def _provider_env_keys() -> tuple[str, ...]:
+    """Every environment variable a provider would read a credential from.
+
+    Read off the registry rather than listed here, so a provider added later is
+    isolated by the same fixture instead of quietly re-arming this file.
+    """
+    from raven.providers.registry import PROVIDERS
+
+    return tuple(sorted({spec.env_key for spec in PROVIDERS if getattr(spec, "env_key", None)}))
+
+
 @pytest.fixture
 def home(tmp_path):
     if not raven_binary().exists():
         pytest.skip(f"raven console script not installed at {raven_binary()}")
-    return {"RAVEN_HOME": str(tmp_path / "home")}
+    root = tmp_path / "home"
+    user = tmp_path / "user"
+    user.mkdir()
+    env = {
+        "RAVEN_HOME": str(root),
+        # What actually moves the config file. USERPROFILE alongside it because
+        # that is the one ``Path.home()`` reads on Windows.
+        "HOME": str(user),
+        "USERPROFILE": str(user),
+    }
+    # Emptied rather than left alone: a key in the parent's environment reaches
+    # the child whatever the config file says, and this suite's contract is that
+    # no turn here can reach a provider.
+    env.update({key: "" for key in _provider_env_keys()})
+    return env
 
 
 @pytest.fixture
@@ -121,16 +154,15 @@ class TestSessionRefusals:
         agent home is *inside* the work tree -- so a session rooted here would
         commit provider keys into a shadow repository.
 
-        The path comes from the configuration rather than from a temporary
-        directory because ``RAVEN_HOME`` does not move the workspace in this
-        repo: it steers tracing and the terminal's runtime root only. Pointing
-        the guard at an invented home would test nothing, so the case uses the
-        home the agent under test actually has. Nothing is created either way --
-        the refusal happens before a session exists.
+        The path is derived from the child's own ``HOME``, not from this
+        process's configuration. ``workspace_path`` defaults to
+        ``$HOME/.raven/workspace``, so the isolated home the fixture hands the
+        child *is* an ancestor of the agent home the child will refuse for --
+        while reading it from ``load_config()`` here would name the operator's
+        directory, which the child no longer has and would not refuse. Nothing is
+        created either way: the refusal happens before a session exists.
         """
-        from raven.config import load_config
-
-        ancestor = str(load_config().workspace_path.parent)
+        ancestor = home["HOME"]
 
         async with stub_client(env=home) as client:
             await client.handshake()
