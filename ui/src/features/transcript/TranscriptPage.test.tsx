@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CARD as dagCARD } from '../dag/graph'
 import * as mount from './mount'
 import * as store from './store'
+import * as attachmentCache from '../../shell/attachment-cache'
 
 import type { Shell } from '../../shell/bridge'
 import type { ProseTarget } from '../../shell/prose'
@@ -38,7 +39,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     showPage: () => {},
     down: () => {},
     attNotes: () => ['[attachments]'],
-    attImage: () => undefined,
     copyToClip: () => {},
     hunkFromEdit: (o, n) => ({ rows: [['del', o], ['add', n]], add: 1, del: 1 }),
     hunkFromWrite: (c) => ({ rows: [['add', c]], add: 1, del: 0 }),
@@ -84,6 +84,7 @@ const $$ = (sel: string): Element[] => [...document.querySelectorAll(sel)]
 
 beforeEach(() => {
   store._resetForTests()
+  attachmentCache._resetForTests()
   PRODUCED.clear()
   opened.length = 0
   wire()
@@ -98,6 +99,15 @@ afterEach(() => {
 const iso = (ms: number): string => new Date(ms).toISOString()
 
 describe('transcript island, history', () => {
+  it('renders a freshly uploaded image from the shared preview cache', () => {
+    attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
+    act(() => {
+      mount.history([{ role: 'user', text: 'look\n\n[attachments]\n- uploads/shot.png' }])
+    })
+    expect($<HTMLImageElement>('.ask .shot')?.src).toBe('data:image/png;base64,eA==')
+    expect($('.ask .achip')).toBeNull()
+  })
+
   it('reads a stored turn as segments: ask, folded step with thought and call, answer', () => {
     const t0 = Date.now() - 60000
     act(() => {

@@ -49,7 +49,6 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     menuAt: (_x, _y, items) => menus.push(items),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: id => calls.push(['showPage', id]),
-    dropDraft: id => calls.push(['dropDraft', id]),
     openCron: () => calls.push(['openCron', null]),
     navState: () => ({ pages: [], btnOf: () => undefined })
   }
@@ -122,6 +121,7 @@ afterEach(() => {
   cleanup()
   sessionReset()
   found.term = ''
+  localStorage.clear()
 })
 
 describe('rail island', () => {
@@ -359,6 +359,7 @@ describe('rail island', () => {
      of the local work -- no splice, no undo, no moving off the row. */
   it('hands the delete to a source that can do it', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+    localStorage.setItem('raven.gui.drafts', JSON.stringify({ b: { t: 'keep', at: 1 } }))
     const gone: string[] = []
     src().remove = (s: SessRow) => gone.push(s.id)
     const host = mount()
@@ -366,15 +367,16 @@ describe('rail island', () => {
     expect(gone).toEqual(['b'])
     expect(screen.getByText('second task')).toBeTruthy()
     expect(h.toasts.find(x => x.action)).toBeUndefined()
-    expect(h.calls.find(c => c[0] === 'dropDraft')).toBeUndefined()
+    expect(JSON.parse(localStorage.getItem('raven.gui.drafts') || '{}').b.t).toBe('keep')
   })
 
   it('deletes locally when no source can, and restores on undo', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+    localStorage.setItem('raven.gui.drafts', JSON.stringify({ b: { t: 'discard', at: 1 } }))
     const host = mount()
     const del = rowItems(host, 'second task').find(x => x !== '-' && x.bad) as MenuItem
     act(() => del.fn())
-    expect(h.calls).toContainEqual(['dropDraft', 'b'])
+    expect(JSON.parse(localStorage.getItem('raven.gui.drafts') || '{}').b).toBeUndefined()
     expect(sessionCurrent()).toBe('a')
     expect(h.calls).toContainEqual(['openSession', 'a'])
     expect(screen.queryByText('second task')).toBeNull()

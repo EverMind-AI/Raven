@@ -180,7 +180,7 @@ function liveSend(text) {
     turnOwner = sessionCurrent();
     // The composer was owned by 'new' until this point; keep later keystrokes
     // filed under the session that just came into being.
-    if (draftOwner === 'new') draftOwner = sessionCurrent();
+    claimDraft(sessionCurrent());
     titleFromFirstMessage(text);
     sessionDraw();
     await subscribe(s.id);

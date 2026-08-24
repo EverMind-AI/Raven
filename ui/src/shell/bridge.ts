@@ -67,10 +67,9 @@ export interface Shell {
      paint -- so the optional call there is the guard, and the island never
      asks without a record anyway. */
   agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
-  /* Transcript island verbs: the tail-follow, the attachment image bytes,
-     the lightbox, and the diff builders the workspace panel already owns. */
+  /* Transcript island verbs: the tail-follow and the diff builders the
+     workspace panel already owns. */
   down?(): void
-  attImage?(path: string): string | undefined
   attNotes?(): string[]
   hunkFromEdit?(oldText: string, newText: string): unknown
   hunkFromWrite?(content: string): unknown
@@ -84,16 +83,9 @@ export interface Shell {
   noteRow?(label: string, detail: string): void
   stick?(): boolean
   setStick?(on: boolean): void
-  /* The draft debounce, kept whole: the composer parks 250ms after a
-     keystroke and drops the parked copy the moment the text is sent. */
-  draftTouch?(): void
-  draftDrop?(): void
-  draftPark?(): void
-  attImageSet?(path: string, url: string): void
   slashName?(id: string): string
   slashHelp?(id: string): string
-  /* Rail island verbs that still belong to page chrome or draft storage. */
-  dropDraft?(id: string): void
+  /* Rail island verbs that still belong to page chrome. */
   openCron?(): void
   /* What markNew needs of the chrome's page registry: the NAV_OF keys and the
      button a page lights up. The More rows are not in here -- the nav flyout

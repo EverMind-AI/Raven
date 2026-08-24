@@ -35,55 +35,7 @@ const down = () => {
 const sess = (id) => sessionRows().find((s) => s.id === id);
 
 /* ══ composer drafts ══════════════════════════════════════════════
-   Unsent text belongs to the session it was typed in. One textarea is shared
-   by every session, so switching without parking the text carried a
-   half-written message into the next conversation -- where the next Enter
-   would have sent it. Keyed by session id ('new' while a task has no id yet)
-   and mirrored to localStorage, so a reload (the upgrade flow forces one)
-   does not eat the draft either. */
-const DRAFT_KEY = 'raven.gui.drafts';
-const DRAFT_MAX = 30;
-let draftOwner = null;
-let draftTick = null;
-
-function draftsRead() {
-  try {
-    const o = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-    return o && typeof o === 'object' ? o : {};
-  } catch { return {}; }
-}
-function draftsWrite(all) {
-  const keys = Object.keys(all);
-  if (keys.length > DRAFT_MAX) {
-    keys.sort((a, b) => (all[a].at || 0) - (all[b].at || 0))
-      .slice(0, keys.length - DRAFT_MAX)
-      .forEach((k) => delete all[k]);
-  }
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(all)); } catch { /* quota or private mode */ }
-}
-/* Park under the session that owned the composer while the text was typed,
-   never under the one being opened. */
-function parkDraft() {
-  const key = draftOwner || sessionCurrent() || 'new';
-  const text = $('#ta').value;
-  const all = draftsRead();
-  if (text.trim()) all[key] = { t: text, at: Date.now() };
-  else delete all[key];
-  draftsWrite(all);
-}
-function loadDraft(id) {
-  draftOwner = id || 'new';
-  const el = $('#ta');
-  el.value = (draftsRead()[draftOwner] || {}).t || '';
-  taFit();
-  goState();
-}
-function dropDraft(id) {
-  const all = draftsRead();
-  delete all[id || 'new'];
-  draftsWrite(all);
-}
-
+   Storage and ownership live in RavenIslands.composer. */
 /* ══ confirm dialog ═══════════════════════════════════════════════ */
 let cfFn = null;
 function confirmAsk(title, body, label, fn) {
@@ -110,7 +62,8 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    retire a sheet keep calling these by name. */
 const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
   approveSheet, clarifySheet, drawQueue: queueDraw, queuePush, queueShift,
-  queueClear, queueSnapshot, queueRestore, turn } = RavenIslands.composer;
+  queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
+  claimDraft, turn } = RavenIslands.composer;
 const { current: modelCurrent, setCurrent: modelSet } = RavenIslands.model;
 /* Bound at the shared top level because the live parts run in the IIFE nested
    below it. The writers themselves stay in the modern bundle. */
