@@ -60,8 +60,6 @@ function install(providers: OnboardProvider[] = [connected, keyed], over: Partia
   }
   const shell: Shell = {
     T: (key, vars) => (vars?.err ? `${key}:${vars.err}` : key),
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {}
   }

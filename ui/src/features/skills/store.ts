@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
 
@@ -159,7 +160,7 @@ export function fetchDetail(hubId: string): void {
   source()
     .detail(hubId)
     .then((d) => set({ details: { ...state.details, [hubId]: d } }))
-    .catch((e: unknown) => shell().toast(t('gui.hub.err', { err: errText(e) })))
+    .catch((e: unknown) => toast(t('gui.hub.err', { err: errText(e) })))
 }
 
 export function install(it: HubItem): void {
@@ -200,7 +201,7 @@ export function removeInstalled(c: InstalledSkill): void {
         it.installed = false
         it.installed_name = ''
       }
-      shell().toast(t('gui.caps.removed_x', { name: c.name }))
+      toast(t('gui.caps.removed_x', { name: c.name }))
       closeDrawer()
     })
     .catch(ignoreHandled)

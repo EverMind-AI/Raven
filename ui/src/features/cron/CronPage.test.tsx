@@ -45,8 +45,6 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
   const shellCalls: Array<[string, unknown]> = []
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     /* Confirms immediately: the dialog itself is legacy chrome, not island. */
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),

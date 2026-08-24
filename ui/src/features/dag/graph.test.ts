@@ -12,8 +12,6 @@ import type { DagNode, DagRun } from './types'
 beforeEach(() => {
   const shell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

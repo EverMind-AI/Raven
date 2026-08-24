@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ModelPickerApp } from './ModelPicker'
 import * as store from './store'
@@ -9,6 +9,11 @@ import type { Shell } from '../../shell/bridge'
 import type { ModelSource, Provider } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { toastWriter.items.push(text) },
+}))
 
 const PROVIDERS: Provider[] = [
   { id: 'minimax', name: 'MiniMax', models: ['minimax-m3', 'minimax-m2'], on: true },
@@ -28,6 +33,7 @@ interface Harness {
 
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
   const h: Harness = { toasts: [], persisted: [], local: [], settings: 0, after: 0, model: store.current }
+  toastWriter.items = h.toasts
   let last = store.current()
   store.subscribe(() => {
     const next = store.current()
@@ -45,8 +51,6 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
   }
   const shell: Shell = {
     T: (key) => key,
-    toast: (text) => h.toasts.push(text),
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

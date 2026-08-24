@@ -1,4 +1,5 @@
 import { ds, shell } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
 
@@ -53,7 +54,7 @@ export async function refresh(): Promise<void> {
     const rows = await source().rows()
     set({ rows, loaded: true, rev: state.rev + 1 })
   } catch (e) {
-    shell().toast(`加载失败：${(e as Error).message || e}`)
+    toast(`加载失败：${(e as Error).message || e}`)
     set({ loaded: true, rev: state.rev + 1 })
   }
 }

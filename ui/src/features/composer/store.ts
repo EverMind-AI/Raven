@@ -2,6 +2,7 @@ import { ds, shell, t } from '../../shell/bridge'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
@@ -548,7 +549,7 @@ export function pickFiles(open: () => void): void {
     return
   }
   const hint = source().pickHint
-  if (hint) shell().toast(hint)
+  if (hint) toast(hint)
 }
 
 /* ── the field's own keyboard and input ───────────────────────────────── */

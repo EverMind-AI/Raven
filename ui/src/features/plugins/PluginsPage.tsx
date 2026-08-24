@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } 
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
@@ -643,7 +644,7 @@ function InstallControls({
       if (!form[k]) missing = true
     })
     if (missing) {
-      shell().toast(t('gui.plug.need_key'))
+      toast(t('gui.plug.need_key'))
       return null
     }
     return form

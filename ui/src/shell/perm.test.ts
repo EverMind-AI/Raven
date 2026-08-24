@@ -33,8 +33,6 @@ function markup(): void {
 beforeEach(() => {
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

@@ -17,8 +17,6 @@ const opened: Array<[string, string]> = []
 function wire(): void {
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

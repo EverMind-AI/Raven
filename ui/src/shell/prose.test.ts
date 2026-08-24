@@ -23,8 +23,6 @@ function wire(over: Partial<ProseSource> = {}): { asked: string[] } {
   }
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }

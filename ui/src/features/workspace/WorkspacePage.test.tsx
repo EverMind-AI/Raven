@@ -11,6 +11,14 @@ import type { WorkspaceSource, WsChange, WsShared } from './types'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const writers = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { writers.calls.push(['toast', text]) },
+}))
+vi.mock('../../shell/menu', () => ({
+  show: (_x: number, _y: number, items: unknown) => { writers.calls.push(['menuAt', items]) },
+}))
+
 function change(over: Partial<WsChange> = {}): WsChange {
   return {
     key: '/repo/src/app.py',
@@ -38,6 +46,7 @@ function emptyWs(over: Partial<WsShared> = {}): WsShared {
 function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
   store.restore(ws)
   const shellCalls: Array<[string, unknown]> = []
+  writers.calls = shellCalls
   const source: WorkspaceSource = {
     shortPath: (p) => String(p).replace(/^\/repo\//, ''),
     hostPlatform: () => 'mac',
@@ -46,8 +55,6 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
   }
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     wsView: () => view,

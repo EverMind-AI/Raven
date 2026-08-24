@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { XaApp } from './XaPage'
 import * as store from './store'
@@ -10,6 +10,11 @@ import type { XaRow, XaSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { toastWriter.items.push(text) },
+}))
 
 function row(over: Partial<XaRow> = {}): XaRow {
   return {
@@ -49,10 +54,9 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
     ...over,
   }
   const toasts: string[] = []
+  toastWriter.items = toasts
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => toasts.push(text),
-    menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     closeDetail: () => {

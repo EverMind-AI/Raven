@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { show as toast } from '../../shell/toast'
 
 import type { ProviderOp, SettingsSnapshot, SettingsSource, UsageStats } from './types'
 
@@ -90,7 +91,7 @@ export async function refresh(): Promise<void> {
     const snap = await source().load()
     set({ snap, epoch: state.epoch + 1 })
   } catch (e) {
-    shell().toast(`加载失败：${(e as Error).message || String(e)}`)
+    toast(`加载失败：${(e as Error).message || String(e)}`)
   }
 }
 

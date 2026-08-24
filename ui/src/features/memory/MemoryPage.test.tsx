@@ -40,8 +40,6 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
   const shellCalls: Array<[string, unknown]> = []
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     closeDetail: () => {

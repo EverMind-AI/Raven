@@ -2,6 +2,7 @@ import { ds, shell } from '../../shell/bridge'
 import { dropDraft } from '../composer/store'
 import { mark as navMark } from '../../shell/navfly'
 import { setCurrent } from '../../shell/session'
+import { show as toast } from '../../shell/toast'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -235,7 +236,7 @@ export function archive(s: SessRow): void {
   if (index >= 0) rows.splice(index, 1)
   const sh = shell()
   draw()
-  sh.toast(sh.T('gui.sess.archived', { title: s.title }), {
+  toast(sh.T('gui.sess.archived', { title: s.title }), {
     label: sh.T('gui.undo'),
     fn: () => {
       const current = source().snapshot().rows
@@ -278,7 +279,7 @@ export function remove(s: SessRow): void {
     }
   }
   draw()
-  sh.toast(shell().T('gui.sess.deleted_x', { title: s.title }), {
+  toast(shell().T('gui.sess.deleted_x', { title: s.title }), {
     label: shell().T('gui.undo'),
     fn: () => {
       const bin = undoBin as { s: SessRow; at: number }

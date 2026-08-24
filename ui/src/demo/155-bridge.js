@@ -6,8 +6,6 @@
    ahead of need. */
 window.RavenShell = {
   T: (key, vars, fallback) => T(key, vars, fallback),
-  toast: (text, action) => toast(text, action),
-  menuAt: (x, y, items) => menuAt(x, y, items),
   confirmAsk: (title, body, label, fn) => confirmAsk(title, body, label, fn),
   showPage: (id) => showPage(id),
   useInTask: (key, name) => useInTask(key, name),

@@ -11,6 +11,11 @@ import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './typ
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { toastWriter.calls.push(['toast', text]) },
+}))
+
 function item(over: Partial<MarketItem> = {}): MarketItem {
   return {
     id: 'websearch',
@@ -80,10 +85,9 @@ function install(
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
+  toastWriter.calls = shellCalls
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, its) => shellCalls.push(['menuAt', its]),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),

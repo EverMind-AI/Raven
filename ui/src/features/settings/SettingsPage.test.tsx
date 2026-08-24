@@ -11,6 +11,11 @@ import type { SettingsSnapshot, SettingsSource } from './types'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
+vi.mock('../../shell/toast', () => ({
+  show: (text: string) => { toastWriter.calls.push(['toast', text]) },
+}))
+
 function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
     raw: {
@@ -70,10 +75,9 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
+  toastWriter.calls = shellCalls
   const fakeShell: Shell = {
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    toast: (text) => shellCalls.push(['toast', text]),
-    menuAt: (_x, _y, items) => shellCalls.push(['menuAt', items]),
     /* Confirms immediately: the dialog itself is legacy chrome, not island. */
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),

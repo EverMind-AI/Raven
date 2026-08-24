@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
+import { show as menuAt } from '../../shell/menu'
+import { show as toast } from '../../shell/toast'
 import {
   FT, FT_SHOW_MAX, FTW_KEY, RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
   ftAbs, ftJoin, ftKindOf, ftLoad, ftLoadVisible, ftMatches, ftOpenTo, ftQuery, ftReveal,
@@ -8,7 +10,7 @@ import {
 } from './store'
 import * as store from './store'
 
-import type { MenuItem } from '../../shell/bridge'
+import type { MenuItem } from '../../shell/menu'
 import type { WsChange, WsFile, WsShared } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent, RefObject } from 'react'
 
@@ -151,7 +153,7 @@ function ChgRow({ c }: { c: WsChange }): JSX.Element {
           onClick={(e) => {
             e.stopPropagation()
             const r = e.currentTarget.getBoundingClientRect()
-            shell().menuAt(r.left, r.bottom + 6, chgItems(c))
+            menuAt(r.left, r.bottom + 6, chgItems(c))
           }}
         >
           {'⋯'}
@@ -246,7 +248,7 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
   const hand = (app: string | null): void => {
     void openInApp(f.path, app).then(
       () => {},
-      (e: unknown) => shell().toast(((e as Error) && (e as Error).message) || String(e)),
+      (e: unknown) => toast(((e as Error) && (e as Error).message) || String(e)),
     )
   }
   const pick = (e: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -263,7 +265,7 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
       label: t('gui.ws.open_with_default'),
       fn: () => { setAppFor(f.path, null); hand(null) },
     })
-    shell().menuAt(r.left, r.bottom + 6, items)
+    menuAt(r.left, r.bottom + 6, items)
   }
   return (
     <div className="binote">
@@ -363,7 +365,7 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
             aria-label={t('gui.ws.copy_path_do')}
             onClick={() => {
               if (navigator.clipboard) {
-                navigator.clipboard.writeText(f.path).then(() => shell().toast(t('gui.ws.copy_path')), () => {})
+                navigator.clipboard.writeText(f.path).then(() => toast(t('gui.ws.copy_path')), () => {})
               }
             }}
           >
@@ -413,7 +415,7 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
           aria-label={revealTip}
           onClick={() => {
             store.source().reveal?.(f.path).then(() => {}, (e: unknown) =>
-              shell().toast(((e as Error) && (e as Error).message) || String(e)))
+              toast(((e as Error) && (e as Error).message) || String(e)))
           }}
         >
           <Ico d={ICO.reveal} />

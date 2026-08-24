@@ -8,8 +8,6 @@ import type { Shell } from './bridge'
 function wire(): void {
   const shell: Shell = {
     T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
   }
