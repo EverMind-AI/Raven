@@ -34,7 +34,7 @@ function parkTurn() {
        here, a turn ten minutes in read "2s" after a round trip through
        another session. */
     liveT0: RavenIslands.composer.liveAnchor(),
-    ws: { changes: WS.changes, cmds: WS.cmds, urls: WS.urls, file: WS.file, turn: WS.turn, unseen: WS.unseen },
+    ws: RavenIslands.workspace.snapshot(),
     /* Asked for, not read off the panel's own bindings: this layer parks the
        pane state, it does not own it. */
     pane: wsView(),
@@ -61,7 +61,7 @@ function restoreTurn(pk) {
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
   RavenIslands.composer.setLiveAnchor(pk.liveT0 || 0);
-  Object.assign(WS, pk.ws);
+  RavenIslands.workspace.restore(pk.ws);
   wsRestore(pk.pane.tab, pk.pane.picked);
   const s = sess(sessionCurrent());
   if (s && s.status === 'run') s.status = null;

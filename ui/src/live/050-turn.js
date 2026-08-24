@@ -59,7 +59,7 @@ function onEvent(ev) {
     if (p.content) touchSession(sessionCurrent(), p.content);
     turnOwner = sessionCurrent();
     turn.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter();
-    WS.turn += 1;
+    RavenIslands.workspace.advanceTurn();
   } else if (ev.type === 'turn.started') {
     /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
        The spine suppresses message.start for these, so this event is the whole
@@ -70,7 +70,7 @@ function onEvent(ev) {
        the lane. `delegated` carries the identity AND the injected text, the
        same identity a stored entry carries on replay, so the two views draw
        the same row at the same place. */
-    WS.turn += 1;
+    RavenIslands.workspace.advanceTurn();
     if (p.delegated) {
       const d = p.delegated;
       const isDag = d.kind === 'dag';
@@ -117,7 +117,7 @@ function onEvent(ev) {
        display string: edit_file's old_text/new_text is the diff. */
     if (typeof wsOnTool === 'function') wsOnTool(p.name, p.arguments, false);
   } else if (ev.type === 'tool.complete') {
-    if (p.metadata) RavenIslands.transcript.delivery(WS.turn, p.metadata);
+    if (p.metadata) RavenIslands.transcript.delivery(RavenIslands.workspace.currentTurn(), p.metadata);
     const o = live.open.get(p.tool_call_id);
     if (!o) return;
     live.open.delete(p.tool_call_id);
@@ -260,7 +260,7 @@ function finishTurn(usage) {
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
-  RavenIslands.transcript.artifacts(WS.turn);
+  RavenIslands.transcript.artifacts(RavenIslands.workspace.currentTurn());
   turn.dispatch({ type: 'idle' });
   const inTok = usage.input_tokens || usage.prompt_tokens || 0;
   /* The window fill is the turn's prompt, not the running total. */

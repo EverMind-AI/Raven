@@ -46,17 +46,19 @@ export interface WsFile {
   seq?: number
 }
 
-/* The shared workspace record. Declared by the demo shell (WS in
-   demo/100-workspace.js) and mutated by every layer -- the tool hooks, the
-   turn counter, the session parker -- so the island reads it through
-   RavenShell.wsState() and never replaces the object. */
-export interface WsShared {
+/* The workspace state parked with an in-flight conversation. Arrays stay
+   shared with the detached turn while it is away; restore replaces the five
+   fields on the store's stable record. */
+export interface WorkspaceSnapshot {
   changes: WsChange[]
   urls: WsUrl[]
   file: WsFile | null
   turn: number
   unseen: number
 }
+
+/* The stable workspace record owned by the island store. */
+export type WsShared = WorkspaceSnapshot
 
 export interface FtEntry {
   name: string

@@ -30,7 +30,7 @@ const livePathOf = (s) => {
   const t = String(s).trim().replace(/:\d+(?::\d+)?$/, '');
   if (!t || /\s/.test(t)) return null;
   if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(t)) return relToWorkspace(t) || t;
-  const hit = WS.changes.find((c) => c.key === t || wsShortPath(c.key) === t);
+  const hit = RavenIslands.workspace.changes().find((c) => c.key === t || wsShortPath(c.key) === t);
   return hit ? hit.key : null;
 };
 

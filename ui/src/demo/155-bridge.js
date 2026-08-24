@@ -20,7 +20,6 @@ window.RavenShell = {
   lang: () => LANG,
   hostPlatform: () => HOST_PLATFORM,
   wsView: () => wsView(),
-  wsState: () => WS,
   wsPick: (tab) => wsPick(tab),
   dur: (ms) => dur(ms),
   plainTitle: (s) => plainTitle(s),

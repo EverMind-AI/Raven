@@ -61,7 +61,6 @@ export interface Shell {
   lang?(): string
   hostPlatform?(): string
   wsView?(): WsPanelView
-  wsState?(): unknown
   wsPick?(tab: string): void
   dur?(ms: number): string
   plainTitle?(s: string): string

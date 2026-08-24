@@ -5,7 +5,7 @@ import * as agents from '../subagents/mount'
 import { ds, shell, t } from '../../shell/bridge'
 import { md } from '../../shell/prose'
 
-import type { FtEntry, FtKids, WorkspaceSource, WsFile, WsShared } from './types'
+import type { FtEntry, FtKids, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 import type { Shell } from '../../shell/bridge'
@@ -13,9 +13,9 @@ import type { Shell } from '../../shell/bridge'
 /* Page state, outside React on purpose: the legacy shell drives this panel
  * imperatively (the tab bar, the open/close buttons and the tool hooks all
  * live in legacy parts and call drawWs), so the state lives where the shims
- * can reach it and the component subscribes. The workspace record itself
- * (WS) stays a demo-shell global that every layer mutates; the island reads
- * it through the shell and re-renders when poked.
+ * can reach it and the component subscribes. The workspace record lives here
+ * as well; the legacy fixture adapter reaches the stable record through the
+ * island bag, while the live layer uses the narrow accessors below.
  */
 
 export type WsRoute = 'launch' | 'diff' | 'file'
@@ -26,6 +26,40 @@ export interface WsIslandState {
 
 let state: WsIslandState = { route: 'launch' }
 const listeners = new Set<() => void>()
+
+const workspace: WsShared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
+
+export const shared = (): WsShared => workspace
+export const currentTurn = (): number => workspace.turn
+export const changes = (): WsShared['changes'] => workspace.changes
+export const urls = (): WsShared['urls'] => workspace.urls
+
+export function advanceTurn(): number {
+  workspace.turn += 1
+  return workspace.turn
+}
+
+export function snapshot(): WorkspaceSnapshot {
+  return {
+    changes: workspace.changes,
+    urls: workspace.urls,
+    file: workspace.file,
+    turn: workspace.turn,
+    unseen: workspace.unseen,
+  }
+}
+
+export function restore(next: WorkspaceSnapshot): void {
+  workspace.changes = next.changes
+  workspace.urls = next.urls
+  workspace.file = next.file
+  workspace.turn = next.turn
+  workspace.unseen = next.unseen
+}
+
+function resetShared(): void {
+  restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0 })
+}
 
 export const getState = (): WsIslandState => state
 
@@ -46,8 +80,6 @@ function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
   if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
   return v as NonNullable<Shell[K]>
 }
-
-export const shared = (): WsShared => verb('wsState')() as WsShared
 
 export function copyToClip(text: string, done: string): void {
   verb('copyToClip')(text, done)
@@ -337,6 +369,7 @@ function ftReset(): void {
 /* A different session is a different workspace state: keep no listing that
    was read before the switch. Called by the demo shell's wsReset. */
 export function reset(): void {
+  resetShared()
   ftReset()
 }
 

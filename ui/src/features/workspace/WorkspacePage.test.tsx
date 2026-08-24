@@ -36,6 +36,7 @@ function emptyWs(over: Partial<WsShared> = {}): WsShared {
    window.DS.workspace -- the fixture shape for demo behaviour, a list/reveal
    shape for live behaviour. */
 function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
+  store.restore(ws)
   const shellCalls: Array<[string, unknown]> = []
   const source: WorkspaceSource = {
     shortPath: (p) => String(p).replace(/^\/repo\//, ''),
@@ -51,7 +52,6 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
     copyToClip: (text, done) => shellCalls.push(['copyToClip', `${text} -> ${done}`]),
     hostPlatform: () => 'mac',
     wsView: () => view,
-    wsState: () => ws,
     showWorkspace: (tab) => {
       shellCalls.push(['showWorkspace', tab])
       view.tab = tab
@@ -69,7 +69,7 @@ function install(ws: WsShared, over: Partial<WorkspaceSource> = {}, view = { tab
      spinner up instead of letting happy-dom dial a real socket. */
   vi.stubGlobal('fetch', () => new Promise(() => {}))
   document.body.innerHTML = '<aside id="ws"><div class="ws-body" id="wsBody"></div></aside>'
-  return { source, shellCalls, view, ws }
+  return { source, shellCalls, view, ws: store.shared() }
 }
 
 async function mount() {
@@ -98,6 +98,22 @@ afterEach(() => {
 })
 
 describe('workspace island', () => {
+  it('owns the stable record and round-trips a parked snapshot', () => {
+    const first = emptyWs({ turn: 3, urls: [{ url: 'https://one', kind: 'fetch', at: 'now' }] })
+    store.restore(first)
+    const stable = store.shared()
+    const parked = store.snapshot()
+
+    expect(store.advanceTurn()).toBe(4)
+    store.restore(emptyWs({ turn: 9 }))
+    store.restore(parked)
+
+    expect(store.shared()).toBe(stable)
+    expect(store.currentTurn()).toBe(3)
+    expect(store.urls()).toEqual(first.urls)
+    expect(Object.keys(parked).sort()).toEqual(['changes', 'file', 'turn', 'unseen', 'urls'])
+  })
+
   it('shows the launcher while nothing happened and no view was picked', async () => {
     const { shellCalls } = install(emptyWs(), {}, { tab: 'diff', open: true, picked: false })
     await mount()
