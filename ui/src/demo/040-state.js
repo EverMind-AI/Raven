@@ -32,7 +32,7 @@ const down = () => {
   const s = $('#scroll');
   s.scrollTo({ top: s.scrollHeight, behavior: 'instant' });
 };
-const sess = (id) => SESS.find((s) => s.id === id);
+const sess = (id) => sessionRows().find((s) => s.id === id);
 
 /* ══ composer drafts ══════════════════════════════════════════════
    Unsent text belongs to the session it was typed in. One textarea is shared

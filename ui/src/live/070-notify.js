@@ -1,7 +1,7 @@
 /* ---- notifications ------------------------------------------------ */
 const notifyTurn = (owner, event) => {
   transitionTurn(owner, event);
-  if (owner === sessionCurrent()) { drawMeter(); goState(); drawList(); }
+  if (owner === sessionCurrent()) { drawMeter(); goState(); sessionDraw(); }
 };
 
 rpc.notify.event = (params) => {
@@ -16,7 +16,7 @@ rpc.notify.event = (params) => {
     const s = sess(sid);
     // This branch only ever runs for a session the reader is NOT looking at
     // (a parked turn), so a clean finish is news: hold the row on 'done'
-    // until they open it. openSession is what clears it. A cancel is a stop
+    // until they open it. sessionOpen is what clears it. A cancel is a stop
     // somebody chose, not a failure -- no red dot for doing what was asked.
     const cancelled = ev.type === 'error' && (ev.payload || {}).reason === 'cancelled_by_client';
     if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(sid); }

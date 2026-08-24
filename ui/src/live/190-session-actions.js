@@ -10,7 +10,7 @@ DS.transcript.branch = () => {
       const s = { id: r.session_id, title: r.title || T('gui.sess.branch_title'),
         last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
         at: Math.floor(Date.now() / 1000), run: null, live: true };
-      SESS.unshift(s); sessionSet(s.id); drawList(); openSession(s);
+      sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s);
       toast(`已分叉，带上了 ${r.message_count || 0} 条消息`);
     })
     .catch((e) => toast(`分叉失败：${e.message || e}`));
@@ -23,7 +23,7 @@ DS.composer.slash.forEach((x) => {
         .then(() => {
           $('#stage').innerHTML = ''; pitch();
           const s = sess(sessionCurrent()); if (s) s.last = T('gui.sess.cleared');
-          drawMeter(); drawList();
+          drawMeter(); sessionDraw();
         })
         .catch((e) => noteRow(T('gui.clear_title'), (e.data && e.data.detail) || e.message || String(e)));
     });

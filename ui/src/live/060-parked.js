@@ -10,7 +10,7 @@ const subBySession = {};        // session_key -> subscription_id
 const subSession = {};          // subscription_id -> session_key
 const PARK_EVENT_CAP = 4000;
 /* The session the running turn belongs to. parkTurn must NOT key by the current
-   pointer: every rail click moves it before openSession(s), so by the time the
+   pointer: every rail click moves it before sessionOpen(s), so by the time the
    old turn is parked it already names the TARGET session. Parking under that
    would file the old transcript in the wrong drawer and immediately hand it
    back as the new session's content. */
@@ -67,7 +67,7 @@ function restoreTurn(pk) {
   if (s && s.status === 'run') s.status = null;
   pk.events.forEach((ev) => { try { onEvent(ev); } catch { /* one bad frame must not eat the rest */ } });
   paintSay();
-  drawMeter(); goState(); drawList(); drawBanner();
+  drawMeter(); goState(); sessionDraw(); drawBanner();
   if (typeof drawWs === 'function' && wsOpen) drawWs();
   down();
   if (!turn.busy()) drainQueue();

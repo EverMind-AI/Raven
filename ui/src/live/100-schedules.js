@@ -65,8 +65,8 @@ DS.cron = {
     closeCron();
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' };
-    if (!sess(s.id)) SESS.unshift(s);
-    sessionSet(s.id); drawList(); openSession(s);
+    if (!sess(s.id)) sessionRows().unshift(s);
+    sessionSet(s.id); sessionDraw(); sessionOpen(s);
   },
 };
 

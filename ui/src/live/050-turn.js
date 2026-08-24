@@ -147,7 +147,7 @@ function onEvent(ev) {
     turn.dispatch({ type: 'idle' });
     noteRow(p.message || 'error', p.detail || p.reason || '',
       lastAsk ? { retry: () => liveSend(lastAsk) } : null);
-    goState(); drawMeter(); drawList();
+    goState(); drawMeter(); sessionDraw();
   } else if (ev.type === 'cron.delivered') {
     toast(T('gui.cron.new_output', { name: p.name }));
   } else if (ev.type === 'cron.missed') {
@@ -170,7 +170,7 @@ function onEvent(ev) {
     if (!s) {
       s = { id, title: p.name, last: '', when: T('gui.sess.just_now'),
         at: Date.now() / 1000, run: null, live: true, from: 'cron' };
-      SESS.unshift(s);
+      sessionRows().unshift(s);
     }
     s.status = 'run';
     if (p.name) s.title = p.name;
@@ -272,7 +272,7 @@ function finishTurn(usage) {
   // background; ntfPush itself checks focus and the user's preference.
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || live.say.trim().slice(0, 80));
   resetTurnState();
-  drawMeter(); goState(); drawList(); down();
+  drawMeter(); goState(); sessionDraw(); down();
   const nx = queueShift();
   if (nx !== undefined) liveSend(nx);
 }
@@ -287,7 +287,7 @@ function titleFromFirstMessage(text) {
   if (!t) return;
   s.title = t;
   $('#title').textContent = plainTitle(t);
-  drawList();
+  sessionDraw();
   rpc.call('session.title', { session_id: s.id, title: t }).catch(() => {});
 }
 
@@ -299,7 +299,7 @@ function titleFromFirstMessage(text) {
 DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
   .catch((e) => {
     const s = sess(id);
-    if (s) { s.pin = !pinned; drawList(); }
+    if (s) { s.pin = !pinned; sessionDraw(); }
     toast(T('gui.sess.pin_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
   });
 
@@ -310,10 +310,10 @@ async function refreshList() {
     // Pins and persisted fields come from the server. Only the running/done
     // marker is client state; a not-yet-saved current row also survives until
     // the first list response that contains it.
-    const reconciled = RavenIslands.rail.reconcile(SESS, rows, sessionCurrent());
+    const reconciled = RavenIslands.rail.reconcile(sessionRows(), rows, sessionCurrent());
     const currentMissing = reconciled.currentMissing;
-    SESS = reconciled.rows;
+    sessionReplace(reconciled.rows);
     if (currentMissing) await leaveDeletedSession(sessionCurrent());
-    else drawList();
+    else sessionDraw();
   } catch { /* keep the stale list */ }
 }

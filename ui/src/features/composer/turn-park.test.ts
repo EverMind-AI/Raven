@@ -35,7 +35,7 @@ function harness(): {
   const names = [
     'DS', 'turn', 'stopSayPaint', 'sess', '$', 'live', 'queueSnapshot', 'RavenIslands', 'WS', 'wsView',
     'sessionCurrent', 'queueRestore', 'wsRestore', 'onEvent', 'paintSay', 'drawMeter', 'goState',
-    'drawList', 'drawBanner', 'drawWs', 'wsOpen', 'down', 'drainQueue',
+    'sessionDraw', 'drawBanner', 'drawWs', 'wsOpen', 'down', 'drainQueue',
   ]
   const values = [
     { transcript: {} }, turn, vi.fn(), () => ({ status: null }),

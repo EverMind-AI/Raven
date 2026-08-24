@@ -172,7 +172,7 @@ async function langPickLive(next, { persist } = {}) {
 /* Everything the catalogue reaches that is drawn rather than written in
    the markup. Cheap enough to run wholesale on a language flip. */
 function redrawAll() {
-  drawList();
+  sessionDraw();
   drawFoot();
   drawCapsBadge();
   setModelLabel();
@@ -206,7 +206,7 @@ function redrawAll() {
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:
      re-opening the session mid-turn would cut the stream off. */
-  if (!draft && sessionCurrent() && !turn.busy()) openSession(sess(sessionCurrent()));
+  if (!draft && sessionCurrent() && !turn.busy()) sessionOpen(sess(sessionCurrent()));
 }
 
 async function loadLang() {

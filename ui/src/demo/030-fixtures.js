@@ -419,7 +419,7 @@ const eventsFor = (run) => (run.key === 'gtm' && capOn('websearch') && run.evOk)
 /* ══ module 1 data: sessions ══════════════════════════════════════ */
 /* Live mode persists a pin through this hook (session.pin); the demo has no
    server, so it stays null and pins live in page memory only. */
-let SESS = [
+const SESSION_FIXTURES = [
   { id:'a', title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', when:'11:24', run:'gtm', pin:false },
   { id:'b', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   when:'09:02', run:'fix', pin:true },
   { id:'g', title:'重构支付回调',       last:'出错：找不到模块 stripe',              when:'08:41', run:null, status:'err' },

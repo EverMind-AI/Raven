@@ -81,7 +81,6 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
     openConn: () => shellCalls.push(['openConn', null]),
     reachText: (reach) => `reach:${reach}`,
     reachHint: (reach) => `hint:${reach}`,
-    sessionCount: () => 3,
   }
   window.RavenShell = fakeShell
   /* The danger card's button is a SESSION operation offered from this page, so
@@ -89,7 +88,12 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   const wiped: Array<null> = []
   window.DS = {
     settings: source,
-    sessions: { snapshot: () => ({ rows: [], cur: null, busy: false }), deleteAll: () => wiped.push(null) },
+    sessions: {
+      snapshot: () => ({ rows: [{}, {}, {}], cur: null, busy: false }),
+      replace: () => {},
+      open: () => {},
+      deleteAll: () => wiped.push(null),
+    },
   }
   document.body.innerHTML =
     '<div class="snavlist" id="snavList"></div><h3 id="setTitle"></h3><p class="sub" id="setSub"></p>' +

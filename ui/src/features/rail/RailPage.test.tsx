@@ -37,8 +37,7 @@ interface Harness {
 
 /* The island runs against the same two seams production wires: a fake shell
    on window.RavenShell (T returns its key, so tests assert catalogue keys)
-   and a snapshot source on window.DS.sessions. The fake drawList loops back
-   into store.draw() exactly as the legacy shim does. */
+   and a snapshot source on window.DS.sessions. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
@@ -50,8 +49,6 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     menuAt: (_x, _y, items) => menus.push(items),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: id => calls.push(['showPage', id]),
-    drawList: () => store.draw(),
-    openSession: s => calls.push(['openSession', (s as SessRow).id]),
     dropDraft: id => calls.push(['dropDraft', id]),
     openCron: () => calls.push(['openCron', null]),
     navState: () => ({ pages: [], btnOf: () => undefined })
@@ -63,10 +60,11 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     state.cur = id
     store.draw()
   })
-  /* Only the read, so every case below exercises the island's OWN behaviour --
-     which is what an offline page gets. The cases that need a page with
-     somewhere to write install the verbs themselves. */
-  window.DS = { sessions: { snapshot: () => state } }
+  window.DS = { sessions: {
+    snapshot: () => state,
+    replace: (rows: SessRow[]) => { state.rows = rows },
+    open: (s: SessRow) => calls.push(['openSession', s.id]),
+  } }
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
@@ -228,11 +226,13 @@ describe('rail island', () => {
     install()
     const host = document.getElementById('list')!
     render(<RailApp />, { container: host })
-    act(() => store.skeleton())
+    act(() => store.hold())
     const skels = host.querySelectorAll('.sess.skel')
     expect(skels.length).toBe(6)
     expect(skels[0]!.querySelectorAll('.sk').length).toBe(2)
     act(() => store.draw())
+    expect(host.querySelectorAll('.sess.skel').length).toBe(6)
+    act(() => store.release())
     expect(host.querySelector('.sess.skel')).toBeNull()
     expect(screen.getByText('GTM research')).toBeTruthy()
   })
@@ -276,7 +276,7 @@ describe('rail island', () => {
     expect(host.querySelectorAll('.sess').length).toBe(1)
   })
 
-  it('opens another session through the shell and repaints the mark', () => {
+  it('opens another session through the source and repaints the mark', () => {
     const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'a' })
     const host = mount()
     act(() => {

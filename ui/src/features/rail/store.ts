@@ -5,16 +5,10 @@ import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
 
-/* Rail state, outside React on purpose: the legacy shell drives the list
- * imperatively (every layer calls drawList() after touching SESS, the live
- * boot holds it on skeletons, a language flip redraws it), so the state
- * lives in a plain store the shims can call, and the component subscribes.
- *
- * Unlike the page islands this store owns no rows: the session list stays
- * in the shared SESS array and session pointer, which the transcript, turn,
- * schedule and settings layers all write in place. Each draw pulls a fresh
- * snapshot through DS.sessions instead of keeping a copy that could go stale.
- */
+/* Rail state, outside React on purpose: the page layers redraw the list after
+ * mutating the active session source, the live boot holds it on skeletons,
+ * and a language flip repaints it. Each draw pulls a fresh source snapshot
+ * instead of keeping a copy that could go stale. */
 
 export interface RailState {
   /* Null until the first draw: the legacy #list started empty too. */
@@ -24,6 +18,7 @@ export interface RailState {
 }
 
 let state: RailState = { snap: null, skel: false }
+let held = false
 const listeners = new Set<() => void>()
 
 export const getState = (): RailState => state
@@ -103,25 +98,26 @@ const listOpen = new Set<string>()
 export const isFolded = (gid: string): boolean => grpFold.has(gid)
 export const isOpen = (gid: string): boolean => listOpen.has(gid)
 
-/* Both flips go back out through the shell's drawList, not a local render:
-   during the live boot that name is wrapped to keep the skeletons up, and
-   the flip must lose to that hold the way the legacy redraw did. */
 export function flipFold(gid: string): void {
   if (grpFold.has(gid)) grpFold.delete(gid)
   else grpFold.add(gid)
   saveGrpFold()
-  shell().drawList?.()
+  draw()
 }
 
 export function flipOpen(gid: string): void {
   if (listOpen.has(gid)) listOpen.delete(gid)
   else listOpen.add(gid)
-  shell().drawList?.()
+  draw()
 }
 
 /* One draw = one snapshot. A source that cannot answer keeps the last rows
    on screen rather than blanking the rail. */
 export function draw(): void {
+  if (held) {
+    if (!state.skel) set({ skel: true })
+    return
+  }
   let snap: RailSnapshot
   try {
     snap = source().snapshot()
@@ -132,10 +128,22 @@ export function draw(): void {
   set({ snap, skel: false })
 }
 
-/* The live boot's hold: skeleton rows until the real list lands. The demo
-   never calls this. */
-export function skeleton(): void {
+export function hold(): void {
+  held = true
   set({ skel: true })
+}
+
+export function release(): void {
+  held = false
+  draw()
+}
+
+export function open(s: SessRow): void {
+  void source().open(s)
+}
+
+export function count(): number {
+  return source().snapshot().rows.length
 }
 
 /* One writer for the rail's nav marks, because the surfaces stack: the
@@ -206,7 +214,7 @@ export function renameRow(s: SessRow, title: string): void {
   } catch {
     /* no source, nowhere to put it */
   }
-  shell().drawList?.()
+  draw()
 }
 
 export function archive(s: SessRow): void {
@@ -225,13 +233,13 @@ export function archive(s: SessRow): void {
   const index = rows.findIndex(row => row.id === s.id)
   if (index >= 0) rows.splice(index, 1)
   const sh = shell()
-  sh.drawList?.()
+  draw()
   sh.toast(sh.T('gui.sess.archived', { title: s.title }), {
     label: sh.T('gui.undo'),
     fn: () => {
       const current = source().snapshot().rows
       if (!current.some(row => row.id === s.id)) current.splice(Math.max(0, Math.min(at, current.length)), 0, s)
-      sh.drawList?.()
+      draw()
     }
   })
 }
@@ -239,8 +247,7 @@ export function archive(s: SessRow): void {
 /* Deleting a session. A source that can delete one does it -- the live page
    has a confirmation to ask and a pile of per-session state to forget, none of
    which belongs to the rail. Without one, this is the whole behaviour: splice
-   the shared rows in place rather than rebinding SESS (an island cannot
-   reassign a page-script binding), and offer it back. */
+   the source-owned rows in place, and offer it back. */
 let undoBin: { s: SessRow; at: number } | null = null
 
 export function remove(s: SessRow): void {
@@ -266,17 +273,17 @@ export function remove(s: SessRow): void {
     const nx = st.rows[0]
     if (nx) {
       setCurrent(nx.id)
-      sh.openSession?.(nx)
+      open(nx)
     }
   }
-  sh.drawList?.()
+  draw()
   sh.toast(shell().T('gui.sess.deleted_x', { title: s.title }), {
     label: shell().T('gui.undo'),
     fn: () => {
       const bin = undoBin as { s: SessRow; at: number }
       source().snapshot().rows.splice(bin.at, 0, bin.s)
       undoBin = null
-      sh.drawList?.()
+      draw()
     }
   })
 }
@@ -320,7 +327,7 @@ export function rename(): void {
     nh.id = 'title'
     inp.replaceWith(nh)
     if (rb) rb.hidden = false
-    shell().drawList?.()
+    draw()
   }
   inp.onblur = () => finish(true)
   inp.onkeydown = e => {

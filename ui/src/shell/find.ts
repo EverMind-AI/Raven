@@ -12,17 +12,18 @@
  * this module can produce, which is exactly the coupling the DataSource seam
  * exists to retire.
  *
- * Redraws go out through the shell rather than calling the rail island's draw:
- * the live boot layer REBINDS drawList (live/010-boot-guard.js) to keep the
- * skeleton up until the first real list lands, and a stored reference here
- * would keep calling whichever function existed when this module evaluated.
+ * The rail installs the redraw callback from the bundle entry point. Its own
+ * live-boot hold decides whether that means rows or skeletons.
  */
 
 import { composing } from '../features/composer/store'
 
-import { shell } from './bridge'
-
 let query = ''
+let redraw = (): void => {}
+
+export function onChange(fn: () => void): void {
+  redraw = fn
+}
 
 /* What the rail filters by. Lowercased and trimmed at write time, so every
    reader compares against the same shape. */
@@ -59,7 +60,7 @@ export function toggle(force?: boolean): void {
      the blur handler below closes the row on every click away. */
   if (query) {
     clear()
-    shell().drawList?.()
+    redraw()
   }
 }
 
@@ -72,7 +73,7 @@ export function install(): void {
     field.oninput = () => {
       query = field.value.trim().toLowerCase()
       if (clr) clr.hidden = !query
-      shell().drawList?.()
+      redraw()
     }
     field.onkeydown = (e) => {
       /* Escape ends an open composition first; taking the row down on that
@@ -91,7 +92,7 @@ export function install(): void {
   if (clr) {
     clr.onclick = () => {
       clear()
-      shell().drawList?.()
+      redraw()
       el<HTMLInputElement>('sfind')?.focus()
     }
   }

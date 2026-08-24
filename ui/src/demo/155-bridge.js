@@ -40,8 +40,6 @@ window.RavenShell = {
   attImageSet: (p, url) => { ATT_IMG.set(String(p), url); },
   slashName: (id) => slashName(id),
   slashHelp: (id) => slashHelp(id),
-  drawList: () => drawList(),
-  openSession: (s) => openSession(s),
   dropDraft: (id) => dropDraft(id),
   openCron: () => openCron(),
   navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]) }),
@@ -65,6 +63,5 @@ if (typeof closeSet === 'function') window.RavenShell.closeSet = () => closeSet(
 if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOpen();
 if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();
 if (typeof APP_VERSION !== 'undefined') window.RavenShell.appVersion = () => APP_VERSION || null;
-if (typeof SESS !== 'undefined') window.RavenShell.sessionCount = () => SESS.length;
 if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
 if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };
