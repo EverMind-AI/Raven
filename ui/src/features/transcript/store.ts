@@ -2,6 +2,7 @@ import * as dagNodes from '../dag/nodes'
 import { ds, shell, t, verb } from '../../shell/bridge'
 import { formatDuration } from '../../shell/duration'
 import { md } from '../../shell/prose'
+import * as hunks from '../workspace/hunks'
 
 import type { WsChange } from '../workspace/types'
 import type {
@@ -520,12 +521,11 @@ export function answerProgress(lane: Lane, seg: AnswerData, shown: number | null
 const bridge = (): Shell => shell()
 
 function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
-  const sh = bridge()
-  if (name === 'edit_file' && typeof a.old_text === 'string' && typeof a.new_text === 'string' && sh.hunkFromEdit) {
-    return sh.hunkFromEdit(a.old_text, a.new_text) as Hunk
+  if (name === 'edit_file' && typeof a.old_text === 'string' && typeof a.new_text === 'string') {
+    return hunks.fromEdit(a.old_text, a.new_text)
   }
-  if (name === 'write_file' && typeof a.content === 'string' && sh.hunkFromWrite) {
-    return sh.hunkFromWrite(a.content) as Hunk
+  if (name === 'write_file' && typeof a.content === 'string') {
+    return hunks.fromWrite(a.content)
   }
   return null
 }
@@ -693,7 +693,7 @@ function callDone(lane: Lane, seg: StepData, c: CallData,
   c.res = String(res == null ? '' : res)
   c.ms = ms || 0
   c.truncated = !!truncated
-  if (diff && bridge().hunkFromUnified) c.hunk = bridge().hunkFromUnified!(diff) as Hunk
+  if (diff) c.hunk = hunks.fromUnified(diff)
   if (c.kind === 'dag') {
     if (dagPending && dagPending.call === c) dagPending = null
     /* The id only. The rest of the run is read when someone opens the card:

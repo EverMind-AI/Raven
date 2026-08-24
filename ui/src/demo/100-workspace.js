@@ -77,62 +77,7 @@ function wsOnHistory(messages) {
    edit_file carries old_text and new_text, which IS the ground truth of the
    change, so the diff needs no backend support at all. Long runs of
    unchanged context are folded to one clickable row. */
-const CTX_KEEP = 3;
-
-function hunkFromEdit(oldText, newText) {
-  const del = String(oldText || '').split('\n');
-  const add = String(newText || '').split('\n');
-  let head = 0;
-  while (head < del.length && head < add.length && del[head] === add[head]) head += 1;
-  let tail = 0;
-  while (tail < del.length - head && tail < add.length - head
-         && del[del.length - 1 - tail] === add[add.length - 1 - tail]) tail += 1;
-  const rows = [];
-  const lead = del.slice(0, head);
-  if (lead.length > CTX_KEEP) rows.push(['gap', lead.slice(0, lead.length - CTX_KEEP)]);
-  lead.slice(Math.max(0, lead.length - CTX_KEEP)).forEach((l) => rows.push(['ctx', l]));
-  del.slice(head, del.length - tail).forEach((l) => rows.push(['del', l]));
-  add.slice(head, add.length - tail).forEach((l) => rows.push(['add', l]));
-  const rest = del.slice(del.length - tail);
-  rest.slice(0, CTX_KEEP).forEach((l) => rows.push(['ctx', l]));
-  if (rest.length > CTX_KEEP) rows.push(['gap', rest.slice(CTX_KEEP)]);
-  return { rows, add: add.length - head - tail, del: del.length - head - tail };
-}
-
-function hunkFromWrite(content) {
-  const all = String(content == null ? '' : content).split('\n');
-  /* A file ending in a newline splits to a trailing "" that is not a line;
-     counting it would report one more added line than any diff tool does. */
-  if (all.length > 1 && all[all.length - 1] === '') all.pop();
-  const rows = all.slice(0, 40).map((l, i) => ['add', l, null, i + 1]);
-  if (all.length > 40) rows.push(['gap', all.slice(40)]);
-  return { rows, add: all.length, del: 0 };
-}
-
-/* A tool that reports its own unified diff (or a replay that carries one)
-   lands here instead: same row shape, so the view does not care which. */
-/* Accepts the wire's unified-diff string or an array of its lines. The two
-   ---/+++ file headers are dropped: they name the file the row already names,
-   and read as one deletion and one addition if left in. */
-function hunkFromUnified(lines) {
-  const rows = []; let add = 0, del = 0;
-  /* Rows carry [kind, text, oldLineNo, newLineNo], numbered from the @@
-     headers -- the one hunk source that knows where in the file it landed.
-     The headers themselves become 'hunk' separator rows: with a numbered
-     gutter their "-12,7 +12,8" text says nothing the gutter does not. */
-  let o = null, n = null;
-  const src = typeof lines === 'string' ? lines.split('\n') : (lines || []);
-  src.filter((l) => !/^(---|\+\+\+)( |$)/.test(String(l))).forEach((raw) => {
-    const l = String(raw);
-    const m = l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (m) { o = Number(m[1]); n = Number(m[2]); rows.push(['hunk', l]); return; }
-    if (l.startsWith('@@')) { rows.push(['hunk', l]); return; }
-    if (l.startsWith('+')) { rows.push(['add', l.slice(1), null, n == null ? null : n++]); add += 1; return; }
-    if (l.startsWith('-')) { rows.push(['del', l.slice(1), o == null ? null : o++, null]); del += 1; return; }
-    rows.push(['ctx', l.replace(/^ /, ''), o == null ? null : o++, n == null ? null : n++]);
-  });
-  return { rows, add, del };
-}
+const { hunkFromEdit, hunkFromWrite, hunkFromUnified } = RavenIslands.workspace;
 
 /* The two front ends hand over different shapes -- the live RPC gives the
    whole argument object, the demo replay gives the one string it displays.

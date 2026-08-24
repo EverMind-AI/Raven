@@ -61,18 +61,8 @@ export interface Shell {
   lang?(): string
   wsView?(): WsPanelView
   wsPick?(tab: string): void
-  /* The transcript bridge: draws a delegated run's record into a stage box
-     with the transcript's own renderer. Forwards to DS.agents.stagePaint,
-     which the fixture source omits -- no runs to hand out means no record to
-     paint -- so the optional call there is the guard, and the island never
-     asks without a record anyway. */
-  agentStagePaint?(box: HTMLElement, ctx: unknown, opts?: { key?: string; empty?: string; reset?: boolean }): void
-  /* Transcript island verbs: the attachment marker and the diff builders the
-     workspace panel already owns. */
+  /* Transcript island verbs: the attachment marker the history reader needs. */
   attNotes?(): string[]
-  hunkFromEdit?(oldText: string, newText: string): unknown
-  hunkFromWrite?(content: string): unknown
-  hunkFromUnified?(lines: string | string[]): unknown
   /* The draft store, the tail anchor and the two catalogues the palette renders
      from. `send`/`halt` used to be here, and their leaving is the point of the
      change that moved them: as shell verbs the page decided what sending meant

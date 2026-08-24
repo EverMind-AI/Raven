@@ -33,6 +33,7 @@ import * as transcript from './features/transcript/mount'
 import * as transcriptTail from './features/transcript/tail'
 import { WsApp } from './features/workspace/WorkspacePage'
 import * as workspace from './features/workspace/store'
+import * as workspaceHunks from './features/workspace/hunks'
 import { XaApp } from './features/xa/XaPage'
 import * as xa from './features/xa/store'
 import { SettingsApp } from './features/settings/SettingsPage'
@@ -371,6 +372,9 @@ window.RavenIslands = {
     urls: workspace.urls,
     showFile: workspace.showFile,
     openDir: workspace.openDir,
+    hunkFromEdit: workspaceHunks.fromEdit,
+    hunkFromWrite: workspaceHunks.fromWrite,
+    hunkFromUnified: workspaceHunks.fromUnified,
   },
 }
 

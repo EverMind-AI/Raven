@@ -40,9 +40,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     showPage: () => {},
     attNotes: () => ['[attachments]'],
     copyToClip: () => {},
-    hunkFromEdit: (o, n) => ({ rows: [['del', o], ['add', n]], add: 1, del: 1 }),
-    hunkFromWrite: (c) => ({ rows: [['add', c]], add: 1, del: 0 }),
-    hunkFromUnified: () => ({ rows: [], add: 0, del: 0 }),
   }
   window.RavenShell = fakeShell
   const source: TranscriptSource = {
