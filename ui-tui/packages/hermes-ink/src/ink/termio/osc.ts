@@ -58,39 +58,42 @@ export function wrapForMultiplexer(sequence: string): string {
 }
 
 /**
- * Which path setClipboard() will take, based on env state. Synchronous so
- * callers can show an honest toast without awaiting the copy itself.
+ * Which path a clipboard write actually took.
  *
- * - 'native': pbcopy (or equivalent) will run — high-confidence system
- *   clipboard write. tmux buffer may also be loaded as a bonus.
- * - 'tmux-buffer': tmux load-buffer will run, but no native tool — paste
- *   with prefix+] works. System clipboard depends on tmux's set-clipboard
- *   option + outer terminal OSC 52 support; can't know from here.
- * - 'osc52': only the raw OSC 52 sequence will be written to stdout.
- *   Best-effort; iTerm2 disables OSC 52 by default.
+ * - 'native': pbcopy (or equivalent) ran -- high-confidence system clipboard
+ *   write. The tmux buffer may have been loaded as a bonus.
+ * - 'tmux-buffer': tmux load-buffer succeeded but no native tool ran -- paste
+ *   with prefix+] works. Reaching the system clipboard from there depends on
+ *   tmux's set-clipboard option plus the outer terminal's OSC 52 support,
+ *   which cannot be known from here.
+ * - 'osc52': only the raw OSC 52 sequence went to stdout. Best-effort; iTerm2
+ *   disables OSC 52 by default.
  *
- * pbcopy gating uses SSH_CONNECTION specifically, not SSH_TTY — tmux panes
- * inherit SSH_TTY forever even after local reattach, but SSH_CONNECTION is
- * in tmux's default update-environment set and gets cleared.
+ * Reported by `setClipboard()` from what it observed, not derived from the
+ * environment afterwards. The difference is load-bearing: inside tmux, a
+ * load-buffer that fails falls through to raw OSC 52, and the environment
+ * still looks exactly like the tmux case that did work. Callers put this
+ * value in front of the user, and a path named wrongly sends them to fix
+ * something that was never broken.
  */
 export type ClipboardPath = 'native' | 'tmux-buffer' | 'osc52'
 
-export function getClipboardPath(): ClipboardPath {
-  const nativeAvailable = process.platform === 'darwin' && !process.env['SSH_CONNECTION']
-
-  if (nativeAvailable) {
-    return 'native'
-  }
-
-  if (process.env['TMUX']) {
-    return 'tmux-buffer'
-  }
-
-  return 'osc52'
+/**
+ * Whether to log why a clipboard write took the path it did.
+ *
+ * Reads the RAVEN_TUI spelling as well as the upstream HERMES_TUI one: this
+ * repo documents the former (it is what `/copy` tells the user to set) and
+ * vendors the latter.
+ */
+export function clipboardDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.RAVEN_TUI_DEBUG_CLIPBOARD || env.HERMES_TUI_DEBUG_CLIPBOARD)
 }
 
 export function shouldEmitClipboardSequence(env: NodeJS.ProcessEnv = process.env): boolean {
   const override = (
+    env.RAVEN_TUI_FORCE_OSC52 ??
+    env.RAVEN_TUI_CLIPBOARD_OSC52 ??
+    env.RAVEN_TUI_COPY_OSC52 ??
     env.HERMES_TUI_FORCE_OSC52 ??
     env.HERMES_TUI_CLIPBOARD_OSC52 ??
     env.HERMES_TUI_COPY_OSC52 ??
@@ -143,7 +146,8 @@ export function shouldEmitClipboardSequence(env: NodeJS.ProcessEnv = process.env
  *     `allow-passthrough`, which many users don't have configured.
  *
  *     The OSC-52-will-emit guard matters too: if the user has set
- *     HERMES_TUI_FORCE_OSC52=0, no OSC 52 sequence will be written. If
+ *     RAVEN_TUI_FORCE_OSC52=0 (or the HERMES_TUI_ alias), no OSC 52
+ *     sequence will be written. If
  *     we ALSO skip native, the clipboard write becomes a no-op. So skip
  *     native only when OSC 52 will actually carry the data.
  */
@@ -152,13 +156,17 @@ export function shouldUseNativeClipboard(
   terminal: string | null = envModule.terminal
 ): boolean {
   // Over SSH the native tools would write to the wrong machine's clipboard.
+  // SSH_CONNECTION specifically, not SSH_TTY: a tmux pane inherits SSH_TTY
+  // forever, even after the client detaches and reattaches locally, while
+  // SSH_CONNECTION is in tmux's default update-environment set and gets
+  // cleared.
   if (env.SSH_CONNECTION) {
     return false
   }
 
   // Inside tmux/screen, OSC 52 is normally suppressed and we rely on
   // tmux load-buffer instead — so the wl-copy/OSC-52 race usually doesn't
-  // apply. Even when HERMES_TUI_FORCE_OSC52=1 forces a tmux-passthrough
+  // apply. Even when RAVEN_TUI_FORCE_OSC52=1 forces a tmux-passthrough
   // OSC 52 emission, we keep native enabled as a safety net: tmux's
   // outer-terminal forwarding depends on `allow-passthrough` in the
   // user's tmux config, so a forced OSC 52 may silently never reach the
@@ -258,6 +266,8 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
 export type ClipboardResult = {
   sequence: string
   success: boolean
+  /** The path that took the text, or null when no path did (success false). */
+  path: ClipboardPath | null
 }
 
 export async function setClipboard(text: string): Promise<ClipboardResult> {
@@ -284,15 +294,21 @@ export async function setClipboard(text: string): Promise<ClipboardResult> {
   // than raw OSC 52, so the wl-copy race usually doesn't apply, and
   // native is kept as a safety net because tmux passthrough forwarding
   // depends on the user's `allow-passthrough` config (note: when
-  // HERMES_TUI_FORCE_OSC52=1 we DO additionally emit a tmux-passthrough
+  // RAVEN_TUI_FORCE_OSC52=1 we DO additionally emit a tmux-passthrough
   // OSC 52, but it can be silently dropped without that setting).
   // Native also fires when the user has disabled OSC 52 emission via
-  // HERMES_TUI_FORCE_OSC52=0 (otherwise the clipboard write becomes a
-  // complete no-op). Fire-and-forget, but `nativeAttempted` tells us
-  // whether ANY native path will be tried.
-  const nativeAttempted = shouldUseNativeClipboard(process.env, envModule.terminal) && copyNative(text)
+  // RAVEN_TUI_FORCE_OSC52=0 (otherwise the clipboard write becomes a
+  // complete no-op). The spawn stays fire-and-forget; what is awaited is
+  // only whether a tool exists to spawn, which on Linux's first copy is
+  // not known until the probe settles.
+  // Started before the await, resolved after it: on Linux's first copy the tool
+  // is not known yet, and reporting a native write before the probe settles
+  // claims a copy that no tool performed. The probe now runs alongside
+  // load-buffer instead of ahead of the report.
+  const nativePending = shouldUseNativeClipboard(process.env, envModule.terminal) && copyNative(text)
 
   const tmuxBufferLoaded = await tmuxLoadBuffer(text)
+  const nativeAttempted = await nativePending
 
   // Inner OSC uses BEL directly (not osc()) — ST's ESC would need doubling
   // too, and BEL works everywhere for OSC 52.
@@ -306,7 +322,19 @@ export async function setClipboard(text: string): Promise<ClipboardResult> {
   // load failed), in which case reporting failure to the user is honest.
   const success = nativeAttempted || tmuxBufferLoaded || sequence.length > 0
 
-  return { sequence, success }
+  // Same precedence the doc above describes, read off what happened rather
+  // than off the environment: native outranks tmux because it is the write
+  // that is not contingent on a terminal or multiplexer setting, and a failed
+  // load-buffer has to fall through to osc52 here exactly as the data did.
+  const path: ClipboardPath | null = nativeAttempted
+    ? 'native'
+    : tmuxBufferLoaded
+      ? 'tmux-buffer'
+      : sequence.length > 0
+        ? 'osc52'
+        : null
+
+  return { sequence, success, path }
 }
 
 // Linux clipboard tool: undefined = not yet probed, null = none available.
@@ -351,8 +379,13 @@ async function probeLinuxCopy(): Promise<'wl-copy' | 'xclip' | 'xsel' | null> {
  * Linux behaviour: if DISPLAY and WAYLAND_DISPLAY are both unset, native
  * clipboard tools cannot work (they need a display server). In that case
  * we skip probing entirely and treat linuxCopy as permanently null.
+ *
+ * The first Linux call answers with a promise, because until the probe settles
+ * there is no answer to give: a display server says a tool could exist, not
+ * that one does. Every other call answers synchronously, so only that first
+ * copy pays for it, and the caller starts this before its own await.
  */
-function copyNative(text: string): boolean {
+function copyNative(text: string): boolean | Promise<boolean> {
   const opts = { input: text, useCwd: false, timeout: 2000 }
 
   switch (process.platform) {
@@ -376,7 +409,7 @@ function copyNative(text: string): boolean {
 
       // No display server → native tools will fail immediately. Cache null.
       if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error('[clipboard] [native] Linux: no DISPLAY or WAYLAND_DISPLAY — native clipboard unavailable')
         }
 
@@ -384,15 +417,16 @@ function copyNative(text: string): boolean {
 
         return false
       }
-      // First call: probe in the background and cache the result for future copies.
-      // We don't await — this is fire-and-forget. Treat as an attempt:
-      // the probe will discover a tool and spawn it. If probing finds
-      // nothing, the NEXT copy will short-circuit above.
-      void (async () => {
+      // First call: probe, cache the result for future copies, and answer with
+      // whether a tool was actually found. A display server means a tool could
+      // exist, not that one does, so answering true here would report a copy
+      // that nothing performed. The copy itself already waited on this probe --
+      // only the report used to run ahead of it.
+      return (async () => {
         const winner = await probeLinuxCopy()
         linuxCopy = winner
 
-        if (process.env.HERMES_TUI_DEBUG_CLIPBOARD) {
+        if (clipboardDebugEnabled()) {
           console.error(`[clipboard] [native] Linux: clipboard probe complete → ${winner ?? 'no tool available'}`)
         }
 
@@ -400,9 +434,9 @@ function copyNative(text: string): boolean {
         if (winner) {
           void execFileNoThrow(winner, winner === 'wl-copy' ? [] : ['-selection', 'clipboard'], opts)
         }
-      })()
 
-      return true
+        return winner !== null
+      })()
     }
 
     case 'win32':
