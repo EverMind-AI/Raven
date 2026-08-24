@@ -4759,6 +4759,10 @@
       "en": "No background work yet",
       "zh": "还没有后台任务"
     },
+    "gui.ws.desk_limit": {
+      "en": "You can open up to 4 panes at once.",
+      "zh": "最多同时打开 4 个窗口"
+    },
     "gui.ws.instance_empty": {
       "en": "No conversation on record for this sub-agent.",
       "zh": "这个子智能体还没有留下对话记录。"

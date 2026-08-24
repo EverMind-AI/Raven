@@ -32,6 +32,8 @@ import * as subagentsStore from './features/subagents/store'
 import * as transcript from './features/transcript/mount'
 import * as transcriptTail from './features/transcript/tail'
 import { WsApp } from './features/workspace/WorkspacePage'
+import { DeskApp } from './features/workspace/DeskPage'
+import * as desk from './features/workspace/DeskPage'
 import * as workspace from './features/workspace/store'
 import * as workspaceHunks from './features/workspace/hunks'
 import { XaApp } from './features/xa/XaPage'
@@ -164,6 +166,8 @@ find.onChange(rail.draw)
    republish can go. Same mechanism as cronExprHuman and cronWhen above: the
    bundle owns the function, the legacy layers keep calling md(). */
 window.md = md
+
+installLinkTrap()
 
 /* The skills island renders into a host node the legacy shim re-attaches
    under #capsBody on every skill-tab draw: the plugin tab clears that box
@@ -308,10 +312,6 @@ window.RavenIslands = {
   },
 }
 
-/* The transcript's link handler lives with the island now; it arms itself
-   only when the installed DS.browser source is the embedded one. */
-installLinkTrap()
-
 /* The dock's own listeners -- the field, the send button, the file picker, the
    drop target, the pill. Registered here rather than on the first paint
    because the markup is already in the document; the handlers read the shell
@@ -348,6 +348,11 @@ const memHost = document.getElementById('memBody')
 if (memHost) createRoot(memHost).render(<MemoryApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
+const deskHost = document.createElement('div')
+deskHost.id = 'deskHost'
+document.body.appendChild(deskHost)
+const deskRoot = createRoot(deskHost)
+queueMicrotask(() => deskRoot.render(<DeskApp />))
 createRoot(skillsHost).render(<SkillsApp />)
 createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <SkillsSkeleton key={i} />)}</>)
 
@@ -362,7 +367,10 @@ window.RavenIslands = {
   workspace: {
     draw: workspace.draw,
     redraw: workspace.redraw,
-    reset: workspace.reset,
+    reset: () => {
+      workspace.reset()
+      desk.reset()
+    },
     shared: workspace.shared,
     currentTurn: workspace.currentTurn,
     advanceTurn: workspace.advanceTurn,
@@ -375,6 +383,13 @@ window.RavenIslands = {
     hunkFromEdit: workspaceHunks.fromEdit,
     hunkFromWrite: workspaceHunks.fromWrite,
     hunkFromUnified: workspaceHunks.fromUnified,
+    toggleDesk: desk.toggleDesk,
+    openDeskTab: desk.openDeskTab,
+    openFile: desk.openDeskFile,
+    openDiff: desk.openDeskDiff,
+    openAgent: desk.openDeskAgent,
+    openAgentRecord: desk.openDeskAgentRecord,
+    notifyDesk: desk.notifyDesk,
   },
 }
 

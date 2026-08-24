@@ -4,7 +4,7 @@ import { current as currentSession } from '../../shell/session'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
-import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
+import type { AgentRow, AgentsSource, InstanceRow, OpenItem, SubagentRow } from './types'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
  * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
@@ -18,6 +18,7 @@ import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
  */
 
 export interface AgentsState {
+  roster: SubagentRow[]
   rows: AgentRow[]
   /* What the panel lists. The runs in `rows` are still read, because a run
      detail opened from the conversation's own graph card takes its header from
@@ -32,6 +33,7 @@ export interface AgentsState {
      can resolve after the reader has already moved on, so clearing this on
      open would not have been enough. */
   sendFail: { agent: string; handle: string; why: string } | null
+  direct: Record<string, DirectChatState>
   open: OpenItem | null
   /* The listed row may mislabel a run the list has aged out; the context
      answer carries the truth and corrects the open header through this. */
@@ -43,8 +45,14 @@ export interface AgentsState {
   tick: number
 }
 
+export interface DirectChatState {
+  busy: boolean
+  pending: string[]
+  queue: string[]
+}
+
 const initial: AgentsState = {
-  rows: [], instances: [], sendFail: null, open: null, who: null, epoch: 0, tick: 0,
+  roster: [], rows: [], instances: [], sendFail: null, direct: {}, open: null, who: null, epoch: 0, tick: 0,
 }
 
 let state: AgentsState = { ...initial }
@@ -160,6 +168,26 @@ export function refresh(force = false): void {
 
 export const rows = (): AgentRow[] => state.rows
 
+let rosterBusy = false
+let rosterDrawn = ''
+
+export function refreshRoster(force = false): void {
+  const src = source()
+  if (!src.roster || rosterBusy || (!force && state.roster.length > 0)) return
+  rosterBusy = true
+  src.roster()
+    .then((rows) => {
+      const next = rows || []
+      const print = JSON.stringify(next)
+      if (print !== rosterDrawn) {
+        rosterDrawn = print
+        set({ roster: next })
+      }
+    })
+    .catch(() => {})
+    .then(() => { rosterBusy = false })
+}
+
 export const instances = (): InstanceRow[] => state.instances
 
 let instBusy = false
@@ -209,6 +237,11 @@ function instanceOf(runId: string, nodeId: string, rows: InstanceRow[] = state.i
 }
 
 export function openInstance(it: InstanceRow): void {
+  const workspace = window.RavenIslands?.workspace as { openAgent?: (row: InstanceRow) => void } | undefined
+  if (workspace?.openAgent) {
+    workspace.openAgent(it)
+    return
+  }
   /* The same stage the runs use: an instance's direct chat is a transcript, and
      giving it a second renderer would be a second place for the transcript's
      rules to drift out of. */
@@ -248,6 +281,53 @@ const DIRECT_POKE_MS = 500
 
 const targetKey = (t: { agent?: string; handle?: string }): string => `${t.agent}\u0000${t.handle}`
 
+const directOf = (agent: string, handle: string): DirectChatState => (
+  state.direct[targetKey({ agent, handle })] || { busy: false, pending: [], queue: [] }
+)
+
+function setDirect(agent: string, handle: string, next: DirectChatState): void {
+  set({ direct: { ...state.direct, [targetKey({ agent, handle })]: next } })
+}
+
+export function directChat(agent: string, handle: string): DirectChatState {
+  return directOf(agent, handle)
+}
+
+export function removeQueued(agent: string, handle: string, index: number): void {
+  const chat = directOf(agent, handle)
+  setDirect(agent, handle, { ...chat, queue: chat.queue.filter((_, i) => i !== index) })
+}
+
+function startDirect(agent: string, handle: string, said: string): Promise<boolean> {
+  const src = source()
+  if (!src.instanceSend) return Promise.resolve(false)
+  const chat = directOf(agent, handle)
+  setDirect(agent, handle, { ...chat, busy: true, pending: [...chat.pending, said] })
+  return src.instanceSend(agent, handle, said)
+    .then(() => {
+      refreshInstances(true)
+      return true
+    })
+    .catch((e: unknown) => {
+      const now = directOf(agent, handle)
+      setDirect(agent, handle, {
+        ...now,
+        busy: false,
+        pending: now.pending.filter((text, index) => text !== said || index !== now.pending.indexOf(said)),
+      })
+      set({ sendFail: { agent, handle, why: (e as Error)?.message || String(e) } })
+      return false
+    })
+}
+
+function drainDirect(agent: string, handle: string): void {
+  const chat = directOf(agent, handle)
+  if (chat.busy || !chat.queue.length) return
+  const [said, ...queue] = chat.queue
+  setDirect(agent, handle, { ...chat, queue })
+  void startDirect(agent, handle, said!)
+}
+
 /* An event belonging to a direct chat, forwarded here rather than rendered by
    the conversation -- the conversation is not its addressee and drops it.
 
@@ -255,8 +335,23 @@ const targetKey = (t: { agent?: string; handle?: string }): string => `${t.agent
    back through `instance.history`, which is the one place its turns are
    assembled from every lane that addressed it. Rendering the delta here instead
    would be a second renderer for the same thing, and the two would drift. */
-export function directEvent(target: { agent?: string; handle?: string }, type?: string): void {
+export function directEvent(
+  target: { agent?: string; handle?: string },
+  type?: string,
+  payload?: { content?: string },
+): void {
   const key = targetKey(target)
+  const agent = target.agent || ''
+  const handle = target.handle || ''
+  if (agent && handle && type === 'message.start') {
+    const chat = directOf(agent, handle)
+    const content = String(payload?.content || '').trim()
+    setDirect(agent, handle, {
+      ...chat,
+      busy: true,
+      pending: content && !chat.pending.includes(content) ? [...chat.pending, content] : chat.pending,
+    })
+  }
   const settle = (): void => {
     /* The row's status moved (running -> completed), which the list is the only
        source for, and the open transcript grew. */
@@ -274,7 +369,12 @@ export function directEvent(target: { agent?: string; handle?: string }, type?: 
   const pending = directPoke.get(key)
   if (type === 'message.complete' || type === 'error') {
     if (pending) { clearTimeout(pending); directPoke.delete(key) }
+    if (agent && handle) {
+      const chat = directOf(agent, handle)
+      setDirect(agent, handle, { ...chat, busy: false })
+    }
     settle()
+    if (agent && handle) setTimeout(() => drainDirect(agent, handle), 0)
     return
   }
   if (pending) return
@@ -289,20 +389,12 @@ export function sendToInstance(agent: string, handle: string, text: string): Pro
   const said = text.trim()
   if (!src.instanceSend || !said) return Promise.resolve(false)
   if (state.sendFail) set({ sendFail: null })
-  return src.instanceSend(agent, handle, said)
-    .then(() => {
-      /* Forced, past the refresh floor: the row going `running` is what starts
-         the heartbeat repainting this stage, so waiting out the floor would
-         leave the turn invisible for as long as it takes. */
-      refreshInstances(true)
-      return true
-    })
-    .catch((e: unknown) => {
-      /* Said rather than swallowed. A refusal here is usually this instance
-         still answering the turn before, which the reader can act on. */
-      set({ sendFail: { agent, handle, why: (e as Error)?.message || String(e) } })
-      return false
-    })
+  const chat = directOf(agent, handle)
+  if (chat.busy) {
+    setDirect(agent, handle, { ...chat, queue: [...chat.queue, said] })
+    return Promise.resolve(true)
+  }
+  return startDirect(agent, handle, said)
 }
 
 /* Why this instance refused a turn, and nothing about any other. */
@@ -335,6 +427,8 @@ export function openRow(it: AgentRow): void {
   } else {
     set({ open: { kind: 'spawn', id: it.id || '' }, who: null })
   }
+  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
+  workspace?.openAgentRecord?.(it)
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
@@ -354,6 +448,8 @@ export function openDagNode(runId: string, n: { id: string; subagent?: string | 
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label: n.id }, who: null })
+  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
+  workspace?.openAgentRecord?.({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label: n.id })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)
@@ -441,6 +537,30 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
     })
 }
 
+export function paintInstanceDirect(box: HTMLElement, agent: string, handle: string): void {
+  const src = source()
+  if (!src.instanceHistory) {
+    emptyStage(box, t('gui.ws.agents_none'))
+    return
+  }
+  src.instanceHistory(agent, handle)
+    .then((r) => {
+      if (!box.isConnected) return
+      const row = state.instances.find((x) => x.agent === agent && x.handle === handle)
+      const ctx = toInstanceCtx(r?.turns, row?.status ?? undefined)
+      const actualUser = new Set(ctx.messages.filter((m) => m.role === 'user').map((m) => m.text))
+      const chat = directOf(agent, handle)
+      const optimistic = chat.pending.filter((text) => !actualUser.has(text))
+      if (optimistic.length !== chat.pending.length) setDirect(agent, handle, { ...chat, pending: optimistic })
+      ctx.messages.push(...optimistic.map((text) => ({ role: 'user', text })))
+      src.stagePaint?.(box, ctx, { key: `desk:${agent}:${handle}`, reset: box.dataset.instanceKey !== `${agent}:${handle}` })
+      box.dataset.instanceKey = `${agent}:${handle}`
+    })
+    .catch((e: unknown) => {
+      if (box.isConnected) failStage(box, e)
+    })
+}
+
 export function paintSpawn(box: HTMLElement, id: string): void {
   const src = source()
   if (!src.context) {
@@ -503,6 +623,46 @@ export function paintDag(box: HTMLElement, it: { run_id: string; node: string })
     })
 }
 
+export function paintAgentRecord(box: HTMLElement, row: AgentRow): void {
+  const src = source()
+  const dag = row.kind === 'dag'
+  const key = dag ? `dag:${row.run_id || ''}:${row.node || ''}` : `sp:${row.id || ''}`
+  const reset = box.dataset.recordKey !== key
+  const request = dag
+    ? src.node?.(row.run_id || '', row.node || '')
+    : src.context?.(row.id || '')
+  if (!request) {
+    emptyStage(box, t('gui.ws.agents_none'))
+    return
+  }
+  request
+    .then((record) => {
+      if (!box.isConnected) return
+      const ctx = dag
+        ? { messages: ('messages' in record && record.messages) || [], status: row.status || null }
+        : record
+      src.stagePaint?.(
+        box,
+        ctx,
+        {
+          key,
+          empty: t(dag ? 'gui.dag.node_empty' : 'gui.ws.spawn_empty'),
+          reset,
+        },
+      )
+      box.dataset.recordKey = key
+      if (dag && 'output_truncated' in record && record.output_truncated && !box.querySelector(':scope > .wsnote')) {
+        const note = document.createElement('div')
+        note.className = 'wsnote'
+        note.textContent = t('gui.dag.truncated')
+        box.appendChild(note)
+      }
+    })
+    .catch((error: unknown) => {
+      if (box.isConnected) failStage(box, error)
+    })
+}
+
 /* ── the watch ────────────────────────────────────────────────────────
    The live source calls back every couple of seconds; everything about what
    deserves asking is decided here, against what is on screen. A run in
@@ -510,6 +670,13 @@ export function paintDag(box: HTMLElement, it: { run_id: string; node: string })
    the moment the run does -- a detail page still saying "working" over a run
    the list already knows failed is the panel lying. */
 let hooked: AgentsSource | null = null
+const detailPollListeners = new Set<() => void>()
+
+export function subscribeDetailPoll(listener: () => void): () => void {
+  detailPollListeners.add(listener)
+  hook()
+  return () => detailPollListeners.delete(listener)
+}
 
 export function hook(): void {
   const seam = window.DS
@@ -520,8 +687,15 @@ export function hook(): void {
 }
 
 function onPoll(): void {
+  detailPollListeners.forEach((listener) => listener())
   const shows = shell().wsShows
-  if (!shows || !shows('agents')) return
+  if (!shows || !shows('agents')) {
+    if (detailPollListeners.size) {
+      refresh(true)
+      refreshInstances(true)
+    }
+    return
+  }
   const open = state.open
   /* Both lists on the same heartbeat: an instance's status moves when a direct
      turn ends, which no run row reports. */
@@ -616,6 +790,8 @@ export function attached(on: boolean): void {
    conversation's background work to another. The open dag node goes for the
    same reason, and because dag.node is addressed by session. */
 export function reset(): void {
+  rosterDrawn = ''
+  rosterBusy = false
   drawn = ''
   at = 0
   busy = false
@@ -638,6 +814,7 @@ export function _resetForTests(): void {
   directPoke.clear()
   mounted = false
   hooked = null
+  detailPollListeners.clear()
   stageEl = null
   reset()
 }

@@ -184,7 +184,7 @@ function DLine({ numbered, kind, text, oldNo, newNo }: {
   )
 }
 
-function ChgDiff({ c }: { c: WsChange }): JSX.Element {
+export function ChgDiff({ c }: { c: WsChange }): JSX.Element {
   /* One gutter decision per file, not per hunk: a mixed card must not
      zigzag its left edge between the two layouts. */
   const numbered = c.hunks.some((h) => h.rows.some((r) => r.length > 2))
@@ -294,10 +294,18 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
   )
 }
 
-function FileView({ ws }: { ws: WsShared }): JSX.Element {
+export function FileView({
+  ws,
+  file = ws.file,
+  onOpen = store.showFile,
+}: {
+  ws: WsShared
+  file?: WsFile | null
+  onOpen?: (path: string) => void
+}): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.dir_empty')}</div>
-  const f = ws.file
+  const f = file
   return (
     <div
       className="fwrap"
@@ -307,7 +315,7 @@ function FileView({ ws }: { ws: WsShared }): JSX.Element {
     >
       <Fbar f={f} />
       <div className="frow">
-        <FtPane />
+        <FtPane selectedPath={f?.path || ''} onOpen={onOpen} />
         <Grip wrapRef={wrapRef} />
         <div className="fpane">
           {!f ? (
@@ -425,9 +433,23 @@ function Fbar({ f }: { f: WsFile | null }): JSX.Element {
   )
 }
 
-function FtPane(): JSX.Element {
+function FtPane({ selectedPath, onOpen }: { selectedPath: string; onOpen: (path: string) => void }): JSX.Element {
+  const list = useRef<HTMLDivElement>(null)
   useEffect(() => {
     ftLoadVisible()
+  }, [])
+  useEffect(() => {
+    if (!selectedPath) return
+    const full = relToRoot(selectedPath) || relToWorkspace(selectedPath) || selectedPath
+    ftOpenTo(full)
+  }, [selectedPath])
+  useEffect(() => {
+    if (!selectedPath) return
+    const full = relToRoot(selectedPath) || relToWorkspace(selectedPath) || selectedPath
+    requestAnimationFrame(() => {
+      const row = list.current?.querySelector<HTMLElement>(`.ftrow[data-p="${CSS.escape(full)}"]`)
+      row?.scrollIntoView({ block: 'nearest' })
+    })
   })
   return (
     <div className="ftree">
@@ -451,8 +473,8 @@ function FtPane(): JSX.Element {
           }}
         />
       </div>
-      <div className="ftlist">
-        {FT.q ? <FtResults /> : <FtRows dir="" depth={0} />}
+      <div className="ftlist" ref={list}>
+        {FT.q ? <FtResults onOpen={onOpen} /> : <FtRows dir="" depth={0} selectedPath={selectedPath} onOpen={onOpen} />}
       </div>
     </div>
   )
@@ -462,7 +484,7 @@ function FtLeaf({ text, depth }: { text: string; depth: number }): JSX.Element {
   return <div className="ftleaf" style={{ paddingLeft: `${23 + depth * 13}px` }}>{text}</div>
 }
 
-function FtResults(): JSX.Element {
+function FtResults({ onOpen }: { onOpen: (path: string) => void }): JSX.Element {
   const hits = ftMatches()
   return (
     <>
@@ -473,7 +495,7 @@ function FtResults(): JSX.Element {
             return
           }
           ftOpenTo(full)
-          store.showFile(ftAbs(full))
+          onOpen(ftAbs(full))
         }
         const items = (): MenuItem[] => (e.dir ? [] : [{ label: t('gui.ws.open'), fn: open }]).concat([
           { label: t('gui.ws.reveal'), fn: () => ftReveal(full, Boolean(e.dir)) },
@@ -501,8 +523,12 @@ function FtResults(): JSX.Element {
   )
 }
 
-function FtRows({ dir, depth }: { dir: string; depth: number }): JSX.Element {
-  const ws = store.shared()
+function FtRows({ dir, depth, selectedPath, onOpen }: {
+  dir: string
+  depth: number
+  selectedPath: string
+  onOpen: (path: string) => void
+}): JSX.Element {
   const kids = FT.kids.get(dir)
   if (kids === undefined) return <FtLeaf text={t('gui.ws.file_loading')} depth={depth} />
   if (isErr(kids)) return <FtLeaf text={t('gui.ws.read_fail', { err: kids.err })} depth={depth} />
@@ -512,7 +538,7 @@ function FtRows({ dir, depth }: { dir: string; depth: number }): JSX.Element {
       {kids.map((e) => {
         const full = ftJoin(dir, e.name)
         const open = Boolean(e.dir) && FT.open.has(full)
-        const on = !e.dir && ws.file != null && ws.file.path === ftAbs(full)
+        const on = !e.dir && selectedPath === ftAbs(full)
         /* Guide lines, one per level, each under its ancestor's chevron.
            Inline because the count is the row's depth; hover keeps working
            because the states set background-color, never the shorthand. */
@@ -534,7 +560,7 @@ function FtRows({ dir, depth }: { dir: string; depth: number }): JSX.Element {
         }
         const items = (): MenuItem[] => (e.dir
           ? [{ label: t(open ? 'gui.ws.dir_collapse' : 'gui.ws.dir_expand'), fn: flip }]
-          : [{ label: t('gui.ws.open'), fn: () => store.showFile(ftAbs(full)) }]
+          : [{ label: t('gui.ws.open'), fn: () => onOpen(ftAbs(full)) }]
         ).concat([
           { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(ftAbs(full), t('gui.ws.copy_path')) },
           { label: t('gui.ws.copy_name'), fn: () => copyToClip(e.name, t('gui.ws.copied_name')) },
@@ -548,7 +574,7 @@ function FtRows({ dir, depth }: { dir: string; depth: number }): JSX.Element {
               aria-expanded={e.dir ? open : undefined}
               onClick={() => {
                 if (e.dir) flip()
-                else store.showFile(ftAbs(full))
+                else onOpen(ftAbs(full))
               }}
               ref={ctxRef(items)}
             >
@@ -566,7 +592,9 @@ function FtRows({ dir, depth }: { dir: string; depth: number }): JSX.Element {
               <span className="nm">{e.name}</span>
               {!e.dir ? <span className="sz">{fmtSize(e.size)}</span> : null}
             </button>
-            {e.dir && open ? <FtRows dir={full} depth={depth + 1} /> : null}
+            {e.dir && open
+              ? <FtRows dir={full} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} />
+              : null}
           </Fragment>
         )
       })}

@@ -51,7 +51,7 @@ function onEvent(ev) {
      instance's words get typed into the conversation as if raven had said them.
      These belong on the instance's own page, which reads them back through
      `subagents.instance.history`. */
-  if (p.target) { RavenIslands.subagents.directEvent(p.target, ev.type); return; }
+  if (p.target) { RavenIslands.subagents.directEvent(p.target, ev.type, p); return; }
   if (ev.type === 'message.start') {
     /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not. */

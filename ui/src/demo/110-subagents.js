@@ -54,7 +54,7 @@ function wsOnToolDone(name, args, ok, preview, ms, diff) {
   bumpWs();
 }
 
-$('#wsBtn').onclick = () => setWs(!wsOpen);
+$('#wsBtn').onclick = () => RavenIslands.workspace.toggleDesk();
 $('#wsClose').onclick = () => setWs(false);
 /* Widening by hand is the seam's job now, so this button does the thing dragging
    cannot: hand the whole window to the panel. */

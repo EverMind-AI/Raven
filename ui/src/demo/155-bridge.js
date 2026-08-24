@@ -11,6 +11,7 @@ window.RavenShell = {
   useInTask: (key, name) => useInTask(key, name),
   closeDetail: () => closeDetail(),
   showWorkspace: (tab) => { if (!wsOpen) setWs(true); wsPick(tab); },
+  workspaceSetOpen: (open) => setWs(Boolean(open)),
   wsShows: (tab) => wsOpen && wsTab === tab,
   wsView: () => wsView(),
   wsPick: (tab) => wsPick(tab),

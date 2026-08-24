@@ -15,7 +15,7 @@ function xaRowOf(r) {
   return {
     name: r.name,
     preset: r.preset,
-    kind: r.kind || 'cli',
+    kind: r.kind || (r.builtin ? 'builtin' : 'cli'),
     configured: !!r.configured,
     /* Raven's own agents. On the table whether or not config mentions them, so
        they are `configured: false` yet not something to install -- the page needs
