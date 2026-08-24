@@ -68,3 +68,40 @@ async def test_deliver_eats_streaming_and_in_turn_events():
     await adapter.deliver(ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="grep", source=src))
     await adapter.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", source=src))
     assert ch.sent == []  # all eaten — a non-streaming channel renders only the final reply
+
+
+async def test_a_blocked_action_is_not_eaten() -> None:
+    """The one notice kind that replaces the answer instead of accompanying it.
+    The runtime ends the turn on a safety decision and the reply it would have
+    sent *is* this notice, so eating it -- as this outlet does with every other
+    kind -- ends the turn in silence: the user asked for something, the runtime
+    refused, and nothing arrives. Measured through a real denial before this: the
+    turn ended normally and the channel had sent nothing at all."""
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+
+    await adapter.deliver(
+        Notice(kind=NoticeKind.ACTION_BLOCKED, detail="Error: command requires approval", source=_src("telegram", "c3"))
+    )
+
+    assert len(ch.sent) == 1
+    chat_id, content, media = ch.sent[0]
+    assert chat_id == "c3" and media is None
+    assert "requires approval" in content
+
+
+async def test_a_blocked_action_with_no_detail_still_says_something() -> None:
+    """``detail`` is optional on purpose: a tool can abort with no readable line
+    at all. Sending whitespace would put an empty message in front of a person as
+    if it were an explanation, and sending nothing is the silence this exists to
+    prevent."""
+    ch = _FakeChannel()
+    adapter = ChannelOutletAdapter(ch)
+
+    await adapter.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail=None, source=_src()))
+    await adapter.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail="   \n ", source=_src()))
+
+    assert [content for _chat, content, _media in ch.sent] == [
+        "The runtime blocked this action.",
+        "The runtime blocked this action.",
+    ]

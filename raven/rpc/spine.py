@@ -218,10 +218,25 @@ class TuiOutlet:
             {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+    async def emit_error(
+        self,
+        conversation_id: str,
+        code: int,
+        message: str,
+        reason: str,
+        detail: str = "",
+        turn_id: str | None = None,
+    ) -> None:
+        # The failing turn's own id, for the same reason message.complete carries
+        # one: a runtime turn failing on a busy lane must not be mistaken by the
+        # client for the end of the turn it is watching. Omitted rather than
+        # blank when there is no turn to name -- a connection-level failure, or a
+        # cancellation, which the client asked for on its own turn.
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if detail:
             payload["detail"] = detail
+        if turn_id:
+            payload["turn_id"] = turn_id
         await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
 
 
@@ -298,6 +313,7 @@ def _make_tui_sink(
                     "turn_failed",
                     "internal",
                     event.error or "",
+                    turn_id=event.turn_id,
                 )
             return
         if isinstance(event, TurnStarted):

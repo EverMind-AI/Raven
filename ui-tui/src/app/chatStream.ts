@@ -282,6 +282,15 @@ const onError = (
   appendMessage?: (msg: Msg) => void
 ): void => {
   const { reason, message, code, detail } = ev.payload
+  // Same correlation the completion path needs, for the same reason: a turn the
+  // runtime submitted can fail while this client's turn is queued behind it on
+  // the same lane, and an ungated failure clears the queued turn's guard and
+  // idles an input the user is still waiting on. A failure with no turn_id --
+  // a connection-level one, or the cancellation this client asked for -- is
+  // this client's business by construction, so it falls through.
+  if (state.turnId && ev.payload.turn_id && ev.payload.turn_id !== state.turnId) {
+    return
+  }
   state.turnId = null
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)

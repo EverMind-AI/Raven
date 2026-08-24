@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 
 from raven.agent.loop import AgentLoop
@@ -434,3 +435,59 @@ async def test_a_normal_turn_still_gets_its_closing_text(tmp_path) -> None:
     assert hints, f"this turn is only a discriminator if a notice fired at all: {emitted}"
     assert not [e for e in emitted if isinstance(e, Notice) and e.kind is NoticeKind.ACTION_BLOCKED]
     assert [e for e in emitted if isinstance(e, Text)], f"the answer must still be delivered: {emitted}"
+
+
+async def test_a_denied_action_still_reaches_a_channel_that_cannot_draw_notices(tmp_path) -> None:
+    """The end of the same path, on the surface that has no notice to draw.
+
+    ``run_turn`` always wires ``on_notice``, so a non-streaming channel turn takes
+    the notice branch too -- and the boundary then suppresses the closing
+    ``Text``. Before the outlet learned this one kind, that combination delivered
+    nothing at all: the turn ended normally and the channel had sent no message,
+    which is what a refusal and an empty answer look like when they are the same
+    silence. Exactly one message, because the point of the suppression is that no
+    surface says it twice.
+    """
+    from raven.channels.outlet import ChannelOutletAdapter
+    from raven.spine.events import Deliverable
+
+    class _Channel:
+        def __init__(self) -> None:
+            self.name = "telegram"
+            self.sent: list[str] = []
+
+        async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
+            self.sent.append(content)
+
+    channel = _Channel()
+    outlet = ChannelOutletAdapter(channel)
+    source = Source(channel="telegram", chat_id="c1", sender_id="user", chat_type=ChatType.DM)
+
+    async def emit(event) -> None:
+        if isinstance(event, Deliverable):
+            # The hub stamps the target before an outlet sees it; the runner-side
+            # events carry none, so this stands in for that hop.
+            await outlet.deliver(dataclasses.replace(event, source=source))
+
+    def drain() -> list:
+        return []
+
+    agent = AgentLoop(provider=_Provider(), workspace=tmp_path, model="fake/model")
+    tool = ExecTool(executor=_Executor(), working_dir=str(tmp_path))
+    tool.start_approval_turn(_Responder(answer=False), conversation_id="session-c", turn_id="turn-c")
+    agent.tools.register(tool)
+
+    await agent.run_turn(
+        TurnRequest(
+            origin=Origin.USER,
+            source=source,
+            text="delete file.txt",
+            conversation="session-c",
+        ),
+        emit,
+        drain,
+        stream=False,
+    )
+
+    assert channel.sent, "a denied action must not leave the channel with nothing to show"
+    assert len(channel.sent) == 1, f"and must not say it twice: {channel.sent}"

@@ -537,6 +537,55 @@ describe('createChatStream — one turn cannot terminate another', () => {
     expect(getUiState().status).toBe('ready')
   })
 
+  it('ignores a failure belonging to another turn, and keeps the input live', async () => {
+    // The failure half of the same defect: a runtime turn failing on a busy lane
+    // used to clear the queued client's guard and idle an input the user was
+    // still waiting on.
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('hi')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', turn_id: 'runtime-turn' }
+    })
+
+    expect(getUiState().busy).toBe(true)
+    expect(sysCalls.some(m => /turn_failed/.test(m))).toBe(false)
+  })
+
+  it('still surfaces a failure that names no turn', async () => {
+    // A connection-level failure, and the cancellation this client asked for,
+    // carry no turn_id -- they are this client's business by construction.
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('hi')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal' }
+    })
+
+    expect(sysCalls.some(m => /turn_failed/.test(m))).toBe(true)
+    expect(getUiState().busy).toBe(false)
+  })
+
   it('still finalizes a completion that arrives with no turn being watched', async () => {
     // Nothing set state.turnId: a resumed or replayed stream must not lose its
     // streamed content to a guard that has no turn to compare against.

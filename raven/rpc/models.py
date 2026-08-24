@@ -255,6 +255,18 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    turn_id: str | None = Field(
+        default=None,
+        description=(
+            "Which turn failed, when the failure belongs to one. The lane is shared, so a turn "
+            "the runtime submitted can fail while a client's turn is queued behind it: a client "
+            "with no id to compare clears its own turn's state on somebody else's failure, and a "
+            "consumer that answers a request off this event answers the wrong request. Absent when "
+            "there is no turn to name -- a connection-level failure, or a cancellation the client "
+            "asked for on the turn it is watching -- which a consumer reads as not-somebody-else's "
+            "rather than as its own."
+        ),
+    )
 
 
 class ErrorEvent(_Strict):

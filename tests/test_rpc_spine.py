@@ -766,3 +766,39 @@ async def test_every_outlet_emission_validates_against_the_wire_contract():
     assert len(emitter.emitted) == len(events) + 3
     for _key, wire in emitter.emitted:
         adapter.validate_python(wire)
+
+
+async def test_a_failure_names_the_turn_that_failed():
+    """The failure half of the correlation ``message.complete`` already had. A
+    runtime turn failing on a busy lane reaches the client as an ``error``, and
+    without an id on it the client cannot tell that failure from the end of the
+    turn it is watching -- so it clears its own turn's state on somebody else's
+    failure."""
+    from raven.rpc.spine import TuiOutlet, _make_tui_sink
+    from raven.spine.delivery import DeliveryHub
+
+    hub = DeliveryHub()
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    hub.register(outlet)
+    # The lane's slot holds the queued client turn, not the one that is failing.
+    sink = _make_tui_sink(hub, outlet, "tui", {"tui:c1": "client-1"}, {}, None)
+
+    await sink(TurnFailed(error="boom", cancelled=False, conversation_id="tui:c1", turn_id="runtime-1"))
+
+    errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+    assert len(errors) == 1
+    assert errors[0]["payload"]["turn_id"] == "runtime-1", "the failing turn's own id, not the lane slot's value"
+
+
+async def test_a_failure_with_no_turn_to_name_omits_the_field():
+    """Absent rather than blank. A connection-level failure belongs to no turn,
+    and a cancellation belongs to the turn the client asked about -- an empty
+    string would be a third state a client has to special-case."""
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal")
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "", turn_id="")
+
+    assert all("turn_id" not in e["payload"] for _k, e in emitter.emitted)
