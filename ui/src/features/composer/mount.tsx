@@ -90,6 +90,10 @@ export const queueShift = (): string | undefined => store.queueShift()
 export const queueClear = (): void => store.queueClear()
 export const queueSnapshot = (): string[] => store.queueSnapshot()
 export const queueRestore = (items: string[]): void => store.queueRestore(items)
+export const parkDraft = (): void => store.parkDraft()
+export const loadDraft = (id: string | null): void => store.loadDraft(id)
+export const dropDraft = (id: string | null): void => store.dropDraft(id)
+export const claimDraft = (id: string | null): void => store.claimDraft(id)
 
 export function drawMeter(): void {
   ensure()

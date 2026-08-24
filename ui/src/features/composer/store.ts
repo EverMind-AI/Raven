@@ -1,5 +1,7 @@
 import { ds, shell, t } from '../../shell/bridge'
+import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
+import { current as currentSession } from '../../shell/session'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
@@ -69,6 +71,80 @@ export const durText = formatDuration
 /* ── the field ────────────────────────────────────────────────────────── */
 
 export const field = (): HTMLTextAreaElement | null => el<HTMLTextAreaElement>('ta')
+
+const DRAFT_KEY = 'raven.gui.drafts'
+const DRAFT_MAX = 30
+let draftOwner: string | null = null
+let draftTick: ReturnType<typeof setTimeout> | null = null
+
+interface Draft {
+  t: string
+  at: number
+}
+
+type Drafts = Record<string, Draft>
+
+function draftsRead(): Drafts {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null')
+    return value && typeof value === 'object' ? value as Drafts : {}
+  } catch {
+    return {}
+  }
+}
+
+function draftsWrite(all: Drafts): void {
+  const keys = Object.keys(all)
+  if (keys.length > DRAFT_MAX) {
+    keys.sort((a, b) => (all[a]?.at || 0) - (all[b]?.at || 0))
+      .slice(0, keys.length - DRAFT_MAX)
+      .forEach((key) => delete all[key])
+  }
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(all))
+  } catch {
+    /* Storage may be unavailable in private mode or over quota. */
+  }
+}
+
+export function parkDraft(): void {
+  const key = draftOwner || currentSession() || 'new'
+  const text = field()?.value || ''
+  const all = draftsRead()
+  if (text.trim()) all[key] = { t: text, at: Date.now() }
+  else delete all[key]
+  draftsWrite(all)
+}
+
+export function loadDraft(id: string | null): void {
+  draftOwner = id || 'new'
+  const ta = field()
+  if (!ta) return
+  ta.value = draftsRead()[draftOwner]?.t || ''
+  fitField()
+  goPaint()
+}
+
+export function dropDraft(id: string | null): void {
+  const all = draftsRead()
+  delete all[id || 'new']
+  draftsWrite(all)
+}
+
+export function claimDraft(id: string | null): void {
+  if (draftOwner === 'new') draftOwner = id || currentSession() || 'new'
+}
+
+export function touchDraft(): void {
+  if (draftTick) clearTimeout(draftTick)
+  draftTick = setTimeout(parkDraft, 250)
+}
+
+export function dropOwnedDraft(): void {
+  if (draftTick) clearTimeout(draftTick)
+  draftTick = null
+  dropDraft(draftOwner)
+}
 
 /* A file on its own is a message -- "look at this" is what dropping it already
    said -- so an empty field with something attached must still be sendable. */
@@ -350,7 +426,7 @@ export function addFiles(files: ArrayLike<File>): void {
           entry.path = r.path
           entry.size = r.size
           entry.uploading = false
-          if (entry.url) verb('attImageSet')(r.path, entry.url)
+          if (entry.url) attachmentCache.set(r.path, entry.url)
           trayPaint(state.atts.slice())
           goPaint()
         })
@@ -407,7 +483,7 @@ export function runSlash(x: SlashCmd | undefined): void {
   if (ta) ta.value = ''
   fitField()
   goPaint()
-  verb('draftDrop')()
+  dropOwnedDraft()
   x.fn()
 }
 
@@ -448,7 +524,7 @@ export function fireSend(): void {
   }
   if (ta) ta.value = ''
   fitField()
-  verb('draftDrop')()
+  dropOwnedDraft()
   source().send(text)
   goPaint()
 }
@@ -482,11 +558,8 @@ export function pickFiles(open: () => void): void {
 export const composing = (e: { isComposing?: boolean; keyCode?: number }): boolean =>
   !!(e.isComposing || e.keyCode === 229)
 
-/* Unloading is not a moment to throw in: whatever is not parked by now is
-   lost anyway, so the verb is asked for rather than demanded. */
 export function parkDraftNow(): void {
-  const s = window.RavenShell
-  if (s && s.draftPark) s.draftPark()
+  parkDraft()
 }
 
 export function fieldInput(): void {
@@ -496,7 +569,7 @@ export function fieldInput(): void {
   const v = ta ? ta.value : ''
   if (v.startsWith('/') && !v.includes(' ')) drawSlash(v)
   else closeSlash()
-  verb('draftTouch')()
+  touchDraft()
 }
 
 export function fieldKeydown(e: KeyboardEvent): void {
@@ -537,8 +610,11 @@ export function fieldKeydown(e: KeyboardEvent): void {
 /* Test seam only: module state survives between tests. */
 export function _resetForTests(): void {
   if (liveTick) clearInterval(liveTick)
+  if (draftTick) clearTimeout(draftTick)
   liveTick = null
   liveT0 = 0
+  draftOwner = null
+  draftTick = null
   state = { ...initial }
   listeners.clear()
 }

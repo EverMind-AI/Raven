@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn'
+import * as attachmentCache from '../../shell/attachment-cache'
 
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -17,8 +18,6 @@ interface Calls {
   halted: number
   notes: Array<[string, string]>
   toasts: string[]
-  attImgs: Array<[string, string]>
-  draftDropped: number
   stick: boolean
 }
 
@@ -68,8 +67,7 @@ const DOCK = `
 
 function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; calls: Calls } {
   const calls: Calls = {
-    sent: [], halted: 0, notes: [], toasts: [], attImgs: [],
-    draftDropped: 0, stick: true,
+    sent: [], halted: 0, notes: [], toasts: [], stick: true,
   }
   const fakeShell: Shell = {
     T: (key, vars) => {
@@ -83,10 +81,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     noteRow: (label, detail) => { calls.notes.push([label, detail]) },
     stick: () => calls.stick,
     setStick: (on) => { calls.stick = on },
-    draftTouch: () => {},
-    draftDrop: () => { calls.draftDropped += 1 },
-    draftPark: () => {},
-    attImageSet: (p, url) => { calls.attImgs.push([p, url]) },
     slashName: (id) => id.replace(/^gui\./, ''),
     slashHelp: (id) => `help for ${id}`,
     down: () => {},
@@ -146,6 +140,8 @@ function mountLive(afterPaint?: () => void): void {
 afterEach(() => {
   cleanup()
   store._resetForTests()
+  attachmentCache._resetForTests()
+  localStorage.clear()
   turn._resetForTests()
   lang = 'zh'
   vi.useRealTimers()
@@ -212,17 +208,74 @@ describe('the send button', () => {
 
   it('sends the trimmed text, clears the field and drops the parked draft', () => {
     const { calls } = wire()
+    store.loadDraft('a')
     ta().value = '  ship it  '
+    store.parkDraft()
     store.fireSend()
     expect(calls.sent).toEqual(['ship it'])
     expect(ta().value).toBe('')
-    expect(calls.draftDropped).toBe(1)
+    expect(localStorage.getItem('raven.gui.drafts')).toBe('{}')
   })
 
   it('refuses to send nothing at all', () => {
     const { calls } = wire()
     store.fireSend()
     expect(calls.sent).toEqual([])
+  })
+})
+
+describe('composer drafts', () => {
+  const drafts = (): Record<string, { t: string; at: number }> =>
+    JSON.parse(localStorage.getItem('raven.gui.drafts') || '{}')
+
+  it('parks the field under its owner after the debounce', () => {
+    vi.useFakeTimers()
+    wire()
+    store.loadDraft('a')
+    ta().value = 'half written'
+    store.touchDraft()
+    vi.advanceTimersByTime(249)
+    expect(drafts()).toEqual({})
+    vi.advanceTimersByTime(1)
+    expect(drafts().a?.t).toBe('half written')
+  })
+
+  it('parks before switching and restores each session independently', () => {
+    wire()
+    store.loadDraft('a')
+    ta().value = 'for a'
+    store.parkDraft()
+    store.loadDraft('b')
+    expect(ta().value).toBe('')
+    ta().value = 'for b'
+    store.parkDraft()
+    store.loadDraft('a')
+    expect(ta().value).toBe('for a')
+    store.loadDraft('b')
+    expect(ta().value).toBe('for b')
+  })
+
+  it('files later text under the session that claims a new draft', () => {
+    wire()
+    store.loadDraft('new')
+    store.claimDraft('created')
+    ta().value = 'after create'
+    store.parkDraft()
+    expect(drafts().created?.t).toBe('after create')
+    expect(drafts().new).toBeUndefined()
+  })
+
+  it('drops an explicit session without disturbing another draft', () => {
+    wire()
+    store.loadDraft('a')
+    ta().value = 'for a'
+    store.parkDraft()
+    store.loadDraft('b')
+    ta().value = 'for b'
+    store.parkDraft()
+    store.dropDraft('a')
+    expect(drafts().a).toBeUndefined()
+    expect(drafts().b?.t).toBe('for b')
   })
 })
 
@@ -381,7 +434,7 @@ describe('the live turn row', () => {
 describe('the attachment tray', () => {
   it('stages an in-flight chip, then the uploaded size, and files the image bytes', async () => {
     let settle: (r: { path: string; size: number }) => void = () => {}
-    const { calls } = wire({ upload: () => new Promise((r) => { settle = r }) })
+    wire({ upload: () => new Promise((r) => { settle = r }) })
     const box = mountTray()
     await act(async () => {
       store.addFiles([new File(['x'], 'shot.png', { type: 'image/png' })])
@@ -400,7 +453,7 @@ describe('the attachment tray', () => {
     })
     expect((box.querySelector('.att') as HTMLElement).classList.contains('up')).toBe(false)
     expect(box.querySelector('.att img')!.getAttribute('title')).toBe('shot.png · 2 KB')
-    expect(calls.attImgs[0]![0]).toBe('uploads/shot.png')
+    expect(attachmentCache.get('uploads/shot.png')).toMatch(/^data:image\/png/)
   })
 
   it('shows a non-image as a name and a size', async () => {
@@ -586,7 +639,7 @@ describe('the slash palette', () => {
     act(() => { store.fieldKeydown(new KeyboardEvent('keydown', { key: 'Enter' })) })
     expect(slash[0]!.fn).toHaveBeenCalledTimes(1)
     expect(ta().value).toBe('')
-    expect(calls.draftDropped).toBe(1)
+    expect(localStorage.getItem('raven.gui.drafts')).toBe('{}')
     expect(document.getElementById('slashPop')!.dataset.open).toBe('false')
     /* Enter belonged to the palette, so no message went out. */
     expect(calls.sent).toEqual([])

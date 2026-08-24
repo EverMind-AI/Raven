@@ -1,4 +1,5 @@
 import { ds, shell } from '../../shell/bridge'
+import { dropDraft } from '../composer/store'
 import { mark as navMark } from '../../shell/navfly'
 import { setCurrent } from '../../shell/session'
 import { plainTitle } from './title'
@@ -264,7 +265,7 @@ export function remove(s: SessRow): void {
   const sh = shell()
   const rows = source().snapshot().rows
   const at = rows.indexOf(s)
-  sh.dropDraft?.(s.id)
+  dropDraft(s.id)
   const i = rows.findIndex(x => x.id === s.id)
   if (i >= 0) rows.splice(i, 1)
   undoBin = { s, at }

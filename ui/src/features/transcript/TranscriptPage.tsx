@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 
 import * as dag from '../dag/graph'
 import { DagGraph } from '../dag/DagGraph'
+import * as attachmentCache from '../../shell/attachment-cache'
 import { shell, t } from '../../shell/bridge'
 import { open as openChip } from '../../shell/chips'
 import {
@@ -664,12 +665,11 @@ export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg:
 const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData }): ReactElement {
   useSeg(lane, seg)
   const bRef = useRef<HTMLDivElement | null>(null)
-  const sh = shell()
-  const imgs = seg.atts.filter((p) => sh.attImage?.(String(p)))
-  const docs = seg.atts.filter((p) => !sh.attImage?.(String(p)))
+  const imgs = seg.atts.filter((p) => attachmentCache.get(String(p)))
+  const docs = seg.atts.filter((p) => !attachmentCache.get(String(p)))
   const openAll = (): void => store.expandAskAtts(lane, seg)
   const thumb = (p: string, liveImg: boolean): ReactElement => {
-    const src = sh.attImage!(String(p)) as string
+    const src = attachmentCache.get(String(p)) as string
     const nm = String(p).split('/').pop() || ''
     return <img key={p} className="shot" src={src} alt={nm}
       {...(liveImg ? { title: t('gui.img.open', { name: nm }), onClick: () => lightbox.open(src, nm) } : {})} />

@@ -63,12 +63,6 @@ function splitAtts(text) {
   return { body: text, atts: [] };
 }
 
-/* Uploaded path -> data URL, filled in by the upload path (live.js). An image
-   the reader just sent should look like an image in their own message, and the
-   bytes are already in the page; attachments travel to the agent as paths, so
-   this is the only place they can be recovered from. */
-const ATT_IMG = new Map();
-
 function ask(text, when) {
   const ch = document.querySelector('.chat');
   if (ch) delete ch.dataset.fresh;
