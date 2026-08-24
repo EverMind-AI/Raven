@@ -1,5 +1,6 @@
 import * as dagNodes from '../dag/nodes'
 import { ds, shell, t, verb } from '../../shell/bridge'
+import { formatDuration } from '../../shell/duration'
 import { md } from '../../shell/prose'
 
 import type { WsChange } from '../workspace/types'
@@ -125,7 +126,7 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
    window.RavenShell.md -> window.md -> back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
-export const durText = (ms: number): string => verb('dur')(ms)
+export const durText = formatDuration
 
 const shortPath = (p: string): string => {
   try {

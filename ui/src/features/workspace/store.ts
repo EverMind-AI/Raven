@@ -90,7 +90,7 @@ export function copyToClip(text: string, done: string): void {
    window.RavenShell.md -> window.md -> this module for nothing, and would hide
    the file viewer from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
-export const hostPlatform = (): string => verb('hostPlatform')()
+export const hostPlatform = (): string => source().hostPlatform()
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. */

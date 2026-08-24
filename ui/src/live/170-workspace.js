@@ -62,6 +62,7 @@ DS.prose = {
 };
 
 DS.workspace = {
+  hostPlatform: () => HOST_PLATFORM,
   canBrowse: true,
   list: (dir) => rpc.call('fs.list', { path: dir, session: sessionCurrent() || '' }).then((r) => {
     /* The root rides on every answer: it is the session's working directory,

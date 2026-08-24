@@ -59,11 +59,8 @@ export interface Shell {
   showWorkspace?(tab: string): void
   wsShows?(tab: string): boolean
   lang?(): string
-  hostPlatform?(): string
   wsView?(): WsPanelView
   wsPick?(tab: string): void
-  dur?(ms: number): string
-  plainTitle?(s: string): string
   /* The transcript bridge: draws a delegated run's record into a stage box
      with the transcript's own renderer. Forwards to DS.agents.stagePaint,
      which the fixture source omits -- no runs to hand out means no record to
@@ -162,9 +159,9 @@ export function ds<S>(domain: string): S {
 
 /* One optional verb, insisted on. Every verb above is declared optional because
    the demo and live layers publish different subsets, but a caller that cannot
-   do its job without one should say so rather than degrade: `shell().dur?.(ms)
-   ?? ''` blanks a clock column forever and reports nothing, and the fake most
-   likely to omit the verb is a test's.
+   do its job without one should say so rather than degrade: asking for
+   `shell().wsView?.()` moves missing panel-state wiring into a later property
+   read, and the fake most likely to omit the verb is a test's.
    Lives here rather than beside its first caller because the module docstring
    above is where this repo states the rule -- a silent fallback moves the
    failure downstream -- and a helper enforcing it belongs with the rule. */

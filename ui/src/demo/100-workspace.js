@@ -265,6 +265,7 @@ function drawWs() {
    object is never consulted. */
 DS.workspace ??= {
   shortPath: (p) => String(p),
+  hostPlatform: () => HOST_PLATFORM,
   openPath: (p) => toast(`demo：正式版会用系统默认程序打开 ${p}`),
 };
 

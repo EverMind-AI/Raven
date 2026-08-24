@@ -21,8 +21,6 @@ function wire(): void {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    /* The clock renders through the page's own duration wording. */
-    dur: (ms) => `${Math.round(ms / 1000)}s`,
   }
   window.RavenShell = shell
   window.DS = {

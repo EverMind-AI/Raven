@@ -39,7 +39,6 @@ beforeEach(() => {
     menuAt: () => {},
     confirmAsk: () => {},
     showPage: () => {},
-    dur: (ms) => `${ms}ms`,
   } satisfies Shell
   const probe = document.createElementNS('http://www.w3.org/2000/svg', 'text')
   textPrototype = Object.getPrototypeOf(probe) as object

@@ -80,7 +80,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     menuAt: () => {},
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    dur: (ms) => `${Math.round(ms / 1000)}s`,
     noteRow: (label, detail) => { calls.notes.push([label, detail]) },
     stick: () => calls.stick,
     setStick: (on) => { calls.stick = on },
@@ -357,7 +356,7 @@ describe('the live turn row', () => {
     store.setLiveAnchor(0)
     store.setLiveAnchor(anchor - 61000)
     act(() => { store.drawTurnLive() })
-    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('61s')
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m01s')
   })
 
   it('paints the meter from the source and shows the pill only away from the tail', () => {
