@@ -183,6 +183,7 @@ REGISTERED_COMMAND_NAMES = {
     "skill",
     "status",
     "tracing",
+    "trajectory",
     "tui",
     "upgrade",
 }
