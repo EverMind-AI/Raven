@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { ScrollBoxHandle } from '@hermes/ink'
+import type { ScrollBoxHandle, SelectionCopy } from '@hermes/ink'
 import type { MutableRefObject, ReactNode, RefObject, SetStateAction } from 'react'
 
 import type { PasteEvent } from '../components/textInput.js'
@@ -47,8 +47,8 @@ export const DEFAULT_INDICATOR_STYLE: IndicatorStyle = 'kaomoji'
 export interface SelectionApi {
   captureScrolledRows: (firstRow: number, lastRow: number, side: 'above' | 'below') => void
   clearSelection: () => void
-  copySelection: () => Promise<string>
-  copySelectionNoClear: () => Promise<string>
+  copySelection: () => Promise<SelectionCopy>
+  copySelectionNoClear: () => Promise<SelectionCopy>
   getState: () => unknown
   version: () => number
   shiftAnchor: (dRow: number, minRow: number, maxRow: number) => void
