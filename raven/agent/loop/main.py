@@ -100,7 +100,13 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import AskUserToolConfig, ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
+    from raven.config.schema import (
+        AskUserToolConfig,
+        ChannelsConfig,
+        DeepResearchToolConfig,
+        ExecToolConfig,
+        WebSearchConfig,
+    )
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
@@ -266,7 +272,7 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int | None = None,
-        brave_api_key: str | None = None,
+        web_search_config: "WebSearchConfig | None" = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         ask_user_config: AskUserToolConfig | None = None,
@@ -372,11 +378,11 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
+        from raven.config.schema import DeepResearchToolConfig, MediaGenConfig, WebSearchConfig
 
+        self.web_search_config = web_search_config or WebSearchConfig()
         self.media_config = media_config or MediaGenConfig()
         self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
@@ -522,7 +528,7 @@ class AgentLoop:
             provider=provider,
             workspace=workspace,
             model=self._default_binding.model,
-            brave_api_key=brave_api_key,
+            web_search_config=web_search_config,
             jina_api_key=jina_api_key,
             web_proxy=web_proxy,
             exec_config=self.exec_config,
@@ -853,9 +859,13 @@ class AgentLoop:
         # call fails, and the error text -- naming a config file and an env var --
         # gets relayed to whoever is on the other end of the channel. Ask the tool
         # rather than the config, because it resolves the key at call time from
-        # either source; gating on `brave_api_key` alone would withdraw the tool
-        # from a deploy that only exports SERPER_API_KEY.
-        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        # either source; gating on the configured key alone would withdraw the
+        # tool from a deploy that only exports SERPER_API_KEY.
+        web_search = WebSearchTool(
+            api_key=self.web_search_config.api_key or None,
+            max_results=self.web_search_config.max_results,
+            proxy=self.web_proxy,
+        )
         if web_search.api_key:
             self.tools.register(web_search)
         # web_fetch is unconditional by contrast: it works without a key, and the

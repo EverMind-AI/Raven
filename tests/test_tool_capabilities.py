@@ -115,7 +115,7 @@ def test_the_table_names_exactly_the_credential_gated_tools(workspace, tmp_path:
     for attr in _media_attrs():
         getattr(full.tools.media, attr).model = "some/model"
     full.providers.openrouter.api_key = "sk-or-test"
-    loop_full = _loop(workspace, full, brave_api_key="sk-serper")
+    loop_full = _loop(workspace, full, web_search_config=full.tools.web.search)
 
     gated = set(loop_full.tools.tool_names) - set(loop_bare.tools.tool_names)
     declared = {c.tool for c in CAPABILITIES if c.need is not Need.NOTHING}
@@ -138,7 +138,7 @@ def test_the_table_agrees_with_the_loop_when_unconfigured(cap, workspace, tmp_pa
 def test_a_configured_search_key_agrees_on_both_sides(workspace, tmp_path: Path) -> None:
     config = _config(tmp_path)
     config.tools.web.search.api_key = "sk-serper"
-    loop = _loop(workspace, config, brave_api_key="sk-serper")
+    loop = _loop(workspace, config, web_search_config=config.tools.web.search)
 
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
     assert is_configured(cap, config) and loop.tools.has("web_search")
@@ -336,7 +336,9 @@ def test_a_switched_off_tool_is_configured_and_still_not_offered(workspace, tmp_
     config.tools.disabled_tools = ["web_search"]
     # Passed in, the way the CLI entry points do: the loop takes the list as an
     # argument rather than reading the config.
-    loop = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
+    loop = _loop(
+        workspace, config, web_search_config=config.tools.web.search, disabled_tools=config.tools.disabled_tools
+    )
     cap = next(c for c in CAPABILITIES if c.tool == "web_search")
 
     assert loop.tools.has("web_search") is False
@@ -359,10 +361,12 @@ def test_being_offered_matches_the_registry_for_every_capability(cap, workspace,
         getattr(config.tools.media, attr).model = "some/model"
     config.providers.openrouter.api_key = "sk-or-test"
 
-    on = _loop(workspace, config, brave_api_key="sk-serper")
+    on = _loop(workspace, config, web_search_config=config.tools.web.search)
     assert is_offered(cap, config) is on.tools.has(cap.tool)
 
     config.tools.disabled_tools = [cap.tool]
-    off = _loop(workspace, config, brave_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
+    off = _loop(
+        workspace, config, web_search_config=config.tools.web.search, disabled_tools=config.tools.disabled_tools
+    )
     assert is_offered(cap, config) is off.tools.has(cap.tool)
     assert off.tools.has(cap.tool) is False

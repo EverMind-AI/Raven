@@ -143,7 +143,7 @@ class RavenSession:
             model=self.model,
             max_iterations=max_iterations,
             context_window_tokens=self.context_window,
-            brave_api_key=self.config.tools.web.search.api_key or None,
+            web_search_config=self.config.tools.web.search,
             jina_api_key=self.config.tools.web.jina_api_key or None,
             web_proxy=self.config.tools.web.proxy or None,
             exec_config=self.config.tools.exec,
@@ -152,7 +152,6 @@ class RavenSession:
             mcp_servers={},
             sandbox_config=self.config.tools.sandbox,
             channels_config=self.config.channels,
-            everos_config=self.config.agents.defaults.everos,
             context_config=context_config,
             # Benchmarks are non-interactive batch runs — opt out of Bug2's
             # per-turn shadow-git checkpoint (no recovery channel to inject

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.config.schema import ToolSearchConfig
+from raven.config.schema import ToolSearchConfig, WebSearchConfig
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.token_wise.base import TokenStrategy
 from raven.token_wise.registry import StrategyRegistry
@@ -64,7 +64,7 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         # web_search is the cataloged domain tool these tests fold away, and the
         # loop only registers it when a search key resolves. Supplying one keeps
         # the subject of the test present for the right reason.
-        brave_api_key="test-serper-key",
+        web_search_config=WebSearchConfig(api_key="test-serper-key"),
     )
 
 
