@@ -5,28 +5,38 @@
 # report the LLM it is tuned for and the EverOS identity it remembers under.
 # Both writes are idempotent, so re-running is cheap.
 #
-# It does not register anything. Registration needs a configured host raven, and
-# on a first install this script runs before one exists - so `raven` asks about
-# each folder during onboarding and writes the entries there. Run this, then
-# `raven`.
+# It registers nothing. A folder on disk is what puts an agent on the table, so
+# `raven` discovers these on every start and onboarding only asks whose LLM each
+# one spends. Run this, then `raven`.
+#
+# It does report the config rows that shadow a folder. An entry an older
+# `install.py` wrote outranks the folder's own manifest, so a manifest a `git
+# pull` updated never reaches the roster. `--prune-stale` deletes those entries
+# after backing the previous list up beside this script. With no host raven to
+# read the config through - a first install, before one exists - the whole step
+# is skipped rather than failed.
 #
 # Usage:
 #   ./install.sh                    # every folder here that ships an install.py
 #   ./install.sh raven-code ...     # only these
 #   ./install.sh --dry-run          # report what each step would do, change nothing
 #   ./install.sh --no-sync          # skip `uv sync` (the venvs are already built)
+#   ./install.sh --prune-stale      # also delete the config rows that shadow a folder
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN=0
 SYNC=1
+PRUNE_STALE=0
+PRUNE_FAILED=0
 FOLDERS=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --no-sync) SYNC=0 ;;
-        -h | --help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --prune-stale) PRUNE_STALE=1 ;;
+        -h | --help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
         *) FOLDERS+=("${1%/}") ;;
     esac
@@ -128,6 +138,28 @@ fi
 
 ready=()
 not_built=()
+newly_built=()
+# What `uv sync` changed, from the lines it writes for each package it touched.
+# Read from a captured stream rather than left to scroll past: uv writes to
+# stderr, which the `> /dev/null` below never suppressed, so a four-folder run
+# already printed its chatter interleaved and attributed to nothing.
+delta_of() {
+    awk '
+        /^[[:space:]]*\+ / { added++ }
+        /^[[:space:]]*- /  { removed++ }
+        /^[[:space:]]*~ /  { updated++ }
+        END {
+            n = 0
+            if (added)   { parts[n++] = added " added" }
+            if (removed) { parts[n++] = removed " removed" }
+            if (updated) { parts[n++] = updated " updated" }
+            if (n == 0) { print "no change"; exit }
+            out = parts[0]
+            for (i = 1; i < n; i++) { out = out ", " parts[i] }
+            print out
+        }
+    ' "$1"
+}
 extra_of() {
     # `ppt` for `raven-ppt`, when the checkout declares an optional-dependency
     # group by that name: the folder name without its `raven-` prefix, the same
@@ -146,6 +178,195 @@ extra_of() {
         END { exit !found }
     ' "$checkout/pyproject.toml" && printf '%s' "$extra"
     return 0
+}
+
+# The interpreter that can import raven, resolved exactly as each folder's
+# `install.py` resolves it: `$RAVEN_PYTHON`, else the shebang of `raven` on PATH.
+# Failing here is the first-install case - no raven yet - and the caller turns
+# that into a skipped step rather than an error.
+host_interpreter() {
+    if [ -n "${RAVEN_PYTHON:-}" ]; then
+        printf '%s' "$RAVEN_PYTHON"
+        return 0
+    fi
+    local script shebang
+    script="$(command -v raven 2> /dev/null || true)"
+    [ -n "$script" ] || return 1
+    shebang="$(sed -n '1s/^#!//p' "$script" 2> /dev/null || true)"
+    [ -n "$shebang" ] || return 1
+    printf '%s' "$shebang"
+}
+
+# Runs under the host raven's interpreter, reading one JSON payload on stdin and
+# writing the report on stdout. Kept in one `-c` string for the reason install.py
+# gives for its own writer: a temp file would need cleaning up on every error path.
+STALE_READER='
+import json
+import os
+import sys
+from pathlib import Path
+
+from raven.config.loader import get_config_path, read_raw_or_raise
+from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.config.update_subagents import remove_agent
+
+payload = json.load(sys.stdin)
+path = get_config_path()
+if not path.exists():
+    sys.exit(0)
+
+raw = read_raw_or_raise(path)
+stored = raw.get("subagents") or {}
+# All three spellings, because the key was renamed twice and a backup taken from
+# the wrong one would be an empty list on a config that has already migrated.
+rows = stored.get("agents") or stored.get("thirdParty") or stored.get("third_party") or []
+
+# `{PYTHON}` resolves against this interpreter for the same reason
+# vendored_agents._resolved_python does: the discovered row is materialized inside
+# the host raven, which is the process this snippet runs in. Resolving it any other
+# way would report a difference discovery does not see.
+def as_row(entry):
+    # The row an entry becomes on the table, or the entry as written when the
+    # schema refuses it -- one bad row must not sink the report. Both sides go
+    # through this, because comparing a manifest against a stored row directly
+    # reports fields neither side can ever agree on: the schema drops
+    # recommendedLlm (it annotates the installer and is not a config field), so
+    # every row was listed as differing in it on every run, forever.
+    try:
+        return ThirdPartyCliSubagentConfig.model_validate(entry).model_dump(by_alias=True)
+    except Exception:
+        return entry
+
+python = os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
+wanted = {}
+for folder, manifest in payload["folders"].items():
+    entry = dict(manifest)
+    for field in ("command", "resumeCommand"):
+        template = entry.get(field)
+        if template:
+            entry[field] = str(template).replace("{SUBAGENT_DIR}", folder).replace("{PYTHON}", python)
+    name = entry.get("name")
+    if name:
+        wanted[name] = as_row(entry)
+
+colliding = [r for r in rows if isinstance(r, dict) and r.get("name") in wanted]
+if not colliding:
+    sys.exit(0)
+
+out = ["== stale config rows (each one outranks the manifest of the folder it names)"]
+for row in colliding:
+    name = row["name"]
+    # The manifest as declared, not as discovery would resolve it: discovery
+    # computes enabled from whether the folder can start, so comparing against
+    # that would report a difference for every folder whose venv is not built.
+    stored = as_row(row)
+    differs = sorted(k for k, v in wanted[name].items() if stored.get(k) != v)
+    detail = "differs in: " + ", ".join(differs) if differs else "matches, and still outranks the manifest"
+    out.append("   {:<16} {}".format(name, detail))
+    if row.get("enabled") is False:
+        out.append("   {:<16} ! enabled=false -- removing it would re-enable this agent".format(""))
+
+mode = payload["mode"]
+if mode == "report":
+    out.append("   pass --prune-stale to delete them (the previous list is backed up first)")
+    print("\n".join(out))
+    sys.exit(0)
+if mode == "dry-run":
+    out.append("   --dry-run: --prune-stale would delete them")
+    print("\n".join(out))
+    sys.exit(0)
+
+backup = Path(payload["backup"])
+try:
+    # Opened at 0600 rather than written and then chmodded: an openai row among
+    # these carries its own api key, and write-then-chmod leaves that key on disk
+    # world-readable for the length of the write. O_CREAT sets the mode only when
+    # it creates, and this path can pre-exist (two runs in one second), so the
+    # fchmod is what makes the mode true either way.
+    fd = os.open(str(backup), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(rows, handle, indent=2, ensure_ascii=False)
+except OSError as exc:
+    # Before any deletion, and with its own message. A backup that cannot be
+    # written has to stop the prune rather than be found missing after it, and the
+    # calling script reports a bare failure as "could not read the host config" -
+    # which would send the reader to look at the wrong file. Exit 3 says the
+    # reason is already on stderr.
+    sys.stderr.write("cannot write the backup at {} ({}); the config is untouched\n".format(backup, exc))
+    sys.exit(3)
+
+out.append("   backed up {} row(s) to {}".format(len(rows), backup))
+# Printed before the deletions rather than with the tally after them. A remove
+# that raises partway through leaves the config half-pruned, and the one thing
+# the reader needs then is the path to the backup - held to the end, that is
+# exactly the line that would be lost.
+print("\n".join(out), flush=True)
+for row in colliding:
+    remove_agent(row["name"], config_path=path)
+print("   deleted {} row(s); restart raven (or the gateway) to pick up the discovered ones".format(len(colliding)))
+'
+
+stale_payload() {
+    local mode="$1" backup="$2"
+    shift 2
+    python3 - "$mode" "$backup" "$@" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+mode, backup, folders = sys.argv[1], sys.argv[2], sys.argv[3:]
+manifests = {}
+for folder in folders:
+    try:
+        manifests[folder] = json.loads((Path(folder) / "subagent.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+print(json.dumps({"folders": manifests, "mode": mode, "backup": backup}))
+PYEOF
+}
+
+# Report the config rows that shadow a folder, and on --prune-stale delete them.
+#
+# Reporting is unconditional and deleting is not, because a row here is the user's
+# config. Without the flag this function reads that file and writes nothing, which
+# is what keeps a plain run safe to hand to anyone; the flag is the whole consent,
+# and it is also the only path on which this script touches a file outside its own
+# tree. The ordering that moved registration out of here - a first install runs
+# this before a configured raven exists - is why that consent cannot be assumed.
+stale_step() {
+    local interpreter mode dirs=()
+    if ! interpreter="$(host_interpreter)"; then
+        return 0
+    fi
+    for folder in "${FOLDERS[@]}"; do
+        [ -f "$HERE/$folder/subagent.json" ] && dirs+=("$HERE/$folder")
+    done
+    [ ${#dirs[@]} -gt 0 ] || return 0
+
+    mode=report
+    if [ "$PRUNE_STALE" = 1 ]; then
+        if [ "$DRY_RUN" = 1 ]; then mode=dry-run; else mode=prune; fi
+    fi
+
+    local status=0
+    # Unquoted on purpose: the shebang may be an `env` line, which is two words.
+    # shellcheck disable=SC2086
+    stale_payload "$mode" "$HERE/subagents-backup-$(date +%Y%m%d-%H%M%S).json" "${dirs[@]}" \
+        | $interpreter -c "$STALE_READER" || status=$?
+    # 3 means the reader already said what went wrong, on stderr. Repeating the
+    # generic line over it would name the config as the thing that failed when the
+    # backup was.
+    if [ "$status" != 0 ] && [ "$status" != 3 ]; then
+        echo "== stale config rows: could not read the host config through $interpreter"
+    fi
+    # Only when the deletion was actually asked for. Reporting is advisory - a
+    # machine with no host raven to read is the ordinary first install, not a
+    # failure - but `--prune-stale` names an action, and a script that gets exit 0
+    # after it did not happen has been told the opposite of the truth.
+    if [ "$status" != 0 ] && [ "$mode" = prune ]; then
+        PRUNE_FAILED=1
+    fi
 }
 
 failed=()
@@ -168,7 +389,9 @@ for folder in "${FOLDERS[@]}"; do
 
     extra="$(extra_of "$folder" "$checkout")"
 
+    was_built=0
     if [ -x "$checkout/.venv/bin/raven" ]; then
+        was_built=1
         echo "   venv: present in $(basename "$checkout")"
     elif [ "$DRY_RUN" = 1 ] || [ "$SYNC" = 0 ]; then
         echo "   venv: MISSING in $(basename "$checkout") - the agent cannot run until \`uv sync\` builds it"
@@ -179,10 +402,18 @@ for folder in "${FOLDERS[@]}"; do
             sync_args+=(--extra "$extra")
         fi
         echo "   venv: uv ${sync_args[*]} in $(basename "$checkout")"
-        if ! (cd "$checkout" && uv "${sync_args[@]}" > /dev/null); then
+        sync_log="$(mktemp)"
+        if ! (cd "$checkout" && uv "${sync_args[@]}" > /dev/null 2> "$sync_log"); then
             echo "   uv sync failed"
+            sed 's/^/      /' "$sync_log"
+            rm -f "$sync_log"
             failed+=("$folder")
             continue
+        fi
+        echo "   venv: $(delta_of "$sync_log")"
+        rm -f "$sync_log"
+        if [ "$was_built" = 0 ] && [ -x "$checkout/.venv/bin/raven" ]; then
+            newly_built+=("$folder")
         fi
     fi
 
@@ -210,11 +441,14 @@ for folder in "${FOLDERS[@]}"; do
     fi
 done
 
+stale_step
+
 echo "== summary"
-[ ${#ready[@]} -gt 0 ] && echo "   ready:     ${ready[*]}"
-[ ${#not_built[@]} -gt 0 ] && echo "   not built: ${not_built[*]}"
-[ ${#failed[@]} -gt 0 ] && echo "   failed:    ${failed[*]}"
+[ ${#ready[@]} -gt 0 ] && echo "   ready:       ${ready[*]}"
+[ ${#newly_built[@]} -gt 0 ] && echo "   newly built: ${newly_built[*]}"
+[ ${#not_built[@]} -gt 0 ] && echo "   not built:   ${not_built[*]}"
+[ ${#failed[@]} -gt 0 ] && echo "   failed:      ${failed[*]}"
 if [ ${#ready[@]} -gt 0 ] && [ "$DRY_RUN" = 0 ]; then
     echo "   now run \`raven\` - onboarding asks about each of these and registers the ones you take up"
 fi
-[ ${#failed[@]} -eq 0 ]
+[ ${#failed[@]} -eq 0 ] && [ "$PRUNE_FAILED" = 0 ]
