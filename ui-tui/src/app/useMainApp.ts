@@ -33,7 +33,7 @@ import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
-import { copyOnSelectNotice, graphemeCount } from '../lib/clipboard.js'
+import { createCopyOnSelectReporter, graphemeCount } from '../lib/clipboard.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
 import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
@@ -338,13 +338,19 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // only confirmation the clipboard was written. Lives below `sys` because the
   // dependency array is evaluated during render, while `sys` is still in its
   // temporal dead zone further up.
-  const copiedOnSelectRef = useRef(false)
+  //
+  // The path caveat is per session while this hook outlives any one session:
+  // `newSession()` and `resumeById()` replace `ui.sid` without remounting it,
+  // so which sessions have been told belongs to the reporter rather than to a
+  // flag here, which would stay set and drop the caveat from the next
+  // session's first copy. The sid is read through `getUiState()` so a session
+  // change does not tear down and rebuild the bus subscription.
+  const reportCopyOnSelect = useRef(createCopyOnSelectReporter())
 
   useEffect(
     () =>
       subscribeCopyOnSelect(selection, text => {
-        sys(copyOnSelectNotice(graphemeCount(text), getClipboardPath(), !copiedOnSelectRef.current))
-        copiedOnSelectRef.current = true
+        sys(reportCopyOnSelect.current(graphemeCount(text), getClipboardPath(), getUiState().sid ?? 'draft'))
       }),
     [selection, sys]
   )

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   copyOnSelectNotice,
+  createCopyOnSelectReporter,
   graphemeCount,
   copyResultNotice,
   isUsableClipboardText,
@@ -379,6 +380,37 @@ describe('copyOnSelectNotice', () => {
     // settings would bury the transcript the feature exists to let you read.
     expect(copyOnSelectNotice(42, 'osc52', false)).toBe('sent 42 characters')
     expect(copyOnSelectNotice(1, 'tmux-buffer', false)).toBe('copied 1 character')
+  })
+})
+
+describe('createCopyOnSelectReporter', () => {
+  it('spends the caveat once per session, not once per process', () => {
+    // A new or resumed session replaces the sid under a component that stays
+    // mounted. Carrying one flag across that boundary loses the caveat for
+    // every session after the first, which is where a user meets an OSC 52
+    // paste that silently came up empty.
+    const report = createCopyOnSelectReporter()
+
+    expect(report(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
+    expect(report(42, 'osc52', 's2')).toBe(copyResultNotice(42, 'osc52'))
+  })
+
+  it('does not repeat the caveat when a session is returned to', () => {
+    // The caveat is about this session having been told, so resuming one that
+    // already heard it has nothing to add.
+    const report = createCopyOnSelectReporter()
+
+    report(42, 'osc52', 's1')
+    report(42, 'osc52', 's2')
+
+    expect(report(42, 'osc52', 's1')).toBe('sent 42 characters')
+  })
+
+  it('keeps its own tally per reporter', () => {
+    // Two TUI processes must not share the fact that one of them has reported.
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
+    expect(createCopyOnSelectReporter()(42, 'osc52', 's1')).toBe(copyResultNotice(42, 'osc52'))
   })
 })
 

@@ -238,3 +238,28 @@ export function copyResultNotice(charCount: number, path: ClipboardPath): string
 export function copyOnSelectNotice(charCount: number, path: ClipboardPath, firstOfSession: boolean): string {
   return firstOfSession ? copyResultNotice(charCount, path) : counted(verbFor(path), charCount)
 }
+
+/**
+ * Report copies for a TUI process, spending the path caveat once per session.
+ *
+ * The caller keeps one of these for as long as its component lives, which
+ * outlasts any single session -- so which sessions have already been told is
+ * state this has to own, rather than a boolean the caller flips. `sessionKey`
+ * is whatever identifies the current session to the caller; a resumed session
+ * reaching the same key has already had its caveat and does not repeat it.
+ */
+export function createCopyOnSelectReporter(): (
+  charCount: number,
+  path: ClipboardPath,
+  sessionKey: string
+) => string {
+  const told = new Set<string>()
+
+  return (charCount, path, sessionKey) => {
+    const firstOfSession = !told.has(sessionKey)
+
+    told.add(sessionKey)
+
+    return copyOnSelectNotice(charCount, path, firstOfSession)
+  }
+}
