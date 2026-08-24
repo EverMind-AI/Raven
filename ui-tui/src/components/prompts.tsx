@@ -18,8 +18,17 @@ const CMD_PREVIEW_LINES = 10
 
 // 90 -> "1m 30s", 45 -> "45s". Seconds are padded so the line keeps its
 // width as the countdown runs and the prompt below it does not jitter.
-const clarifyRemainingText = (secs: number): string =>
-  secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`
+//
+// The payload is a remaining-time subtraction, so it arrives fractional: a
+// 90-second budget shows up as 89.99999912502244. Ceil before the branch, not
+// inside it -- 59.7 belongs to the minutes shape, and rounding after the test
+// would render it as "60s". Ceil rather than round keeps the last second on
+// screen until the deadline has actually passed.
+const clarifyRemainingText = (secs: number): string => {
+  const whole = Math.ceil(secs)
+
+  return whole < 60 ? `${whole}s` : `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, '0')}s`
+}
 
 export function ApprovalPrompt({ onChoice, req, t }: ApprovalPromptProps) {
   const [sel, setSel] = useState(0)

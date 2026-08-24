@@ -124,6 +124,29 @@ describe('ClarifyPrompt', () => {
     expect(frame).toMatch(/1m 30s/)
   })
 
+  it('renders a whole-second countdown from the fractional payload', () => {
+    // The runtime sends `deadline - loop.time()`, so a 90-second budget arrives
+    // as 89.99999912502244 and the raw value would widen the line to
+    // "1m 29.99999912502244s" on every tick, not just the first frame.
+    const frame = frameOf(
+      <ClarifyPrompt onAnswer={noop} onCancel={noop} req={req({ timeoutS: 89.99999912502244 })} t={DEFAULT_THEME} />
+    )
+
+    expect(frame).toMatch(/1m 30s/)
+    expect(frame).not.toMatch(/\d\.\d/)
+  })
+
+  it('carries a rounded-up sub-minute value into the minutes shape', () => {
+    // Ceiling 59.7 crosses the minute boundary, so the branch has to be chosen
+    // after the rounding or the line reads "60s".
+    const frame = frameOf(
+      <ClarifyPrompt onAnswer={noop} onCancel={noop} req={req({ timeoutS: 59.7 })} t={DEFAULT_THEME} />
+    )
+
+    expect(frame).toMatch(/1m 00s/)
+    expect(frame).not.toMatch(/60s/)
+  })
+
   it('sends the selected option together with the note the user added', async () => {
     const onAnswer = vi.fn()
     const h = driven(onAnswer)
