@@ -56,8 +56,8 @@ is nothing separate to remember. That step is skipped when raven is installed
 from the published wheel, which ships no sub-agent tree, and when the machine has
 no `bash` or no `python3`.
 
-**This script does not register anything.** Registration needs a configured host
-raven, and on a first install it runs before one exists: `~/.raven/config.json`
+**This script registers nothing.** Registration needs a configured host raven,
+and on a first install it runs before one exists: `~/.raven/config.json`
 is written by the setup wizard, minutes later. So the wizard owns that step. It
 finds this directory through the running raven's own package path - which is why
 only a source checkout is offered the agents at all - and asks, per folder,
@@ -74,9 +74,17 @@ cd subagents
 ```
 
 A second run rebuilds nothing it does not have to. `--dry-run` reports what each
-step would do, `--no-sync` skips the venv build. It exits non-zero only when a
-folder failed to build; a folder that is merely unbuilt (`--dry-run`,
-`--no-sync`) is reported, not treated as an error.
+step would do, `--no-sync` skips the venv build. It exits non-zero when a folder
+failed to build, or when `--prune-stale` was asked for and could not run; a
+folder that is merely unbuilt (`--dry-run`, `--no-sync`) is reported, not treated
+as an error, and so is a config the script could not read when no deletion was
+requested.
+
+Each folder's line reports what `uv sync` changed (`4 added, 1 updated`, or `no
+change`), and the summary names the folders this run built for the first time.
+That is the whole answer to "did I need to run this?" - a folder an upgrade added
+appears under `newly built`, and a venv an upgrade invalidated shows a non-empty
+delta.
 
 A built venv is what makes a folder offerable: the wizard declines to register
 one it cannot start, because a name in the roster that fails the moment the model
@@ -162,6 +170,46 @@ the keys are right before involving the host raven at all:
 ```bash
 python3 run.py --task "..." --verbose
 ```
+
+## After a pull
+
+A `git pull` that touches this directory needs `./install.sh` run again, and the
+script now says which of the three reasons applied.
+
+Two of them it simply fixes. A folder the upgrade **added** has no venv, and is
+listed under `newly built` once it does; a folder whose checkout changed its
+dependencies gets a `uv sync` whose delta is reported on the folder's own line.
+Neither needs an argument - re-running is the whole fix, and always was. What was
+missing is that nothing said so, which is why nobody knew to re-run.
+
+The third it can only report by default. A config row written by an older
+`install.py` **outranks the folder's own manifest**: the table takes the whole
+stored row, so a manifest the pull updated does not reach the roster, and a
+command baked against a tree that has since moved keeps pointing at the old path.
+The script lists every stored row that names a folder here, with the fields that
+disagree, and `--prune-stale` deletes them so discovery supplies the row instead:
+
+```bash
+./install.sh --prune-stale         # or --dry-run --prune-stale to see it first
+```
+
+Read the list before passing it. It is a name match, and a name match cannot tell
+an outdated snapshot from a row you tuned by hand - the fields it reports are the
+evidence, and two of them are worth stopping on:
+
+- a row you edited in the web UI is deleted along with the rest, and the
+  discovered row replaces it with the manifest's own text;
+- **a row with `enabled: false` is the only place that switch lives.** A purely
+  discovered row cannot be switched off, so deleting one re-enables that agent.
+  The report flags this per row; it is not a warning the flag suppresses.
+
+The previous list is written to `subagents-backup-<timestamp>.json` beside the
+script before anything is deleted, exactly as it sat on disk - restoring from it
+is the rollback. Nothing reclaims those; they are gitignored and safe to delete.
+
+With no host raven to read the config through - a first install, before one
+exists - the whole step is skipped rather than failed. It never creates a config
+file that was not already there.
 
 ## What `install.py` does
 
