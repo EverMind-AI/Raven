@@ -37,8 +37,6 @@ export interface Shell {
   /* Grown by the islands. Optional, so fakes that predate a helper
      stay valid: each one is only reached from the island that asked. */
   useInTask?(promptKey: string, name: string): void
-  reachText?(reach: string): string
-  reachHint?(reach: string): string
   closeDetail?(): void
   /* Optional verbs: each exists once an island needs it and the shell half
      (demo/155-bridge.js) publishes it. */
@@ -48,14 +46,6 @@ export interface Shell {
   wsPick?(tab: string): void
   /* Transcript island verbs: the attachment marker the history reader needs. */
   attNotes?(): string[]
-  /* The draft store, the tail anchor and the two catalogues the palette renders
-     from. `send`/`halt` used to be here, and their leaving is the point of the
-     change that moved them: as shell verbs the page decided what sending meant
-     AND reached back into this island for the attachment tray. They are
-     DS.composer.send / .stop now, so the island builds the message and the
-     source decides what happens to it. */
-  slashName?(id: string): string
-  slashHelp?(id: string): string
   /* Rail island verbs that still belong to page chrome. */
   openCron?(): void
   /* What markNew needs of the chrome's page registry: the NAV_OF keys and the

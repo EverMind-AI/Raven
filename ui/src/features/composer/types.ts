@@ -40,6 +40,8 @@ export interface UploadRes {
 export interface ComposerSource {
   meter(): string
   slash: SlashCmd[]
+  slashName(id: string): string
+  slashHelp(id: string): string
   /* What the demo canvas says instead of opening a file picker it has no
      backend for. Absent in live mode, which installs `upload` instead. */
   pickHint?: string

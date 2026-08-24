@@ -87,12 +87,12 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     },
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
-    slashName: (id) => id.replace(/^gui\./, ''),
-    slashHelp: (id) => `help for ${id}`,
   }
   const source: ComposerSource = {
     meter: () => '',
     slash: [],
+    slashName: (id) => id.replace(/^gui\./, ''),
+    slashHelp: (id) => `help for ${id}`,
     /* The two actions live on the source now, not the shell. Spread last so a
        test can still override either one. */
     send: (text) => { calls.sent.push(text) },

@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { shell, t } from '../../shell/bridge'
 import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
+import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
 import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
 import * as store from './store'
@@ -1183,8 +1184,8 @@ function ToolLine({ row, raw, s }: { row: ToolRow; raw: Record<string, unknown>;
         {row.one}
       </div>
       <div className="bdgs">
-        <span className={'kd' + (row.reach === 'auth' ? ' auth' : '')} title={shell().reachHint?.(row.reach)}>
-          {shell().reachText?.(row.reach)}
+        <span className={'kd' + (row.reach === 'auth' ? ' auth' : '')} title={reachHint(row.reach)}>
+          {reachText(row.reach)}
         </span>
       </div>
       <div className="ctl">

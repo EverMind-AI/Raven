@@ -41,6 +41,8 @@ DS.composer ??= {
     : use ? T('gui.meter.usage', { calls: use.calls, in: (use.in / 1000).toFixed(1), out: (use.out / 1000).toFixed(1) })
     : ''),
   slash: SLASH,
+  slashName: (id) => slashName(id),
+  slashHelp: (id) => slashHelp(id),
   pickHint: 'demo：正式版在这里选文件或直接拖进来',
   send: (text) => send(text),
   stop: () => halt(),

@@ -1,4 +1,4 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { ds, t } from '../../shell/bridge'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession } from '../../shell/session'
@@ -8,7 +8,6 @@ import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * imperatively by the legacy page (the turn machine advances phase, the queue
@@ -60,12 +59,6 @@ function set(p: Partial<ComposerState>): void {
 }
 
 export const source = (): ComposerSource => ds<ComposerSource>('composer')
-
-function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
-  const v = shell()[name]
-  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
-  return v as NonNullable<Shell[K]>
-}
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
@@ -445,8 +438,8 @@ export function addFiles(files: ArrayLike<File>): void {
 
 /* ── the slash palette ────────────────────────────────────────────────── */
 
-export const slashCmd = (x: SlashCmd): string => '/' + verb('slashName')(x.id)
-export const slashDesc = (x: SlashCmd): string => verb('slashHelp')(x.id)
+export const slashCmd = (x: SlashCmd): string => '/' + source().slashName(x.id)
+export const slashDesc = (x: SlashCmd): string => source().slashHelp(x.id)
 
 function popOpen(on: boolean): void {
   const pop = el('slashPop')
@@ -458,7 +451,7 @@ export const slashIsOpen = (): boolean => state.slashOpen
 export function drawSlash(term: string): void {
   const q = term.slice(1).toLowerCase()
   const rows = source().slash.filter((x) => (!x.when || x.when())
-    && (!q || x.id.includes(q) || verb('slashName')(x.id).toLowerCase().includes(q)
+    && (!q || x.id.includes(q) || source().slashName(x.id).toLowerCase().includes(q)
       || slashDesc(x).toLowerCase().includes(q)))
   if (!rows.length) {
     closeSlash()
