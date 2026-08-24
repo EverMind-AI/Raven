@@ -222,7 +222,7 @@ class TestDirectExecutor:
 
     async def test_exec_timeout(self):
         e = DirectExecutor()
-        result = await e.exec("sleep 10", timeout=1)
+        result = await e.exec("sleep 10", timeout=0.1)
         assert result.exit_code == -1
         assert "Timed" in result.stderr
 
@@ -651,7 +651,7 @@ def _make_mock_execution(stdout_lines=None, stderr_lines=None):
 class TestBoxliteExecTimeout:
     async def test_timeout_kills_and_returns_minus_one(self, tmp_path):
         """exec() times out: execution.kill() is called, exit_code=-1 returned."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         mock_box = MagicMock()
         execution = _make_mock_execution()
@@ -663,13 +663,13 @@ class TestBoxliteExecTimeout:
         mock_box.exec = _slow_exec
         executor._box = mock_box
 
-        result = await executor.exec("sleep 10", timeout=1)
+        result = await executor.exec("sleep 10", timeout=0.05)
         assert result.exit_code == -1
         assert "timed out" in result.stderr.lower()
 
     async def test_exec_timeout_execution_kill_called(self, tmp_path):
         """When execution handle is obtained before timeout, kill() must be called."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05)
 
         execution = _make_mock_execution()
         execution.stdout.return_value = _infinite_stream()
@@ -685,7 +685,7 @@ class TestBoxliteExecTimeout:
         mock_box.exec = AsyncMock(return_value=execution)
         executor._box = mock_box
 
-        result = await executor.exec("cmd", timeout=1)
+        result = await executor.exec("cmd", timeout=0.05)
         assert result.exit_code == -1
         execution.kill.assert_awaited_once()
 
@@ -771,7 +771,7 @@ class TestBoxliteVerifyTimeout:
         mock_box = MagicMock()
         mock_box.exec = AsyncMock(return_value=execution)
 
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=1)
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05)
         with pytest.raises(SandboxInitError, match="timed out"):
             await executor._verify(mock_box)
         execution.kill.assert_awaited_once()
@@ -933,7 +933,7 @@ class TestBoxliteStartFailureCleanup:
             image="ubuntu:22.04",
             workspace=tmp_path,
             owned_ids=owned,
-            verify_timeout=1,
+            verify_timeout=0.05,
         )
 
         mock_box = MagicMock()

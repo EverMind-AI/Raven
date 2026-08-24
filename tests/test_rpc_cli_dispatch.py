@@ -82,7 +82,10 @@ def _make_fake_app() -> typer.Typer:
     def slow() -> None:
         import time
 
-        time.sleep(10)
+        # asyncio.to_thread cannot be cancelled: when the dispatch times out this
+        # thread runs on, and the loop's shutdown joins it -- so this sleep is
+        # paid in full by the teardown, not bounded by the timeout under test.
+        time.sleep(1.0)
 
     @fake.command()
     def aborts() -> None:
@@ -495,7 +498,7 @@ async def test_b1_typer_exit_three_propagates(fake_app_patch):
 
 async def test_timeout_raises_32014(fake_app_patch):
     with pytest.raises(CliCommandTimeoutError) as exc_info:
-        await cli_dispatch({"argv": ["slow"], "width": 80, "timeout_s": 0.3})
+        await cli_dispatch({"argv": ["slow"], "width": 80, "timeout_s": 0.05})
     assert exc_info.value.code == -32014
 
 

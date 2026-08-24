@@ -225,11 +225,18 @@ def _is_everos_server(pid: int) -> bool:
     number been handed to something unrelated. Checking the command line is what
     keeps a port-convergence restart from killing an innocent process. ``ps -p``
     is POSIX and needs no extra dependency; the EverOS path is POSIX-only anyway.
+
+    ``-ww`` because the marker sits at the *end* of the command line, after the
+    interpreter path. Without it ``ps`` truncates its output to ``$COLUMNS``,
+    defaulting to 80, and the answer then depends on how deep this raven is
+    installed: past that column the marker is cut off and a genuine server reads
+    as somebody else's process. The failure is the dangerous direction -- the
+    caller concludes its own server is gone and starts a second one.
     """
     ps = shutil.which("ps") or "/bin/ps"
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-p", str(pid), "-o", "command="],
+            [ps, "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=5,
@@ -415,11 +422,15 @@ def _proc_locks_pid(lock: Path) -> int | None:
 
 
 def _cmdline_of(pid: int) -> str:
-    """The full command line of ``pid``, or an empty string."""
+    """The full command line of ``pid``, or an empty string.
+
+    ``-ww`` is what makes "full" true: ``ps`` otherwise truncates to ``$COLUMNS``
+    (80 when unset), which silently turns this into "the first 80 characters".
+    """
     ps = shutil.which("ps") or "/bin/ps"
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
+            [ps, "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
         )
     except (OSError, subprocess.SubprocessError):
         return ""

@@ -115,13 +115,17 @@ async def test_menu_truncates_descriptions_to_one_line():
     assert "第一行描述很有用" in res.text and "第二行" not in res.text
 
 
-async def test_menu_times_out_gracefully_on_a_slow_source():
+async def test_menu_times_out_gracefully_on_a_slow_source(monkeypatch):
     import asyncio
 
     class _Slow:
         async def select(self, query, history, k):
             await asyncio.sleep(10)
 
+    # The budget is a module constant rather than an argument, so it is patched
+    # rather than passed. Only its expiry is under test, and the source outlasts
+    # it by 200x either way.
+    monkeypatch.setattr("raven.context_engine.scent._BUILD_TIMEOUT_S", 0.05)
     assert not await ScentMenu(_Slow()).build("统计一下渠道覆盖率数据", [])
 
 

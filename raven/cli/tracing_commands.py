@@ -155,7 +155,10 @@ def _pid_is_viewer(pid: int) -> bool:
         return "node" in out.lower()
     try:
         out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
+            # -ww: `server.js` sits at the end of the argv, and ps truncates to
+            # $COLUMNS (80 when unset), so without it a deep install reads as not
+            # ours and the viewer is never stopped.
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
             capture_output=True,
             text=True,
             check=False,
