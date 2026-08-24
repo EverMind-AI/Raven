@@ -1,3 +1,11 @@
+/**
+ * Behaviour of the copy-on-select subscription: which settled selections reach
+ * the clipboard, which bus notifications must not, and what the caller is told.
+ *
+ * The clipboard write itself belongs to ink, so the bus is faked and every
+ * assertion is about what this module decides to do with it.
+ */
+
 import { describe, expect, it } from 'vitest'
 
 import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
@@ -56,10 +64,9 @@ function fakeSelection() {
 
 describe('subscribeCopyOnSelect', () => {
   it('copies a settled selection on a non-macOS platform', () => {
-    // The defect this closes: the subscription used to bail out on
-    // `!isMac`, so a drag on Linux or Windows highlighted text and copied
-    // nothing. This suite runs on whatever the host is -- on Linux (this
-    // box, and CI) reaching the copy IS the proof the platform gate is gone.
+    // The case is the host platform's own: there is no platform to inject, so
+    // reaching the copy at all is what says no platform gate remains. That
+    // makes the assertion meaningful only on a non-macOS runner.
     const bus = fakeSelection()
 
     subscribeCopyOnSelect(bus.selection)
@@ -185,8 +192,8 @@ describe('subscribeCopyOnSelect reporting', () => {
 
   it('stays silent when no clipboard path took the text', async () => {
     // `copySelectionNoClear()` resolves to '' when nothing reached the
-    // clipboard. Announcing a copy there would be the exact lie this change
-    // set out to remove from `/copy`.
+    // clipboard, so the empty string is the whole signal -- reporting a copy
+    // on it would claim a write that never happened.
     const bus = fakeSelection()
 
     bus.state.writeSucceeded = false
