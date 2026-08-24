@@ -242,6 +242,21 @@ const onMessageComplete = (
   ev: MessageCompleteEvent,
   appendMessage?: (msg: Msg) => void
 ): void => {
+  // A lane is serial but its slots are per-lane, so a turn the runtime
+  // submitted itself can end while this client's turn is still queued behind
+  // it on the same lane -- the observed order is message.start(client),
+  // message.complete(runtime), message.complete(client). Ungated, the runtime
+  // turn's completion clears the queued client's guard and finalizes a buffer
+  // that is not its own, so the client's real ending has nothing left to
+  // report against. Usage is session-cumulative and belongs to neither turn,
+  // so it is still applied; the runtime turn's own text stays in the buffer
+  // and is committed by the completion of the turn that owns it.
+  if (state.turnId && ev.payload.turn_id && ev.payload.turn_id !== state.turnId) {
+    if (ev.payload.usage) {
+      patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
+    }
+    return
+  }
   state.turnId = null
   // The typed message.complete carries `{turn_id, usage}` per CAP-CHAT-1
   // wire shape (B1 fix); the assistant content is reconstructed from the

@@ -2328,6 +2328,12 @@ class AgentLoop:
                                 "arguments": tool_call.arguments,
                                 # Tool-authored call label; None -> UI derives one.
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
+                                # The same flag the registry reads to skip its
+                                # timeout: this call waits on a human, so it has
+                                # no deadline and may emit nothing while it runs.
+                                # A client that clocks the stream needs to know
+                                # before the wait, not after it.
+                                "blocking": bool(_tool.blocking_interaction) if _tool else False,
                             },
                         )
                     if tool_call.name == "exec":
@@ -2360,6 +2366,13 @@ class AgentLoop:
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
                                 "truncated": len(display_src) > 200,
+                                # Client-only, straight off the ToolOutput the
+                                # registry built: never shown to the model, and
+                                # ``getattr`` because a tool may still return a
+                                # bare str, which the registry wraps without
+                                # either field.
+                                "metadata": getattr(result, "metadata", None),
+                                "diff": getattr(result, "diff", None),
                             },
                         )
                     model_text, blocks, attach_blocks = self._route_result_images(
@@ -3163,6 +3176,13 @@ class AgentLoop:
             )
 
         streamed = False
+        # ACTION_BLOCKED does not accompany the answer, it *is* the answer (see
+        # NoticeKind): the runtime sentence reaches the client as the notice
+        # detail, while _process_message still returns it as the reply. Without
+        # this flag the boundary below emits the same sentence a second time as
+        # Text -- which TuiOutlet maps to token.delta, so it arrives dressed as
+        # the model's own prose, exactly what routing it as a notice avoided.
+        replaced_by_notice = False
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3203,6 +3223,9 @@ class AgentLoop:
                 )
 
         async def on_notice(kind: NoticeKind, detail: str) -> None:
+            nonlocal replaced_by_notice
+            if kind is NoticeKind.ACTION_BLOCKED:
+                replaced_by_notice = True
             await emit(Notice(kind=kind, detail=detail or None))
 
         async def on_progress(text: str, tool_hint: bool = False) -> None:
@@ -3314,7 +3337,7 @@ class AgentLoop:
             reply_content, reply_media = out
             if reply_media:
                 await _emit_media(reply_media)
-            if not streamed and reply_content:
+            if not streamed and not replaced_by_notice and reply_content:
                 await emit(Text(content=reply_content))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content

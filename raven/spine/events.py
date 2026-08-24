@@ -88,8 +88,8 @@ class ToolEvent:
     # deadline and may emit nothing for as long as it runs. An outlet whose
     # client clocks the stream must suspend that clock while it is in flight.
     blocking: bool = False
-    # COMPLETE only: opt-in structured payload from Tool.take_metadata (e.g. a
-    # deliver_files manifest). Outlets that do not understand a key ignore it.
+    # COMPLETE only: opt-in structured payload from ToolResult.metadata (e.g. a
+    # file manifest). Outlets that do not understand a key ignore it.
     metadata: dict[str, Any] | None = None
     # COMPLETE only: unified diff of what the call changed on disk, when the
     # tool could produce one (see ToolResult.diff). For an outlet that renders
