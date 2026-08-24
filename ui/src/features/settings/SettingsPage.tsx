@@ -2,6 +2,8 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
+import * as lookStore from '../../shell/look'
+import * as notifications from '../../shell/notifications'
 import { open as openUrl } from '../../shell/open-url'
 import { isMac, modKey } from '../../shell/platform'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
@@ -372,10 +374,12 @@ function Shot({ kind }: { kind: string }): JSX.Element {
 }
 
 function LookPage(): JSX.Element {
-  const sh = shell()
-  const look = sh.look?.get() ?? { theme: 'light', codeFont: 'system', motion: 'on', lang: 'zh' }
-  const setLook = (patch: { theme?: string; codeFont?: string; motion?: string }): void => {
-    sh.look?.set(patch)
+  const look = {
+    ...lookStore.get(),
+    lang: document.documentElement.lang.toLowerCase().startsWith('zh') ? 'zh' : 'en',
+  }
+  const setLook = (patch: Partial<lookStore.LookState>): void => {
+    lookStore.set(patch)
     store.redraw()
   }
   return (
@@ -457,20 +461,19 @@ function LookPage(): JSX.Element {
 /* ---- notifications --------------------------------------------------- */
 
 function NotifyPage(): JSX.Element {
-  const sh = shell()
-  const on = sh.ntf?.get() ?? false
+  const on = notifications.enabled()
   const canNtf = 'Notification' in window
   const flip = async (v: boolean): Promise<void> => {
     if (v && canNtf && Notification.permission !== 'granted') {
       const r = await Notification.requestPermission()
       if (r !== 'granted') {
-        sh.ntf?.set(false)
+        notifications.setEnabled(false)
         store.redraw()
         toast(t('gui.set.ntf.denied'))
         return
       }
     }
-    sh.ntf?.set(v && canNtf)
+    notifications.setEnabled(v && canNtf)
     store.redraw()
     if (v && !canNtf) toast(t('gui.set.ntf.denied'))
   }
@@ -481,7 +484,7 @@ function NotifyPage(): JSX.Element {
       </Crow>
       {on && (
         <Crow label={t('gui.set.ntf.test')}>
-          <button className="mini ghost" onClick={() => sh.ntf?.push(t('gui.set.ntf.test_body'))}>
+          <button className="mini ghost" onClick={() => notifications.show(t('gui.set.ntf.test_body'), '', { force: true })}>
             {t('gui.set.ntf.test')}
           </button>
         </Crow>

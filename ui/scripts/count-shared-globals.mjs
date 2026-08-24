@@ -97,7 +97,7 @@ import { join } from 'node:path'
 
 const EXPECTED = 0
 const EXPECTED_HELD = 0
-const EXPECTED_VERBS = 24
+const EXPECTED_VERBS = 21
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
 const read = (dir) =>

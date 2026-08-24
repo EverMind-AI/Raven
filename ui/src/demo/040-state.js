@@ -2,13 +2,6 @@
 sessionSet('a');
 let timers = [], use = null;
 let rt = 'local', undoBin = null;
-const CFG = {
-  /* Light until the reader says otherwise: a fresh install has no stored
-     preference, and following the system would mean the desktop shell's
-     launch splash (decided before this page can report anything) and the
-     first painted frame could disagree. 'system' stays available in settings. */
-  theme: 'light', motion: 'on', codeFont: 'system'
-};
 
 const stop_ = () => { timers.forEach(clearTimeout); timers = []; };
 const later = (ms, fn) => timers.push(setTimeout(fn, ms));

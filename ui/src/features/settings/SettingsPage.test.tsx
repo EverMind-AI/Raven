@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SettingsApp } from './SettingsPage'
 import * as store from './store'
+import * as lookStore from '../../shell/look'
+import * as notifications from '../../shell/notifications'
 
 import type { Shell } from '../../shell/bridge'
 import type { SettingsSnapshot, SettingsSource } from './types'
@@ -123,6 +125,10 @@ afterEach(() => {
   cleanup()
   store.reset()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  localStorage.clear()
+  lookStore.load()
+  notifications.setEnabled(false)
 })
 
 describe('settings island', () => {
@@ -225,6 +231,41 @@ describe('settings island', () => {
       screen.getByText('gui.set.language_en').click()
     })
     expect(calls).toEqual([['setLang', 'en']])
+  })
+
+  it('persists an appearance pick through the modern look owner', async () => {
+    install()
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.look').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.set.theme_dark').click()
+    })
+    expect(lookStore.get().theme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('forces the notification test through the modern notification owner', async () => {
+    const shown: string[] = []
+    class FakeNotification {
+      static permission: NotificationPermission = 'granted'
+
+      constructor(title: string) {
+        shown.push(title)
+      }
+    }
+    vi.stubGlobal('Notification', FakeNotification)
+    notifications.setEnabled(true)
+    install()
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.notify').click()
+    })
+    await act(async () => {
+      screen.getByRole('button', { name: 'gui.set.ntf.test' }).click()
+    })
+    expect(shown).toEqual(['gui.set.ntf.test_body'])
   })
 
   it('asks the settings source to check for an update, from the about page', async () => {
