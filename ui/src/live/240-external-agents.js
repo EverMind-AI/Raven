@@ -204,4 +204,8 @@ window.__dag = (ev) => onEvent(ev && ev.type ? ev : {
   },
 });
 
+/* This is the live manifest's last part. Every synchronous DS installer is now
+   in place, so the first data-driven paint cannot observe a fixture source. */
+queueMicrotask(bootPage);
+
 })();

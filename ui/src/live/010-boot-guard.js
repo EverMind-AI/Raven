@@ -27,15 +27,11 @@ const shellReady = () => {
    the splash lifts and whether first-run setup is due (setup.status). */
 window.__liveBoot = 1;
 
-/* Set before the first paint, cleared once the real counts land: the demo boot
-   has already written its mock attention counts into the rail badges by the
-   time this runs, and letting them through was the badge that flashed on the
-   rail on every refresh. */
+/* Set before the deferred first paint, cleared once the real counts land. */
 (() => { const r = document.querySelector('.rail'); if (r) r.dataset.counts = 'pending'; })();
 
-/* The demo shell has already painted by the time this runs. Install the empty
-   live session source synchronously, blank the conversation, and hold the rail
-   on skeleton rows until the real list lands. */
+/* Install the empty live session source synchronously and hold the rail on
+   skeleton rows before the deferred boot reads either one. */
 let liveSessionRows = [];
 DS.sessions = {
   snapshot: () => ({ rows: liveSessionRows, cur: sessionCurrent(), busy: turn.busy() }),
@@ -44,8 +40,3 @@ DS.sessions = {
 };
 RavenIslands.rail.hold();
 sessionSet(null);
-CRONS.length = 0;
-$('#stage').innerHTML = '';
-$('#flash').textContent = '';
-$('#title').textContent = T('gui.new_task');
-sessionDraw();

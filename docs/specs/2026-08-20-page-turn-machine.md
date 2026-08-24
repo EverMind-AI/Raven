@@ -313,13 +313,14 @@ dispatcher and nothing else, which is what a live layer is supposed to be.
 
 ## A boot-order finding that outlives this cluster
 
-While measuring the above, two places were found where the served page shows
-fixture data in live mode. Both have the same cause and neither is a bug in
+While measuring the above, two places were found where the served page showed
+fixture data in live mode. Both had the same cause and neither was a bug in
 the notice itself.
 
-The demo layer boots and **paints** before the live layer installs its sources.
-Anything the demo painted from fixture data and the live layer does not happen
-to repaint stays on screen showing the fixture's values.
+This ordering defect is now resolved. `demo/160` declares the shared boot but
+defers it; `live/240` queues it only after every synchronous source installer.
+Offline mode queues the same boot after the assembled script task. The
+measurements below are the pre-fix evidence that required this order.
 
 Measured on a `raven serve` instance with a throwaway agent home, on
 `main` (`562f3251`) and on a branch, identically:
@@ -330,12 +331,12 @@ Measured on a `raven serve` instance with a throwaway agent home, on
   `demo/030-fixtures.js:193` (`{calls: 4, in: 14226, out: 3180}`) formatted by
   `demo/090-composer.js:46`.
 
-On a healthy gateway both are cleared within milliseconds by the first session
-open, which calls `drawBanner()` and `drawMeter()`. On a gateway that cannot
-open a session they persist -- which is to say they are visible exactly when
-the reader is already trying to work out what is wrong.
+On a healthy gateway both were cleared within milliseconds by the first session
+open, which called `drawBanner()` and `drawMeter()`. On a gateway that could not
+open a session they persisted -- which is to say they were visible exactly when
+the reader was already trying to work out what was wrong.
 
-This is not a reason to fix either notice. It is the argument for the endgame
-step already in the plan: the live layer installs its sources **before** any
-paint, at which point the whole class of stale-fixture-on-screen bugs stops
-being possible rather than being cleared after the fact.
+This was not a reason to fix either notice. It was the argument for installing
+the live sources **before** any paint, at which point the whole class of
+stale-fixture-on-screen bugs stops being possible rather than being cleared
+after the fact.

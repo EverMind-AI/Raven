@@ -249,15 +249,11 @@ only remaining readers are that fixture source -- unreachable on a live page onc
 renderers, and the last thing tying this one to the live layer is the line that
 blanks it.
 
-That line is **not** safe to simply delete, and the reason is worth writing down
-because it will recur on every container. `live/010`'s comment states an
-invariant: the demo shell has already seeded *and painted* by the time it runs,
-so the clearing happens in the same task, "so nothing mock survives to the first
-frame". Between `live/010` and `live/100` there is most of the live layer, and a
-repaint anywhere in that window still reads the fixture source. Retiring a
-container therefore means answering an ordering question, not just a reader
-question -- which is the argument for the live layer installing its sources
-before the first paint, already on the endgame list below.
+That line could not safely be deleted until the boot order changed. The page now
+defers boot until the assembled script finishes; `live/240` queues it after every
+source installer. The `CRONS` clear is gone, `CRONS` stays fixture-owned, and the
+held-container ratchet is zero. Retiring the container therefore required
+answering an ordering question, not just a reader question.
 
 **Why this matters for the order of the remaining work.** An Axis 1 move retires
 a name; it does not retire the storage. A renderer can move into an island and
@@ -391,8 +387,6 @@ now does it (`!181`), which is the prerequisite this section should have named.
   dist contract survives as a Vite config rather than a Python script.
 - Retire `count-shared-globals.mjs` and `tests/test_ui_language_repaint.py`.
   Both exist to watch a coupling that will be gone.
-- **Install the live sources before the first paint.** This is the root fix for
-  a whole class of bug, not a cleanup: the demo layer paints first today, so a
-  live page's first frame is drawn from fixtures and corrected on the next
-  redraw. Three separate bugs found during this migration were that one fact
-  wearing different clothes.
+- **Done: install the live sources before the first paint.** This is the root
+  fix for a whole class of bug, not a cleanup. Three separate bugs found during
+  this migration were the old ordering defect wearing different clothes.

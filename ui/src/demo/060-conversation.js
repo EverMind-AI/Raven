@@ -30,12 +30,8 @@ function openDemoSession(s) {
    this reading of it: live/120-settings.js installs a source that refuses the
    suggestion outright, because a config gap belongs in the settings page, not
    as a strip over every conversation.
-   Not "never", exactly: the demo boot paints before the live layer has
-   installed anything, so a live page's FIRST draw of this strip does come
-   through here, and is cleared by the first redraw after the install. That is
-   the boot order rather than this source's business, and it is the same reason
-   a live page's composer meter shows a fixture's token counts until the first
-   session opens. */
+   Live mode installs its source before the shared deferred boot, so this
+   fixture source is never consulted for a live page's first paint. */
 DS.banner ??= {
   websearchNeeds: () => { const c = cap('websearch'); return !!c && c.state === 'need'; },
 };
