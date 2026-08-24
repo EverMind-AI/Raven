@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { forceRedraw, getClipboardPath } from '@hermes/ink'
+import { forceRedraw } from '@hermes/ink'
 
 import type {
   ConfigGetValueResponse,
@@ -355,10 +355,10 @@ export const coreCommands: SlashCommand[] = [
       const { sys } = ctx.transcript
 
       if (!arg && ctx.composer.hasSelection) {
-        const text = await ctx.composer.selection.copySelection()
+        const { text, path } = await ctx.composer.selection.copySelection()
 
-        if (text) {
-          return sys(copyResultNotice(graphemeCount(text), getClipboardPath()))
+        if (text && path) {
+          return sys(copyResultNotice(graphemeCount(text), path))
         }
 
         return sys(

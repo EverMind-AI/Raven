@@ -4,7 +4,6 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import {
-  getClipboardPath,
   type ScrollBoxHandle,
   useApp,
   useHasSelection,
@@ -349,8 +348,8 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
   useEffect(
     () =>
-      subscribeCopyOnSelect(selection, text => {
-        sys(reportCopyOnSelect.current(graphemeCount(text), getClipboardPath(), getUiState().sid ?? 'draft'))
+      subscribeCopyOnSelect(selection, (text, path) => {
+        sys(reportCopyOnSelect.current(graphemeCount(text), path, getUiState().sid ?? 'draft'))
       }),
     [selection, sys]
   )

@@ -4,11 +4,15 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-{hermes-agent,ink}.txt.
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { env, supportsOsc52Clipboard } from '../../utils/env.js'
 
-import { clipboardDebugEnabled, getClipboardPath, shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
+import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
+
+import { clipboardDebugEnabled, setClipboard, shouldEmitClipboardSequence, shouldUseNativeClipboard } from './osc.js'
+
+vi.mock('../../utils/execFileNoThrow.js', () => ({ execFileNoThrow: vi.fn() }))
 
 describe('shouldEmitClipboardSequence', () => {
   it('suppresses local multiplexer clipboard OSC by default', () => {
@@ -247,48 +251,51 @@ describe('shouldUseNativeClipboard', () => {
   })
 })
 
-describe('getClipboardPath', () => {
-  // setClipboard() decides native via shouldUseNativeClipboard() and then
-  // copyNative()'s own per-platform availability. A predictor that disagrees
-  // with either sends the user to fix the wrong thing, so every branch of both
-  // gets a case here rather than only the one this CI box runs on.
+describe('setClipboard path reporting', () => {
+  // The path is what a caller puts in front of the user, and inside tmux the
+  // environment cannot tell a load-buffer that worked from one that did not:
+  // both have TMUX set. So it has to come from the call, which means driving
+  // the real one with `tmux` stubbed rather than asserting on a predictor.
+  const run = vi.mocked(execFileNoThrow)
 
-  it('names native on a plain local macOS terminal', () => {
-    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'darwin', null)).toBe('native')
+  beforeEach(() => {
+    run.mockReset()
+    // SSH suppresses the native tool, so tmux and OSC 52 are the only paths
+    // left and the case is not decided by whatever this runner has installed.
+    vi.stubEnv('SSH_CONNECTION', '1')
+    vi.stubEnv('TMUX', '/tmp/tmux-1/default,1,0')
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '1')
   })
 
-  it('names native on a local Linux desktop with a display server', () => {
-    // The defect this closes: the predictor keyed native off darwin alone, so
-    // wl-copy/xclip really wrote the clipboard while the user was told the copy
-    // only left as an escape sequence and to go change a terminal setting.
-    expect(getClipboardPath({ DISPLAY: ':0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('native')
-    expect(getClipboardPath({ WAYLAND_DISPLAY: 'wayland-0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('native')
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
-  it('names native on Windows, where clip.exe always exists', () => {
-    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'win32', null)).toBe('native')
+  it('names the tmux buffer when load-buffer succeeds', async () => {
+    run.mockResolvedValue({ stdout: '', stderr: '', code: 0 })
+
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: true, path: 'tmux-buffer' })
   })
 
-  it('names osc52 on a terminal where setClipboard deliberately skips native', () => {
-    // On an allowlisted terminal setClipboard suppresses the native tool to
-    // avoid racing the terminal's own OSC 52 write, so OSC 52 is the only path
-    // taken -- the old predictor claimed 'native' here.
-    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'darwin', 'ghostty')).toBe('osc52')
+  it('names osc52 when load-buffer failed and the sequence carried the text', async () => {
+    // A stale TMUX socket: the variable is set, the server is gone. The bytes
+    // went out as raw OSC 52, so telling the user to check tmux set-clipboard
+    // sends them to a setting that had nothing to do with it.
+    run.mockResolvedValue({ stdout: '', stderr: 'no server running', code: 1 })
+
+    const result = await setClipboard('probe')
+
+    expect(result.success).toBe(true)
+    expect(result.path).toBe('osc52')
+    expect(result.sequence).toContain(']52;c;')
   })
 
-  it('names osc52 over SSH, where native would write the wrong machine', () => {
-    expect(getClipboardPath({ SSH_CONNECTION: '1' } as NodeJS.ProcessEnv, 'linux', null)).toBe('osc52')
-    expect(getClipboardPath({ DISPLAY: ':0', SSH_CONNECTION: '1' } as NodeJS.ProcessEnv, 'darwin', null)).toBe('osc52')
-  })
+  it('reports no path when nothing took the text', async () => {
+    // Suppressing the sequence with the same override leaves a failed
+    // load-buffer as the only attempt, and success false has to agree.
+    vi.stubEnv('RAVEN_TUI_FORCE_OSC52', '0')
+    run.mockResolvedValue({ stdout: '', stderr: 'no server running', code: 1 })
 
-  it('names osc52 on headless Linux, where no native tool can run', () => {
-    expect(getClipboardPath({} as NodeJS.ProcessEnv, 'linux', null)).toBe('osc52')
-  })
-
-  it('names the tmux buffer only when no native tool is available', () => {
-    // Inside tmux with a native tool present, setClipboard fires both and the
-    // native write is the higher-confidence one, so that is what gets named.
-    expect(getClipboardPath({ TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv, 'darwin', null)).toBe('native')
-    expect(getClipboardPath({ TMUX: '/tmp/t,1,0' } as NodeJS.ProcessEnv, 'linux', null)).toBe('tmux-buffer')
+    await expect(setClipboard('probe')).resolves.toMatchObject({ success: false, path: null })
   })
 })

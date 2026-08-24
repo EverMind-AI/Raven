@@ -58,69 +58,25 @@ export function wrapForMultiplexer(sequence: string): string {
 }
 
 /**
- * Which path setClipboard() will take, based on env state. Synchronous so
- * callers can show an honest toast without awaiting the copy itself.
+ * Which path a clipboard write actually took.
  *
- * - 'native': pbcopy (or equivalent) will run — high-confidence system
- *   clipboard write. tmux buffer may also be loaded as a bonus.
- * - 'tmux-buffer': tmux load-buffer will run, but no native tool — paste
- *   with prefix+] works. System clipboard depends on tmux's set-clipboard
- *   option + outer terminal OSC 52 support; can't know from here.
- * - 'osc52': only the raw OSC 52 sequence will be written to stdout.
- *   Best-effort; iTerm2 disables OSC 52 by default.
+ * - 'native': pbcopy (or equivalent) ran -- high-confidence system clipboard
+ *   write. The tmux buffer may have been loaded as a bonus.
+ * - 'tmux-buffer': tmux load-buffer succeeded but no native tool ran -- paste
+ *   with prefix+] works. Reaching the system clipboard from there depends on
+ *   tmux's set-clipboard option plus the outer terminal's OSC 52 support,
+ *   which cannot be known from here.
+ * - 'osc52': only the raw OSC 52 sequence went to stdout. Best-effort; iTerm2
+ *   disables OSC 52 by default.
  *
- * Only meaningful once a copy has succeeded. setClipboard() can take no path
- * at all -- headless, no tmux, and OSC 52 suppressed by the override -- and
- * reports success false for it; this returns 'osc52' there, because the type
- * has no word for "nothing happened". Both callers ask only after a non-empty
- * result, so that combination is unreachable through them.
- *
- * Decided by asking the same two questions setClipboard() asks, in the same
- * order: shouldUseNativeClipboard() for whether the native tool is wanted, and
- * copyNative()'s own platform gate for whether one exists. Keeping this in step
- * with them is the whole point -- callers put the answer in front of the user,
- * and a path named wrongly sends them to fix something that was never broken.
- *
- * The native gate uses SSH_CONNECTION specifically, not SSH_TTY — tmux panes
- * inherit SSH_TTY forever even after local reattach, but SSH_CONNECTION is
- * in tmux's default update-environment set and gets cleared.
+ * Reported by `setClipboard()` from what it observed, not derived from the
+ * environment afterwards. The difference is load-bearing: inside tmux, a
+ * load-buffer that fails falls through to raw OSC 52, and the environment
+ * still looks exactly like the tmux case that did work. Callers put this
+ * value in front of the user, and a path named wrongly sends them to fix
+ * something that was never broken.
  */
 export type ClipboardPath = 'native' | 'tmux-buffer' | 'osc52'
-
-/** Whether copyNative() has a tool it can actually run on this platform.
- *  Mirrors its own switch: pbcopy and clip.exe ship with the OS, while the
- *  Linux tools need a display server to talk to. */
-function nativeToolAvailable(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
-  switch (platform) {
-    case 'darwin':
-    case 'win32':
-      return true
-
-    case 'linux':
-      return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY)
-
-    default:
-      return false
-  }
-}
-
-export function getClipboardPath(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-  terminal: string | null = envModule.terminal
-): ClipboardPath {
-  // Native first: when it fires alongside tmux or OSC 52 it is the one write
-  // that is not contingent on a terminal or multiplexer setting.
-  if (shouldUseNativeClipboard(env, terminal) && nativeToolAvailable(env, platform)) {
-    return 'native'
-  }
-
-  if (env.TMUX) {
-    return 'tmux-buffer'
-  }
-
-  return 'osc52'
-}
 
 /**
  * Whether to log why a clipboard write took the path it did.
@@ -200,6 +156,10 @@ export function shouldUseNativeClipboard(
   terminal: string | null = envModule.terminal
 ): boolean {
   // Over SSH the native tools would write to the wrong machine's clipboard.
+  // SSH_CONNECTION specifically, not SSH_TTY: a tmux pane inherits SSH_TTY
+  // forever, even after the client detaches and reattaches locally, while
+  // SSH_CONNECTION is in tmux's default update-environment set and gets
+  // cleared.
   if (env.SSH_CONNECTION) {
     return false
   }
@@ -306,6 +266,8 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
 export type ClipboardResult = {
   sequence: string
   success: boolean
+  /** The path that took the text, or null when no path did (success false). */
+  path: ClipboardPath | null
 }
 
 export async function setClipboard(text: string): Promise<ClipboardResult> {
@@ -354,7 +316,19 @@ export async function setClipboard(text: string): Promise<ClipboardResult> {
   // load failed), in which case reporting failure to the user is honest.
   const success = nativeAttempted || tmuxBufferLoaded || sequence.length > 0
 
-  return { sequence, success }
+  // Same precedence the doc above describes, read off what happened rather
+  // than off the environment: native outranks tmux because it is the write
+  // that is not contingent on a terminal or multiplexer setting, and a failed
+  // load-buffer has to fall through to osc52 here exactly as the data did.
+  const path: ClipboardPath | null = nativeAttempted
+    ? 'native'
+    : tmuxBufferLoaded
+      ? 'tmux-buffer'
+      : sequence.length > 0
+        ? 'osc52'
+        : null
+
+  return { sequence, success, path }
 }
 
 // Linux clipboard tool: undefined = not yet probed, null = none available.

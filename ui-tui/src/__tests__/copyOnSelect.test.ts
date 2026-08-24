@@ -6,6 +6,8 @@
  * assertion is about what this module decides to do with it.
  */
 
+import type { ClipboardPath } from '@hermes/ink'
+
 import { describe, expect, it } from 'vitest'
 
 import { subscribeCopyOnSelect } from '../lib/copyOnSelect.js'
@@ -19,8 +21,10 @@ function fakeSelection() {
   const listeners = new Set<() => void>()
   const copied: string[] = []
   const reported: string[] = []
+  const reportedPaths: (ClipboardPath | null)[] = []
   const state: {
     dragging: boolean
+    path: ClipboardPath
     present: boolean
     rawState?: unknown
     text: string
@@ -28,6 +32,7 @@ function fakeSelection() {
     writeSucceeded: boolean
   } = {
     dragging: false,
+    path: 'native',
     present: true,
     text: 'selected text',
     version: 1,
@@ -36,7 +41,10 @@ function fakeSelection() {
 
   return {
     copied,
-    onCopied: (text: string) => reported.push(text),
+    onCopied: (text: string, path: ClipboardPath) => {
+      reported.push(text)
+      reportedPaths.push(path)
+    },
     notify: () => {
       for (const cb of listeners) {
         cb()
@@ -46,7 +54,7 @@ function fakeSelection() {
       copySelectionNoClear: async () => {
         copied.push(state.text)
 
-        return state.writeSucceeded ? state.text : ''
+        return state.writeSucceeded ? { text: state.text, path: state.path } : { text: '', path: null }
       },
       getState: (): unknown => state.rawState ?? { isDragging: state.dragging },
       hasSelection: () => state.present,
@@ -58,6 +66,7 @@ function fakeSelection() {
       version: () => state.version
     },
     reported,
+    reportedPaths,
     state
   }
 }
@@ -188,6 +197,17 @@ describe('subscribeCopyOnSelect reporting', () => {
     await flush()
 
     expect(bus.reported).toEqual(['selected text'])
+  })
+
+  it('reports the path the write took, not one re-derived afterwards', async () => {
+    const bus = fakeSelection()
+
+    bus.state.path = 'osc52'
+    subscribeCopyOnSelect(bus.selection, bus.onCopied)
+    bus.notify()
+    await flush()
+
+    expect(bus.reportedPaths).toEqual(['osc52'])
   })
 
   it('stays silent when no clipboard path took the text', async () => {
