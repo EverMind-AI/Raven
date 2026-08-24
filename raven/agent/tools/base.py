@@ -68,6 +68,14 @@ class ToolResult:
     display_text: str | None = None
     retryable: bool = True
     abort_action: bool = False
+    ok: bool = True
+    """Whether the tool call succeeded, as the tool itself knows it.
+
+    ``False`` is a verdict, not a presentation: a refused command and a failing
+    command both read as failures to a surface drawing the row, so a tool must
+    set it for a failure it reports in words rather than by raising. Defaulted
+    true because a bare ``str`` result carries no such signal at all.
+    """
     blocks: list[ContentPart] | None = None
     diff: str | None = None
     file_change: "FileChange | None" = None
@@ -90,6 +98,7 @@ class ToolOutput(str):
     display_text: str | None
     retryable: bool
     abort_action: bool
+    ok: bool
     blocks: list[ContentPart] | None
     diff: str | None
     file_change: "FileChange | None"
@@ -101,6 +110,7 @@ class ToolOutput(str):
         *,
         retryable: bool = True,
         abort_action: bool = False,
+        ok: bool = True,
         blocks: list[ContentPart] | None = None,
         diff: str | None = None,
         file_change: "FileChange | None" = None,
@@ -109,6 +119,7 @@ class ToolOutput(str):
         out.display_text = display_text
         out.retryable = retryable
         out.abort_action = abort_action
+        out.ok = ok
         out.blocks = blocks
         out.diff = diff
         out.file_change = file_change

@@ -200,7 +200,20 @@ class SubagentManager:
         self._session_record_tasks: dict[str, set[asyncio.Task]] = {}
         self.registry = AgentRegistry()
         self.registry.set_builtin_builder(self.build_builtin_backend)
-        self.registry.apply(agents or [])
+        self._configs = list(agents or [])
+        self.registry.apply(self._configs)
+
+    def refresh_agents(self) -> None:
+        """Rebuild the agent table from the last-applied configs.
+
+        Re-running ``apply`` re-derives every row's ``AgentCaps`` and rebuilds
+        the external backends, which is how a newly recorded acp capability
+        snapshot (the startup backfill, a Test) reaches the live table -- the
+        row's statefulness and ``AcpAgentBackend._snapshot`` were materialized
+        before the snapshot existed, so without this a fresh install reports
+        the agent stateful to the roster and rejects it at dispatch.
+        """
+        self.apply_agents(self._configs)
 
     def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
         """An in-process raven loop for one ``builtin`` row, narrowed for one dispatch.
@@ -258,7 +271,13 @@ class SubagentManager:
         registry: before this, the manager's dict and the DAG tool's were
         refreshed by two separate setters that each skipped a bad entry on its
         own, so a partial failure left the two rosters disagreeing.
+
+        The configs are remembered as the refresh source: a hot-apply that
+        replaces the roster must not be rolled back by a later
+        :meth:`refresh_agents` -- the snapshot backfill runs its refresh
+        asynchronously and can land after a user has already changed the table.
         """
+        self._configs = list(configs)
         self.registry.apply(configs)
 
     def _resolve_backend(self, agent: str) -> SubagentBackend:

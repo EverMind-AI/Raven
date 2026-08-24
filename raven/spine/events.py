@@ -99,6 +99,12 @@ class ToolEvent:
     display: str | None = None
     result_preview: str = ""
     truncated: bool = False
+    # COMPLETE only, and the verdict the emit site can actually give: derived
+    # from the registry's own failure convention (the model-facing text of a
+    # failed tool starts with "Error"), which is the same rule the retry hint
+    # uses. Defaulted true so an outlet that predates the field keeps drawing
+    # every row as it drew it before.
+    ok: bool = True
     source: Source | None = None
     conversation_id: str | None = None
     # START only: the tool is a blocking interaction, so it has no automatic

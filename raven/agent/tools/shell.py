@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from raven.agent import workdir
-from raven.agent.tools.base import Tool, ToolResult
+from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
@@ -275,7 +275,11 @@ class ExecTool(Tool):
             result = await self._executor.exec(command, cwd=cwd, timeout=effective_timeout, env=env)
         except Exception as e:
             return f"Error executing command: {str(e)}"
-        return result.as_text(self._MAX_OUTPUT)
+        text = result.as_text(self._MAX_OUTPUT)
+        # The exit code is the verdict a config change, a security call or a
+        # syntax error share, and the text a failing command produced is not
+        # token-safe to classify from -- so the caller gets it structurally.
+        return ToolOutput(text, ok=result.exit_code == 0)
 
     async def _request_approval(self, command: str, *, sandboxed: bool = False) -> ToolResult | None:
         """Request one-shot authority for an exact command, failing closed.
@@ -318,6 +322,7 @@ class ExecTool(Tool):
             model_text=message + cls._STOP_INSTRUCTION,
             retryable=False,
             abort_action=True,
+            ok=False,
         )
 
     def _guard_command(self, command: str, cwd: str) -> str | None:

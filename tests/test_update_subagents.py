@@ -131,13 +131,29 @@ class TestTheBuiltinNamesAreReserved:
     """
 
     @pytest.mark.parametrize("name", ["Raven", "raven"])
-    @pytest.mark.parametrize("kind", ["cli", "acp", "openai"])
+    @pytest.mark.parametrize("kind", ["cli", "openai"])
     def test_a_new_entry_cannot_claim_either_spelling(self, tmp_path: Path, name: str, kind: str) -> None:
         p = tmp_path / "config.json"
         p.write_text(json.dumps({"subagents": {"agents": []}}))
 
         with pytest.raises(ValueError, match="built-in"):
             set_agents([{"name": name, "kind": kind, "command": "x {prompt}"}], config_path=p)
+
+    @pytest.mark.parametrize("name", ["Raven", "raven"])
+    def test_an_acp_redeclaration_of_a_builtin_name_is_allowed(self, tmp_path: Path, name: str) -> None:
+        """An acp row of a seed's name is the supported transport switch: the
+        generic agent is then served over this raven's own `raven acp`. An empty
+        command is kept as written -- merge_builtin_seeds fills the host command
+        at materialization, so a config file stays machine-portable."""
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"subagents": {"agents": []}}))
+
+        set_agents([{"name": name, "kind": "acp", "command": ""}], config_path=p)
+
+        from raven.agent.subagent.builtin_agents import canonical_agent_name
+
+        stored = {canonical_agent_name(e["name"]): e for e in _entries(p)}
+        assert stored["Raven"]["kind"] == "acp"
 
     def test_another_casing_is_not_reserved(self, tmp_path: Path) -> None:
         # Only the two spellings the row answers to are taken. `RAVEN` resolves to

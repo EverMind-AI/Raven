@@ -134,10 +134,12 @@ def reject_builtin_transport_changes(entries: list[dict], *, existing: list[dict
 
     A built-in agent is an in-process raven loop; its row exists whether or not
     config mentions one, and an override may retune what it can reach (``skills``,
-    ``tools``, ``model``). What it may not do is claim the name for another
-    transport: every name the generic row answers to is reserved, so a cli / acp /
-    openai entry spelled that way would shadow the row that an unnamed ``spawn``
-    and a dag node with no ``subagent`` both dispatch to.
+    ``tools``, ``model``). One redeclaration is supported: an ``acp`` entry
+    spells "serve the generic agent over this raven's own ``raven acp``", which
+    is the transport switch a user makes deliberately and ``merge_builtin_seeds``
+    honours. Every other transport is refused: a cli / openai entry spelled that
+    way would shadow the row that an unnamed ``spawn`` and a dag node with no
+    ``subagent`` both dispatch to.
 
     ``existing`` is what config already holds, and an entry matching one of those
     by name *and* kind passes. Without that, the rule would reject every write
@@ -159,7 +161,7 @@ def reject_builtin_transport_changes(entries: list[dict], *, existing: list[dict
             continue
         name = entry.get("name")
         kind = entry.get("kind")
-        if not name or not is_builtin_agent_name(name) or kind in (None, "builtin"):
+        if not name or not is_builtin_agent_name(name) or kind in (None, "builtin", "acp"):
             continue
         if (name, kind) in held:
             logger.warning(

@@ -514,3 +514,154 @@ async def test_testing_a_builtin_agent_is_refused_rather_than_attempted() -> Non
     assert result.ok is False
     assert "nothing to test" in result.detail
     assert "unknown third-party" not in result.detail
+
+
+class _FakeRow:
+    def __init__(self, name: str, *, kind: str = "acp", enabled: bool = True, config: object = None) -> None:
+        self.name = name
+        self.kind = kind
+        self.enabled = enabled
+        self.config = config if config is not None else type("C", (), {"name": name})()
+
+
+class _FakeManager:
+    def __init__(self, rows: list[_FakeRow], *, with_refresh: bool = False) -> None:
+        self.registry = type("R", (), {"rows": lambda self: rows})()
+        if with_refresh:
+            self.refresh_calls = 0
+
+            def refresh_agents() -> None:
+                self.refresh_calls += 1
+
+            self.refresh_agents = refresh_agents
+
+
+class TestAutomaticSnapshotVerification:
+    async def test_only_missing_or_stale_rows_are_verified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        fresh, missing, stale = _FakeRow("fresh"), _FakeRow("missing"), _FakeRow("stale")
+        recorded: list[str] = []
+
+        def fake_snapshot_for(cfg: object) -> Snap | None:
+            return {id(fresh.config): Snap(), id(missing.config): None, id(stale.config): Snap(stale=True)}[
+                id(cfg)
+            ]
+
+        async def fake_verify(cfg: object) -> Snap:
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
+        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.agent.subagent.probe.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(getattr(s, "status")))})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        manager = _FakeManager([fresh, missing, stale], with_refresh=True)
+        task = schedule_snapshot_verification(manager)
+        assert task is not None
+        assert task in probe_mod._VERIFY_TASKS, "an unrefed task can be collected mid-run"
+        await task
+        assert task not in probe_mod._VERIFY_TASKS, "the done callback must release the reference"
+
+        assert len(recorded) == 2  # both missing and stale round-tripped to a fresh snapshot
+        assert manager.refresh_calls == 1, "the materialized rows must be rebuilt after recording"
+
+    async def test_failed_verification_does_not_stop_the_rest(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        calls: list[str] = []
+
+        async def fake_verify(cfg: object) -> object:
+            calls.append(getattr(cfg, "tag", "?"))
+            if getattr(cfg, "tag", "") == "boom":
+                raise RuntimeError("no")
+            return type("S", (), {"status": "ready"})()
+
+        def make(tag: str) -> object:
+            return type("Row", (), {"name": tag, "kind": "acp", "enabled": True,
+                                    "config": type("C", (), {"tag": tag})()})()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.agent.subagent.probe.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([make("boom"), make("after")]))
+        await task
+
+        assert calls == ["boom", "after"]
+
+    async def test_a_manager_without_a_registry_defers_to_the_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A mounted stack's subagents substitute may not carry the registry the
+        backfill reads; scheduling nothing must not burn the once-per-process
+        ticket, so a real host later in the same process still gets its backfill."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        called: list[str] = []
+        monkeypatch.setattr(
+            probe_mod, "acp_snapshot_for",
+            lambda cfg: None,
+        )
+
+        async def fake_verify(cfg: object) -> object:
+            called.append("verified")
+            return type("S", (), {"status": "ready"})()
+
+        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.agent.subagent.probe.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        stub = type("Stub", (), {})()
+        assert schedule_snapshot_verification(stub) is None
+        assert probe_mod._SCHEDULED is False, "the ticket must not be spent on a mount that cannot backfill"
+        assert called == []
+
+    async def test_disabled_and_non_acp_rows_are_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        called: list[str] = []
+        monkeypatch.setattr(
+            probe_mod, "acp_snapshot_for",
+            lambda cfg: None,
+        )
+
+        async def fake_verify(cfg: object) -> object:
+            called.append(cfg.name)
+            return type("S", (), {"status": "ready"})()
+
+        monkeypatch.setattr(probe_mod, "verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.agent.subagent.probe.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        rows = [
+            _FakeRow("off", enabled=False),
+            _FakeRow("cli-kind", kind="cli"),
+            _FakeRow("on"),
+        ]
+        task = schedule_snapshot_verification(_FakeManager(rows))
+        await task
+
+        assert called == ["on"]

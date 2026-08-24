@@ -144,6 +144,18 @@ async def build_rpc_stack(
         # assistant turn nobody visibly asked.
         agent_loop.subagents.set_delivery_sink(emitter.emit)
 
+        # Backfill the acp capability snapshots at startup: an acp row's
+        # statefulness comes from its snapshot, and before this the only writers
+        # were the UI Test button and a probe=true listing -- so a fresh install
+        # reported every acp agent stateless and the instance picker hid them.
+        # Skipped on the acp channel, where this stack is itself a subagent
+        # child: verifying there would cascade (each child verifying its own
+        # row launching another child), and the host's own stack does it.
+        if channel != "acp":
+            from raven.agent.subagent.probe import schedule_snapshot_verification
+
+            schedule_snapshot_verification(agent_loop.subagents)
+
         # Per-server MCP events, broadcast rather than conversation-scoped: a
         # server connecting is not part of anybody's turn. Clients already listen
         # for these three, and an OAuth connect is not completable without them --

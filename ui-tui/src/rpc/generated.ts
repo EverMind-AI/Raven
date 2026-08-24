@@ -1252,6 +1252,10 @@ export interface ToolCompleteEvent {
     tool_call_id: string;
     result_preview: string;
     truncated: boolean;
+    /**
+     * Whether the tool call succeeded, by the emit site's verdict.
+     */
+    ok?: boolean;
     metadata?: {
       [k: string]: JsonValue;
     };

@@ -312,6 +312,7 @@ class RpcOutlet:
                             "tool_call_id": out.tool_call_id,
                             "result_preview": out.result_preview,
                             "truncated": out.truncated,
+                            "ok": out.ok,
                             "metadata": out.metadata,
                             "diff": out.diff,
                             # Beside the rendered diff for a client that draws its

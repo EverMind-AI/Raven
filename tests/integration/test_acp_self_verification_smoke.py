@@ -76,7 +76,7 @@ async def test_the_probe_reads_back_exactly_what_the_agent_declared(tmp_path):
     # codex-acp, which is the point of this file: the flag is not merely set in
     # the agent's own dict, it is found where a third-party reader looks for it.
     assert snapshot.can_load is True, "the transcript replay exists, so the capability is declared"
-    assert snapshot.can_resume is False, "session/resume is stable and unbuilt"
+    assert snapshot.can_resume is True, "session/resume is implemented and declared"
     assert snapshot.can_fork is False
 
 

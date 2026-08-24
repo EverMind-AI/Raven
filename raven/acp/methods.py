@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import mimetypes
 from collections.abc import Callable
 from itertools import count
@@ -46,12 +47,33 @@ from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTransla
 UNIMPLEMENTED_METHODS = frozenset(
     {
         "session/set_mode",
-        "session/resume",
-        "session/close",
-        "session/delete",
         "logout",
     }
 )
+
+AVAILABLE_COMMANDS: tuple[tuple[str, str], ...] = (
+    (
+        "deep-research",
+        "Run MiroThinker-backed deep research over multiple sources and return a cited report.",
+    ),
+    (
+        "playbook",
+        "Run a stored orchestration (playbook library) for a reusable procedure, or list the library.",
+    ),
+    ("cron", "Schedule a recurring task for raven, or show the scheduled jobs."),
+    ("sentinel", "Inspect proactive observations and scheduled nudges."),
+    ("sessions", "List, resume, fork, export or delete sessions."),
+    ("tracing", "Open the local tracing dashboard or compact audit artifacts."),
+)
+"""The command menu an editor shows for this agent.
+
+A deliberate white-list, not a reflection of the Typer app: the CLI surface
+includes verbs whose meaning is internal to a terminal (`acp`, `gateway`
+plumbing) or that a command panel has no business offering as a quick action,
+and reflecting it would put those in front of a reader and drift with every new
+verb. These six are the user-facing actions raven can start or inspect from a
+conversation; each is announced once per session as
+``available_commands_update``."""
 
 # Notifications that are safe to receive and correct to ignore. ``$/cancel_request``
 # is protocol-level and explicitly optional: the spec says a receiver MAY act on
@@ -124,6 +146,7 @@ class AcpMethods:
         self._ids = count(1)
         self.initialized = False
         self.client = ClientCapabilities()
+        self._titles: dict[str, str] = {}
 
     # -- frame handling ---------------------------------------------------
 
@@ -216,8 +239,14 @@ class AcpMethods:
             return await self._session_new(params)
         if method == "session/load":
             return await self._session_load(params)
+        if method == "session/resume":
+            return await self._session_resume(params)
         if method == "session/list":
             return await self._session_list(params)
+        if method == "session/close":
+            return await self._session_close(params)
+        if method == "session/delete":
+            return await self._session_delete(params)
         if method == "session/set_config_option":
             return await self._set_config_option(params)
         if method == "session/prompt":
@@ -262,6 +291,7 @@ class AcpMethods:
         )
         self._translator.add(session)
         logger.info("acp: session {} created at {}", session_key, cwd)
+        self._announce_commands(session_key)
         # The ACP sessionId *is* the raven session key. One identity rather than
         # two: session/load and session/list both address raven sessions, and a
         # second id space would need a map that survives a restart to be worth
@@ -325,6 +355,107 @@ class AcpMethods:
         for update in updates:
             self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
         logger.info("acp: replayed {} update(s) for {}", len(updates), session_id)
+        self._announce_commands(session_id)
+        return {}
+
+    async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Reopen a stored session for its own state, without replaying it.
+
+        The distinction is the spec's, and it is the whole of the method:
+        ``session/load`` returns the transcript as ``session/update``
+        notifications so a client that lost its history can repaint it;
+        ``session/resume`` continues a session the client already has, so the
+        transcript stays where it is and the session becomes promptable again.
+        What both must establish is the same state -- the translator entry, the
+        subscription, and the working-directory binding -- and both must refuse
+        an unknown id the same way, because ``session.resume`` mints a fresh
+        session for one and a client silently handed a new id would prompt an
+        empty conversation for one that had history.
+        """
+        cwd = self._validated_cwd(params.get("cwd"))
+        session_id = params.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise AcpMethodError(protocol.INVALID_PARAMS, "sessionId is required", {"field": "sessionId"})
+
+        result = await self._call("session.resume", {"session_id": session_id})
+        if result.get("session_id") != session_id:
+            raise AcpMethodError(protocol.RESOURCE_NOT_FOUND, "unknown session", {"sessionId": session_id})
+
+        # Same ordering as ``_session_load``, for the same reasons: the workdir
+        # comes from the client, and binding it before the branch keeps it true
+        # of a session this connection already holds.
+        self._bind_workdir(session_id, cwd)
+        session = self._translator.get(session_id)
+        if session is None:
+            session = AcpSession(
+                session_id=session_id,
+                session_key=session_id,
+                cwd=cwd,
+                subscription_id=await self._subscribe(session_id),
+            )
+            self._translator.add(session)
+        else:
+            session.cwd = cwd
+        logger.info("acp: resumed session {}", session_id)
+        self._announce_commands(session_id)
+        return {}
+
+    async def _session_close(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Drop one session from this connection.
+
+        Per the spec: any work still running is cancelled (``session/close`` is
+        a cancel plus a resource release), the stream is unbound, and the
+        session becomes an unknown id for a later prompt. The stored
+        conversation stays -- closing says "I am done with this stream",
+        deleting says the conversation is gone.
+        """
+        session_id = params.get("sessionId")
+        session = self._session_for(params) if isinstance(session_id, str) else None
+        if session is None:
+            raise AcpMethodError(protocol.INVALID_PARAMS, "sessionId is required", {"field": "sessionId"})
+        if session.turn is not None:
+            with contextlib.suppress(AcpMethodError):
+                await self._call("turn.cancel", {"session_key": session.session_key})
+        self._translator.release_session(session_id)
+        logger.info("acp: closed session {}", session_id)
+        return {}
+
+    async def _session_delete(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Delete a stored session, and drop it from this connection if held.
+
+        The engine's session manager owns the store, so the removal goes through
+        it. ``SessionManager.delete`` returns True only for a session that had a
+        file -- a session minted and never prompted lives in the cache alone --
+        so existence is judged by ``peek`` before the delete and the deletion
+        verdict is "was here, is not now". An unknown id is refused rather than
+        silently acknowledged: a client told its delete succeeded may go looking
+        for the conversation it was told is gone.
+
+        A running turn is cancelled *before* the store is touched. The cancel
+        path drains the turn, and the loop persists a broken-turn marker while
+        unwinding -- so deleting the file first and cancelling after lets the
+        unwind recreate the conversation the delete just removed, and the
+        request reports success against a session that is back on disk.
+        """
+        session_id = params.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise AcpMethodError(protocol.INVALID_PARAMS, "sessionId is required", {"field": "sessionId"})
+        manager = self._session_manager() if self._agent_loop is not None else None
+        held = self._translator.get(session_id)
+        existed = held is not None
+        if manager is not None:
+            existed = manager.peek(session_id) is not None or existed
+        if not existed:
+            raise AcpMethodError(protocol.RESOURCE_NOT_FOUND, "unknown session", {"sessionId": session_id})
+        if held is not None:
+            if held.turn is not None:
+                with contextlib.suppress(AcpMethodError):
+                    await self._call("turn.cancel", {"session_key": held.session_key})
+            self._translator.release_session(session_id)
+        if manager is not None:
+            manager.delete(session_id)
+        self._titles.pop(session_id, None)
+        logger.info("acp: deleted session {}", session_id)
         return {}
 
     async def _session_list(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -481,6 +612,7 @@ class AcpMethods:
             stop = await future
         finally:
             self._translator.end_turn(session.session_id)
+        self._announce_title(session.session_id)
         return {"stopReason": stop}
 
     async def _session_cancel(self, params: dict[str, Any]) -> None:
@@ -723,6 +855,63 @@ class AcpMethods:
             logger.warning("acp: no engine, so {} cannot be pinned to {}", session_key, cwd)
             return
         _manager_for(self._agent_loop, load_config()).get_or_create(session_key).metadata["workdir"] = cwd
+
+    def _session_manager(self) -> Any:
+        """The engine's own session manager, or a throwaway one when there is no engine.
+
+        Same caveat as ``_bind_workdir``: without an engine the manager built
+        here caches nothing, so a write through it would be lost -- which is why
+        the three callers that mutate (bind, delete, title read) each say what
+        they need and let the no-engine case fall through to its honest no-op.
+        """
+        from raven.config import load_config
+        from raven.rpc.methods.session import _manager_for
+
+        return _manager_for(self._agent_loop, load_config())
+
+    def _announce_commands(self, session_id: str) -> None:
+        """One ``available_commands_update`` per session, on its own stream.
+
+        Sent on ``session/new``, ``session/load`` and ``session/resume`` so a
+        client that switches sessions repaints the menu; never re-sent per turn
+        -- the list is static for the life of this connection.
+        """
+        self._emit(
+            protocol.notification(
+                "session/update",
+                {
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "available_commands_update",
+                        "availableCommands": [{"name": name, "description": desc} for name, desc in AVAILABLE_COMMANDS],
+                    },
+                },
+            )
+        )
+
+    def _announce_title(self, session_id: str) -> None:
+        """Emit ``session_info_update`` when a turn set or changed the title.
+
+        The auto-title is derived from the first user message and stored during
+        the turn, so this runs after it on every prompt. Read once: a client
+        that already has the title is not repainted, and a session whose title
+        never changes emits nothing after the first mention.
+        """
+        if self._agent_loop is None:
+            return
+        title = self._session_manager().get_or_create(session_id).metadata.get("title")
+        if not isinstance(title, str) or not title or self._titles.get(session_id) == title:
+            return
+        self._titles[session_id] = title
+        self._emit(
+            protocol.notification(
+                "session/update",
+                {
+                    "sessionId": session_id,
+                    "update": {"sessionUpdate": "session_info_update", "title": title},
+                },
+            )
+        )
 
     async def unsubscribe_all(self) -> None:
         """Close every subscription this connection opened.

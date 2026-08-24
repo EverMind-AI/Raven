@@ -400,19 +400,18 @@ def _tool_call(payload: dict[str, Any], cwd: str | None, meta: dict[str, Any] | 
 def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> dict[str, Any]:
     """A ``tool_call_update`` for a finished call.
 
-    ``status: "completed"`` unconditionally, which is a known inaccuracy and not
-    an oversight: ``ToolEvent`` carries no success flag, and the preview it does
-    carry comes from ``display_text or model_text`` -- so a tool that writes a
-    friendly message on failure is indistinguishable here from one that
-    succeeded. Guessing from the text would mislabel both directions. The fix is
-    a status field at the emit site, which is a change to the spine's vocabulary,
-    not to this mapping. Recorded in the compatibility matrix.
+    ``status`` is the emit site's verdict, not this mapping's guess: the loop
+    derives ``ok`` from the registry's own failure convention (the model-facing
+    text of a failed tool starts with ``Error``), which is the same rule the
+    retry-hint logic uses. A tool that reports a friendly ``Error: ...`` message
+    is therefore classified as failed here too -- the convention is the contract
+    tools opt into, and breaking it mislabels the transcript row as well.
     """
     preview = payload.get("result_preview")
     update: dict[str, Any] = {
         "sessionUpdate": "tool_call_update",
         "toolCallId": str(payload.get("tool_call_id") or ""),
-        "status": "completed",
+        "status": "completed" if payload.get("ok", True) else "failed",
     }
     content: list[dict[str, Any]] = []
     if isinstance(preview, str) and preview:
@@ -640,6 +639,24 @@ class UpdateTranslator:
         if session.subscription_id:
             self._by_subscription.pop(session.subscription_id, None)
         session.subscription_id = None
+
+    def release_session(self, session_id: str) -> AcpSession | None:
+        """Drop one session from this connection, settling any turn it holds.
+
+        ``session/close`` and ``session/delete`` both land here: the session's
+        stream is gone, so a turn still in flight is settled as ``cancelled``
+        (the way the spec says a torn-down turn resolves), and a later prompt is
+        refused like any unknown session instead of running into a stream no
+        subscriber holds.
+        """
+        session = self._by_session_id.get(session_id)
+        if session is None:
+            return None
+        if session.turn is not None:
+            session.turn.settle("cancelled")
+        self._mark_stream_dead(session)
+        self._by_session_id.pop(session_id, None)
+        return session
 
     def get(self, session_id: str) -> AcpSession | None:
         return self._by_session_id.get(session_id)

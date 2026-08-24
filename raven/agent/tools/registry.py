@@ -389,12 +389,14 @@ class ToolRegistry:
             if isinstance(result, ToolResult):
                 model_text, display_text = result.model_text, result.display_text
                 retryable, abort_action = result.retryable, result.abort_action
+                ok = result.ok
                 blocks = result.blocks
                 diff = result.diff
                 file_change = result.file_change
             else:
                 model_text, display_text = str(result), None
                 retryable, abort_action = True, False
+                ok = bool(getattr(result, "ok", True))
                 blocks = None
                 diff = None
                 file_change = None
@@ -413,12 +415,14 @@ class ToolRegistry:
                     display_text,
                     retryable=retryable,
                     abort_action=abort_action,
+                    ok=False,
                 )
             return ToolOutput(
                 model_text,
                 display_text,
                 retryable=retryable,
                 abort_action=abort_action,
+                ok=ok,
                 blocks=blocks,
                 diff=diff,
                 file_change=file_change,

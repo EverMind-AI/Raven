@@ -274,6 +274,7 @@ async def test_outlet_deliver_tool_event_to_tool_start_and_complete():
                     "tool_call_id": "t1",
                     "result_preview": "ok",
                     "truncated": False,
+                    "ok": True,
                     "metadata": None,
                     "diff": None,
                 },

@@ -182,6 +182,21 @@ class TestTranslatedFrames:
         update = translate({"type": "tool.complete", "payload": {"tool_call_id": "t"}}).updates[0]
 
         assert "content" not in update, "an empty content array renders as a blank block"
+
+    def test_a_failed_tool_is_reported_failed(self):
+        update = translate(
+            {"type": "tool.complete", "payload": {"tool_call_id": "t", "result_preview": "Error: nope", "ok": False}}
+        ).updates[0]
+
+        assert update["status"] == "failed"
+        validate_def("SessionUpdate", update)
+
+    def test_a_successful_tool_without_the_flag_stays_completed(self):
+        """``ok`` defaults to true -- every pre-existing emit site, and the
+        verdict is the emit site's job, not the translator's guess."""
+        update = translate({"type": "tool.complete", "payload": {"tool_call_id": "t", "result_preview": "ok"}}).updates[0]
+
+        assert update["status"] == "completed"
         validate_def("SessionUpdate", update)
 
     def test_a_subagents_reply_is_tagged_rather_than_merged(self):

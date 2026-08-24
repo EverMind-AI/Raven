@@ -118,10 +118,10 @@ class TestDeclaredCapabilities:
         assert caps["promptCapabilities"]["audio"] is False, "there is no audio path on the prompt side"
         assert caps["mcpCapabilities"] == {"http": False, "sse": False}, "MCP is per process, not per session"
         assert caps["auth"] == {}, "declaring auth.logout would put a method on the wire with nothing to end"
-        # ``list`` is declared and the other four are not. Each of resume / close
-        # / delete / additionalDirectories is stable in the schema and unbuilt
-        # here, and each one declared is a method that must then work.
-        assert set(caps["sessionCapabilities"]) == {"list"}
+        # ``list``, ``resume``, ``close`` and ``delete`` are declared and each
+        # has a method behind it; additionalDirectories is stable in the schema
+        # and unbuilt here, and each one declared is a method that must then work.
+        assert set(caps["sessionCapabilities"]) == {"list", "resume", "close", "delete"}
 
     def test_what_is_declared_is_declared_because_it_works(self):
         caps = agent_capabilities()
@@ -144,6 +144,22 @@ class TestDeclaredCapabilities:
 
         assert "list" in agent_capabilities()["sessionCapabilities"]
         assert "session/list" not in UNIMPLEMENTED_METHODS
+
+    def test_resume_is_declared_only_because_the_method_answers(self):
+        """``sessionCapabilities.resume`` is what a raven acting as this agent's
+        client reads to report the row resumable, so the declaration and the
+        method cannot drift apart."""
+        from raven.acp.methods import UNIMPLEMENTED_METHODS
+
+        assert "resume" in agent_capabilities()["sessionCapabilities"]
+        assert "session/resume" not in UNIMPLEMENTED_METHODS
+
+    def test_close_and_delete_are_declared_only_because_the_methods_answer(self):
+        from raven.acp.methods import UNIMPLEMENTED_METHODS
+
+        for name, method in (("close", "session/close"), ("delete", "session/delete")):
+            assert name in agent_capabilities()["sessionCapabilities"], name
+            assert method not in UNIMPLEMENTED_METHODS, method
 
     def test_the_agent_names_itself_with_a_real_version(self):
         info = initialize_result({})["agentInfo"]

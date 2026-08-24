@@ -193,3 +193,64 @@ class TestANonBuiltinRowCannotTakeASeedsName:
         merged = merge_builtin_seeds([self._external("raven")])
 
         assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "builtin")]
+
+
+class TestAnAcpRowCanReplaceTheSeed:
+    """An acp row of the generic name is the one supported transport switch.
+
+    Unlike a cli / openai claim of the name -- which is dropped, because an
+    unnamed ``spawn`` and a dag node with no ``subagent`` must not silently land
+    on an external backend -- an acp redeclaration is the user saying exactly
+    that out loud: the generic agent is served over this raven's own
+    ``raven acp``, and every default dispatch follows it.
+    """
+
+    def _acp(self, name: str = GENERIC_AGENT) -> Any:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        return ThirdPartyAcpSubagentConfig.model_validate({"name": name, "kind": "acp", "command": ""})
+
+    def test_the_row_takes_the_slot_with_the_host_command_filled(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp"
+        )
+
+        merged = merge_builtin_seeds([self._acp()])
+
+        assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
+        assert merged[0].command == "/usr/bin/raven acp"
+
+    def test_the_legacy_spelling_resolves_onto_the_capitalised_row(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp"
+        )
+
+        merged = merge_builtin_seeds([self._acp("raven")])
+
+        assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
+
+    def test_env_carries_the_host_raven_home(self, monkeypatch) -> None:
+        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+
+        merged = merge_builtin_seeds([self._acp()])
+
+        assert merged[0].env["RAVEN_HOME"] == "/srv/raven"
+
+    def test_a_declared_command_description_and_env_are_kept(self) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {
+                "name": GENERIC_AGENT,
+                "kind": "acp",
+                "command": "custom acp",
+                "description": "mine",
+                "env": {"RAVEN_HOME": "/elsewhere"},
+            }
+        )
+
+        merged = merge_builtin_seeds([row])
+
+        assert merged[0].command == "custom acp"
+        assert merged[0].description == "mine"
+        assert merged[0].env == {"RAVEN_HOME": "/elsewhere"}
