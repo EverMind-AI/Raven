@@ -218,7 +218,7 @@ class AcpConnectionPool:
                 # not of whichever backend happens to hold the turn, and every
                 # caller leaving it unset is how an unanswered request came to
                 # cancel turns.
-                on_request=on_request if on_request is not None else auto_approver(name),
+                on_request=on_request if on_request is not None else auto_approver(name, observe=router.dispatch),
                 on_notification=router.dispatch,
                 journal=journal,
             )

@@ -24,6 +24,7 @@ and as anything at all from the rest.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
@@ -70,12 +71,18 @@ def permission_outcome(params: dict[str, Any]) -> dict[str, Any]:
     return {"outcome": "cancelled"}
 
 
-def auto_approver(name: str) -> "Any":
+def auto_approver(name: str, observe: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None) -> "Any":
     """An ``on_request`` handler that approves permissions and refuses the rest.
 
     Refusing the rest is deliberate: ``fs/read_text_file`` and its siblings are
     advertised as unsupported in ``CLIENT_CAPABILITIES``, and answering one
     here would claim a capability raven does not serve.
+
+    ``observe`` is handed each permission request after the outcome is decided.
+    It exists because the request carries what the matching ``session/update``
+    does not -- codex badges a shell command as a ``read`` and sends the command
+    only here. It runs inside a ``try``: an unanswered request cancels the whole
+    turn, so nothing an observer does may reach the answer.
     """
 
     async def handle(method: str, params: dict[str, Any]) -> Any:
@@ -85,6 +92,11 @@ def auto_approver(name: str) -> "Any":
         tool = params.get("toolCall")
         title = tool.get("title") or tool.get("kind") if isinstance(tool, dict) else None
         logger.debug("acp agent {!r}: approving {} ({})", name, title or "a tool call", outcome)
+        if observe is not None:
+            try:
+                await observe(method, params)
+            except Exception as exc:  # noqa: BLE001 - an observer must not reach the answer
+                logger.debug("acp agent {!r}: permission observer failed: {}", name, exc)
         return {"outcome": outcome}
 
     return handle

@@ -56,9 +56,10 @@ def test_the_subject_falls_back_to_locations_when_there_is_no_input() -> None:
     """codex-acp's ``read`` carries the path nowhere else.
 
     Its opening frame has no ``rawInput`` key whatsoever; ``locations`` is the
-    spec's own answer and the only place the path exists. A subject found there
-    has no field of the adapter's to be stored under, so it keeps the literal
-    key ``argument``.
+    spec's own answer and the only place the path exists. ``subject_field``
+    reads it there and keys it ``path`` -- ``arguments_json``'s own literal
+    ``argument`` key is the fallback for a subject with no field of its own,
+    and this one has one.
     """
     update = {
         "sessionUpdate": "tool_call",
@@ -70,9 +71,9 @@ def test_the_subject_falls_back_to_locations_when_there_is_no_input() -> None:
     }
     call = CodexDialect().call(update)
 
-    assert call.name == "read"
+    assert call.name == "commandExecution.read"
     assert call.subject == "/repo/bridge/tsconfig.json"
-    assert json.loads(call.arguments_json()) == {"argument": "/repo/bridge/tsconfig.json"}
+    assert json.loads(call.arguments_json()) == {"path": "/repo/bridge/tsconfig.json"}
 
 
 def test_a_call_with_no_argument_anywhere_still_shows_its_title() -> None:
@@ -239,7 +240,7 @@ def test_codex_prefers_the_command_over_the_titles_truncation_of_it() -> None:
     }
     call = CodexDialect().call(update)
 
-    assert call.name == "execute"
+    assert call.name == "commandExecution"
     assert call.subject == command
     assert json.loads(call.arguments_json()) == {"command": command, "cwd": "/repo/ui-tui"}
 
@@ -295,3 +296,214 @@ def test_arguments_keep_the_adapters_own_spelling() -> None:
     call = AcpDialect().call({"toolCallId": "t1", "kind": "read", "rawInput": {"filePath": "src/a.py"}})
 
     assert json.loads(call.arguments_json()) == {"filePath": "src/a.py"}
+
+
+from tests import acp_frames
+
+
+def test_a_frame_without_a_kind_cannot_name_the_call() -> None:
+    """codex does not repeat ``kind`` when it completes a call.
+
+    Re-reading the name from such a frame returned the fallback and overwrote a
+    name the opening frame had right.
+    """
+    spec = AcpDialect()
+
+    assert spec.names_call({"kind": "execute"}) is True
+    assert spec.names_call(acp_frames.CLAUDE_EXEC_UPDATE) is True
+    assert spec.names_call({"rawInput": {"command": "pwd"}}) is False
+    assert spec.names_call({}) is False
+
+
+def test_a_result_reveals_no_subject_by_default() -> None:
+    assert AcpDialect().subject_from_result(acp_frames.CODEX_PATCH_DONE) is None
+
+
+def test_the_spec_reads_a_permission_command_from_the_tool_call() -> None:
+    assert AcpDialect().permission_command(acp_frames.CODEX_READ_PERMISSION) == "\"sed -n '1,200p' calc.py\""
+    assert AcpDialect().permission_command({"toolCall": {}}) is None
+
+
+def test_codex_prefers_the_parsed_command_over_the_bash_argument() -> None:
+    """`rawInput.command` is the quoted bash argument; `commandActions` is clean."""
+    assert CodexDialect().permission_command(acp_frames.CODEX_READ_PERMISSION) == "sed -n '1,200p' calc.py"
+
+
+def test_codex_names_each_tool_the_way_codex_does() -> None:
+    """The ACP `kind` enum is five values for eleven codex tools.
+
+    `apply_patch` and an MCP tool keep their model-facing names because codex
+    runs them as commands and the command is on the frame; the rest are named
+    by codex's own item type.
+    """
+    codex = CodexDialect()
+
+    assert codex.tool_name(acp_frames.CODEX_PATCH_OPEN) == "apply_patch"
+    assert codex.tool_name(acp_frames.CODEX_EXEC_OPEN) == "commandExecution"
+    assert codex.tool_name(acp_frames.CODEX_READ_OPEN) == "commandExecution.read"
+    assert codex.tool_name(acp_frames.CODEX_WEBSEARCH_OPEN) == "webSearch"
+    assert codex.tool_name({"kind": "read", "title": "List files in '/tmp'"}) == "commandExecution.listFiles"
+    assert codex.tool_name({"kind": "read", "title": "View Image /tmp/a.png"}) == "imageView"
+    assert codex.tool_name({"kind": "search", "title": "Search for 'x'"}) == "commandExecution.search"
+    assert codex.tool_name({"kind": "other", "title": "Image generation"}) == "imageGeneration"
+    assert codex.tool_name({"kind": "other", "_meta": {"contextCompaction": True}}) == "contextCompaction"
+    assert (
+        codex.tool_name(
+            {
+                "kind": "execute",
+                "_meta": {"is_mcp_tool_call": True},
+                "rawInput": {"server": "fs", "tool": "read", "arguments": {}},
+            }
+        )
+        == "mcp.fs.read"
+    )
+    assert (
+        codex.tool_name(
+            {"kind": "other", "title": "Start subagent docs", "_meta": {"codex": {"subagent": {"path": "a/docs"}}}}
+        )
+        == "subAgentActivity"
+    )
+    assert (
+        codex.tool_name(
+            {"kind": "other", "title": "handoff", "_meta": {"codex": {"collaboration": {"tool": "handoff"}}}}
+        )
+        == "collabAgentToolCall"
+    )
+    # A dynamic tool puts its real name in the title and sends no command.
+    assert codex.tool_name({"kind": "execute", "title": "my_tool", "rawInput": {"arguments": {"a": 1}}}) == "my_tool"
+
+
+def test_codex_discriminators_name_a_call_without_a_kind() -> None:
+    """The completing web-search frame has no `kind` but says what it is."""
+    codex = CodexDialect()
+
+    assert codex.names_call(acp_frames.CODEX_WEBSEARCH_DONE) is True
+    assert codex.tool_name(acp_frames.CODEX_WEBSEARCH_DONE) == "webSearch"
+    # An MCP completion carries neither, so the opening frame's name must stand.
+    assert codex.names_call({"rawInput": {"server": "fs", "tool": "read", "arguments": {}}}) is False
+
+
+def test_codex_stores_each_subject_under_a_key_that_names_it() -> None:
+    """The subject must be the first string in the arguments, truthfully keyed.
+
+    A reader that does not know the tool takes the first string value it finds
+    (`tool_vocabulary._promote`), so a path stored under `command` is a lie that
+    reaches the row.
+    """
+    codex = CodexDialect()
+
+    assert codex.subject_field(acp_frames.CODEX_EXEC_OPEN) == (
+        "command",
+        'python3 -c "import calc; print(calc.add(2,3))"',
+    )
+    # No rawInput on a read: the path is all the frame has until Task 5's
+    # permission back-fill supplies the command.
+    assert codex.subject_field(acp_frames.CODEX_READ_OPEN) == ("path", "/tmp/codexprobe/ws/calc.py")
+    assert codex.subject_field(acp_frames.CODEX_WEBSEARCH_DONE) == (
+        "query",
+        "site:developers.openai.com/codex Codex overview coding agent capabilities, "
+        "site:developers.openai.com/codex models GPT-5 Codex",
+    )
+    assert codex.subject_field(
+        {"kind": "read", "title": "View Image /tmp/a.png", "rawInput": {"path": "/tmp/a.png"}}
+    ) == ("path", "/tmp/a.png")
+
+
+def test_a_codex_call_puts_its_subject_first_in_the_arguments() -> None:
+    codex = CodexDialect()
+
+    call = codex.call(acp_frames.CODEX_WEBSEARCH_DONE)
+    fields = json.loads(call.arguments_json())
+
+    assert next(iter(fields)) == "query"
+    assert fields["query"].startswith("site:developers.openai.com/codex Codex overview")
+    # The adapter's own fields survive beside it; the record keeps what it sent.
+    assert fields["type"] == "webSearch"
+
+
+def test_codex_reads_the_patched_files_out_of_the_envelope() -> None:
+    """`apply_patch` names itself as the command; the files are in the result."""
+    codex = CodexDialect()
+
+    assert codex.subject_from_result(acp_frames.CODEX_PATCH_DONE, name="apply_patch") == "calc.py"
+    assert codex.subject_from_result(acp_frames.CODEX_READ_DONE, name="apply_patch") is None
+
+
+def test_codex_takes_an_images_path_but_never_its_prompt() -> None:
+    """`savedPath` is a path; `revisedPrompt` is prose and would be keyed as one.
+
+    Synthetic -- no capture reached image generation. Shape from the adapter's
+    `imageGenerationRawOutput`.
+    """
+    codex = CodexDialect()
+    raw = {"status": "completed", "revisedPrompt": "a red bicycle", "savedPath": "/w/bike.png"}
+
+    assert codex.subject_from_result({"rawOutput": raw}, name="imageGeneration") == "/w/bike.png"
+    assert (
+        codex.subject_from_result(
+            {"rawOutput": {k: v for k, v in raw.items() if k != "savedPath"}}, name="imageGeneration"
+        )
+        is None
+    )
+
+
+def test_codex_results_lose_the_terminals_crlf() -> None:
+    codex = CodexDialect()
+
+    text = codex.result(acp_frames.CODEX_PATCH_DONE).text
+
+    assert "\r" not in text
+    assert "*** Update File: calc.py" in text
+
+
+def test_codex_reads_the_paths_a_native_file_change_touched() -> None:
+    """A native `fileChange` frame carries no `rawInput`; its diff blocks do.
+
+    Synthetic -- `fileChange` never fired in either capture. Shape from the
+    adapter's `createFileChangeUpdate` and its `createAddFileContent` /
+    `createUpdateFileContent` / `createDeleteFileContent` diff-block builders,
+    each of which stamps its own `path` beside `type: "diff"`.
+    """
+    update = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "edit-1",
+        "kind": "edit",
+        "title": "Editing files",
+        "status": "completed",
+        "content": [
+            {"type": "diff", "oldText": None, "newText": "a\n", "path": "src/a.py", "_meta": {"kind": "add"}},
+            {"type": "diff", "oldText": "b\n", "newText": None, "path": "src/b.py", "_meta": {"kind": "delete"}},
+        ],
+    }
+    codex = CodexDialect()
+
+    assert codex.subject_field(update) == ("path", "src/a.py, src/b.py")
+    assert codex.call(update).subject == "src/a.py, src/b.py"
+
+
+def test_codex_reads_a_single_file_changes_path() -> None:
+    """One diff block is the common case; the join must not add a stray comma."""
+    update = {
+        "kind": "edit",
+        "title": "Editing files",
+        "content": [
+            {"type": "diff", "oldText": "old\n", "newText": "new\n", "path": "notes.txt", "_meta": {"kind": "update"}}
+        ],
+    }
+
+    assert CodexDialect().subject_field(update) == ("path", "notes.txt")
+
+
+def test_a_file_change_with_no_path_anywhere_keeps_the_truthful_key() -> None:
+    """No diff block carries a usable path: the key must still be `path`.
+
+    Falling through to the generic tail is the defect this guards against --
+    it read `argument` off the fixed title instead.
+    """
+    update = {
+        "kind": "edit",
+        "title": "Editing files",
+        "content": [{"type": "diff", "oldText": "x", "newText": "y"}],
+    }
+
+    assert CodexDialect().subject_field(update) == ("path", "")

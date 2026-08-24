@@ -36,6 +36,12 @@ row per call; a call opens further into its Detail Block. A single-call segment 
 middle depth, since its folded row already names the call.
 _Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this replaces.
 
+**Codex Verb Rule**:
+An entry in `CODEX_VERBS` (`ui-tui/src/domain/codexTools.ts`) giving one codex tool its
+folding style. The verb is codex's own name verbatim — only `unit` and `style` are the
+TUI's. Needed because codex rows deliberately keep codex's vocabulary instead of Raven's,
+so `OVERRIDES` cannot match them.
+
 **Detail Block**:
 A call's full argument and its output, rendered on a filled background (a `▏` rule below
 256 colors). The only place the raw command, path, or URL appears; rows above it carry
