@@ -1172,6 +1172,101 @@ class TestConnectMcpSandboxGuard:
         with pytest.raises(asyncio.CancelledError):
             await task
 
+    async def test_sse_connection_uses_merged_headers(self, monkeypatch):
+        """The SSE transport keeps config headers when the SDK adds its own."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+        from types import SimpleNamespace
+
+        import httpx
+        import mcp
+        import mcp.client.sse
+
+        from raven.agent.tools.mcp import connect_mcp_servers
+        from raven.agent.tools.registry import ToolRegistry
+
+        clients = []
+
+        class FakeHttpClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+        def fake_http_client(**kwargs):
+            clients.append(kwargs)
+            return FakeHttpClient()
+
+        @asynccontextmanager
+        async def fake_sse_client(url, httpx_client_factory):
+            client = httpx_client_factory(
+                headers={"X-SDK": "sdk", "X-Shared": "sdk"},
+                timeout="timeout",
+                auth="auth",
+            )
+            async with client:
+                yield object(), object()
+
+        class FakeSession:
+            def __init__(self, read, write):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def initialize(self):
+                pass
+
+            async def list_tools(self):
+                return SimpleNamespace(tools=[])
+
+        monkeypatch.setattr(httpx, "AsyncClient", fake_http_client)
+        monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+        monkeypatch.setattr(mcp.client.sse, "sse_client", fake_sse_client)
+
+        cfg = SimpleNamespace(
+            type="sse",
+            url="https://example.test/sse",
+            headers={"X-Config": "config", "X-Shared": "config"},
+            tool_timeout=30,
+        )
+        async with AsyncExitStack() as stack:
+            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), stack)
+
+        assert clients == [
+            {
+                "headers": {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"},
+                "follow_redirects": True,
+                "timeout": "timeout",
+                "auth": "auth",
+            }
+        ]
+
+    async def test_unknown_transport_is_skipped(self, monkeypatch):
+        """An unknown transport does not attempt to open an MCP connection."""
+        from contextlib import AsyncExitStack
+        from types import SimpleNamespace
+
+        from raven.agent.tools import mcp as mcp_tools
+        from raven.agent.tools.registry import ToolRegistry
+
+        attempted = False
+
+        def fake_connection(cfg, transport_type, executor):
+            nonlocal attempted
+            attempted = True
+            raise AssertionError("unknown transport attempted a connection")
+
+        monkeypatch.setattr(mcp_tools, "_mcp_server_connection", fake_connection)
+        cfg = SimpleNamespace(type="websocket", command=None, url="wss://example.test/mcp")
+
+        await mcp_tools.connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack())
+
+        assert attempted is False
+
     async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
         from contextlib import AsyncExitStack
