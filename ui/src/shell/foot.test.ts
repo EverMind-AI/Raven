@@ -3,27 +3,19 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { draw } from './foot'
 
-import type { Shell } from './bridge'
-
 interface Facts {
   version?: string | null
   mac?: boolean
 }
 
+const originalPlatform = Object.getOwnPropertyDescriptor(navigator, 'platform')
+
 function install(facts: Facts = {}): void {
-  const fake: Shell = {
-    T: (key) => key,
-    toast: () => {},
-    menuAt: () => {},
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    appVersion: () => facts.version ?? null,
-    /* The legacy modKey(), verbatim: the glyph on a Mac, the word plus its own
-       spacing everywhere else. */
-    modKey: () => (facts.mac ? '⌘' : 'Ctrl +'),
-    isMac: () => !!facts.mac,
-  }
-  window.RavenShell = fake
+  window.DS = { settings: { version: () => facts.version ?? null } }
+  Object.defineProperty(navigator, 'platform', {
+    configurable: true,
+    value: facts.mac ? 'MacIntel' : 'Linux x86_64',
+  })
 }
 
 const sub = (): string => document.getElementById('meSub')?.textContent ?? ''
@@ -34,7 +26,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  delete window.DS
+  if (originalPlatform) Object.defineProperty(navigator, 'platform', originalPlatform)
+  else Reflect.deleteProperty(navigator, 'platform')
 })
 
 describe('the foot row', () => {

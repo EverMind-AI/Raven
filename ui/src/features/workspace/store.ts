@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import { ds, shell, t } from '../../shell/bridge'
+import { copy } from '../../shell/clipboard'
 import { md } from '../../shell/prose'
 
 import type { FtEntry, FtKids, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
@@ -82,7 +83,7 @@ function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
 }
 
 export function copyToClip(text: string, done: string): void {
-  verb('copyToClip')(text, done)
+  copy(text, done)
 }
 
 /* Straight to the renderer, not out through the shell and back: prose.ts is a

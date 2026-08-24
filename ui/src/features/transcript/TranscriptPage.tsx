@@ -5,6 +5,7 @@ import * as dag from '../dag/graph'
 import { DagGraph } from '../dag/DagGraph'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { shell, t } from '../../shell/bridge'
+import { copy } from '../../shell/clipboard'
 import { open as openChip } from '../../shell/chips'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
@@ -752,7 +753,7 @@ const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
   const items = (): Array<{ label: string; fn: () => void }> => {
     const list = [{
       label: t('gui.answer.copy'),
-      fn: () => shell().copyToClip?.(seg.text, t('gui.answer.copied')),
+      fn: () => copy(seg.text, t('gui.answer.copied')),
     }]
     if (branch) list.push({ label: t('gui.answer.branch'), fn: () => branch(seg.text) })
     return list
@@ -770,7 +771,7 @@ const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteDa
   const brief = store.firstErrLine(seg.detail, 140) || seg.detail
   const full = seg.detail ? `${seg.label} · ${seg.detail}` : seg.label
   const items = (): Array<{ label: string; fn: () => void }> => [
-    { label: t('gui.answer.copy'), fn: () => shell().copyToClip?.(full, t('gui.answer.copied')) },
+    { label: t('gui.answer.copy'), fn: () => copy(full, t('gui.answer.copied')) },
   ]
   return (
     <div className={'tnote in' + (seg.quiet ? '' : ' bad')} title={full} ref={ctxRef(items)}>

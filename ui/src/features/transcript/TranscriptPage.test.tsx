@@ -39,7 +39,6 @@ function wire(over: Partial<TranscriptSource> = {}): void {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     attNotes: () => ['[attachments]'],
-    copyToClip: () => {},
   }
   window.RavenShell = fakeShell
   const source: TranscriptSource = {

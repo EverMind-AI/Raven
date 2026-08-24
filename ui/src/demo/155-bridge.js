@@ -14,10 +14,8 @@ window.RavenShell = {
   reachText: (reach) => reachText(reach),
   reachHint: (reach) => reachHint(reach),
   closeDetail: () => closeDetail(),
-  copyToClip: (text, done) => copyToClip(text, done),
   showWorkspace: (tab) => { if (!wsOpen) setWs(true); wsPick(tab); },
   wsShows: (tab) => wsOpen && wsTab === tab,
-  lang: () => LANG,
   wsView: () => wsView(),
   wsPick: (tab) => wsPick(tab),
   attNotes: () => Object.values(I18N.ui['gui.att.note'] || {}),
@@ -30,9 +28,6 @@ window.RavenShell = {
   openConn: () => openConn(),
   markNew: () => markNewCurrent(),
   themeSet: (next) => { CFG.theme = next; lookSave(); shellTheme(); if (setIsOpen()) drawSettings(); },
-  appVersion: () => APP_VERSION,
-  modKey: () => modKey(),
-  isMac: () => isMac(),
   plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
 };
 
@@ -43,6 +38,5 @@ if (typeof openSet === 'function') window.RavenShell.openSet = () => openSet();
 if (typeof closeSet === 'function') window.RavenShell.closeSet = () => closeSet();
 if (typeof setIsOpen === 'function') window.RavenShell.setIsOpen = () => setIsOpen();
 if (typeof openConn === 'function') window.RavenShell.openConn = () => openConn();
-if (typeof APP_VERSION !== 'undefined') window.RavenShell.appVersion = () => APP_VERSION || null;
 if (typeof lookGet === 'function') window.RavenShell.look = { get: () => lookGet(), set: (patch) => lookSet(patch) };
 if (typeof ntfSave === 'function') window.RavenShell.ntf = { get: () => NTF.on, set: (v) => { NTF.on = v; ntfSave(); }, push: (title) => ntfPush(title, '', { force: true }) };
