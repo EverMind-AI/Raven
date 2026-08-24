@@ -149,7 +149,11 @@ export const estimatedMsgHeight = (
     h += (msg.tools?.length ?? 0) + wrappedLines(msg.thinking ?? '', bodyWidth)
   }
 
-  if (msg.role === 'user' || msg.kind === 'diff') {
+  if (msg.role === 'user') {
+    // A blank margin row each side, plus the two padding rows of the filled
+    // prompt block messageLine draws around the text.
+    h += 4
+  } else if (msg.kind === 'diff') {
     h += 2
   } else if (msg.kind === 'slash') {
     h++

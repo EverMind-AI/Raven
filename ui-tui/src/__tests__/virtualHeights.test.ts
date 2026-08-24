@@ -21,8 +21,18 @@ describe('virtual height estimates', () => {
   it('uses compound user prompt width when estimating user message wrapping', () => {
     const msg: Msg = { role: 'user', text: 'x'.repeat(21) }
 
-    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: '❯' })).toBe(3)
-    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: 'Ψ >' })).toBe(4)
+    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: '❯' })).toBe(5)
+    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: 'Ψ >' })).toBe(6)
+  })
+
+  it('reserves the prompt block padding a user message renders with', () => {
+    const user: Msg = { role: 'user', text: 'one line' }
+    const assistant: Msg = { role: 'assistant', text: 'one line' }
+    const opts = { compact: true, details: false }
+
+    // One row of text, a blank margin either side, and the block's own two
+    // padding rows -- messageLine.tsx draws the padding whatever the tier.
+    expect(estimatedMsgHeight(user, 80, opts)).toBe(estimatedMsgHeight(assistant, 80, opts) + 4)
   })
 
   it('includes detail sections when visible', () => {
