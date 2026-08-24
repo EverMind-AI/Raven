@@ -1,25 +1,34 @@
 /* ══ boot ═════════════════════════════════════════════════════════
-   Each step is isolated: one failure used to abort the whole sequence and
-   leave the static shell on screen with no session list, no transcript and
-   no clue why. Now a failure is visible and the rest still renders.      */
-[
-  ['lookLoad', () => lookLoad()],
-  ['paneLoad', () => paneLoad()],
-  ['setRail', () => setRail(true)],
-  ['sessionDraw', () => sessionDraw()],
-  ['sessionOpen', () => sessionOpen(sessionRows()[0])],
-  ['drawCapsBadge', () => drawCapsBadge()],
-  ['drawPerm', () => drawPerm()],
-  ['drawCtx', () => drawCtx()],
-  ['drawCaps', () => drawCaps()],
-  ['drawFoot', () => drawFoot()],
-  ['bumpWs', () => bumpWs()],
-  ['drawSettings', () => drawSettings()],
-  ['setRuntime', () => setRuntime('local')],
-  ['goState', () => goState()]
-].forEach(([where, step]) => {
-  try { step(); } catch (e) { bootError(where, e); }
-});
+   Declared here but queued after the whole assembled script: in live mode
+   every synchronous DS installer must run before the first data-driven paint.
+   Each step is isolated so one failure stays visible and the rest still
+   renders. */
+function bootPage() {
+  [
+    ['lookLoad', () => lookLoad()],
+    ['paneLoad', () => paneLoad()],
+    ['setRail', () => setRail(true)],
+    ['sessionDraw', () => sessionDraw()],
+    /* Live boot deliberately starts with an empty source and chooses a draft
+       after the real list lands. Demo mode has a fixture row to open here. */
+    ['sessionOpen', () => { const first = sessionRows()[0]; if (first) sessionOpen(first); }],
+    ['drawCapsBadge', () => drawCapsBadge()],
+    ['drawPerm', () => drawPerm()],
+    ['drawCtx', () => drawCtx()],
+    ['drawCaps', () => drawCaps()],
+    ['drawFoot', () => drawFoot()],
+    ['bumpWs', () => bumpWs()],
+    ['drawSettings', () => drawSettings()],
+    ['setRuntime', () => setRuntime('local')],
+    ['goState', () => goState()]
+  ].forEach(([where, step]) => {
+    try { step(); } catch (e) { bootError(where, e); }
+  });
+}
+
+/* The live guard runs later in this same script task and claims boot before
+   microtasks drain. Its final part queues bootPage after every source install. */
+queueMicrotask(() => { if (!window.__liveBoot) bootPage(); });
 
 /* ══ boot splash + first-run onboarding ══════════════════════════ */
 

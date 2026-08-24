@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 132 methods, 74 component schemas.
+// 132 methods, 77 component schemas.
 
 /* eslint-disable */
 /**
@@ -39,7 +39,8 @@ export type TurnEvent =
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
   | DagRunCompletedEvent
-  | CronMissedEvent;
+  | CronMissedEvent
+  | MediaEvent;
 
 export interface BrowserTab {
   index: number;
@@ -905,6 +906,10 @@ export interface ToolStartEvent {
       [k: string]: JsonValue;
     };
     display?: string | null;
+    /**
+     * The call is a blocking interaction with no automatic deadline. A client that clocks the event stream for liveness must suspend that clock while it is in flight.
+     */
+    blocking?: boolean;
   };
 }
 export interface ToolProgressEvent {
@@ -913,6 +918,23 @@ export interface ToolProgressEvent {
     tool_call_id: string;
     preview: string;
   };
+}
+/**
+ * One file a tool call wrote, as contents rather than as a rendering of them. Beside ToolCompleteEvent.diff rather than instead of it: a client that draws its own diff needs the text, and a unified diff cannot be turned back into the file.
+ */
+export interface FileChange {
+  /**
+   * Absolute path of the file that was written.
+   */
+  path: string;
+  /**
+   * The file's full contents after the write.
+   */
+  after: string;
+  /**
+   * The contents the write replaced. Absent when the file did not exist, so a client renders a creation differently from a rewrite; an empty string means the file existed and was empty.
+   */
+  before?: string;
 }
 export interface ToolCompleteEvent {
   type: 'tool.complete';
@@ -927,6 +949,7 @@ export interface ToolCompleteEvent {
      * Unified diff of what the call changed on disk, when the tool could produce one.
      */
     diff?: string;
+    file_change?: FileChange;
   };
 }
 export interface MessageCompleteEvent {
@@ -1112,6 +1135,32 @@ export interface DagRunCompletedEvent {
       output_file?: string;
       error?: string;
     }[];
+  };
+}
+/**
+ * One file the agent produced as part of its reply, by local path.
+ */
+export interface MediaItem {
+  /**
+   * Absolute path of the file on the machine the agent runs on.
+   */
+  path: string;
+  /**
+   * MIME type as declared by the emit site. Today every producer declares application/octet-stream, so a client that needs the real type should sniff the extension rather than trust this.
+   */
+  mime: string;
+  /**
+   * Coarse media class; "file" is the only value emitted today.
+   */
+  kind: string;
+}
+export interface MediaEvent {
+  type: 'media';
+  payload: {
+    /**
+     * The files, in the order the turn produced them. Never empty: an event with nothing to deliver is not emitted.
+     */
+    items: MediaItem[];
   };
 }
 export interface SessionListParams {
