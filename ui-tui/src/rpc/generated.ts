@@ -60,7 +60,8 @@ export type TurnEvent =
   | DagRunStartedEvent
   | DagNodeUpdatedEvent
   | DagRunCompletedEvent
-  | CronMissedEvent;
+  | CronMissedEvent
+  | MediaEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1204,6 +1205,10 @@ export interface ToolStartEvent {
       [k: string]: JsonValue;
     };
     display?: string | null;
+    /**
+     * The call is a blocking interaction with no automatic deadline. A client that clocks the event stream for liveness must suspend that clock while it is in flight.
+     */
+    blocking?: boolean;
   };
 }
 /**
@@ -1216,6 +1221,26 @@ export interface ToolProgressEvent {
     tool_call_id: string;
     preview: string;
   };
+}
+/**
+ * One file a tool call wrote, as contents rather than as a rendering of them. Beside ToolCompleteEvent.diff rather than instead of it: a client that draws its own diff needs the text, and a unified diff cannot be turned back into the file.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "FileChange".
+ */
+export interface FileChange {
+  /**
+   * Absolute path of the file that was written.
+   */
+  path: string;
+  /**
+   * The file's full contents after the write.
+   */
+  after: string;
+  /**
+   * The contents the write replaced. Absent when the file did not exist, so a client renders a creation differently from a rewrite; an empty string means the file existed and was empty.
+   */
+  before?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1234,6 +1259,7 @@ export interface ToolCompleteEvent {
      * Unified diff of what the call changed on disk, when the tool could produce one.
      */
     diff?: string;
+    file_change?: FileChange;
   };
 }
 /**
@@ -1256,6 +1282,10 @@ export interface ErrorEvent {
   type: 'error';
   payload: {
     code: number;
+    /**
+     * The turn this failure belongs to. Empty when the emitter did not know it; a consumer that correlates a request to a turn must not treat an empty value as its own.
+     */
+    turn_id?: string;
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;
@@ -1453,6 +1483,39 @@ export interface DagRunCompletedEvent {
       output_file?: string;
       error?: string;
     }[];
+  };
+}
+/**
+ * One file the agent produced as part of its reply, by local path.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MediaItem".
+ */
+export interface MediaItem {
+  /**
+   * Absolute path of the file on the machine the agent runs on.
+   */
+  path: string;
+  /**
+   * MIME type as declared by the emit site. Today every producer declares application/octet-stream, so a client that needs the real type should sniff the extension rather than trust this.
+   */
+  mime: string;
+  /**
+   * Coarse media class; "file" is the only value emitted today.
+   */
+  kind: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MediaEvent".
+ */
+export interface MediaEvent {
+  type: 'media';
+  payload: {
+    /**
+     * The files, in the order the turn produced them. Never empty: an event with nothing to deliver is not emitted.
+     */
+    items: MediaItem[];
   };
 }
 /**

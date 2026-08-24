@@ -7,6 +7,25 @@ from typing import Any
 from raven.utils.helpers import ContentPart
 
 
+@dataclass(frozen=True)
+class FileChange:
+    """One file's whole content before and after a write.
+
+    Whole contents rather than a rendered diff, because a surface that draws its
+    own -- an editor with a diff view -- needs the two versions, and cannot
+    recover them from a unified diff whose context is limited and which is
+    dropped entirely past 400 lines.
+
+    ``before`` is ``None`` when the file did not exist. That is a distinction, not
+    a missing value: a client shows a new file differently from a rewritten one,
+    and collapsing the two makes every creation look like a full replacement.
+    """
+
+    path: str
+    after: str
+    before: str | None = None
+
+
 @dataclass
 class ToolResult:
     """A tool's output split into the model-facing text and an optional
@@ -35,6 +54,14 @@ class ToolResult:
     renders the change itself. Only a writing tool can produce it -- by the time
     anyone else looks, the content it replaced is gone -- and it never reaches
     the model, so ``model_text`` still has to say what happened on its own.
+
+    ``file_change`` is the same change unrendered: the path and the whole file
+    before and after. A surface that draws its own diff needs the contents rather
+    than somebody else's rendering of them, and it cannot recover them from the
+    unified form -- ``_unified`` emits limited context and drops a rewrite over
+    400 lines entirely. Set beside ``diff`` by the same tools, from the same two
+    strings they already hold; ``before`` is ``None`` only when the file did not
+    exist, which is a distinction a client renders differently.
     """
 
     model_text: str
@@ -43,6 +70,7 @@ class ToolResult:
     abort_action: bool = False
     blocks: list[ContentPart] | None = None
     diff: str | None = None
+    file_change: "FileChange | None" = None
 
 
 class ToolOutput(str):
@@ -64,6 +92,7 @@ class ToolOutput(str):
     abort_action: bool
     blocks: list[ContentPart] | None
     diff: str | None
+    file_change: "FileChange | None"
 
     def __new__(
         cls,
@@ -74,6 +103,7 @@ class ToolOutput(str):
         abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
         diff: str | None = None,
+        file_change: "FileChange | None" = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
@@ -81,6 +111,7 @@ class ToolOutput(str):
         out.abort_action = abort_action
         out.blocks = blocks
         out.diff = diff
+        out.file_change = file_change
         return out
 
 

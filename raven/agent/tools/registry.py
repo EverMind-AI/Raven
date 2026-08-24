@@ -391,11 +391,13 @@ class ToolRegistry:
                 retryable, abort_action = result.retryable, result.abort_action
                 blocks = result.blocks
                 diff = result.diff
+                file_change = result.file_change
             else:
                 model_text, display_text = str(result), None
                 retryable, abort_action = True, False
                 blocks = None
                 diff = None
+                file_change = None
 
             if model_text.startswith("Error"):
                 # ``Error:`` describes presentation, not retry semantics.
@@ -419,6 +421,7 @@ class ToolRegistry:
                 abort_action=abort_action,
                 blocks=blocks,
                 diff=diff,
+                file_change=file_change,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint

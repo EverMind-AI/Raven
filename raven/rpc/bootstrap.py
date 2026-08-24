@@ -39,7 +39,13 @@ class RpcStack:
     deliverables: Any = None
 
 
-async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> RpcStack:
+async def build_rpc_stack(
+    send_frame: SendFrame,
+    *,
+    agent_loop: Any = None,
+    channel: str = "tui",
+    approval_responder: Any = None,
+) -> RpcStack:
     """Assemble dispatcher + engine wired to ``send_frame``.
 
     Must run inside the event loop that will serve requests (cron start and
@@ -58,6 +64,24 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
     as ``RpcStack.question_broker``) and its own, so the page answers its own
     sessions' questions without swallowing the host's -- see
     ``RoutingQuestionBroker`` and the gateway's page mount.
+
+    ``channel`` names the delivery channel this stack's turns run on, and it must
+    reach *both* collaborators or nothing is delivered at all: ``build_rpc_spine``
+    registers its outlet under this name, and ``register_turn_methods`` stamps it
+    on every turn it submits as ``source.channel``. ``spine/turn.py`` states the
+    consequence outright -- the default channel MUST match the channel the outlet
+    was registered under, or the reply is dropped -- so passing it to one and not
+    the other loses every turn silently. Defaulted to ``"tui"``, which is what
+    both sides already used, so existing callers are unchanged.
+
+    ``approval_responder`` replaces the shell-approval transport for this stack's
+    user turns. The broker built here emits ``approval.request`` on the same
+    ``send_frame``, which is right for a client that implements that method and
+    useless for one that does not -- an ACP client speaks
+    ``session/request_permission`` instead. Only the transport is replaced:
+    classification, the one-command scope and the absence of any always-allow
+    state all stay where they are. ``None`` keeps this stack's own broker, so
+    existing callers are unchanged.
     """
     from raven.cli.tui_commands import (
         _build_agent_loop,
@@ -151,10 +175,15 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
         turn_scheduler, _turn_hub, turn_ids, turn_teardown = build_rpc_spine(
             agent_loop,
             emitter,
+            channel=channel,
             on_turn_end=turn_module.clear_active,
             direct_targets=direct_targets,
             readback_texts=cron_readback,
-            approval_responder=approval_broker,
+            # The caller's transport when it brought one. The locally built
+            # broker is still constructed either way: ``approval.respond`` is
+            # registered from it below, and a caller that overrides the responder
+            # is not necessarily removing that method.
+            approval_responder=approval_responder or approval_broker,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -190,6 +219,7 @@ async def build_rpc_stack(send_frame: SendFrame, *, agent_loop: Any = None) -> R
         direct_targets=direct_targets,
         build_error=build_error,
         send_frame=send_frame,
+        default_channel=channel,
     )
 
     if owns_loop and agent_loop is not None and agent_loop.backend is not None:

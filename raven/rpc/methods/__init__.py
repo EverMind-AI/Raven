@@ -94,6 +94,7 @@ def register_aligned_methods(
     direct_targets: "dict[str, dict[str, str]] | None" = None,
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -109,6 +110,8 @@ def register_aligned_methods(
     ``confirm_broker`` is forwarded to :func:`register_confirm_methods`;
     ``approval_broker`` gates the shell approval response surface so callers
     without an interactive broker do not expose an unusable approval method.
+    ``default_channel`` is stamped on every turn ``turn.send`` submits and must
+    match the channel the delivery outlet was registered under.
     """
     register_system_methods(dispatcher)
     register_aligned_methods_except_system(
@@ -123,6 +126,7 @@ def register_aligned_methods(
         direct_targets=direct_targets,
         build_error=build_error,
         send_frame=send_frame,
+        default_channel=default_channel,
     )
 
 
@@ -139,6 +143,7 @@ def register_aligned_methods_except_system(
     direct_targets: "dict[str, dict[str, str]] | None" = None,
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -213,6 +218,9 @@ def register_aligned_methods_except_system(
             turn_ids=turn_ids,
             direct_targets=direct_targets,
             build_error=build_error,
+            # Must equal the channel ``build_rpc_spine`` registered its outlet
+            # under; ``turn.py`` documents that a mismatch drops the reply.
+            default_channel=default_channel,
         )
     # confirm.respond — needs a ConfirmBroker to resolve the pending
     # confirm future. Gated like turn.*: when no broker is supplied (demo

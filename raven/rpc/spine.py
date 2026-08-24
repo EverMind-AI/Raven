@@ -28,6 +28,7 @@ from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
     EpisodeStart,
+    MediaOut,
     Notice,
     NoticeKind,
     Origin,
@@ -210,8 +211,8 @@ class RpcOutlet:
     -> a token.delta). The turn's completion (``message.complete``) and failure
     (``error``) are emitted by the sink after the render barrier. A Notice the
     runtime raised about the turn itself (``action_blocked``) rides ``notice``;
-    progress and tool-hint notices are eaten, as is MediaOut — no client shows
-    per-turn progress or tool media today (a known gap, deferred)."""
+    a MediaOut rides ``media``. Progress and tool-hint notices are eaten -- no
+    client shows per-turn progress today (a known gap, deferred)."""
 
     def __init__(
         self,
@@ -313,6 +314,11 @@ class RpcOutlet:
                             "truncated": out.truncated,
                             "metadata": out.metadata,
                             "diff": out.diff,
+                            # Beside the rendered diff for a client that draws its
+                            # own. Absent rather than null when a call changed no
+                            # file, so every payload the wire already carried keeps
+                            # its shape.
+                            **({"file_change": out.file_change} if out.file_change else {}),
                         },
                     },
                 )
@@ -341,7 +347,23 @@ class RpcOutlet:
             await self._emitter.emit(
                 self._subscription(cid), {"type": "episode.start", "payload": {"index": out.index}}
             )
-        # MediaOut: eaten (no wire event today).
+        elif isinstance(out, MediaOut):
+            # Paths, not bytes: both ends of this wire are on one machine (the
+            # terminal is a child process; an ACP client spawns the agent itself),
+            # and a turn can produce a file large enough that base64 on a
+            # line-delimited channel would stall every other event behind it.
+            #
+            # An empty tuple is not emitted. The contract says the list is never
+            # empty, and an event that delivers nothing would still make a client
+            # draw an attachment row.
+            if out.media:
+                await self._emitter.emit(
+                    self._subscription(cid),
+                    {
+                        "type": "media",
+                        "payload": {"items": [{"path": m.path, "mime": m.mime, "kind": m.kind} for m in out.media]},
+                    },
+                )
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
         if done:
@@ -381,8 +403,21 @@ class RpcOutlet:
         reason: str,
         detail: str = "",
         target: dict[str, str] | None = None,
+        turn_id: str = "",
     ) -> None:
+        """A turn's failure, tagged with the turn it belongs to when known.
+
+        ``turn_id`` matters to any consumer that answers a *request* off this
+        event. One session's subscription also carries turns the runtime
+        submitted, and this lane is shared -- see ``_owns_lane`` -- so a consumer
+        with no id to compare has no way to tell a foreign turn's failure from
+        its own, and will answer the wrong request. Empty when the caller did not
+        know the turn, which a consumer must read as "not mine" rather than as
+        "mine".
+        """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
+        if turn_id:
+            payload["turn_id"] = turn_id
         if detail:
             payload["detail"] = detail
         if target is not None:
@@ -474,6 +509,11 @@ def _make_rpc_sink(
                     "internal",
                     event.error or "",
                     target,
+                    # The ending turn's own id, for the same reason
+                    # ``emit_complete`` above takes it rather than reading the
+                    # lane slot: the slot may hold a client turn that has not
+                    # started yet.
+                    turn_id=event.turn_id,
                 )
             return
         if isinstance(event, TurnStarted):

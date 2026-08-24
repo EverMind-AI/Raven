@@ -349,6 +349,39 @@ def _log_late_mcp_sync(task: "asyncio.Task") -> None:
         logger.warning("MCP: the connect a turn stopped waiting for failed: {}", exc)
 
 
+# A whole file both ways is the largest thing a tool event carries, and it is
+# carried so a client can draw the change itself. Past this the pair is dropped
+# rather than truncated, for the reason ``_unified`` drops an oversized diff: half
+# a file reads as a smaller change than the one that happened.
+_FILE_CHANGE_MAX_CHARS = 512 * 1024
+
+
+def _file_change_payload(change: Any) -> dict[str, Any] | None:
+    """One write as a plain mapping, or ``None`` when there is nothing to send.
+
+    Flattened here rather than passed as the dataclass: ``spine.events`` is
+    deliberately free of the tools package, and a mapping is also what goes on
+    the wire two hops later.
+
+    ``before`` is preserved as ``None`` when the file did not exist, because a
+    client renders a creation differently from a rewrite -- so this cannot use a
+    "falsy means absent" shortcut, an empty file having the same emptiness.
+    """
+    if change is None:
+        return None
+    after = getattr(change, "after", None)
+    path = getattr(change, "path", None)
+    if not isinstance(after, str) or not isinstance(path, str) or not path:
+        return None
+    before = getattr(change, "before", None)
+    if len(after) + len(before or "") > _FILE_CHANGE_MAX_CHARS:
+        return None
+    payload: dict[str, Any] = {"path": path, "after": after}
+    if before is not None:
+        payload["before"] = before
+    return payload
+
+
 _TOOL_PREVIEW_MAX_CHARS = 4_000
 """How much of a tool's output rides the ``tool.complete`` event to a client.
 
@@ -3102,6 +3135,9 @@ class AgentLoop:
                                 # registry attaches it to the result, and only
                                 # this event reaches a UI.
                                 "diff": getattr(result, "diff", None),
+                                # Alongside it, for a surface that renders the
+                                # change itself rather than a unified diff of it.
+                                "file_change": _file_change_payload(getattr(result, "file_change", None)),
                             },
                         )
                     # A skill the model loaded itself never passes through
@@ -4274,6 +4310,7 @@ class AgentLoop:
                         truncated=info["truncated"],
                         metadata=info.get("metadata"),
                         diff=info.get("diff"),
+                        file_change=info.get("file_change"),
                     )
                 )
 

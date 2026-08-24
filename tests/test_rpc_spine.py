@@ -12,6 +12,7 @@ from raven.rpc.spine import (
 from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine import (
     ChatType,
+    EpisodeStart,
     MediaOut,
     Notice,
     NoticeKind,
@@ -331,7 +332,7 @@ async def test_outlet_deliver_text_to_token_delta():
     assert emitter.emitted == [("tui:c1", {"type": "token.delta", "payload": {"text": "please clarify"}})]
 
 
-async def test_outlet_deliver_eats_chatty_notices_and_media():
+async def test_outlet_deliver_eats_chatty_notices():
     # Progress and tool-hint notices exist for channels that cannot draw a tool
     # row. This client draws every call, so forwarding them narrates the same
     # work twice.
@@ -339,10 +340,93 @@ async def test_outlet_deliver_eats_chatty_notices_and_media():
     outlet = RpcOutlet("tui", emitter)
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", conversation_id="tui:c1"))
     await outlet.deliver(Notice(kind=NoticeKind.TOOL_HINT, detail="reading", conversation_id="tui:c1"))
-    await outlet.deliver(
-        MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1")
-    )
     assert emitter.emitted == []  # no wire event for these today
+
+
+async def test_outlet_deliver_media_to_a_media_event():
+    """A reply's files reach the wire instead of being dropped at this hop.
+
+    They used to be eaten here, which made the loss invisible to every layer
+    above: a turn that produced a chart answered with text that referred to a
+    file the client was never told about.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        MediaOut(
+            media=(
+                Media(path="/tmp/x.png", mime="image/png", kind="image"),
+                Media(path="/tmp/y.csv", mime="text/csv", kind="file"),
+            ),
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "media",
+                "payload": {
+                    "items": [
+                        {"path": "/tmp/x.png", "mime": "image/png", "kind": "image"},
+                        {"path": "/tmp/y.csv", "mime": "text/csv", "kind": "file"},
+                    ]
+                },
+            },
+        )
+    ]
+
+
+async def test_outlet_deliver_media_with_nothing_in_it_emits_nothing():
+    """The contract says ``items`` is never empty, so this cannot be forwarded.
+
+    Not a theoretical guard: the emit site builds the tuple from a reply's path
+    list, and an empty event would still make a client draw an attachment row
+    with nothing behind it.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(MediaOut(media=(), conversation_id="tui:c1"))
+    assert emitter.emitted == []
+
+
+async def test_outlet_deliver_tool_complete_forwards_the_file_change():
+    """The structured change beside the rendered diff.
+
+    An ACP client cannot use the diff string at all -- its Diff content block is
+    ``{path, newText, oldText}`` -- so this field is the only thing that reaches
+    it, and it is absent rather than null when a call wrote nothing so that every
+    payload the wire already carried keeps its shape.
+    """
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            truncated=False,
+            file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["file_change"] == {
+        "path": "/tmp/a.txt",
+        "after": "new",
+        "before": "old",
+    }
+
+    emitter.emitted.clear()
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t2",
+            result_preview="ok",
+            truncated=False,
+            conversation_id="tui:c1",
+        )
+    )
+    assert "file_change" not in emitter.emitted[0][1]["payload"]
 
 
 async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
@@ -373,6 +457,54 @@ async def test_a_blocked_action_rides_notice_and_never_the_token_stream():
         )
     ]
     assert not any(ev["type"] == "token.delta" for _, ev in emitter.emitted)
+
+
+async def test_every_outlet_emission_validates_against_the_wire_contract():
+    """Whatever the outlet emits must parse as a declared ``TurnEvent``.
+
+    The schema-match tests compare the two *declarations* to each other; this
+    compares what the code actually puts on the wire to the declaration. Both are
+    needed, and this is the one that was missing when ``tool.complete`` grew a
+    ``file_change`` field that no declaration knew about: the payload models are
+    ``extra="forbid"``, so an undeclared field makes a validating consumer drop
+    the entire event rather than the unknown key.
+
+    Driven through ``deliver`` with one of every Deliverable, so a new branch that
+    invents a payload shape fails here instead of at a client.
+    """
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    events = [
+        Reasoning(content="thinking", conversation_id="tui:c1"),
+        ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="read_file", conversation_id="tui:c1"),
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="ok",
+            diff="--- a\n+++ b",
+            metadata={"k": "v"},
+            file_change={"path": "/tmp/a.txt", "after": "new", "before": "old"},
+            conversation_id="tui:c1",
+        ),
+        Text(content="hello", conversation_id="tui:c1"),
+        Notice(kind=NoticeKind.ACTION_BLOCKED, detail="blocked", conversation_id="tui:c1"),
+        EpisodeStart(index=0, conversation_id="tui:c1"),
+        MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1"),
+    ]
+    for event in events:
+        await outlet.deliver(event)
+    await outlet.send_stream_chunk("tui:c1", "tui:c1", "delta")
+    await outlet.emit_complete("tui:c1", "turn-1", {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3})
+    await outlet.emit_error("tui:c1", -32099, "boom", "internal", detail="stack")
+
+    adapter = TypeAdapter(TurnEvent)
+    assert len(emitter.emitted) == len(events) + 3
+    for _, wire in emitter.emitted:
+        adapter.validate_python(wire)
 
 
 async def test_outlet_emits_token_delta_on_a_chunk():
