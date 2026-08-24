@@ -102,6 +102,39 @@ const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload
 }
 
 /**
+ * Attach prompts to a run whose nodes were built without them.
+ *
+ * `dag.run_started` travels on the DAG tool's own progress sink and the
+ * `tool.start` carrying the prompts goes through the delivery hub, so either
+ * can reach the client first -- the margin measured on a real run was 2ms.
+ * `fromStart` covers the order where the prompts are already known; this covers
+ * the other one. Without it that margin silently decides whether any row of the
+ * graph can be expanded, and nothing later puts the prompts back.
+ *
+ * Returns `run` itself when it adds nothing: the store publishes by identity, so
+ * a fresh object here would re-render every graph on every call. A node that
+ * already has a template keeps it -- a `dag.get` snapshot read the run dir,
+ * which is a truer source than the arguments the model sent.
+ */
+export const withPromptTemplates = (run: DagRunState, templates: Record<string, string>): DagRunState => {
+  let changed = false
+
+  const nodes = run.nodes.map(node => {
+    const template = templates[node.id]
+
+    if (!template || node.promptTemplate) {
+      return node
+    }
+
+    changed = true
+
+    return { ...node, promptTemplate: template }
+  })
+
+  return changed ? { ...run, nodes } : run
+}
+
+/**
  * Fold one progress event into the run it belongs to.
  *
  * Returns a new state, never a mutation of `prev` — the store publishes by

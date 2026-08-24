@@ -5318,6 +5318,10 @@
           "tool_call_id": {
             "type": "string"
           },
+          "dag_run_id": {
+            "description": "The run a run_subagent_dag call started, so a resumed transcript can fetch its graph through dag.get. Absent on every other tool, and on a graph that was rejected before it ran.",
+            "type": "string"
+          },
           "timestamp": {
             "type": "string"
           },

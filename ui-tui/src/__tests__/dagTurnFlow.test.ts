@@ -220,6 +220,41 @@ describe('chatStream DAG dispatch', () => {
     await stream.detach()
   })
 
+  it('still names the nodes when run_started beats tool.start to the client', async () => {
+    // The two travel on different channels -- dag.* on the tool's own progress
+    // sink, tool.start through the delivery hub -- so their order at the client
+    // is not guaranteed, and the margin measured on a real run was 2ms. Reading
+    // the prompts only while folding run_started makes that margin decide
+    // whether every row of the graph can be expanded, and nothing backfills
+    // them afterwards, so a lost race is permanent for the run.
+    turnController.reset()
+    const fake = makeFakeRpc()
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
+    await stream.attach()
+
+    fake.__pushEvent(runStarted('dag-1', 'call-a'))
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: {
+        tool_call_id: 'call-a',
+        name: 'run_subagent_dag',
+        arguments: {
+          nodes: [
+            { id: 'a', agent: 'echo', prompt_template: 'read the file' },
+            { id: 'b', agent: 'echo', prompt_template: 'summarise {{ a.output }}' }
+          ]
+        }
+      }
+    } as TurnEvent)
+
+    expect(getTurnState().dagRuns[0]!.nodes.map(n => n.promptTemplate)).toEqual([
+      'read the file',
+      'summarise {{ a.output }}'
+    ])
+
+    await stream.detach()
+  })
+
   it('leaves the graph unnamed when the frame names no tool call', async () => {
     // Without a tool_call_id there is nothing to match the stored prompts to,
     // so the rows fall back to their node ids rather than borrowing another

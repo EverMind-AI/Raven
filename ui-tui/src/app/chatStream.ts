@@ -33,6 +33,7 @@ import type {
 } from '../rpc/index.js'
 import type { Msg, TurnArtifacts } from '../types.js'
 
+import { TOOL_PREVIEW_TRUNCATED_SUFFIX } from '../domain/episodeFold.js'
 import { addUnique, artifactMessage, changedFile, deliveryFiles } from '../domain/turnArtifacts.js'
 import { t } from '../i18n/index.js'
 import { argPreview, dagPromptTemplates } from '../lib/toolArgs.js'
@@ -381,7 +382,7 @@ const onToolStart = (state: InternalState, ev: ToolStartEvent): void => {
 
 const onToolComplete = (state: InternalState, ev: ToolCompleteEvent): void => {
   const { tool_call_id, result_preview, truncated } = ev.payload
-  const summary = truncated ? `${result_preview} (truncated)` : result_preview
+  const summary = truncated ? `${result_preview}${TOOL_PREVIEW_TRUNCATED_SUFFIX}` : result_preview
   turnController.recordToolComplete(tool_call_id, undefined, undefined, summary)
   deliveryFiles(ev.payload.metadata).forEach(file => addUnique(state.artifacts.deliveries, file))
 }

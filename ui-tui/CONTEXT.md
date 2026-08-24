@@ -31,9 +31,10 @@ reading model.
 
 **Work Segment**:
 Every call made between two things the model said — so it spans episode boundaries.
-Folded it is one row ("listed .raven, read TOOLS.md, ran 4 commands (2.4s)"); opened, one
-row per call; a call opens further into its Detail Block. A single-call segment skips the
-middle depth, since its folded row already names the call.
+Folded it is one row ("listed .raven, read TOOLS.md, ran 4 commands (2.4s)"), plus a DAG
+Panel under any `run_subagent_dag` call it holds; opened, one row per call; a call opens
+further into its Detail Block. A single-call segment skips the middle depth, since its
+folded row already names the call.
 _Avoid_: "run"/"tool group" — both were earlier, narrower constructs that this replaces.
 
 **Codex Verb Rule**:
@@ -116,6 +117,26 @@ leaves the strip as it was rather than emptying it, since a quiet rpc reports "t
 failed" and "there is nothing" the same way.
 _Avoid_: "agent chip" - a chip is one *instance* of an agent, and one agent can have
 several.
+
+**DAG Panel** (`ui-tui/src/components/dagPanel.tsx`):
+One `run_subagent_dag` run drawn under the tool row that started it: a dependency
+graph of boxed nodes, one column per depth, then one detail row per node. Fed
+either by live `dag.*` frames during the turn or, on resume, by one `dag.get`
+snapshot fetched per run and folded onto the same tool call -- both paths land
+on `tool.dag`, so a resumed session shows the graph too, just never the
+frame-by-frame replay a live turn drew. The Work Segment holding this call draws
+the panel by default, without a click, and folding that segment back by hand
+still leaves the panel drawn -- only the summary row folds. Clicking a row, or
+the node's box in the graph, expands that node's full prompt; both carry the
+same key, so they cannot disagree about what is open.
+
+**Ordinal** (`DagPanel`, `/dag`):
+The short number (`1..N`) printed inside each graph box and at the head of the
+matching detail row -- what ties the two together, and what `/dag 3` takes so a
+node is reachable without a mouse. Assigned in submitted order, not by depth.
+_Avoid_: "handle" -- that is the **instance handle** (`a2-d0bd29`), which the same
+row already prints as `(subagent@instance)`; one row shows both, so the words
+cannot be shared.
 
 **Confirm Overlay**:
 The countdown overlay a destructive Confirm Round-Trip presents; the answer resolves

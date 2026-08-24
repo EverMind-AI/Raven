@@ -293,3 +293,71 @@ describe('EpisodeView', () => {
     expect(f).not.toContain('fetch')
   })
 })
+
+const DAG_RUN = {
+  done: true,
+  nodes: [
+    { dependsOn: [], id: 'a', promptTemplate: 'do a', status: 'completed' as const, subagent: 'echo' },
+    { dependsOn: ['a'], id: 'b', promptTemplate: 'do b', status: 'completed' as const, subagent: 'echo' }
+  ],
+  runId: 'dag-1'
+}
+
+describe('a stretch holding a dag call', () => {
+  it('opens itself, so the graph is drawn without a click', () => {
+    const f = view([
+      step(0, 'planning', [
+        call('s1', 'read_skill', 'local/subagent-dag-orchestration'),
+        call('s2', 'run_subagent_dag', '2 nodes: a, b', { dag: DAG_RUN })
+      ])
+    ])
+
+    // The box corner: the graph rendered. Without the default this stretch
+    // folds to one summary row and draws nothing.
+    expect(f).toContain('\u256d')
+    expect(f).toContain('run subagent dag')
+  })
+
+  it('keeps the graph when the reader folds it by hand', () => {
+    // `openKeys` seeds the reader's decisions; a stretch that defaults open is
+    // closed by naming it here, which is what the tri-state store records.
+    const f = view(
+      [
+        step(0, 'planning', [
+          call('s1', 'read_skill', 'local/subagent-dag-orchestration'),
+          call('s2', 'run_subagent_dag', '2 nodes: a, b', { dag: DAG_RUN })
+        ])
+      ],
+      { closedKeys: ['seg:s1'] }
+    )
+
+    expect(f).toContain('\u256d')
+  })
+
+  it('leaves a stretch without a dag call folded', () => {
+    const f = view([step(0, 'looking', [call('t1', 'read_file', 'a.ts'), call('t2', 'read_file', 'b.ts')])])
+
+    expect(f).not.toContain('\u256d')
+  })
+})
+
+describe('a solo dag call', () => {
+  const solo = (extra: Partial<EpisodeTool> = {}) =>
+    call('s1', 'run_subagent_dag', '2 nodes: a, b', { dag: DAG_RUN, resultPreview: 'ran a then b', ...extra })
+
+  it('draws the graph without auto-expanding the detail block', () => {
+    const f = view([step(0, 'planning', [solo()])])
+
+    // The folded row already names the call, so this stretch skips straight to
+    // its Detail Block on open -- the graph must not drag that block open too,
+    // or the result prints twice: once as a picture, once as raw text.
+    expect(f).toContain('\u256d')
+    expect(f).not.toContain('ran a then b')
+  })
+
+  it('still expands to the detail block when the reader opens it', () => {
+    const f = view([step(0, 'planning', [solo()])], { openKeys: ['seg:s1'] })
+
+    expect(f).toContain('ran a then b')
+  })
+})

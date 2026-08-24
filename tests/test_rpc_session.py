@@ -29,6 +29,7 @@ from raven.rpc.errors import TurnInProgressError
 from raven.rpc.methods import session as session_module
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.session import (
+    _map_to_wire,
     register_session_methods,
     session_archive,
     session_branch,
@@ -1861,3 +1862,93 @@ async def test_session_create_without_workdir_stays_lazy_and_unpinned(
 
     result = await session_create({"cols": 80})
     assert _SESSION_ID_RE.match(result["session_id"])
+
+
+# ---------------------------------------------------------------------------
+# _map_to_wire dag_run_id derivation (the DAG-graph hand-off)
+# ---------------------------------------------------------------------------
+
+
+def test_a_dag_tool_row_names_the_run_it_started() -> None:
+    """The run id is in the result text the tool authored; the client should not
+    have to parse prose to find it."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "run_subagent_dag",
+                "tool_call_id": "call-1",
+                "content": (
+                    "DAG run 20260823T063516789587Z-1e97d546 finished: 2 completed, 0 failed "
+                    "(of 2).\nRun dir: /root/.raven/x/subagents/mas_dag/20260823T063516789587Z-1e97d546"
+                ),
+            }
+        ],
+        "sess",
+    )
+
+    assert rows[0]["dag_run_id"] == "20260823T063516789587Z-1e97d546"
+
+
+def test_a_non_dag_tool_row_names_no_run() -> None:
+    rows = _map_to_wire(
+        [{"role": "tool", "name": "read_file", "tool_call_id": "c", "content": "contents"}],
+        "sess",
+    )
+
+    assert "dag_run_id" not in rows[0]
+
+
+def test_a_dag_row_whose_text_names_no_run_is_left_alone() -> None:
+    """A graph rejected by validation returns an error, not a run."""
+    rows = _map_to_wire(
+        [{"role": "tool", "name": "run_subagent_dag", "tool_call_id": "c", "content": "rejected: bad spec"}],
+        "sess",
+    )
+
+    assert "dag_run_id" not in rows[0]
+
+
+def test_a_non_dag_tool_row_with_dag_shaped_content_names_no_run() -> None:
+    """A read_file or grep row can legitimately quote a DAG's own "finished"
+    line back (a saved log, a grep hit) -- the name guard, not the regex, is
+    what must keep such a row from being mistaken for the run it quotes."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "read_file",
+                "tool_call_id": "c",
+                "content": (
+                    "DAG run 20260823T063516789587Z-1e97d546 finished: 2 completed, 0 failed "
+                    "(of 2).\nRun dir: /root/.raven/x/subagents/mas_dag/20260823T063516789587Z-1e97d546"
+                ),
+            }
+        ],
+        "sess",
+    )
+
+    assert "dag_run_id" not in rows[0]
+
+
+def test_a_dag_tool_row_with_notice_prefix_still_names_the_run() -> None:
+    """``_with_notices`` prepends "Note: ...\\n\\n" ahead of the tool's own
+    first line whenever the graph carried a capability-downgrade notice; the
+    id must still be found mid-string, not just at the start of it."""
+    rows = _map_to_wire(
+        [
+            {
+                "role": "tool",
+                "name": "run_subagent_dag",
+                "tool_call_id": "call-1",
+                "content": (
+                    "Note: node 'b': agent 'x' cannot take injected skills.\n\n"
+                    "DAG run 20260823T063516789587Z-1e97d546 finished: 2 completed, 0 failed "
+                    "(of 2).\nRun dir: /root/.raven/x/subagents/mas_dag/20260823T063516789587Z-1e97d546"
+                ),
+            }
+        ],
+        "sess",
+    )
+
+    assert rows[0]["dag_run_id"] == "20260823T063516789587Z-1e97d546"

@@ -76,11 +76,29 @@ export const dagNodeSummary = (promptTemplate: string | undefined, room: number)
  * Returned together with the row's own arithmetic in mind: the summary gets
  * whatever cells these leave, so a caller measuring them separately from what it
  * draws would clip against the wrong budget.
+ *
+ * `drawn` holds the `${dep}>${node}` keys the picture above the rows already
+ * drew as edges, and naming those again here would say twice what the graph
+ * already shows. What survives is the dependency the picture *cannot* draw: one
+ * naming a node an earlier run of the session completed, which has no box. A
+ * `null` means no picture was drawn at all -- too narrow a terminal -- and then
+ * the row is the only place the topology exists, so every dependency is named.
+ *
+ * The agent name is dropped from `parens` for the same reason: the row already
+ * opens with it and the picture's box repeats it. Only an instance handle, which
+ * appears nowhere else, keeps the parenthetical alive.
  */
-export const dagNodeNames = (node: Pick<DagRunNode, 'dependsOn' | 'instance' | 'subagent'>) => ({
-  deps: node.dependsOn.length > 0 ? ` \u2190 ${node.dependsOn.join(', ')}` : '',
-  parens: `(${node.subagent}${node.instance ? `@${node.instance}` : ''})`
-})
+export const dagNodeNames = (
+  node: Pick<DagRunNode, 'dependsOn' | 'id' | 'instance' | 'subagent'>,
+  drawn: ReadonlySet<string> | null
+) => {
+  const named = drawn ? node.dependsOn.filter(dep => !drawn.has(`${dep}>${node.id}`)) : node.dependsOn
+
+  return {
+    deps: named.length > 0 ? ` \u2190 ${named.join(', ')}` : '',
+    parens: node.instance ? `(${node.subagent}@${node.instance})` : ''
+  }
+}
 
 /**
  * One-line progress summary for the run's header row.

@@ -193,6 +193,10 @@ export interface TranscriptMessage {
   context?: JsonValue;
   name?: string;
   tool_call_id?: string;
+  /**
+   * The run a run_subagent_dag call started, so a resumed transcript can fetch its graph through dag.get. Absent on every other tool, and on a graph that was rejected before it ran.
+   */
+  dag_run_id?: string;
   timestamp?: string;
   reasoning_content?: string;
   /**

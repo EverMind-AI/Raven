@@ -17,7 +17,7 @@ import type {
 import type { PanelSection } from '../../../types.js'
 import type { SlashCommand } from '../types.js'
 
-import { attachedImageNotice, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
+import { attachedImageNotice, hydrateDagRuns, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
 import { fmtK } from '../../../lib/text.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
@@ -228,47 +228,61 @@ export const sessionCommands: SlashCommand[] = [
           session_id: ctx.sid,
           ...(arg ? { focus_topic: arg } : {})
         })
-        .then(
-          ctx.guarded<SessionCompressResponse>(r => {
-            if (Array.isArray(r.messages)) {
-              const rows = toTranscriptMessages(r.messages)
+        .then(async r => {
+          if (ctx.stale() || !r) {
+            return
+          }
 
-              ctx.transcript.setHistoryItems(r.info ? [introMsg(r.info), ...rows] : rows)
-            }
+          if (Array.isArray(r.messages)) {
+            const rows = await hydrateDagRuns(
+              r.messages,
+              toTranscriptMessages(r.messages),
+              ctx.gateway.rpc,
+              ctx.sid ?? ''
+            )
 
-            if (r.info) {
-              patchUiState({ info: r.info })
-            }
-
-            if (r.usage) {
-              patchUiState(state => ({ ...state, usage: { ...state.usage, ...r.usage } }))
-            }
-
-            if (r.summary?.headline) {
-              const prefix = r.summary.noop ? '' : '✓ '
-
-              ctx.transcript.sys(`${prefix}${r.summary.headline}`)
-
-              if (r.summary.token_line) {
-                ctx.transcript.sys(`  ${r.summary.token_line}`)
-              }
-
-              if (r.summary.note) {
-                ctx.transcript.sys(`  ${r.summary.note}`)
-              }
-
+            // hydrateDagRuns awaits an RPC round trip; re-check staleness after
+            // it so a session switch mid-fetch can't land this response's
+            // history over the newer session's.
+            if (ctx.stale()) {
               return
             }
 
-            if ((r.removed ?? 0) <= 0) {
-              return ctx.transcript.sys('nothing to compress')
+            ctx.transcript.setHistoryItems(r.info ? [introMsg(r.info), ...rows] : rows)
+          }
+
+          if (r.info) {
+            patchUiState({ info: r.info })
+          }
+
+          if (r.usage) {
+            patchUiState(state => ({ ...state, usage: { ...state.usage, ...r.usage } }))
+          }
+
+          if (r.summary?.headline) {
+            const prefix = r.summary.noop ? '' : '✓ '
+
+            ctx.transcript.sys(`${prefix}${r.summary.headline}`)
+
+            if (r.summary.token_line) {
+              ctx.transcript.sys(`  ${r.summary.token_line}`)
             }
 
-            ctx.transcript.sys(
-              `compressed ${r.removed} messages${r.usage?.total ? ` · ${fmtK(r.usage.total)} tok` : ''}`
-            )
-          })
-        )
+            if (r.summary.note) {
+              ctx.transcript.sys(`  ${r.summary.note}`)
+            }
+
+            return
+          }
+
+          if ((r.removed ?? 0) <= 0) {
+            return ctx.transcript.sys('nothing to compress')
+          }
+
+          ctx.transcript.sys(
+            `compressed ${r.removed} messages${r.usage?.total ? ` · ${fmtK(r.usage.total)} tok` : ''}`
+          )
+        })
         .catch(ctx.guardedErr)
     }
   },

@@ -213,8 +213,10 @@ const ActivityRow = memo(function ActivityRow({
 //   detail  -- a call's full argument and output, in a filled block
 // A single-call stretch skips the middle depth: its folded row already names the
 // call, so an identical row underneath would just be the same sentence twice.
+// A dag call is the one exception to "folded is one row" -- see dagFor below.
 const WorkSegment = memo(function WorkSegment({
   compact,
+  defaultOpen,
   isOpen,
   live,
   now,
@@ -226,6 +228,7 @@ const WorkSegment = memo(function WorkSegment({
   width
 }: {
   compact?: boolean
+  defaultOpen: boolean
   isOpen: boolean
   live: boolean
   now: number
@@ -264,9 +267,9 @@ const WorkSegment = memo(function WorkSegment({
 
   // A dag call's graph is its result, not a detail of it: which node failed is
   // the answer, and no one-line label can carry it. So it renders under the
-  // call's own row rather than inside the detail block -- at every depth where
-  // that row is the call itself. Under a summary row it does not: a folded
-  // stretch is one row, and a graph is not one row.
+  // call's own row rather than inside the detail block, at every depth --
+  // including a folded summary row. That is exactly why a stretch holding one
+  // defaults open, and why folding it back by hand still leaves the graph.
   const dagFor = (tool: EpisodeTool, depth: number) =>
     tool.dag ? (
       <Box key={`g:${tool.id}`} paddingLeft={depth}>
@@ -384,7 +387,9 @@ const WorkSegment = memo(function WorkSegment({
               {openCalls.has(tool.id) ? detailFor(tool, INDENT + STEP, () => toggleCall(tool.id)) : null}
             </Box>
           ))
-        : null}
+        : defaultOpen
+          ? tools.map(tool => dagFor(tool, INDENT + STEP))
+          : null}
     </Box>
   )
 })
@@ -394,6 +399,7 @@ const WorkSegment = memo(function WorkSegment({
 // shares the margin but is dim and carries an inline duration -- that pairing,
 // not a column of glyphs, is what separates the two voices.
 export const EpisodeView = memo(function EpisodeView({
+  closedKeys,
   cols,
   compact,
   episodes,
@@ -403,6 +409,7 @@ export const EpisodeView = memo(function EpisodeView({
   t,
   text
 }: {
+  closedKeys?: readonly string[]
   cols?: number
   compact?: boolean
   episodes: Episode[]
@@ -418,10 +425,22 @@ export const EpisodeView = memo(function EpisodeView({
   //
   // Held outside this component (see `foldStore`) so that a row the runtime
   // replaces -- a step landing in a turn still running -- does not close what
-  // the reader just opened. `openKeys` still seeds it, for a caller rendering a
-  // fixed state and for the tests.
+  // the reader just opened. `openKeys` and `closedKeys` still seed it, for a
+  // caller rendering a fixed state and for the tests.
   const stored = useStore($folds)
-  const open = useMemo(() => new Set([...(openKeys ?? []), ...(stored[scope] ?? [])]), [openKeys, scope, stored])
+  const seeded = useMemo(
+    () => ({
+      closed: new Set(closedKeys ?? []),
+      open: new Set([...(openKeys ?? []), ...(stored[scope]?.open ?? [])])
+    }),
+    [closedKeys, openKeys, scope, stored]
+  )
+  const foldOpen = (key: string, defaultOpen: boolean) =>
+    seeded.open.has(key)
+      ? true
+      : seeded.closed.has(key) || (stored[scope]?.closed ?? []).includes(key)
+        ? false
+        : defaultOpen
   const toggle = (key: string) => toggleFold(scope, key)
 
   const lastIdx = episodes.length - 1
@@ -429,7 +448,7 @@ export const EpisodeView = memo(function EpisodeView({
   const width = cols ? Math.max(20, cols - 4) : 116
   const proseWidth = Math.max(20, width - INDENT)
   const liveIndex = live ? episodes[lastIdx]?.index : undefined
-  const openCalls = new Set([...open].filter(k => k.startsWith('call:')).map(k => k.slice(5)))
+  const openCalls = new Set([...seeded.open].filter(k => k.startsWith('call:')).map(k => k.slice(5)))
 
   const renderTalk = (ep: Episode) => {
     const reasoning = (ep.reasoning ?? '').trim()
@@ -442,7 +461,7 @@ export const EpisodeView = memo(function EpisodeView({
     const thinking = live && running && !narration && ep.tools.length === 0 && !text
     const reasoningMs =
       ep.reasoningMs ?? ep.durationMs ?? (thinking && ep.startedAt ? Math.max(0, now - ep.startedAt) : undefined)
-    const rsnOpen = (thinking && hasReasoning) || open.has(`rsn:${ep.index}`)
+    const rsnOpen = (thinking && hasReasoning) || seeded.open.has(`rsn:${ep.index}`)
 
     return (
       <Box flexDirection="column" key={`t:${ep.index}`}>
@@ -485,21 +504,36 @@ export const EpisodeView = memo(function EpisodeView({
     )
   }
 
-  const renderWork = (seg: Extract<Segment, { kind: 'work' }>) => (
-    <WorkSegment
-      compact={compact}
-      isOpen={open.has(`seg:${seg.key}`)}
-      key={`w:${seg.key}`}
-      live={seg.live}
-      now={now}
-      openCalls={openCalls}
-      t={t}
-      toggleCall={id => toggle(`call:${id}`)}
-      toggleSelf={() => toggle(`seg:${seg.key}`)}
-      tools={seg.tools}
-      width={width}
-    />
-  )
+  const renderWork = (seg: Extract<Segment, { kind: 'work' }>) => {
+    // The one tool whose result is a picture: a summary line cannot say which
+    // node failed, so a stretch holding one opens itself, and folding it by hand
+    // still leaves the graph.
+    const hasDag = seg.tools.some(tool => tool.dag)
+    // A solo stretch has no "expanded" depth of its own: its fold state gates the
+    // detail block directly (WorkSegment's solo branch above), so defaulting that
+    // state open would auto-expand the detail block, not just draw the graph
+    // (which renders unconditionally there regardless). Only a multi-call
+    // stretch's fold state means "show one row per call," which a dag call
+    // should still default open.
+    const detailDefaultOpen = hasDag && seg.tools.length > 1
+
+    return (
+      <WorkSegment
+        compact={compact}
+        defaultOpen={hasDag}
+        isOpen={foldOpen(`seg:${seg.key}`, detailDefaultOpen)}
+        key={`w:${seg.key}`}
+        live={seg.live}
+        now={now}
+        openCalls={openCalls}
+        t={t}
+        toggleCall={id => toggle(`call:${id}`)}
+        toggleSelf={() => toggleFold(scope, `seg:${seg.key}`, detailDefaultOpen)}
+        tools={seg.tools}
+        width={width}
+      />
+    )
+  }
 
   const segments = segmentTurn(episodes, liveIndex)
 

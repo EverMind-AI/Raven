@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -211,6 +212,15 @@ def _manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionMan
     return _get_or_build_manager(config)
 
 
+# Matches both shapes run_subagent_dag's result text can start with:
+# "DAG run <id> finished: ..." once it completes in the foreground, or
+# "DAG run <id> started in the background ..." when it hands back early.
+# Derived here rather than stored, so every session already on disk gains the
+# link, and read here rather than in the client, which would be parsing a
+# sentence it does not author.
+_DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
+
+
 def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
@@ -295,6 +305,9 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
                         ],
                     },
                 }
+        if m.get("name") == "run_subagent_dag" and isinstance(content, str):
+            if match := _DAG_RUN_ID_RE.search(content):
+                entry["dag_run_id"] = match.group(1)
         reasoning = m.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             entry["reasoning_content"] = reasoning

@@ -1992,6 +1992,14 @@ class TranscriptMessage(_Strict):
     context: JsonValue = None
     name: str | None = None
     tool_call_id: str | None = None
+    dag_run_id: str | None = Field(
+        default=None,
+        description=(
+            "The run a run_subagent_dag call started, so a resumed transcript can fetch its graph "
+            "through dag.get. Absent on every other tool, and on a graph that was rejected before "
+            "it ran."
+        ),
+    )
     timestamp: str | None = None
     reasoning_content: str | None = None
     reasoning_ms: int | None = Field(

@@ -15,7 +15,7 @@ import {
   STREAM_SCROLL_BATCH_MS,
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
-import { foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
+import { foldDagEvent, foldDagSnapshot, withPromptTemplates } from '../domain/dagRun.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
 import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
@@ -1071,6 +1071,25 @@ class TurnController {
   recordDagPrompts(toolCallId: string, templates: Record<string, string>) {
     if (Object.keys(templates).length === 0) {
       return
+    }
+
+    // The run may already be open: this frame and `dag.run_started` travel on
+    // different channels, so either arrives first. Storing for the fold below
+    // only serves the order where this one leads; a run already built needs the
+    // prompts put on it here, or the order decides whether its rows expand.
+    // Re-pinned because the episode row holds the state object by reference and
+    // the backfill replaces it.
+    if (getTurnState().dagRuns.some(run => run.toolCallId === toolCallId)) {
+      patchTurnState(state => ({
+        ...state,
+        dagRuns: state.dagRuns.map(run =>
+          run.toolCallId === toolCallId ? withPromptTemplates(run, templates) : run
+        )
+      }))
+
+      for (const run of getTurnState().dagRuns.filter(item => item.toolCallId === toolCallId)) {
+        this.pinDagToEpisodeTool(run.runId)
+      }
     }
 
     // Generous next to how many graphs a turn runs, so eviction only ever
