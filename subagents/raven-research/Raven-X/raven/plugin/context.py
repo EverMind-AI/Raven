@@ -3,9 +3,16 @@
 A factory (the ``module.path:callable`` named in a manifest) receives
 exactly one :class:`PluginContext`. From it, the factory pulls:
 
-- ``config``  — the plugin's own config slice from RavenConfig
-  (already validated against the manifest's ``config_schema`` by the
-  registry; the dict is passed through verbatim).
+- ``config``  — the plugin's own config slice from RavenConfig, passed
+  through verbatim. The manifest's ``config_schema`` is checked against
+  the slice at construction
+  (:func:`raven.cli._plugin_stack.validate_plugin_config_slice`), but it
+  only *warns*: an undeclared or mistyped key is reported and still
+  reaches the factory unchanged. So declaring a key in the manifest buys
+  a diagnostic, not enforcement -- keep validating what you depend on in
+  the factory (as the everos backend does for ``mode`` /
+  ``recall_method``), and keep the manifest complete, because a key
+  missing from it is reported as a typo on every boot.
 - ``services`` — a :class:`ServiceLocator` exposing only the host
   services a backend is allowed to touch. The locator is intentionally
   narrow so plugins don't grow ambient dependencies on arbitrary host

@@ -58,7 +58,42 @@ def _gate(reply, **kw):
     return ConversationGate(_Provider(reply), **kw)
 
 
+def test_the_gate_call_carries_a_reasoning_effort_and_a_real_budget() -> None:
+    """Both halves of one failure. A live turn returned ``gate_unparsed`` because the
+    main model is a reasoning model at effort high: the 256-token budget went to
+    ``reasoning_content``, ``content`` came out empty, and the gate failed open to a
+    research turn nobody needed - the same shape the judge hit at 512.
+
+    The cure is the effort, not the cap. The cap is raised only far enough to leave
+    headroom, because this call sits in front of every turn's first token and the
+    model that motivated the change is one that WILL spend whatever it is given,
+    with ``gate_timeout_seconds`` then failing open to the expensive outcome. There
+    is deliberately no fallback to ``reasoning_content``: failing open already gives
+    ``research=true``, so anything recovered from that channel could only ever turn a
+    needed research turn OFF, out of a channel that carries discarded drafts.
+    """
+    from raven.config.raven import DRFlowConversationConfig
+
+    defaults = DRFlowConversationConfig()
+    assert defaults.gate_reasoning_effort == "low"
+    assert defaults.gate_max_tokens == 1024
+
+    provider = _Provider(_Reply('{"research": true, "why": "new facts"}'))
+    gate = ConversationGate(provider, max_tokens=defaults.gate_max_tokens,
+                            reasoning_effort=defaults.gate_reasoning_effort)
+    asyncio.run(gate.decide("and in 2025?", []))
+    assert provider.calls[0]["reasoning_effort"] == "low"
+    assert provider.calls[0]["max_tokens"] == 1024
+
+
+def test_a_gate_built_without_the_knob_leaves_the_provider_default() -> None:
+    provider = _Provider(_Reply('{"research": true}'))
+    asyncio.run(ConversationGate(provider).decide("q", []))
+    assert provider.calls[0]["reasoning_effort"] is None
+
 _HISTORY = [
+
+
     {"role": "user", "content": "What did the 2024 EU AI Act change for open models?"},
     {"role": "assistant", "content": "It introduced tiered obligations..."},
 ]

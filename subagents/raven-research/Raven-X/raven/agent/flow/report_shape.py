@@ -1,13 +1,13 @@
 """Report-template shape: a per-turn reminder, and a deterministic bar on it.
 
 ``final_shape.report_structure`` asks the model for a three-section report
-(``## Answer`` / ``## Findings`` / ``## Limitations``) and dr@3.6 added the rule
+(``## Answer`` / ``## Findings`` / ``## Limitations``) and the same label added the rule
 that the template outranks a format the question itself asks for. Both live in
 the system prompt, and a system prompt is the weakest place to put an
 instruction that a conversation can argue with:
 
 * **Recency loses to it.** Measured on this repo's own demo sessions (30 turns
-  carrying the template, dr@3.5+): 8/14 research turns well-formed, but only
+  carrying the template, dr@3.4): 8/14 research turns well-formed, but only
   2/9 of the turns the conversation gate ruled non-research. Those are the
   reformat/expand follow-ups, and the sessions where they failed had two or
   three earlier replies that were outlines - the model's own history is a

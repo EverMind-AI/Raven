@@ -78,7 +78,7 @@ def test_enabling_the_feature_wraps_every_observer_not_a_chosen_few():
 
 
 def test_the_shape_bar_is_the_one_observer_deliberately_left_unwrapped():
-    """dr@3.7. The exception to the rule above, pinned so it stays deliberate.
+    """dr@3.4. The exception to the rule above, pinned so it stays deliberate.
 
     Every other observer runs the research machine - model calls, evidence,
     ledger rows - and a turn answered from context has no business paying for

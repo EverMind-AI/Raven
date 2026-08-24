@@ -3,9 +3,11 @@
 Raven-X, a **Deep-Research-only agent build**: it answers a research question by
 searching and reading the web, then commits an answer. Everything a
 general-purpose assistant needs (chat channels, proactivity, user memory,
-skills, TUI) is pruned or being pruned. The model sees exactly two tools,
-`web_search` and `web_fetch`, enforced by `drFlow.toolsAllowlist` as an
-allowlist that unregisters everything else at assembly.
+skills, TUI) is pruned or being pruned. What the model sees is fixed by
+`drFlow.toolsAllowlist`, which unregisters everything else at assembly: the two
+web tools, and on this `-filetools` profile six local-file tools. `ask_user` is
+the exception that needs no entry - the flow appends it to the allowlist itself
+when `drFlow.askUser` is on, so the list and the switch cannot disagree.
 
 Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
@@ -13,9 +15,10 @@ Owner: ZuyiZhou. This folder is our caller-side record, not the agent itself.
 
 | | |
 |---|---|
-| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `ce225550` |
+| Source | https://github.com/ZuyiZhou/Raven-X, branch `main`, commit `71abb5a6` |
 | Local checkout | `./Raven-X` - the agent itself lives inside this folder |
-| Package / version | `raven` 0.1.5, flow `dr@3.7` (updated 2026-08-20 from upstream `ce225550`; `dr@3.3` came from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
+| Local patches | **none** - the tree is that commit byte for byte, and the command that proves it is below |
+| Package / version | `raven` 0.1.5, flow `dr@3.4` (updated 2026-08-21 from upstream `71abb5a6`; the label moves *down* because upstream folded `dr@3.5`-`dr@3.7` back into `dr@3.4` - see below. `dr@3.7` came from `ce225550` on 2026-08-20, `dr@3.3` from `e3edf28` on 2026-08-18, `dr@3.2` from `Raven-X-main.zip` on 2026-08-16, and the `dr@2.8` / `dr@2.9` steps from `b68085d` and `b1c12e4` on 2026-08-11) |
 | Upstream ancestry | forked from EverMind-AI/Raven at `dbb1b0c` (2026-07-17), diverged since |
 | Docs to read | `README.md`, `QUICKSTART.md`, `examples/README.md` in that checkout |
 
@@ -45,10 +48,19 @@ Run the suite with an isolated `HOME`:
 HOME=$(mktemp -d) .venv/bin/python -m pytest -q
 ```
 
-With the real `HOME`, `tests/test_cli_sentinel_commands.py::test_sentinel_status_runs`
-fails because the CLI falls back to the host's `/root/.raven/config.json`, whose
-`subagents` entries carry fields this build's schema forbids (`extra_forbidden`).
-That is our machine leaking into the test, not a defect in the checkout.
+The isolated `HOME` is the safe default rather than a current requirement: on this
+build the whole suite passes under the real one (5402 passed, 72 skipped, 2026-08-21),
+including `tests/test_cli_sentinel_commands.py::test_sentinel_status_runs`, which used
+to fail on the host's `/root/.raven/config.json` carrying `subagents` fields the
+schema forbids (`extra_forbidden`).
+
+One leak of that kind is now closed *in the checkout* rather than worked around:
+`render._language_directive()` resolves from that same host config at prompt-assembly
+time, and this machine sets `"language": "zh"`, which prepends 101 measured characters
+to the identity block and moved eight prompt-byte shas. `tests/conftest.py` pins it
+empty for the suite. Note what it does not pin: a **run** still picks the directive up,
+because the spawned CLI reads the host `HOME` too - that is production behaviour here,
+not a test artifact.
 
 `uv sync` bakes absolute-path shebangs into `.venv/bin/`, so **moving the
 checkout breaks the console script** - confirmed the hard way when this folder
@@ -89,12 +101,45 @@ refuses rather than starting something that cannot answer.
 
 The checkout carries **no local patches** - every adaptation lives beside it
 (`run.py`, `config.json`, `subagent.json`, this file), so an update is a straight
-replacement of `Raven-X/`. Check that before replacing, rather than assuming it:
-the base commit is whichever one whose tree the checkout matches, found by
-diffing trees since no file records it, and a real local edit shows up as a file
-that differs there. Compare **ASTs** when a file does differ - a formatter run
-upstream reflows strings and moves blank lines, which `git diff
---ignore-all-space` reports exactly like a real change.
+replacement of `Raven-X/`.
+
+That is true again rather than true by default. For one day it was not: the tree
+was `a958b837` plus six locally patched files, carried because the `ask_user`
+fixes had to run here before upstream had them. It is patch-free again because
+upstream took five of the six back in `ed4a866` and declined the sixth for the
+reason we had already written down against it - a test tightening, not a fix. So
+the swap that brought the everos work also retired the patch set, and the check
+below settles the whole question in one command again.
+
+Check it before replacing, rather than assuming it: the base commit is whichever
+one whose tree the checkout matches, found by diffing trees since no file records
+it, and a real local edit shows up as a file that differs there.
+
+```bash
+mkdir /tmp/up && git -C <upstream clone> archive <commit> | tar -x -C /tmp/up
+diff -rq --no-dereference -x .venv -x __pycache__ -x .ruff_cache -x .pytest_cache \
+    /tmp/up subagents/raven-research/Raven-X          # expect: no output at all
+```
+
+Three ways to misread that diff, all live in this tree. `--no-dereference` is not
+optional: `Raven-X/CLAUDE.md` is a **symlink** to `./AGENTS.md` (mode 120000) here
+and upstream alike, and a comparison that follows the link reports a 275-line edit
+that does not exist - compare link text, or compare blob modes. Compare **ASTs**
+when a `.py` file does differ, because a formatter run upstream reflows strings and
+moves blank lines exactly like a real change (`raven-code`'s 2026-08-20 update
+found seven such files hiding one real patch). And an empty diff against the
+*wrong* commit is not a pass, so name the SHA you archived rather than a branch:
+during the `ask_user` step two upstream branches sat one character apart
+(`feat/add_ask_user_too` and `...tool`, three commits apart), both fetched, and
+neither errored.
+
+If a swap ever does have to carry a patch again, record it as a `git apply`-able
+diff beside the checkout **in the same change**, not as a paragraph here. This
+folder has already lost one the other way: the everos backend's `_timestamp_ms`
+coercion was carried here, dropped in an upstream swap, and survived only as a row
+in the `dr@3.3` table below, because there was no patch file to re-apply it from.
+Upstream has since rebuilt it (`backend.py:321`, now parsing ISO-8601 as well),
+which closes that particular hole but not the one in the process.
 
 Now that the repo clones, the swap comes from its objects rather than an archive:
 
@@ -118,12 +163,24 @@ git diff --name-status "zuyizhou/main^{tree}" \
     $(git write-tree --prefix=subagents/raven-research/Raven-X)
 ```
 
-Keep `.venv` across the swap by moving it out and back. The install is editable
+Keep `.venv` across the swap. Clearing only the tracked files leaves it in place,
+which is simpler than moving it out and back:
+
+```bash
+cd subagents/raven-research/Raven-X
+git ls-files -z . | xargs -0 rm -f
+find . -depth -type d -empty -not -name .venv -not -path './.venv/*' -delete
+find . -type d -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +
+git -C <upstream clone> archive <commit> | tar -x -C .
+```
+
+Clear the stale `__pycache__` as that does: bytecode for a module the new tree no
+longer has is still importable. The install is editable
 (`_editable_impl_raven.pth` points at this checkout), so the new source is live
 immediately; `uv sync` is only needed when `pyproject.toml` or `uv.lock` changed,
-which they did not for `dr@2.6 -> dr@2.8 -> dr@2.9 -> dr@3.2` but did for
-`dr@3.3 -> dr@3.7` (see that section below - no package is added, so the sync is
-optional in practice). `dr@2.9` also
+which they did not for `dr@2.6 -> dr@2.8 -> dr@2.9 -> dr@3.2`, did for
+`dr@3.3 -> dr@3.7` (no package added, so optional in practice), and did not again
+for `dr@3.7 -> dr@3.4` - the two files are byte-identical across that swap. `dr@2.9` also
 brings a `bench/` tree - the evaluation engine - and exempts it from lint in both
 `pyproject.toml` and `.pre-commit-config.yaml`; nothing here calls it.
 
@@ -145,6 +202,31 @@ there.** The repo clones now, so the tree rolls back with
 previous value is in our own history. Both halves of the pair are gitignored and
 neither was made for the `dr@3.7` swap; keep the old ones as long as the zips
 they came from are the only copy of those builds.
+
+### What the `dr@3.4` fold, `ask_user` and everos v2 changed for us
+
+7 upstream commits, 55 files, +12495/-324. `pyproject.toml` and `uv.lock` are
+**byte-identical** to `ce225550`, so the editable venv carried straight across
+with no `uv sync` - only the tree was replaced. Two of the seven commits are our
+own work coming home; the other five are the everos rewrite.
+
+| Change | Effect here |
+|---|---|
+| **The build label moves *down*, `dr@3.7` -> `dr@3.4`** | The one step that is not optional, and this time it runs backwards. Upstream folded `dr@3.5`-`dr@3.7` into `dr@3.4` - same flow semantics, one name - and the loader now **rejects** all three folded labels rather than aliasing them, so the old `dr@3.7-filetools` would not load at all. Verified on this build: `drFlow.version` is `dr@3.4-filetools-askuser` and loads; setting `dr@3.7-filetools-askuser` fails validation with "names a label that was folded into 'dr@3.4' ... set drFlow.version to 'dr@3.4', keeping any profile suffix". Per the rule above that is `raven` exit 1, which `run.py` reports as a credential-or-config error - so a swap that forgets this row looks like a missing key |
+| **The agent asks before it researches** (`drFlow.askUser`, on here) | The behavioural change a caller will notice first. See `Asking first` below for what it does to the reply shape and to `run.py`'s verdict |
+| **Our six local patches came home** (`ed4a866`) | Upstream took five of the six, so the checkout is patch-free again - see `Updating to a newer upstream`. The two that carry behaviour were already live here: the turn answering a clarify is classified as research from the commit marker instead of the conversation gate, and `observers["research_trail"]` carries the rendered trail where this launcher can reach it. The sixth (a `test_provider_rates.py` tightening) was declined on the grounds we had already recorded against it, and is dropped rather than re-applied |
+| **The everos write path is rebuilt** (`77d51b8`, `39d2908`) | Deferred capture, dedup, and the 422s fixed. The shape that matters here is the *cost*: a turn's write is detached after `_STORE_TURN_BUDGET_S` (5s) rather than paid for in full, at most 4 are in flight, and teardown drains them within 15s. So a slow everos costs the turn 5s on the WRITE path instead of its own timeout. Read that narrowly: recall is a different lane and is still fully synchronous on prompt assembly, on this folder's `timeout_s` of 360 - so a service that is reachable but stalled still stalls every turn for minutes, and the 5s bound does not help there |
+| **`--flush-skill-buffer` is live again** | It was inert on the pruned build ("leave it alone"); it now promotes this session's captured turns and **blocks on one request** bounded by the adapter's `flush_timeout_s` (default 960s), inside `run.py`'s own `--timeout` (2400s). `run.py` still passes it on every turn, deliberately: a lone `-m` turn trips no boundary, so the alternative is not "promote later" but "never". The accepted cost is that turn two of a conversation promotes an unfinished trajectory, because the gateway spawns one process per turn and never says which is the last - upstream's advice to promote on the last `-m` only has no addressee here. `memory.flush_on_task_end` is the config-side equivalent and is off; the flag is the only trigger |
+| **Plugin config slices are validated, and an identity mismatch is reported** (`2694acb`) | Both new checks pass clean on our slice, verified by running them: the five keys we set (`mode`, `base_url`, `user_id`, `agent_id`, `timeout_s`) are all declared now - two of them were undeclared and therefore silently inert before - and `memory.userId` / `memory.agentId` agree with the slice's `user_id` / `agent_id`, which is what the mismatch check exists for. A mismatch there is the silent kind: EverOS routes by sender, so writes land under one owner and reads look under another and recall comes back permanently empty with no error on either side. The check warns and never raises, so it cannot kill a run |
+| **A remote everos, with the token out of the config file** (`bd8b4e4`) | **Not our path, and worth keeping that way.** `base_url` points at the host raven's own local everos (`localhost:18791`), so there is no token, no TLS decision and no gateway header to get wrong. If that ever changes, supply the bearer through `EVEROS_API_KEY` in the environment rather than `api_key` in `config.json` - this folder's `config.json` is published and holds no secrets, which is the whole reason `.env` exists |
+| `require_service`, a new exit-1 site | Unset here, so unreachable: a missing everos still degrades to `everos not found` plus an empty recall, and the run answers normally. It widens what exit 1 can mean, which is why the note under `Calling it` no longer says "only one thing" |
+| **The suite stops reading the developer's `~/.raven/config.json`** (`46cdb1a`) | Directly ours, and it fixes a real failure on this machine: `render._language_directive()` resolves lazily at assembly time from the host's config, which here sets `"language": "zh"`, and measured 101 characters prepended to the identity block. Eight prompt-byte tests asserted shas against that ambient value and failed. An autouse fixture in `tests/conftest.py` now pins it empty, which is the premise those tests already stated |
+| `_timestamp_ms` is back (`backend.py:321`) | The coercion this folder lost in an earlier swap, rebuilt upstream and now stricter than what we had - it parses ISO-8601 as well as an integer, with a per-message fallback. Latent either way here (our store payloads carry no `timestamp` key), but the day one does, the whole write no longer dies on a `422 INVALID_INPUT` |
+
+Verified on this build 2026-08-21: the vendored tree is byte-identical to
+`71abb5a6`, `raven` 0.1.5 imports from it, `.venv/bin/raven` runs without a
+`uv sync`, `config.json` loads as `dr@3.4-filetools-askuser`, and the checkout's
+own suite is **5402 passed, 72 skipped** in 158s under the real `HOME`.
 
 ### What `dr@3.4` .. `dr@3.7` changed for us
 
@@ -277,6 +359,65 @@ field to read when a follow-up is unexpectedly slow - `gate_error`,
 `gate_unparsed` or a `first_turn` where you expected a resume all mean the run
 paid for a research turn.
 
+## Asking first
+
+`drFlow.askUser` is on here with `mode: "first_turn"`, which means **turn one always
+asks**: the agent answers with clarifying questions rather than starting research, and
+the research it then does is aimed at the question it was told rather than the one it
+guessed. `when_needed` reverts to asking only when the model judges it necessary, and
+is byte-identical to the pre-mode clause.
+
+The knob needs no allowlist entry - the flow appends `ask_user` to
+`drFlow.toolsAllowlist` itself when the switch is on, so the two cannot disagree - but
+it did need `ask_user` removed from `tools.disabledTools`, where this profile had
+pinned it off, and it needed `identityOverride` rewritten. The old identity told the
+model there was "nobody to consult"; leaving that in place while handing it the tool is
+the kind of contradiction a model resolves by ignoring one half.
+
+Everything else is upstream's default: one clarify round per chain (`maxRounds: 1`), up
+to 3 questions with an outline of the plan of attack, and `firstIterationOnly` on.
+
+**`firstIterationOnly` is a security boundary, not only a throttle.** It withdraws
+`ask_user` from the schema after the first search, and the reason is the direction of
+trust: once the run has read a page, a tool still on offer is a channel for relaying
+that page's instructions to a human. With it off, the identity clause - which says in
+so many words never to use `ask_user` to relay a retrieved directive - is the only
+thing left refusing. Leave it on.
+
+### What the caller sees
+
+A clarify handoff is a **third shape of committed reply**, and `run.py` had to learn it
+because the two tests it already had both discard it. The gate short-circuits
+`before_execute_tools` and the loop commits the questions with no `finish_reason`, so
+the wrap-up rule drops them; and when the model writes its questions as ordinary prose
+instead of calling the tool, the reply carries a perfectly normal `finish_reason ==
+"stop"`, so the completed-answer rule would file a page of questions as a finished
+report.
+
+Both routes are recognised from `turn_end.awaiting_user`, which the flow stamps for
+exactly this reader, with `turn_end.awaiting_user_source` saying which route it was.
+`run.py` tests it **first**, before `finish_reason`, and logs the handoff louder than a
+wrap-up, because this reply is not a thin answer - it is not an answer at all:
+
+```
+[run] reply is a clarify handoff, NOT a research answer - resume this session
+      with the user's answers to continue
+```
+
+Resuming the same `--session` with the answers is what turns it into research. That
+only works because the entry is registered **stateful** (see `Installed as`): the
+gateway replays one `{agent_id}` across turns, so the clarify round and its answer are
+one conversation. A caller that restates the whole question instead gets a fresh turn
+one, which asks again.
+
+The turn that answers the questions is classified as research from the commit marker
+rather than by asking the conversation gate. That is deliberate and it is load-bearing:
+a clarify answer ("the EU market, 2024") reads exactly like the shapes the gate is told
+mean `research=false`, so consulting the gate there dropped the tools from the schema
+and answered a never-researched question from memory, with nothing in the record saying
+so. Under `mode: "first_turn"` that is not an edge case - turn one always asks, so turn
+two is always this turn.
+
 ## Calling it
 
 ```bash
@@ -299,9 +440,12 @@ registration useless:
   its own.
 - **exit 0 does not mean an answer was produced.** By design, nothing maps an
   answerless run to a non-zero code - whether the agent committed an answer is a
-  measurement outcome, not a process failure. Exit 1 means only one thing: a
-  config or credential error. So `run.py` decides success by finding a committed
-  answer, and reports the exit code separately.
+  measurement outcome, not a process failure. Exit 1 is the config-or-credential
+  bucket - a missing key, an unreadable config, an invalid provider, and since
+  the everos rewrite a memory backend with `require_service=true` that finds no
+  usable service. That last one is unreachable on this config, where the knob is
+  unset. So `run.py` decides success by finding a committed answer, and reports
+  the exit code separately.
 
 It also gives every *conversation* its own workspace under
 `./runs/<conversation>/`. Not a decoration: this build files a session under the
@@ -357,18 +501,43 @@ with no `__main__` and cannot be executed as a module.
 there, both documented upstream and both deliberately not treated as failures:
 `invariants.ok == false` is a counter and gates nothing (a run can commit a
 1,300-character answer while reporting it), and `answer_chars: 0` alongside a real
-answer is the same accounting seen from the other side, since the count only
-covers text inside `<answer></answer>` tags that the model is asked - not
-guaranteed - to emit.
+answer is the same accounting seen from the other side: the count is the reply's
+length *after reasoning is folded away*, so it reads 0 when the whole reply parsed
+as reasoning - a think block the generation never closed. It is not a count of
+marker text; the `<answer></answer>` span has its own counter,
+`final_shape.span_chars`.
 
-### The research trail stays out of the reply
+On this profile `answer_chars: 0` is not even occasional. `finalShape.requireMarker`
+is **off** here, so the model is never asked for the marker at all and
+`final_shape` reads `form: "unmarked"` / `reason: "no_marker"` on every turn - a
+permanently degenerate `record` payload, and a config choice rather than model
+non-compliance. The three-section report template already puts the answer under a
+mandated `## Answer` heading, which is what makes the marker redundant; note that
+the profile suffix does not distinguish marker-on from marker-off, so two configs
+can carry this label and read different prompts.
 
-`processAppendix` renders a computed research trail - queries run, pages read,
-reviewer's open points - and appends it to the value the CLI returns, never to the
-persisted message. `run.py` reads the persisted message, so the trail reaches the
-CLI's stdout and stops there: **the subagent reply never carries it, by decision,
-and nothing needs to change to keep it that way.** Verified after the `dr@2.9`
-update, when the appendix started rendering for real.
+### The research trail is appended to the reply
+
+**This reversed.** It used to be a decision that the trail stayed out: the appendix
+rides on the value the CLI *returns*, never on the persisted message, and `run.py`
+reads the persisted message, so the trail reached the CLI's stdout and stopped
+there.
+
+What made that untenable is the report template. It tells the model **not** to
+close with a list of sources, on the promise that the reply is followed by the full
+record of what was searched and opened - and on this path that record never arrived.
+So the model was made to omit its sources in exchange for a substitute the caller
+never got: measured at 17 pages read and 8 cited on one live turn, with the other 9
+recorded nowhere.
+
+The trail therefore reaches this launcher through `observers["research_trail"]`,
+which is upstream's own key for exactly this reader, and `run.py` appends it to the
+one string the host uses for **both** the recorded `out.md` and the reply it shows,
+so the record and the reader see the same sources. It is derived, not generated: no
+tokens are spent on it and there is nothing in it to invent. It is kept out of
+`process_appendix`, which batch tooling reads as a numeric measurement payload, and
+`run.py` pops it before logging the observers line - it is prose measured in
+kilobytes and the rest of that payload is counters.
 
 Leaving the knob on is worth it anyway, because its counters land in
 `launcher.log`, and one of them is a real integrity check:
@@ -526,6 +695,13 @@ question that needs new evidence - since those are exactly the assumptions a
 caller gets wrong. Statefulness is the one that has to be stated outright: a
 caller who believes the agent is stateless restates the whole question every
 turn, which is a research turn every turn and throws away the feature.
+
+Since `askUser` went on, the description also has to say that **the first reply is
+normally questions, not the report.** With `mode: "first_turn"` that is not an
+occasional shape, it is every first call, and the two ways a caller gets it wrong
+are both silent: relay the questions as the deliverable, or answer them by
+restating the whole question, which starts a fresh round of questions instead of
+the research. Neither reads as an error anywhere.
 
 There is a name clash worth knowing: our config already has a `Researcher`
 (kind `openai`, MiroThinker deep-research over an HTTP endpoint). This entry is a

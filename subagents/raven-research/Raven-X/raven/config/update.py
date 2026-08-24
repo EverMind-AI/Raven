@@ -292,9 +292,12 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
         "everos-memory",
         {
             "mode": "embedded",
-            "base_url": "http://localhost:1995",
+            "base_url": "http://127.0.0.1:8000",
+            "api_version": "auto",
             "user_id": mem.user_id,
             "agent_id": mem.agent_id,
+            "defer_extraction": False,
+            "recall_enabled": True,
         },
     )
 

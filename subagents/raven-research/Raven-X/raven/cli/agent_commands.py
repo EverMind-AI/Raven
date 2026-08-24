@@ -29,6 +29,7 @@ from rich.text import Text
 
 from raven import __logo__
 from raven.cli._helpers import (
+    exit_memory_service_unavailable,
     load_runtime_config,
     make_provider,
     parse_fake_now,
@@ -41,6 +42,7 @@ from raven.cli._plugin_stack import (
     maybe_build_memory_backend,
 )
 from raven.cli._token_wise_stack import install_from_config
+from raven.memory_engine.backend import MemoryServiceUnavailableError
 from raven.utils.helpers import sync_workspace_templates
 
 console = Console()
@@ -194,31 +196,25 @@ def register(app: typer.Typer) -> None:
         wait_skill_extract: bool = typer.Option(
             False,
             "--wait-skill-extract/--no-wait-skill-extract",
-            help=(
-                "Block exit until in-flight everos extraction tasks finish. "
-                "Off by default — extraction is fire-and-forget, so the CLI "
-                "returns as soon as the agent responds and any in-flight "
-                "boundary-detection / case-extraction LLM call may be "
-                "cancelled by interpreter shutdown. When on (without "
-                "--flush-skill-buffer), the per-session pending-turn buffer "
-                "is left intact for the next CLI invocation, which is the "
-                "mode you want for scripted multi-turn boundary-detection "
-                "testing (multiple ``-m`` calls sharing the same ``-s``)."
-            ),
+            hidden=True,
+            help="Inert; accepted for call-site compatibility. See README.",
         ),
         flush_skill_buffer: bool = typer.Option(
             False,
             "--flush-skill-buffer/--no-flush-skill-buffer",
             help=(
-                "Send a ``session_end`` signal for this session before exit, "
-                "draining whatever turns are sitting in the everos "
-                "boundary-detection buffer through case + skill extraction. "
-                "Pair with --wait-skill-extract to actually block on the "
-                "resulting LLM calls (a flush without --wait-skill-extract "
-                "schedules the drain but won't survive interpreter "
-                "shutdown). Use on the final ``-m`` of a scripted "
-                "multi-turn session, or to force extraction after a single "
-                "``-m`` turn (a lone turn never trips a boundary on its own)."
+                "Promote this session's buffered turns before exit, so the "
+                "backend derives episodes / cases / skills from them. Needed "
+                "for a deferred-capture backend (everos "
+                "``defer_extraction=true``), where nothing is derived until "
+                "asked and a lone ``-m`` turn never trips a boundary on its "
+                "own. Blocks on one request bounded by the adapter's "
+                "``flush_timeout_s``; extraction past that point continues "
+                "server-side. Leave it off on all but the last of several "
+                "``-m`` calls sharing one ``-s``: they accumulate into one "
+                "backend-side session, and promoting mid-way derives from a "
+                "partial trajectory. Config equivalent, for when every run "
+                "should do this: ``memory.flush_on_task_end``."
             ),
         ),
         fake_now: str | None = typer.Option(
@@ -456,6 +452,36 @@ def register(app: typer.Typer) -> None:
             # Animated spinner is safe to use with prompt_toolkit input handling
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
 
+        async def _start_backend_or_release() -> None:
+            """Start the memory backend, releasing what it took if it refuses.
+
+            ``require_service=true`` makes start() fatal — opted in via the
+            backend's own config, because a scripted run that exists to write
+            memory should stop rather than spend an hour writing into nothing.
+            Interactive surfaces (TUI / gateway) keep degrading instead.
+
+            On that path start() may already have opened the HTTP pool or taken
+            the embedded index lock before the probe failed, and the callers'
+            ``finally`` blocks are not entered yet, so this releases them here.
+            Every other failure is logged and degraded.
+            """
+            if backend is None:
+                return
+            try:
+                await backend.start()
+            except MemoryServiceUnavailableError:
+                try:
+                    await backend.stop()
+                except Exception:
+                    logger.exception(
+                        "memory backend stop failed after a refused start; continuing shutdown",
+                    )
+                raise
+            except Exception:
+                logger.exception(
+                    "memory backend start failed; continuing with legacy memory path",
+                )
+
         if message:
             # Single message mode — one USER turn through spine (submit -> lane ->
             # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
@@ -466,15 +492,8 @@ def register(app: typer.Typer) -> None:
             from raven.spine import ChatType, Origin, Source, TurnRequest
 
             async def run_once():
-                # Bring the memory-backend plugin online before any turn
-                # runs. ``backend`` is ``None`` when no plugin is wired.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
+                # Bring the memory-backend plugin online before any turn runs.
+                await _start_backend_or_release()
                 try:
                     # Build inside the running loop: Scheduler pins its home loop in
                     # __init__, so build_repl must not run in the sync prologue.
@@ -507,18 +526,19 @@ def register(app: typer.Typer) -> None:
                         await handle.result()
                     await hub.wait_idle("cli")  # render barrier: CliOutlet caught up
                     await teardown()
-                    if wait_skill_extract or flush_skill_buffer:
-                        # ``flush_skill_buffer`` sends session_end so any
-                        # buffered turns drain through extraction (a single
-                        # -m turn never trips a boundary on its own).
-                        # ``wait_skill_extract`` blocks on the in-flight
-                        # tasks; without it the flush schedules work that
-                        # interpreter shutdown will cancel. The two flags
-                        # are orthogonal — scripted multi-turn testing uses
-                        # --wait-skill-extract alone so the buffer survives
-                        # for the next CLI run.
+                    # Writes detached past their turn budget are still running;
+                    # exiting on top of them drops exactly the slowest turns.
+                    await agent_loop.drain_backend_stores()
+                    if flush_skill_buffer or ec_config.memory.flush_on_task_end:
+                        # A single -m turn never trips a boundary on its
+                        # own, so a deferred-capture backend needs an
+                        # explicit promotion here or the turns sit
+                        # buffered. --wait-skill-extract alone leaves them
+                        # buffered on purpose: that is the mode scripted
+                        # multi-turn testing wants (several ``-m`` calls
+                        # sharing one ``-s``, promoted on the last).
                         await agent_loop.await_pending_extractions(
-                            flush_session_id=session_id if flush_skill_buffer else None,
+                            flush_session_id=session_id,
                             wait=wait_skill_extract,
                         )
                     await agent_loop.close_mcp()
@@ -531,7 +551,10 @@ def register(app: typer.Typer) -> None:
                                 "memory backend stop failed; continuing shutdown",
                             )
 
-            asyncio.run(run_once())
+            try:
+                asyncio.run(run_once())
+            except MemoryServiceUnavailableError as e:
+                raise exit_memory_service_unavailable(e) from None
             # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
             # thread, torch) segfault during interpreter finalization. The exit
             # chokepoint in raven.cli.commands.run hard-exits past finalization
@@ -567,16 +590,8 @@ def register(app: typer.Typer) -> None:
                 signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
             async def run_interactive():
-                # Backend lifecycle matches the single-message
-                # mode; ``backend`` is ``None`` when no plugin is wired,
-                # in which case start/stop are skipped.
-                if backend is not None:
-                    try:
-                        await backend.start()
-                    except Exception:
-                        logger.exception(
-                            "memory backend start failed; continuing with legacy memory path",
-                        )
+                # Backend lifecycle matches the single-message mode.
+                await _start_backend_or_release()
                 # agent_loop.run() is now a lifecycle keep-alive (executor /
                 # debug server / MCP up, then idle); all turns go through the
                 # spine. Gathered on teardown.
@@ -657,16 +672,16 @@ def register(app: typer.Typer) -> None:
                     agent_loop.stop()
                     await teardown()  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
                     await asyncio.gather(runtime_task, return_exceptions=True)
-                    if wait_skill_extract or flush_skill_buffer:
+                    # Writes detached past their turn budget are still running;
+                    # exiting on top of them drops exactly the slowest turns.
+                    await agent_loop.drain_backend_stores()
+                    if flush_skill_buffer or ec_config.memory.flush_on_task_end:
                         # ``exit`` is not a natural boundary; without a
-                        # flush any buffered turns would sit
-                        # indefinitely until the next session reuses
-                        # the id. With ``flush_skill_buffer`` we send
-                        # session_end here so they drain; with
-                        # ``wait_skill_extract`` we block on the
-                        # resulting (and any other in-flight) task.
+                        # promotion here the buffered turns sit
+                        # indefinitely until the next session reuses the
+                        # id.
                         await agent_loop.await_pending_extractions(
-                            flush_session_id=(f"{cli_channel}:{cli_chat_id}" if flush_skill_buffer else None),
+                            flush_session_id=f"{cli_channel}:{cli_chat_id}",
                             wait=wait_skill_extract,
                         )
                     await agent_loop.close_mcp()
@@ -682,7 +697,10 @@ def register(app: typer.Typer) -> None:
                             )
                     warn_about_pending_cli_reminders(cron, config)
 
-            asyncio.run(run_interactive())
+            try:
+                asyncio.run(run_interactive())
+            except MemoryServiceUnavailableError as e:
+                raise exit_memory_service_unavailable(e) from None
 
 
 __all__ = ["register"]

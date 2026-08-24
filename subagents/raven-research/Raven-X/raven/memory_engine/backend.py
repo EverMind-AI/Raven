@@ -27,6 +27,10 @@ Three design points to flag for plugin authors:
   Protocol exposes the slot so EverOS-style backends can consume it
   without forcing every adapter to fake support.
 
+Capabilities beyond those five live in their own single-method
+Protocols (:class:`FlushableBackend`), never as extra members of
+:class:`MemoryBackend` — see that class's note on why.
+
 The Protocol is :func:`typing.runtime_checkable` so ``isinstance(x,
 MemoryBackend)`` works in tests — at the cost of accepting any class
 whose surface matches, including duck-typed mocks. That's the trade we
@@ -164,4 +168,75 @@ class MemoryBackend(Protocol):
         ...
 
 
-__all__ = ["Memory", "MemoryBackend"]
+@runtime_checkable
+class FlushableBackend(Protocol):
+    """Optional capability: promote what :meth:`MemoryBackend.store` buffered.
+
+    A separate Protocol rather than a sixth :class:`MemoryBackend`
+    method. Both are ``runtime_checkable``, which checks *every* member
+    is present, so folding ``flush`` into the main contract would strip
+    protocol identity from every adapter that doesn't implement it
+    (pinned by ``tests/test_memory_backend_protocol.py``). An
+    ``isinstance`` against this one-method Protocol gives the host a
+    typed capability check without breaking those adapters.
+    """
+
+    async def flush(self, session_id: str) -> None:
+        """Promote ``session_id``'s buffered writes to derived memory.
+
+        Only meaningful for backends that decouple capture from
+        extraction (EverOS's ``defer_extraction``), where ``store``
+        appends to a buffer and nothing derives episodes / cases /
+        skills from it until asked. Backends that extract eagerly
+        satisfy this by not implementing it at all.
+
+        Callers invoke it at a task boundary, never per turn — deferring
+        exists to keep extraction LLMs out of the turn. Implementations
+        own their own timeout and are expected to absorb transport
+        failures rather than raise: the captured turns stay durable, so
+        a failed promotion costs derived memory, not data.
+        """
+        ...
+
+
+class MemoryServiceUnavailableError(RuntimeError):
+    """A backend's service was required at start and is not usable.
+
+    Host-side rather than plugin-side so a caller can decide what an absent
+    memory service means without importing a plugin: an interactive session
+    degrades and continues, while a scripted run that exists to *produce*
+    memory should not spend an hour writing into nothing. Raised from
+    ``start()`` only when the operator opted in — the default everywhere
+    stays fail-open.
+    """
+
+
+class MemoryApiVersionError(MemoryServiceUnavailableError):
+    """The service refused the API version this backend speaks.
+
+    A *subclass*, narrowing rather than replacing: for this account the service
+    genuinely is unusable, so every caller that already handles an unusable
+    service handles this correctly by default. Being a bare ``RuntimeError``
+    instead was a real bug -- ``raven agent``'s start path catches
+    ``MemoryServiceUnavailableError`` to exit cleanly and then has a broad
+    ``except Exception`` that logs and continues, so ``require_service=true``
+    printed a traceback and ran the whole job anyway. That is the exact outcome
+    the switch exists to prevent.
+
+    The distinct type is still worth having: what is wrong is the *account's*
+    provisioning, not the service's health, and no amount of retrying, waiting
+    or failing open improves it. A caller that wants to tell the two apart can;
+    one that does not, does not have to.
+
+    Host-side for the same reason as its parent: a caller decides what it means
+    without importing a plugin.
+    """
+
+
+__all__ = [
+    "FlushableBackend",
+    "Memory",
+    "MemoryApiVersionError",
+    "MemoryBackend",
+    "MemoryServiceUnavailableError",
+]

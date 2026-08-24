@@ -574,12 +574,18 @@ def register(app: typer.Typer) -> None:
                 # in-flight backend.store / backend.feedback calls
                 # spawned during AgentLoop teardown can complete.
                 if backend is not None:
-                    try:
-                        await backend.stop()
-                    except Exception:
-                        _logger.exception(
-                            "memory backend stop failed; continuing shutdown",
-                        )
+                    from raven.cli._plugin_stack import shutdown_memory_backend
+
+                    # Exit is the only task boundary a long-running gateway will
+                    # ever see, so it is where ``memory.flush_on_task_end`` has
+                    # to act. Fans out over every session this process captured,
+                    # bounded -- see promote_all_backend_sessions.
+                    await shutdown_memory_backend(
+                        agent,
+                        backend,
+                        promote=ec_config.memory.flush_on_task_end,
+                        surface="gateway",
+                    )
 
         asyncio.run(run())
 

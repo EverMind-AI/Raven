@@ -272,6 +272,7 @@ __all__ = [
     "turn",
     "memory_recall",
     "memory_store",
+    "memory_flush",
     "memory_feedback",
     "memory_extract",
     "memory_profile_refresh",
@@ -489,6 +490,10 @@ def memory_store(span, bound: dict[str, Any], result: Any, exc: BaseException | 
     msgs = bound.get("messages_slice") or []
     span.set({"memory.session_id": bound.get("session_key"), "memory.message_count": len(msgs)})
     span.artifact("memory.store", {"session_id": bound.get("session_key"), "messages": msgs})
+
+
+def memory_flush(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
+    span.set({"memory.session_id": bound.get("session_key")})
 
 
 def memory_feedback(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:

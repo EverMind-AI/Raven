@@ -8,6 +8,7 @@ mode. Smoke-level coverage: ``--help`` works, options are surfaced, the
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -81,22 +82,37 @@ def test_agent_help_shows_resume_flag() -> None:
 
 
 def _invoke_agent_capturing_session(
-    monkeypatch: pytest.MonkeyPatch, workspace: Path, extra_args: list[str]
-) -> tuple[object, dict[str, str]]:
+    monkeypatch: pytest.MonkeyPatch,
+    workspace: Path,
+    extra_args: list[str],
+    *,
+    config_patch: dict | None = None,
+    backend: Any = None,
+) -> tuple[object, dict[str, Any]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
-    key, mirroring the old session_key arg)."""
+    key, mirroring the old session_key arg).
+
+    ``config_patch`` is merged into the saved config JSON, which is how a
+    test reaches the RavenConfig extension blocks (``memory`` and friends)
+    that :class:`Config` itself doesn't carry."""
+    import json as _json
     import os as _os
 
-    from raven.config.loader import save_config
+    from raven.config.loader import get_config_path, save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
 
     cfg = Config()
     cfg.providers.openrouter.api_key = "stub-test-key"
     save_config(cfg)
+    if config_patch:
+        path = get_config_path()
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        data.update(config_patch)
+        path.write_text(_json.dumps(data), encoding="utf-8")
 
-    captured: dict[str, str] = {}
+    captured: dict[str, Any] = {"teardown_order": []}
 
     class _StubSubagents:
         def set_submit(self, _submit) -> None:
@@ -115,8 +131,12 @@ def _invoke_agent_capturing_session(
             await emit(Text(content="stub-response", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
-        async def await_pending_extractions(self, **_kw) -> None:
-            pass
+        async def await_pending_extractions(self, **kw) -> None:
+            captured["flush_session_id"] = kw.get("flush_session_id")
+            captured["teardown_order"].append("flush")
+
+        async def drain_backend_stores(self, timeout: float | None = None) -> None:
+            captured["teardown_order"].append("drain")
 
         async def close_mcp(self) -> None:
             pass
@@ -132,7 +152,7 @@ def _invoke_agent_capturing_session(
     # embedded everos runtime is heavy and not under test here).
     monkeypatch.setattr(
         "raven.cli.agent_commands.maybe_build_memory_backend",
-        lambda *a, **k: None,
+        lambda *a, **k: backend,
     )
     monkeypatch.setattr(
         "raven.cli.agent_commands.build_plugin_tools",
@@ -204,6 +224,139 @@ def test_agent_session_key_passthrough(tmp_config: Path, tmp_path: Path, monkeyp
     r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "feishu:ou_xyz"])
     assert r.exit_code == 0, r.stdout
     assert captured["session_id"] == "feishu:ou_xyz"
+
+
+def test_agent_does_not_flush_by_default(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default is capture-only: a measurement batch promotes out of band,
+    so a bare run must not spend the extraction budget at exit."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "cli:demo"])
+    assert r.exit_code == 0, r.stdout
+    assert "flush_session_id" not in captured
+
+
+def test_agent_flush_flag_promotes_the_run_session(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--flush-skill-buffer`` promotes the same key the turn ran under."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(
+        monkeypatch, ws, ["--session", "cli:demo", "--flush-skill-buffer"]
+    )
+    assert r.exit_code == 0, r.stdout
+    assert captured["flush_session_id"] == captured["session_id"] == "cli:demo"
+
+
+def test_agent_flush_on_task_end_config_needs_no_flag(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``memory.flushOnTaskEnd`` is the product-side equivalent of the
+    flag, so an interactive deployment doesn't depend on remembering it."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(
+        monkeypatch,
+        ws,
+        ["--session", "cli:demo"],
+        config_patch={"memory": {"flushOnTaskEnd": True}},
+    )
+    assert r.exit_code == 0, r.stdout
+    assert captured["flush_session_id"] == "cli:demo"
+
+
+def test_agent_wait_flag_alone_leaves_the_buffer_intact(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--wait-skill-extract without --flush-skill-buffer is the scripted
+    multi-turn mode: several ``-m`` calls share one ``-s`` and only the
+    last one promotes."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(
+        monkeypatch, ws, ["--session", "cli:demo", "--wait-skill-extract"]
+    )
+    assert r.exit_code == 0, r.stdout
+    assert "flush_session_id" not in captured
+
+
+def test_agent_drains_detached_stores_before_exit(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Store is detached under a turn budget, so the exit path has to drain —
+    unconditionally, not only when a flush was asked for, or the default
+    capture-only profile loses whichever writes were slowest to index."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "cli:demo"])
+    assert r.exit_code == 0, r.stdout
+    assert captured["teardown_order"] == ["drain"]
+
+
+def test_agent_drains_before_it_flushes(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Order, not coincidence: a deferred backend learns the session's
+    backend-side id inside ``store``, so promoting first would flush an id
+    the service never received."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, captured = _invoke_agent_capturing_session(
+        monkeypatch, ws, ["--session", "cli:demo", "--flush-skill-buffer"]
+    )
+    assert r.exit_code == 0, r.stdout
+    assert captured["teardown_order"] == ["drain", "flush"]
+
+
+def test_require_service_exits_one_and_releases_the_backend(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``require_service=true`` is a configuration failure, not a crash.
+
+    Two things it must not do: surface as a bare traceback out of
+    ``asyncio.run`` (the exit-code contract says 1 for a config error), and
+    leave the backend started -- start() can already have opened the HTTP pool
+    or taken the embedded index lock before the probe failed, and the caller's
+    ``finally`` is not entered on that path.
+    """
+    from raven.memory_engine.backend import MemoryServiceUnavailableError
+
+    stopped: list[str] = []
+
+    class _RefusingBackend:
+        recall_enabled = False
+
+        async def start(self) -> None:
+            raise MemoryServiceUnavailableError("EverOS at http://x is not usable")
+
+        async def stop(self) -> None:
+            stopped.append("stop")
+
+        async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+            return []
+
+        async def store(self, session_id, messages) -> None:
+            pass
+
+        async def feedback(self, signals) -> None:
+            pass
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [], backend=_RefusingBackend())
+
+    assert r.exit_code == 1, r.stdout
+    assert stopped == ["stop"]
+    assert "not usable" in r.stdout
+    assert "Traceback" not in r.stdout
 
 
 def test_agent_bare_session_resolves_cross_channel(

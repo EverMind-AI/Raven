@@ -398,6 +398,7 @@ def _build_tui_agent_loop():
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
             runtime_config=ec_config.runtime,
+            memory_config=ec_config.memory,
             backend=backend,
             plugin_tools=plugin_tools,
             # TUI is always a multi-turn interactive session.
@@ -659,14 +660,19 @@ async def _run_rpc_server_until_done(
                     pass
             # Release the embedded index lock so the next process can start.
             if agent_loop is not None and agent_loop.backend is not None:
-                try:
-                    await agent_loop.backend.stop()
-                except Exception:
-                    from loguru import logger as _logger
+                from raven.cli._plugin_stack import shutdown_memory_backend
 
-                    _logger.exception(
-                        "tui: memory backend stop failed; continuing shutdown",
-                    )
+                # Exit is the only task boundary this surface will ever see, so
+                # it is where ``memory.flush_on_task_end`` has to act -- the
+                # setting documents itself for exactly this case.
+                await shutdown_memory_backend(
+                    agent_loop,
+                    agent_loop.backend,
+                    promote=bool(
+                        getattr(agent_loop.memory_config, "flush_on_task_end", False),
+                    ),
+                    surface="tui",
+                )
             serve_task.cancel()
             try:
                 await serve_task

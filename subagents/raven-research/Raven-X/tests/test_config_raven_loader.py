@@ -278,19 +278,78 @@ def test_a_profile_suffix_cannot_smuggle_a_superseded_flow_label():
         with pytest.raises(Exception):
             DRFlowConfig(enabled=True, version=smuggled)
 
+    # A folded label is refused too, but as its own class and with its own text:
+    # upstream carried dr@3.5-dr@3.7 before the 2026-08-20 fold, so their semantics
+    # ARE this build's and "predates" would be a false statement about them. Both
+    # tuples are read off the class for the same reason the current label is - a
+    # literal here is one more place the next fold has to reach.
+    # Read off an INSTANCE, the way the validator reads them: pydantic wraps a
+    # private attr on the class, so ``DRFlowConfig._FOLDED_VERSIONS`` is a
+    # ``ModelPrivateAttr`` rather than the tuple.
+    tuples = DRFlowConfig()
+    for folded in tuples._FOLDED_VERSIONS:
+        for pinned in (folded, f"{folded}-askuser"):
+            with pytest.raises(Exception, match="folded into"):
+                DRFlowConfig(enabled=True, version=pinned)
+        assert DRFlowConfig(enabled=False, version=folded).version == folded
+
     # The current label, its suffixed form, and a future one must survive. All derived
     # from the field default: a test that hardcodes the version is one more place a bump
     # has to reach, which is exactly the drift this check exists to catch. The literal
     # list here was the fourth such place found on 2026-08-04.
+    #
+    # "Future" is the next label NEITHER tuple claims, not current + 0.1: the fold
+    # burned dr@3.5-dr@3.7 as names, so the next bump after dr@3.4 is dr@3.8 and
+    # a probe that just increments the minor lands on a rejected label. Walking the
+    # tuples keeps that derived - the next fold moves the answer, not this test.
     current = DRFlowConfig.model_fields["version"].default
+    burned = set(tuples._SUPERSEDED_VERSIONS) | set(tuples._FOLDED_VERSIONS)
     major, minor = current.rsplit(".", 1)
-    future = f"{major}.{int(minor) + 1}"
+    bump = int(minor)
+    while True:
+        bump += 1
+        future = f"{major}.{bump}"
+        if future not in burned:
+            break
     for allowed in (current, f"{current}-futurex", future):
         assert DRFlowConfig(enabled=True, version=allowed).version == allowed
 
     # A superseded label with the flow OFF is still allowed: the anchor arm carries
     # historical labels and must stay loadable.
     assert DRFlowConfig(enabled=False, version="dr@2.0").version == "dr@2.0"
+
+
+def test_the_folded_label_message_survives_the_next_bump(monkeypatch):
+    """The fold target is history; the label to set is the present. One string
+    cannot read both off the field default.
+
+    Written as a bump simulation because the bug is invisible today: while the
+    current label IS the fold target, reading the target off the default gives the
+    right answer by coincidence. The first version of this message did exactly
+    that, so a bump to dr@3.8 would have had it claim "dr@3.5 was folded into
+    dr@3.8" - true of no rung, and pointing the reader at one that absorbed
+    nothing. That is the same loss of join-ability these commits exist to prevent,
+    committed by the error message meant to prevent it."""
+    from raven.config.raven import DRFlowConfig
+
+    folded, target = "dr@3.7", "dr@3.4"
+    assert DRFlowConfig()._FOLDED_VERSIONS[folded] == target
+
+    # Today: the target is the current label, so "only the name changed" holds.
+    with pytest.raises(ValidationError, match="only the name changed"):
+        DRFlowConfig(enabled=True, version=folded)
+
+    # After a bump past the fold target, that sameness expires and the message has
+    # to say so instead of continuing to assert it. monkeypatch restores the
+    # default, which matters: every other test in the suite reads it.
+    monkeypatch.setattr(DRFlowConfig.model_fields["version"], "default", "dr@3.8")
+    with pytest.raises(ValidationError) as excinfo:
+        DRFlowConfig(enabled=True, version=folded)
+    message = str(excinfo.value)
+    assert f"folded into {target!r}" in message
+    assert f"{target!r} has since been superseded by 'dr@3.8'" in message
+    assert "set drFlow.version to 'dr@3.8'" in message
+    assert "only the name changed" not in message
 
 
 def test_the_shipped_example_configs_load_on_this_build():

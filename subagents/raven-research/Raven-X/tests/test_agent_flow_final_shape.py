@@ -47,11 +47,11 @@ def test_both_knobs_default_on():
     # reason. Narrowing this is the deliberate act the previous comment asked
     # for, not a way to let a default drift.
     #
-    # ``report_bounce`` (dr@3.7) is off because it is the one knob here that
+    # ``report_bounce`` (dr@3.4) is off because it is the one knob here that
     # spends a whole extra generation, and its benefit is not yet priced: the
     # session record stamps ``flow_version`` but never stamped which finalShape
     # knobs were on, so the 43%-malformed baseline that motivated it is an upper
-    # bound that cannot be attributed. dr@3.7 adds the ``report_shape`` observer
+    # bound that cannot be attributed. dr@3.4 adds the ``report_shape`` observer
     # that closes that gap; the knob earns its default from those readings, not
     # from this file.
     off_by_design = {"report_bounce"}
@@ -336,7 +336,7 @@ def test_the_report_clause_is_product_only_and_purely_appended():
     assert "7." not in report_only.split("Contract", 1)[1]
 
     # The override rides its own switch inside the clause: off leaves the
-    # dr@3.5 template with no seam, and no other byte of the clause moves.
+    # pre-override template with no seam, and no other byte of the clause moves.
     no_override = DRModeSegmentBuilder(
         require_answer_marker=True, report_structure=True, report_format_override=False
     )._contract
@@ -368,7 +368,7 @@ def test_the_report_clause_never_asks_for_a_shorter_answer():
 
 
 def test_a_literal_brace_in_a_clause_does_not_crash_the_assembly(monkeypatch):
-    """dr@3.7. The clause text talks about JSON, so a brace must stay inert.
+    """dr@3.4. The clause text talks about JSON, so a brace must stay inert.
 
     It did not: the override passage was spliced with ``replace`` (safe) and the
     clause numbering right after it ran ``format`` (not), so one example object in

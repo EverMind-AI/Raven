@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.memory_engine import (
+    FlushableContractTests,
     LifecycleContractTests,
     Memory,
     MemoryBackend,
@@ -96,3 +97,19 @@ class TestDictBackendContract(MemoryBackendContractTests):
 class TestDictBackendLifecycle(LifecycleContractTests):
     async def make_backend(self) -> MemoryBackend:
         return _DictBackend()
+
+
+class _DeferredDictBackend(_DictBackend):
+    """The deferred-capture shape: store buffers, promotion is explicit."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.promoted: list[str] = []
+
+    async def flush(self, session_id: str) -> None:
+        self.promoted.append(session_id)
+
+
+class TestDeferredDictBackendFlushContract(FlushableContractTests):
+    async def make_backend(self) -> MemoryBackend:
+        return _DeferredDictBackend()

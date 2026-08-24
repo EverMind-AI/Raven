@@ -4,7 +4,8 @@ Post-Phase-B layout:
 
 - ``backend.py``        — :class:`MemoryBackend` Protocol + :class:`Memory`
   (the public plugin contract; what the bundled everos backend and any
-  third-party plugin implements).
+  third-party plugin implements), plus the optional-capability
+  :class:`FlushableBackend` Protocol.
 - ``contract_test.py``  — base test class plugin authors inherit to
   verify their backend satisfies the host's expectations.
 - ``base.py``           — shared data carriers (``AssembledContext``,
@@ -28,21 +29,32 @@ Post-Phase-B layout:
 
 from typing import TYPE_CHECKING
 
-from raven.memory_engine.backend import Memory, MemoryBackend
+from raven.memory_engine.backend import (
+    FlushableBackend,
+    Memory,
+    MemoryApiVersionError,
+    MemoryBackend,
+    MemoryServiceUnavailableError,
+)
 from raven.memory_engine.base import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
     from raven.memory_engine.contract_test import (
+        FlushableContractTests,
         LifecycleContractTests,
         MemoryBackendContractTests,
     )
 
 __all__ = [
     "AssembledContext",
+    "FlushableBackend",
+    "FlushableContractTests",
     "LifecycleContractTests",
     "Memory",
+    "MemoryApiVersionError",
     "MemoryBackend",
     "MemoryBackendContractTests",
+    "MemoryServiceUnavailableError",
     "TokenBudget",
 ]
 
@@ -55,7 +67,11 @@ __all__ = [
 # (PEP 562) so they resolve only when actually accessed — which happens under
 # pytest in the test suite, where the import succeeds.
 def __getattr__(name: str):
-    if name in ("LifecycleContractTests", "MemoryBackendContractTests"):
+    if name in (
+        "FlushableContractTests",
+        "LifecycleContractTests",
+        "MemoryBackendContractTests",
+    ):
         from raven.memory_engine import contract_test
 
         return getattr(contract_test, name)
