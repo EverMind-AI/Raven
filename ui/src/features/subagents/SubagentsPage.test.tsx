@@ -28,14 +28,14 @@ function wire(source: AgentsSource): void {
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: () => {},
     wsShows: (tab) => tab === 'agents',
-    agentStagePaint: (box, ctx, opts) => {
-      paints.push({ ctx, opts })
-      box.appendChild(document.createElement('p'))
-    },
   }
   window.RavenShell = fakeShell
   sessionReset()
   setCurrent('s1')
+  source.stagePaint = (box, ctx, opts) => {
+    paints.push({ ctx, opts })
+    box.appendChild(document.createElement('p'))
+  }
   window.DS = { agents: source }
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'

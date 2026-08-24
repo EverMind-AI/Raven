@@ -58,10 +58,9 @@ DS.agents = {
   /* Draws a delegated run's record with the transcript's own renderer -- the
      transcript island, which owns the incremental bookkeeping too (what is
      already drawn, the held-back streaming answer, the working glyph, the
-     scroll). Reached through the shell's agentStagePaint verb, which forwards
-     to whatever this source offers; a member here rather than its own binding,
-     because a painter is only ever wanted for a record, and this is the source
-     the records come from. */
+     scroll). A member here rather than its own binding, because a painter is
+     only ever wanted for a record, and this is the source the records come
+     from. */
   stagePaint: (box, r, opts) => RavenIslands.transcript.agentStage(box, r, opts),
 };
 setInterval(() => { if (agentsWatch) agentsWatch(); }, 2000);

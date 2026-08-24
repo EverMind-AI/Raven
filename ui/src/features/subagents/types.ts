@@ -20,8 +20,8 @@ export interface AgentRow {
 }
 
 /* A spawned run's whole record, as subagent.context answers it. The island
-   never reads the messages itself -- they go straight to the legacy
-   transcript bridge (the shell's agentStagePaint verb). */
+   never reads the messages itself -- its source hands them to the transcript
+   renderer through stagePaint. */
 export interface AgentCtx {
   status?: string
   agent?: string | null
@@ -50,10 +50,8 @@ export interface InstanceChat {
 }
 
 /* What the transcript renderer takes, as much of it as one instance can fill.
-   Declared here rather than imported from the transcript island for the same
-   reason `stagePaint` below takes `unknown`: the value reaches the painter
-   through the shell's untyped verb, and this is the shape this island is
-   answerable for producing. */
+   Declared here rather than imported from the transcript island because the
+   source owns the boundary and accepts records from both RPC shapes. */
 export interface InstanceCtx {
   status?: string
   messages: Array<{
@@ -91,11 +89,7 @@ export interface AgentsSource {
   watch?(fn: () => void): void
   /* Draws one run's record into a detail stage -- a spawn's AgentCtx or a
      node's DagNodeCtx. Optional for the same reason `context` is: with no
-     record to hand out there is nothing to paint. The island never calls this
-     directly; it reaches the painter through the shell's agentStagePaint verb,
-     whose signature this mirrors, `unknown` included -- the renderer on the
-     far side takes the legacy shape, and a narrower type here would be a
-     claim about a value that crosses an untyped layer to get there. */
+     record to hand out there is nothing to paint. */
   stagePaint?(box: HTMLElement, ctx: unknown,
               opts?: { key?: string; empty?: string; reset?: boolean }): void
 }

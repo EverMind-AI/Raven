@@ -5,7 +5,6 @@ import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { AgentRow, AgentsSource, InstanceRow, OpenItem } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
  * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
@@ -65,12 +64,6 @@ function set(p: Partial<AgentsState>): void {
 }
 
 export const source = (): AgentsSource => ds<AgentsSource>('agents')
-
-function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
-  const v = shell()[name]
-  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
-  return v as NonNullable<Shell[K]>
-}
 
 export const absent = (): boolean => {
   const a = source().absent
@@ -378,9 +371,8 @@ export const sel = (): { run_id: string; node: string } | null =>
   state.open && state.open.kind === 'dag' ? { run_id: state.open.run_id, node: state.open.node } : null
 
 /* ── the detail stage ─────────────────────────────────────────────────
-   The stage's DOM belongs to the legacy transcript bridge (the shell's
-   agentStagePaint verb draws with the transcript's own renderer); the island
-   owns only when to paint and what record to hand over. */
+   The stage's DOM belongs to the transcript renderer installed on the source;
+   the island owns only when to paint and what record to hand over. */
 let stageEl: HTMLElement | null = null
 export function setStage(el: HTMLElement | null): void {
   stageEl = el
@@ -436,7 +428,7 @@ export function paintInstance(box: HTMLElement, agent: string, handle: string): 
       /* Its own empty note, like the dag stage below. Left out, the shared
          renderer falls back to the list's `agents_none` -- "no background
          work yet" -- under the row the reader has just opened. */
-      verb('agentStagePaint')(
+      src.stagePaint?.(
         box,
         ctx,
         { key: `in:${agent}:${handle}`, empty: t('gui.ws.instance_empty'), reset: stageFresh },
@@ -465,7 +457,7 @@ export function paintSpawn(box: HTMLElement, id: string): void {
       const who = (r && r.agent) || 'raven'
       if (state.who !== who) set({ who })
       paintedStatus = (r && r.status) || null
-      verb('agentStagePaint')(
+      src.stagePaint?.(
         box,
         r,
         { key: `sp:${id}`, empty: t('gui.ws.spawn_empty'), reset: stageFresh },
@@ -490,7 +482,7 @@ export function paintDag(box: HTMLElement, it: { run_id: string; node: string })
       if (state.open !== openAt || !box.isConnected) return
       const row = state.rows.find((a) => a.kind === 'dag' && a.run_id === it.run_id && a.node === it.node)
       paintedStatus = row ? row.status || null : null
-      verb('agentStagePaint')(
+      src.stagePaint?.(
         box,
         { messages: (n && n.messages) || [], status: row ? row.status : null },
         { key: `dag:${it.run_id}:${it.node}`, empty: t('gui.dag.node_empty'), reset: stageFresh },
