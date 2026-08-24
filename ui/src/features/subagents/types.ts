@@ -1,6 +1,6 @@
-import type { DirectTurn, InstanceRow } from '../../rpc/generated'
+import type { DirectTurn, InstanceRow, SubagentRow } from '../../rpc/generated'
 
-export type { DirectTurn, InstanceRow }
+export type { DirectTurn, InstanceRow, SubagentRow }
 
 /* One row per delegated run, both kinds: a spawned call is addressed by its
    call id, a graph node by (run, node) -- which is the whole reason a row
@@ -65,6 +65,7 @@ export interface InstanceCtx {
 }
 
 export interface AgentsSource {
+  roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
   /* Live-only: the fixture replay records no per-run context, so the demo
      detail keeps its empty note exactly as the legacy renderer did. */

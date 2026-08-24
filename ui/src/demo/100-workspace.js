@@ -119,6 +119,10 @@ function wsRecordChange(path, kind, hunk) {
 }
 
 function setWs(open, tab) {
+  if (open && tab && document.documentElement.classList.contains('desk-ready')) {
+    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
+    if (desk && tab !== 'browser') { desk(tab); return; }
+  }
   wsOpen = open;
   if (tab) wsTab = tab;
   /* Collapsing leaves expanded mode too: coming back to a full-window panel
@@ -159,11 +163,16 @@ function bumpWs() {
   chip.hidden = n === 0;
   const u = $('#wsUnseen');
   if (u) { u.textContent = n ? `+${n}` : ''; u.hidden = n === 0; }
+  RavenIslands.workspace.notifyDesk?.();
 }
 
 /* Picking a view is a commitment: from then on that view shows its own empty
    note rather than being replaced by the launcher. */
 function wsPick(tab) {
+  if (document.documentElement.classList.contains('desk-ready')) {
+    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
+    if (desk && tab !== 'browser') { desk(tab); return; }
+  }
   wsTab = tab; wsPicked = true;
   drawWs(); bumpWs();
 }

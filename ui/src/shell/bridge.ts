@@ -41,6 +41,7 @@ export interface Shell {
   /* Optional verbs: each exists once an island needs it and the shell half
      (demo/155-bridge.js) publishes it. */
   showWorkspace?(tab: string): void
+  workspaceSetOpen?(open: boolean): void
   wsShows?(tab: string): boolean
   wsView?(): WsPanelView
   wsPick?(tab: string): void

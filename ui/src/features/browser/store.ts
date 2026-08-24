@@ -1,4 +1,5 @@
 import { ds, shell, t } from '../../shell/bridge'
+import { open as openUrl } from '../../shell/open-url'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
 
@@ -470,21 +471,14 @@ export function hook(): void {
   if (src && src.embedded) src.onFrame = onFrame
 }
 
-/* A link in the transcript opens in the embedded browser -- the panel IS this
-   app's browser. Modifier clicks keep the system-browser escape hatch, and a
-   server whose browser is absent or unavailable keeps the navigation. */
+/* Transcript links belong to the user's browser, never to workspace chrome. */
 function trap(e: MouseEvent): void {
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-  const seam = window.DS
-  const src = seam && (seam['browser'] as BrowserSource | undefined)
-  if (!src || !src.embedded) return
-  if (state.absent || state.avail !== true) return
   const el = e.target as Element | null
   const a = el && el.closest ? (el.closest('#scroll a[href]') as HTMLAnchorElement | null) : null
   if (!a || !/^https?:/i.test(a.href)) return
   e.preventDefault()
-  shell().showWorkspace?.('browser')
-  void open(a.href)
+  openUrl(a.href)
 }
 
 export function installLinkTrap(): void {

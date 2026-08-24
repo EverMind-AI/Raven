@@ -3,12 +3,12 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as mount_ from './mount'
-import { SubagentsApp } from './SubagentsPage'
+import { AgentRecordConversation, InstanceConversation, orderAgentGroups, SubagentsApp } from './SubagentsPage'
 import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
 import type { Shell } from '../../shell/bridge'
-import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow } from './types'
+import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -81,11 +81,46 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   sessionReset()
+  window.RavenIslands = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
 describe('subagents island, the list', () => {
+  it('routes an existing instance opener into the floating workspace', () => {
+    const openAgent = vi.fn()
+    window.RavenIslands = { workspace: { openAgent } }
+    const row = inst({ handle: 'resume-me', resumable: true })
+    store.openInstance(row)
+    expect(openAgent).toHaveBeenCalledWith(row)
+  })
+
+  it('routes a legacy run detail into a workspace record pane', () => {
+    const openAgentRecord = vi.fn()
+    window.RavenIslands = { workspace: { openAgentRecord } }
+    const row: AgentRow = { id: 'spawn-1', kind: 'spawn', label: 'legacy task' }
+    store.openRow(row)
+    expect(openAgentRecord).toHaveBeenCalledWith(row)
+  })
+
+  it('orders agents and their conversations by the latest instance activity', () => {
+    const roster = [
+      { name: 'quiet-first' },
+      { name: 'recent' },
+      { name: 'older' },
+      { name: 'quiet-last' },
+    ] as SubagentRow[]
+    const ordered = orderAgentGroups(roster, [
+      inst({ agent: 'older', handle: 'older-new', updatedAtMs: 200 }),
+      inst({ agent: 'recent', handle: 'recent-old', updatedAtMs: 100 }),
+      inst({ agent: 'recent', handle: 'recent-new', updatedAtMs: 300 }),
+    ])
+    expect(ordered.map((group) => group.name))
+      .toEqual(['recent', 'older', 'quiet-first', 'quiet-last'])
+    expect(ordered[0]!.children.map((row) => row.handle))
+      .toEqual(['recent-new', 'recent-old'])
+  })
+
   it('renders one row per instance: handle, agent, status word and tags', async () => {
     instances([
       inst({ handle: 'research-a2a-726da8', status: 'completed', resumable: true, runId: 'r1', nodeId: 'research_a2a' }),
@@ -954,5 +989,96 @@ describe('subagents island, an instance detail', () => {
     /* The same box throughout: a remount would have replaced it, and with it
        everything the transcript had already drawn. */
     expect(document.querySelector('.satx')).toBe(stage)
+  })
+
+  it('repaints a floating running instance while the agents view is hidden', async () => {
+    let poll: (() => void) | null = null
+    let snapshot = 1
+    const row = inst({ handle: 'floating-live', status: 'running', resumable: true })
+    instances([row], {
+      watch: (fn) => { poll = fn },
+      instanceHistory: async () => ({
+        turns: snapshot === 1
+          ? [{ call_id: 'c1', role: 'assistant' as const, content: 'first', at_ms: 1, live: true }]
+          : [
+            { call_id: 'c1', role: 'assistant' as const, content: 'first', at_ms: 1 },
+            { call_id: 'c1', role: 'assistant' as const, content: 'second', at_ms: 2, live: true },
+          ],
+      }),
+    })
+    window.RavenShell!.wsShows = () => false
+
+    render(<InstanceConversation row={row} />, {
+      container: document.getElementById('wsBody')!,
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(paints).toHaveLength(1)
+
+    snapshot = 2
+    await act(async () => {
+      poll?.()
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(paints).toHaveLength(2)
+    expect((paints[1]!.ctx as { messages: unknown[] }).messages).toHaveLength(2)
+  })
+
+  it('renders each workspace record from its own row', async () => {
+    const asked: string[] = []
+    rows([], {
+      context: async (id) => {
+        asked.push(id)
+        return { messages: [{ role: 'assistant', content: id }] }
+      },
+    })
+    const first: AgentRow = { kind: 'spawn', id: 'first', label: 'First' }
+    const second: AgentRow = { kind: 'spawn', id: 'second', label: 'Second' }
+    store.openRow(first)
+    store.openRow(second)
+
+    render(
+      <>
+        <AgentRecordConversation row={first} />
+        <AgentRecordConversation row={second} />
+      </>,
+      { container: document.getElementById('wsBody')! },
+    )
+    await act(async () => { await Promise.resolve() })
+
+    expect(asked).toEqual(['first', 'second'])
+    expect(paints.map((paint) => paint.opts?.key)).toEqual(['sp:first', 'sp:second'])
+  })
+
+  it('repaints a running workspace record on the heartbeat', async () => {
+    let poll: (() => void) | null = null
+    let snapshot = 1
+    const row: AgentRow = { kind: 'spawn', id: 'live', label: 'Live', status: 'run' }
+    rows([row], {
+      watch: (fn) => { poll = fn },
+      context: async () => ({
+        messages: snapshot === 1
+          ? [{ role: 'assistant', content: 'first' }]
+          : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
+      }),
+    })
+    window.RavenShell!.wsShows = () => false
+
+    render(<AgentRecordConversation row={row} />, {
+      container: document.getElementById('wsBody')!,
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(paints).toHaveLength(1)
+
+    snapshot = 2
+    await act(async () => {
+      poll?.()
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(paints).toHaveLength(2)
+    expect((paints[1]!.ctx as { messages: unknown[] }).messages).toHaveLength(2)
   })
 })

@@ -290,12 +290,21 @@ export function relToWorkspace(p: string): string | null {
 
 let fileSeq = 0
 
-export function showFile(p: string, downloadPath?: string): void {
-  const ws = shared()
-  ws.file = {
+export function makeFile(p: string, downloadPath?: string): WsFile {
+  return {
     path: String(p), ...(downloadPath ? { downloadPath } : {}), kind: fileKind(p), raw: false, text: null,
     err: null, size: null, loading: false, seq: ++fileSeq,
   }
+}
+
+export function showFile(p: string, downloadPath?: string): void {
+  const desk = window.RavenIslands?.workspace as { openFile?: (path: string, downloadPath?: string) => void } | undefined
+  if (desk?.openFile) {
+    desk.openFile(p, downloadPath)
+    return
+  }
+  const ws = shared()
+  ws.file = makeFile(p, downloadPath)
   verb('showWorkspace')('file')
 }
 
@@ -327,7 +336,7 @@ export async function loadFileText(f: WsFile): Promise<void> {
     f.err = (e as Error).message || String(e)
   } finally {
     f.loading = false
-    if (shared().file === f) redraw()
+    redraw()
   }
 }
 

@@ -12,6 +12,8 @@
    `absent` is what the island's empty state reads to tell the two apart. */
 let agentsWatch = null;
 DS.agents = {
+  roster: () => rpc.call('subagents.list', { probe: false })
+    .then(r => (r.rows || []).filter(row => !row.vendored)),
   list: (sessionId) => {
     if (!rpcHas('subagent')) return Promise.resolve([]);
     return rpc.call('subagent.list', { session_id: sessionId })
@@ -63,4 +65,59 @@ DS.agents = {
      from. */
   stagePaint: (box, r, opts) => RavenIslands.transcript.agentStage(box, r, opts),
 };
+
+if (new URLSearchParams(location.search).get('desk-demo') === '1') {
+  const now = Date.now();
+  const liveRoster = DS.agents.roster;
+  const demoInstances = [
+    { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'market-map-a19f', kind: 'playbook', status: 'running', runId: '市场调研', nodeId: '竞品功能调研', createdAtMs: now - 420000, updatedAtMs: now, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'model-permissions-7c2a', kind: 'playbook', status: 'completed', runId: 'UI 能力核验', nodeId: '整理权限模型差异', createdAtMs: now - 830000, updatedAtMs: now - 220000, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'instance-sync-coder12', kind: 'dag', status: 'running', runId: '子智能体列表改造', nodeId: '修复实例状态同步', createdAtMs: now - 190000, updatedAtMs: now, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'history-render-9d0e', kind: 'playbook', status: 'failed', runId: 'UI 回归', nodeId: '验证历史消息渲染', createdAtMs: now - 620000, updatedAtMs: now - 480000, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'legacy-build-31ab', kind: 'spawn', status: 'completed', nodeId: '旧版构建迁移', createdAtMs: now - 940000, updatedAtMs: now - 720000, resumable: false },
+    { sessionKey: 'desk-demo', agent: 'content-raven', handle: 'release-notes-18ca', kind: 'dag', status: 'completed', runId: '发布流程', nodeId: '整理发布说明', createdAtMs: now - 380000, updatedAtMs: now - 140000, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'review-raven', handle: 'interaction-coverage-612e', kind: 'playbook', status: 'idle', runId: '交互验收', nodeId: '检查交互状态覆盖', createdAtMs: now - 50000, updatedAtMs: now - 50000, resumable: true },
+  ];
+  const demoHistory = new Map(demoInstances.map((row) => [row.handle, [
+    { call_id: `${row.handle}-u`, role: 'user', content: `请执行「${row.nodeId}」，完成后给出可验证的结果。`, at_ms: row.createdAtMs },
+    { call_id: `${row.handle}-a`, role: 'assistant', content: row.status === 'failed'
+      ? '检查过程中发现历史记录的消息结构与渲染器不一致，需要修正后重试。'
+      : '已读取任务上下文并完成第一轮处理，正在整理关键结果。', at_ms: row.updatedAtMs, live: row.status === 'running' },
+  ]]));
+  let bindDemo = null;
+  const bindDemoAgents = () => {
+    if (bindDemo) return bindDemo;
+    bindDemo = liveRoster().then((rows) => {
+      const names = (rows || []).map((row) => row.name).filter(Boolean);
+      if (!names.length) return;
+      const groups = [...new Set(demoInstances.map((row) => row.agent))];
+      const mapped = new Map(groups.map((name, index) => [name, names[index % names.length]]));
+      demoInstances.forEach((row) => { row.agent = mapped.get(row.agent) || row.agent; });
+    }).catch(() => {});
+    return bindDemo;
+  };
+  DS.agents.instances = async () => {
+    await bindDemoAgents();
+    return demoInstances.slice();
+  };
+  DS.agents.instanceHistory = async (_agent, handle) => ({ turns: (demoHistory.get(handle) || []).slice() });
+  DS.agents.instanceForget = async (agent, handle) => {
+    const at = demoInstances.findIndex((row) => row.agent === agent && row.handle === handle);
+    if (at >= 0) demoInstances.splice(at, 1);
+  };
+  DS.agents.instanceSend = async (agent, handle, text) => {
+    const row = demoInstances.find((item) => item.agent === agent && item.handle === handle);
+    if (!row) throw new Error('Instance not found');
+    row.status = 'running'; row.updatedAtMs = Date.now();
+    const turns = demoHistory.get(handle) || [];
+    turns.push({ call_id: `${handle}-${Date.now()}-u`, role: 'user', content: text, at_ms: Date.now() });
+    demoHistory.set(handle, turns);
+    RavenIslands.subagents.directEvent({ agent, handle }, 'message.start', { content: text });
+    setTimeout(() => {
+      turns.push({ call_id: `${handle}-${Date.now()}-a`, role: 'assistant', content: `已收到并完成：${text}`, at_ms: Date.now() });
+      row.status = 'completed'; row.updatedAtMs = Date.now();
+      RavenIslands.subagents.directEvent({ agent, handle }, 'message.complete', {});
+    }, 1200);
+  };
+}
 setInterval(() => { if (agentsWatch) agentsWatch(); }, 2000);
