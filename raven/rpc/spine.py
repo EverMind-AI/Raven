@@ -26,6 +26,7 @@ from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
     Deliverable,
     EpisodeStart,
+    MediaOut,
     Notice,
     NoticeKind,
     Origin,
@@ -137,9 +138,10 @@ class TuiOutlet:
     (-> token.delta), and the discrete deliverables via ``deliver`` (Reasoning ->
     thinking.delta, ToolEvent -> tool.start / tool.complete, a non-streamed Text
     -> a token.delta). The turn's completion (``message.complete``) and failure
-    (``error``) are emitted by the sink after the render barrier. Notice and
-    MediaOut are eaten — the wire protocol has no event for them and the TUI shows
-    no per-turn progress or tool media today (a known gap, deferred)."""
+    (``error``) are emitted by the sink after the render barrier. A Notice the
+    runtime raised about the turn itself (``action_blocked``) rides ``notice``;
+    a MediaOut rides ``media``. Progress and tool-hint notices are eaten -- no
+    client shows per-turn progress today (a known gap, deferred)."""
 
     def __init__(self, channel: str, emitter: SubscriptionEmitter) -> None:
         self.name = channel
@@ -177,6 +179,11 @@ class TuiOutlet:
                             "truncated": out.truncated,
                             "metadata": out.metadata,
                             "diff": out.diff,
+                            # Beside the rendered diff for a client that draws its
+                            # own. Absent rather than null when a call changed no
+                            # file, so every payload the wire already carried keeps
+                            # its shape.
+                            **({"file_change": out.file_change} if out.file_change else {}),
                         },
                     },
                 )
@@ -200,7 +207,23 @@ class TuiOutlet:
             # Boundary marker; the TUI buckets this model call's reasoning +
             # text + tools into one collapsible episode.
             await self._emitter.emit(cid, {"type": "episode.start", "payload": {"index": out.index}})
-        # MediaOut: eaten (no wire event today).
+        elif isinstance(out, MediaOut):
+            # Paths, not bytes: both ends of this wire are on one machine (the
+            # terminal is a child process; a protocol client spawns the agent
+            # itself), and a turn can produce a file large enough that base64 on
+            # a line-delimited channel would stall every other event behind it.
+            #
+            # An empty tuple is not emitted. The contract says the list is never
+            # empty, and an event that delivers nothing would still make a client
+            # draw an attachment row.
+            if out.media:
+                await self._emitter.emit(
+                    cid,
+                    {
+                        "type": "media",
+                        "payload": {"items": [{"path": m.path, "mime": m.mime, "kind": m.kind} for m in out.media]},
+                    },
+                )
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:
         if done:
@@ -227,12 +250,24 @@ class TuiOutlet:
         detail: str = "",
         turn_id: str | None = None,
     ) -> None:
-        # The failing turn's own id, for the same reason message.complete carries
-        # one: a runtime turn failing on a busy lane must not be mistaken by the
-        # client for the end of the turn it is watching. Omitted rather than
-        # blank when there is no turn to name -- a connection-level failure, or a
-        # cancellation, which the client asked for on its own turn.
+        """A turn's failure, tagged with the turn it belongs to when known.
+
+        Two consumers need it and neither can do without. A client watching one
+        turn must not read a foreign turn's failure as the end of its own -- the
+        lane is shared, so a runtime turn can fail while a client's turn is
+        queued behind it, and an ungated failure idles an input the person is
+        still waiting on. And any consumer that answers a *request* off this
+        event, as the ACP surface does, answers the wrong request without an id
+        to compare (see ``_owns_lane``).
+
+        Omitted rather than blanked when there is no turn to name: a
+        connection-level failure belongs to none, and a cancellation belongs to
+        the turn the client asked about. A consumer reads its absence as "not
+        somebody else's" rather than as "mine".
+        """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
+        if turn_id:
+            payload["turn_id"] = turn_id
         if detail:
             payload["detail"] = detail
         if turn_id:
@@ -313,6 +348,9 @@ def _make_tui_sink(
                     "turn_failed",
                     "internal",
                     event.error or "",
+                    # The ending turn's own id, for the same reason
+                    # ``emit_complete`` takes it rather than reading the lane
+                    # slot: the slot may hold a client turn that has not started.
                     turn_id=event.turn_id,
                 )
             return

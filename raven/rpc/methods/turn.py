@@ -142,7 +142,12 @@ async def _emit_start_then_error(
     await emitter.emit(session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
     await emitter.emit(
         session_key,
-        {"type": "error", "payload": {"code": code, "message": message, "reason": "internal"}},
+        {
+            "type": "error",
+            # Carries the turn it belongs to: this failure answers a request, and
+            # a consumer with no id cannot tell it from a foreign turn's.
+            "payload": {"code": code, "message": message, "reason": "internal", "turn_id": turn_id},
+        },
     )
 
 
@@ -267,10 +272,30 @@ async def turn_unsubscribe(
     return {"unsubscribed": unsubscribed}
 
 
+def _cancel_payload(turn_id: str) -> dict[str, Any]:
+    """The cancelled-turn error's payload, carrying its turn when one is bound.
+
+    The lane's bound turn is the right source here and only here: the client
+    cancels its own session, so the turn ``turn.send`` bound to this lane is the
+    turn being cancelled. The key is omitted rather than sent empty, so that
+    "absent" has one representation on the wire -- a consumer that correlates a
+    request to a turn treats both the same way, as not its own.
+    """
+    payload: dict[str, Any] = {
+        "code": _TURN_FAILED_CODE,
+        "message": "turn_cancelled",
+        "reason": "cancelled_by_client",
+    }
+    if turn_id:
+        payload["turn_id"] = turn_id
+    return payload
+
+
 async def turn_cancel(
     params: dict[str, Any],
     *,
     emitter: SubscriptionEmitter | None = None,
+    turn_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -304,11 +329,7 @@ async def turn_cancel(
             parsed.session_key,
             {
                 "type": "error",
-                "payload": {
-                    "code": _TURN_FAILED_CODE,
-                    "message": "turn_cancelled",
-                    "reason": "cancelled_by_client",
-                },
+                "payload": _cancel_payload((turn_ids or {}).get(parsed.session_key, "")),
             },
         )
 
@@ -364,7 +385,7 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter)
+        return await turn_cancel(params, emitter=emitter, turn_ids=turn_ids)
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)
