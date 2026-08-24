@@ -28,7 +28,7 @@ import type { DagGetResult, DagNodeResult, DagRunSnapshot } from '../../../rpc/i
 import type { Msg } from '../../../types.js'
 import type { SlashCommand } from '../types.js'
 
-import { foldDagSnapshot } from '../../../domain/dagRun.js'
+import { dagRunsFromHistory, foldDagSnapshot } from '../../../domain/dagRun.js'
 import { dagRunHeadline, formatDagNodeDetail } from '../../../lib/dagStatus.js'
 import { turnController } from '../../turnController.js'
 import { getTurnState } from '../../turnStore.js'
@@ -36,26 +36,6 @@ import { getTurnState } from '../../turnStore.js'
 // The file itself is uncapped and can be megabytes. This is a transcript, not a
 // pager, so ask for a slice that stays readable and say when it was cut.
 const NODE_OUTPUT_CHARS = 4000
-
-// A resumed session never repopulates `turnState.dagRuns` -- it is live-turn
-// state and `resetSession` empties it -- but `hydrateDagRuns` already pinned
-// every run it could fetch onto its tool call in the transcript. Reading them
-// back from there is what lets `/dag` reach a graph after a resume.
-const dagRunsFromHistory = (history: Msg[]): DagRunState[] => {
-  const byRunId = new Map<string, DagRunState>()
-
-  for (const msg of history) {
-    for (const episode of msg.episodes ?? []) {
-      for (const tool of episode.tools) {
-        if (tool.dag) {
-          byRunId.set(tool.dag.runId, tool.dag)
-        }
-      }
-    }
-  }
-
-  return [...byRunId.values()]
-}
 
 /**
  * Every run this `/dag` call should offer to refresh.
@@ -79,7 +59,7 @@ const dagRunsToRefresh = (history: DagRunState[], live: DagRunState[]): DagRunSt
  * run, replacing only what changed.
  *
  * `applyDagSnapshot` only reaches `turnController`'s live episodes, which a
- * resumed session has none of (see `dagRunsFromHistory` above) -- the graph a
+ * resumed session has none of (see `dagRunsFromHistory`) -- the graph a
  * resumed transcript renders lives on `tool.dag` in history instead, and a
  * mutation there would not re-render: `MessageLine`/`EpisodeMessage` are
  * memoized on the `msg` prop's identity, so a fresh reference has to reach all

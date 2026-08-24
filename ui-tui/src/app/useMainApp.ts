@@ -18,6 +18,7 @@ import type { Msg, PanelSection, SlashCatalog } from '../types.js'
 
 import { STARTUP_RESUME_ID } from '../config/env.js'
 import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
+import { dagRunsFromHistory } from '../domain/dagRun.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
 import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
 import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
@@ -26,6 +27,7 @@ import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
+import { $dagOpenNodes } from '../lib/dagOpenNodes.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
 import { DEFAULT_VOICE_RECORD_KEY, isMac, type ParsedVoiceRecordKey } from '../lib/platform.js'
@@ -54,6 +56,7 @@ import { patchTurnState, useTurnSelector } from './turnStore.js'
 import { $uiState, getUiState, patchUiState } from './uiStore.js'
 import { useComposerState } from './useComposerState.js'
 import { useConfigSync } from './useConfigSync.js'
+import { useDagNodePoll } from './useDagNodePoll.js'
 import { useDirectStepPoll } from './useDirectStepPoll.js'
 import { useInputHandlers } from './useInputHandlers.js'
 import { useLongRunToolCharms } from './useLongRunToolCharms.js'
@@ -328,16 +331,19 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // too. -1 when no user message exists yet (no row will gate true).
   const firstUserIdx = useMemo(() => virtualRows.findIndex(r => r.msg.role === 'user'), [virtualRows])
 
+  const dagOpen = useStore($dagOpenNodes)
+
   const estimateRowHeight = useCallback(
     (index: number) =>
       estimatedMsgHeight(virtualRows[index]!.msg, cols, {
         compact: ui.compact,
+        dagOpen,
         details: detailsVisible,
         limitHistory: index < virtualRows.length - FULL_RENDER_TAIL_ITEMS,
         userPrompt: ui.theme.brand.prompt,
         withSeparator: virtualRows[index]!.msg.role === 'user' && firstUserIdx >= 0 && index > firstUserIdx
       }),
-    [cols, detailsVisible, firstUserIdx, ui.compact, ui.theme.brand.prompt, virtualRows]
+    [cols, dagOpen, detailsVisible, firstUserIdx, ui.compact, ui.theme.brand.prompt, virtualRows]
   )
 
   const syncHeightCache = useCallback(
@@ -568,6 +574,13 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // The instance on screen is re-read while it works; see `useDirectStepPoll`
   // for why that is a read rather than a stream.
   useDirectStepPoll(rpc, sidRef, directChat.active, isViewWorking(directChat))
+
+  const dagRuns = useTurnSelector(state => state.dagRuns)
+  const pinnedDagRuns = useMemo(() => dagRunsFromHistory(historyItems), [historyItems])
+
+  // A watched DAG node is re-read while it works; see `useDagNodePoll` for why
+  // that is a read rather than a stream.
+  useDagNodePoll(rpc, sidRef, dagRuns, pinnedDagRuns, dagOpen)
 
   const answerClarify = useCallback(
     (answer: string) => {

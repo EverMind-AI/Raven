@@ -198,6 +198,66 @@ describe('dagNodeSummary', () => {
   })
 })
 
+describe('formatDagNodeDetail trace', () => {
+  const base = {
+    node: 'n1',
+    output_chars: 3,
+    output_truncated: false,
+    run_id: 'r1'
+  }
+
+  it('prints the steps between the prompt and the output', () => {
+    const text = formatDagNodeDetail({
+      ...base,
+      messages: [
+        { role: 'assistant', text: 'looking', tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }] },
+        { role: 'tool', text: '12 lines', tool_call_id: 'c' }
+      ],
+      output: 'ok',
+      prompt: 'do it'
+    })
+
+    expect(text).toContain('do it')
+    expect(text).toContain('looking')
+    expect(text).toContain('a.ts')
+    expect(text).toContain('12 lines')
+    expect(text).toContain('ok')
+  })
+
+  it('prints what it printed before when there are no messages', () => {
+    const text = formatDagNodeDetail({ ...base, messages: [], output: 'ok', prompt: 'do it' })
+
+    expect(text).toContain('prompt:')
+    expect(text).toContain('output:')
+    expect(text).not.toContain('trace:')
+  })
+
+  it('does not echo the prompt or the output a second time from the trace', () => {
+    // The real wire shape: the server brackets the transcript with the same
+    // prompt and output text `detail.prompt`/`detail.output` already carry
+    // (`_with_messages` in raven/rpc/methods/dag.py), so a naive trace print
+    // would show each of them twice.
+    const text = formatDagNodeDetail({
+      ...base,
+      messages: [
+        { role: 'user', text: 'do it' },
+        { role: 'assistant', text: 'reading the file', tool_calls: [{ id: 'c', name: 'read_file', arguments: '{"path":"a.ts"}' }] },
+        { role: 'tool', text: '12 lines', tool_call_id: 'c' },
+        { role: 'assistant', text: 'done' }
+      ],
+      output: 'done',
+      prompt: 'do it'
+    })
+    const occurrences = (needle: string) => text.split(needle).length - 1
+
+    expect(occurrences('do it')).toBe(1)
+    expect(occurrences('done')).toBe(1)
+    expect(text).toContain('reading the file')
+    expect(text).toContain('a.ts')
+    expect(text).toContain('12 lines')
+  })
+})
+
 describe('dagNodeNames', () => {
   const joined = { dependsOn: ['a', 'b'], id: 'c', subagent: 'raven-code' }
 

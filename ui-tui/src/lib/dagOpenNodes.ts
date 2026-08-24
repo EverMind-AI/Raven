@@ -25,11 +25,12 @@ export const dagNodeKey = (runId: string, nodeId: string) => `${runId}/${nodeId}
  * The key a click on this node opens, or `null` when it opens nothing.
  *
  * The one rule, so a node's row and its box in the picture cannot disagree about
- * what is expandable. `null` when no prompt reached the client: there is nothing
- * to reveal, and an affordance that swallows a click is worse than none.
+ * what is expandable. A node that has started has a trace to show whether or not
+ * the call's arguments carried a template; one still pending with no template
+ * has neither, and an affordance that swallows a click is worse than none.
  */
 export const dagNodeToggleKey = (runId: string, node: DagRunNode): string | null =>
-  node.promptTemplate ? dagNodeKey(runId, node.id) : null
+  node.promptTemplate || node.status !== 'pending' ? dagNodeKey(runId, node.id) : null
 
 /** The same rule reached from a picture span. `null` for a wire, which belongs
  * to no node at all. */

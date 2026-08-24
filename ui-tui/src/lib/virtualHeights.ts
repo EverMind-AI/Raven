@@ -5,11 +5,17 @@
 
 import type { EpisodeTool, Msg } from '../types.js'
 
+import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
 import { foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
+import { dagNodeToggleKey } from './dagOpenNodes.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
 import { boundedHistoryRenderText } from './text.js'
+
+// One allocation shared by every caller that has no open node, rather than one
+// per estimatedMsgHeight call.
+const EMPTY_OPEN: ReadonlySet<string> = new Set()
 
 const hashText = (text: string) => {
   let h = 5381
@@ -35,7 +41,10 @@ export const messageHeightKey = (msg: Msg) => {
   // the cache key — otherwise a stale height survives a step-count change.
   // A DAG call's own graph can change shape (nodes finish, the run completes)
   // without `foldedPreviewRows` noticing, so it gets its own signature too.
-  const dagSig = (dag: EpisodeTool['dag']) => (dag ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}` : '')
+  const dagSig = (dag: EpisodeTool['dag']) =>
+    dag
+      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}`
+      : ''
   const epSig =
     msg.episodes
       ?.map(
@@ -65,18 +74,32 @@ const STEP = 2
 
 /**
  * Row count for one DAG call's panel: a header, the optional ascii picture,
- * one row per node, and an outputs line once the run is done -- exactly
- * `DagPanel`'s own structure. Reuses the same layout function the panel
- * renders from, so the estimate cannot drift from what it actually draws.
+ * one row per node, each node's live slot, and an outputs line once the run
+ * is done -- exactly `DagPanel`'s own structure. Reuses the same layout
+ * function the panel renders from, so the estimate cannot drift from what it
+ * actually draws.
  */
-const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number): number => {
+const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open: ReadonlySet<string>): number => {
   if (run.nodes.length === 0) {
     return 0
   }
 
   const picture = layoutDagGraph(run.nodes, { width })
 
-  return 1 + (picture?.height ?? 0) + run.nodes.length + (run.done && run.dir ? 1 : 0)
+  // What `DagNodeSlot` draws under each row: a box when expanded, one live
+  // line while it runs, nothing otherwise. `dagNodeToggleKey` is reused
+  // rather than restated because it is also the rule for what a click can
+  // open -- a pending node with no template is never expandable, whatever
+  // `open` holds. The box is a constant because it is a fixed height; reading
+  // its real height here would make this estimator depend on the fold it is
+  // estimating.
+  const slots = run.nodes.reduce((rows, node) => {
+    const toggle = dagNodeToggleKey(run.runId, node)
+
+    return rows + (toggle && open.has(toggle) ? DAG_TRACE_BOX_ROWS : node.status === 'running' ? 1 : 0)
+  }, 0)
+
+  return 1 + (picture?.height ?? 0) + run.nodes.length + slots + (run.done && run.dir ? 1 : 0)
 }
 
 export const estimatedMsgHeight = (
@@ -84,12 +107,14 @@ export const estimatedMsgHeight = (
   cols: number,
   {
     compact,
+    dagOpen = EMPTY_OPEN,
     details,
     limitHistory = false,
     userPrompt = '',
     withSeparator = false
   }: {
     compact: boolean
+    dagOpen?: ReadonlySet<string>
     details: boolean
     limitHistory?: boolean
     userPrompt?: string
@@ -145,12 +170,12 @@ export const estimatedMsgHeight = (
         const dagWidth = cols ? Math.max(20, cols - 4) : 116
 
         if (seg.tools.length === 1) {
-          h += 1 + dagPanelRows(dagTools[0]!.dag!, Math.max(24, dagWidth - (INDENT + STEP)))
+          h += 1 + dagPanelRows(dagTools[0]!.dag!, Math.max(24, dagWidth - (INDENT + STEP)), dagOpen)
         } else {
           h += 1 + seg.tools.length
 
           for (const tool of dagTools) {
-            h += dagPanelRows(tool.dag!, Math.max(24, dagWidth - (INDENT + STEP * 2)))
+            h += dagPanelRows(tool.dag!, Math.max(24, dagWidth - (INDENT + STEP * 2)), dagOpen)
           }
         }
 
