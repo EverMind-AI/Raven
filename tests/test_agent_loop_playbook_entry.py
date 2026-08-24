@@ -148,7 +148,7 @@ async def test_every_origin_records_the_playbook_address(tmp_path):
     assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1"} in stub.contexts
 
 
-def test_a_playbook_config_that_is_on_actually_registers_the_tools(tmp_path) -> None:
+def test_a_playbook_config_that_is_on_registers_creation_but_no_loader_without_content(tmp_path) -> None:
     """The one path production takes: construct the loop *with* a playbook config.
 
     Every other test in the suite assembles the playbook runtime directly, which
@@ -159,8 +159,10 @@ def test_a_playbook_config_that_is_on_actually_registers_the_tools(tmp_path) -> 
     but writing one warning line. Asserting on the registry is what makes that
     reachable -- a runtime that fails to build registers no tools.
 
-    ``create_playbook`` unconditionally, ``load_playbook`` because the builtin
-    layer ships a library, so it is never empty on a real install.
+    ``create_playbook`` registers whenever the feature is on -- an empty library
+    is exactly when capturing the first workflow matters. The loader does not:
+    registered only once something is offered, because a tool that can answer
+    nothing but "unknown" is a tool the model should not have been given.
     """
     from raven.config.schema import PlaybookConfig
 
@@ -174,6 +176,38 @@ def test_a_playbook_config_that_is_on_actually_registers_the_tools(tmp_path) -> 
 
     assert loop._playbooks is not None, "enabled: true must leave a runtime behind"
     assert loop.tools.has("create_playbook")
+    assert not loop.tools.has("load_playbook")
+
+
+def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
+    """The flip side of the empty check: content is what gates the loader.
+
+    A hand-written directory under the user layer is a playbook -- no generator
+    involved -- and one file is enough to open the entry point.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    target = tmp_path / "playbooks" / "weekly-feedback"
+    target.mkdir(parents=True)
+    (target / "playbook.md").write_text(
+        "---\nname: weekly-feedback\ndescription: weekly user-feedback analysis\n---\n\n"
+        "body\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: prompt\nconfirm: true\n"
+        "triggers:\n  keywords: [weekly feedback]\n"
+        "prompts: one research node\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/default",
+        max_iterations=2,
+        playbook_config=PlaybookConfig(enabled=True),
+    )
+
     assert loop.tools.has("load_playbook")
 
 
