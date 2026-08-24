@@ -1,6 +1,6 @@
-"""Crash-safe JSONL file primitives: locked append and atomic replace.
+"""Crash-safe file primitives: locked append, replace, and update.
 
-Both helpers serialize cross-process writers with an advisory lock on a
+The helpers serialize cross-process writers with an advisory lock on a
 sidecar lock kept in a hidden ``.lock/`` subdir of the target's own parent
 (auto-released on process death, so no stale-lock cleanup is needed). The
 lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
@@ -10,9 +10,11 @@ lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator, TypeVar
 
 from raven.utils.portable_lock import file_lock
+
+T = TypeVar("T")
 
 
 @contextmanager
@@ -41,12 +43,29 @@ def locked_append(path: Path, lines: list[str]) -> None:
             os.fsync(f.fileno())
 
 
+def _replace_unlocked(path: Path, data: str) -> None:
+    tmp_path = path.with_name(path.name + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
 def atomic_replace(path: Path, data: str) -> None:
     """Replace ``path``'s content with ``data`` via temp file + os.replace."""
     with _locked(path):
-        tmp_path = path.with_name(path.name + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        _replace_unlocked(path, data)
+
+
+def atomic_update(path: Path, update: Callable[[str | None], tuple[str | None, T]]) -> T:
+    """Lock ``path`` across a read-modify-write transaction."""
+    with _locked(path):
+        try:
+            current = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current = None
+        replacement, result = update(current)
+        if replacement is not None:
+            _replace_unlocked(path, replacement)
+        return result

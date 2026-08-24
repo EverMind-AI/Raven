@@ -9,6 +9,13 @@ import { describe, expect, it } from 'vitest'
 import { INITIAL_STATE, parseMultipleKeypresses } from './parse-keypress.js'
 import { PASTE_END, PASTE_START } from './termio/csi.js'
 
+const DECRPM_2004_SET = '\x1b[?2004;1$y'
+
+// A plain text run reaches the app as one keypress per code point, so text
+// assertions join the run back together instead of indexing a single key.
+const joinKeys = (events: ReturnType<typeof parseMultipleKeypresses>[0]) =>
+  events.map(e => (e.kind === 'key' ? e.sequence : '')).join('')
+
 describe('parseMultipleKeypresses bracketed paste recovery', () => {
   it('emits empty bracketed pastes when the terminal sends both markers', () => {
     const [keys, state] = parseMultipleKeypresses(INITIAL_STATE, PASTE_START + PASTE_END)
@@ -125,19 +132,23 @@ describe('fragmented SGR mouse recovery', () => {
       expect.objectContaining({ kind: 'mouse', button: 35, col: 124, row: 26 }),
       expect.objectContaining({ kind: 'mouse', button: 35, col: 119, row: 26 })
     ])
-    expect(events[4]).toMatchObject({ kind: 'key', sequence: 'typed' })
+    expect(joinKeys(events.slice(4))).toBe('typed')
   })
 
   it('keeps isolated semicolon text that only resembles a prefixless mouse report', () => {
-    const [[key]] = parseMultipleKeypresses(INITIAL_STATE, 'see 1;2;3M for details')
+    const text = 'see 1;2;3M for details'
+    const [events] = parseMultipleKeypresses(INITIAL_STATE, text)
 
-    expect(key).toMatchObject({ kind: 'key', sequence: 'see 1;2;3M for details' })
+    expect(events.every(e => e.kind === 'key')).toBe(true)
+    expect(joinKeys(events)).toBe(text)
   })
 
   it('does not match prefixless fragments inside longer digit runs', () => {
-    const [[key]] = parseMultipleKeypresses(INITIAL_STATE, '1234;56;78M9;10;11M')
+    const text = '1234;56;78M9;10;11M'
+    const [events] = parseMultipleKeypresses(INITIAL_STATE, text)
 
-    expect(key).toMatchObject({ kind: 'key', sequence: '1234;56;78M9;10;11M' })
+    expect(events.every(e => e.kind === 'key')).toBe(true)
+    expect(joinKeys(events)).toBe(text)
   })
 })
 
@@ -229,5 +240,175 @@ describe('modifier+enter parsing (tui-composer-multiline regression lock)', () =
     const [[key]] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[13;1u')
 
     expect(key).toMatchObject({ name: 'return', ctrl: false, meta: false, shift: false })
+  })
+})
+
+// Typing and pasting are indistinguishable in the raw byte stream, so a run
+// of plain bytes is split into one keypress per code point instead of being
+// merged into a single nameless keypress. Bracketed paste (DEC 2004) is the
+// only reliable paste signal; when the terminal is confirmed to support it,
+// every unmarked run is typing. When it is not, short printable runs are
+// still typing but anything carrying control bytes or long enough to be a
+// paste stays whole for the paste path.
+describe('plain text run splitting', () => {
+  const seqs = (keys: ReturnType<typeof parseMultipleKeypresses>[0]) =>
+    keys.map(k => (k.kind === 'key' ? k.sequence : ''))
+
+  describe('bracketed paste unconfirmed (default)', () => {
+    it('splits a printable run into one keypress per character', () => {
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, 'abc')
+
+      expect(seqs(keys)).toEqual(['a', 'b', 'c'])
+      expect(keys.map(k => (k.kind === 'key' ? k.name : ''))).toEqual(['a', 'b', 'c'])
+    })
+
+    it('splits multi-byte characters without breaking them apart', () => {
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, '你好')
+
+      expect(seqs(keys)).toEqual(['你', '好'])
+    })
+
+    it('keeps a run carrying a control byte whole for the paste path', () => {
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, 'there\r')
+
+      expect(seqs(keys)).toEqual(['there\r'])
+    })
+
+    it('keeps an auto-repeated backspace burst whole', () => {
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, '\x7f\x7f\x7f')
+
+      expect(seqs(keys)).toEqual(['\x7f\x7f\x7f'])
+    })
+
+    it('keeps a run longer than a typing burst whole', () => {
+      const long = 'x'.repeat(33)
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, long)
+
+      expect(seqs(keys)).toEqual([long])
+    })
+
+    it('splits a run at the typing-burst limit', () => {
+      const [keys] = parseMultipleKeypresses(INITIAL_STATE, 'x'.repeat(32))
+
+      expect(keys).toHaveLength(32)
+    })
+  })
+
+  describe('bracketed paste confirmed', () => {
+    // The parser learns the capability from the terminal's own DECRPM answer,
+    // so every case here starts from the state that reply produced.
+    const confirmed = parseMultipleKeypresses(INITIAL_STATE, DECRPM_2004_SET)[1]
+
+    it('records the capability from the DECRQM answer', () => {
+      expect(confirmed.bracketedPaste).toBe('confirmed')
+    })
+
+    it('rejects an answer saying the mode is off - App enabled it before asking', () => {
+      const [, state] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[?2004;2$y')
+
+      expect(state.bracketedPaste).toBe('unknown')
+    })
+
+    it('accepts an answer saying the mode is permanently on', () => {
+      const [, state] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[?2004;3$y')
+
+      expect(state.bracketedPaste).toBe('confirmed')
+    })
+
+    it('rejects an answer saying the mode is unknown to the terminal', () => {
+      const [, state] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[?2004;0$y')
+
+      expect(state.bracketedPaste).toBe('unknown')
+    })
+
+    it('rejects an answer saying the mode can never be turned on', () => {
+      const [, state] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[?2004;4$y')
+
+      expect(state.bracketedPaste).toBe('unknown')
+    })
+
+    it('ignores a DECRQM answer for an unrelated mode', () => {
+      const [, state] = parseMultipleKeypresses(INITIAL_STATE, '\x1b[?2026;1$y')
+
+      expect(state.bracketedPaste).toBe('unknown')
+    })
+
+    it('keeps the capability across later reads', () => {
+      const [, next] = parseMultipleKeypresses(confirmed, 'ab')
+
+      expect(next.bracketedPaste).toBe('confirmed')
+    })
+
+    it('splits trailing control bytes into their own keypresses', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, 'there\r')
+
+      expect(seqs(keys)).toEqual(['t', 'h', 'e', 'r', 'e', '\r'])
+      expect(keys[5]).toMatchObject({ name: 'return' })
+    })
+
+    it('splits an auto-repeated backspace burst into individual backspaces', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x7f\x7f\x7f')
+
+      expect(keys.map(k => (k.kind === 'key' ? k.name : ''))).toEqual([
+        'backspace',
+        'backspace',
+        'backspace'
+      ])
+    })
+
+    it('splits a leading control byte from the text that followed it', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x01ab')
+
+      expect(keys[0]).toMatchObject({ name: 'a', ctrl: true })
+      expect(seqs(keys).slice(1)).toEqual(['a', 'b'])
+    })
+
+    it('keeps raw alt+enter ESC+CR as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\r')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ kind: 'key', name: '', sequence: '\x1b\r' })
+    })
+
+    it('keeps raw alt+enter ESC+LF as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\n')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ kind: 'key', name: '', sequence: '\x1b\n' })
+    })
+
+    it('keeps raw meta+backspace ESC+DEL as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\x7f')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ name: 'backspace', sequence: '\x1b\x7f', meta: true })
+    })
+
+    it('keeps raw meta+backspace ESC+BS as one keypress', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, '\x1b\b')
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ name: 'backspace', sequence: '\x1b\b', meta: true })
+    })
+
+    it('splits a run longer than a typing burst', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, 'x'.repeat(33))
+
+      expect(keys).toHaveLength(33)
+    })
+
+    it('leaves bracketed paste content whole', () => {
+      const [keys] = parseMultipleKeypresses(confirmed, PASTE_START + 'ab' + PASTE_END)
+
+      expect(keys).toHaveLength(1)
+      expect(keys[0]).toMatchObject({ isPasted: true, raw: 'ab' })
+    })
+  })
+
+  it('leaves a single character alone in both modes', () => {
+    expect(parseMultipleKeypresses(INITIAL_STATE, 'a')[0]).toHaveLength(1)
+    expect(
+      parseMultipleKeypresses(parseMultipleKeypresses(INITIAL_STATE, DECRPM_2004_SET)[1], 'a')[0]
+    ).toHaveLength(1)
   })
 })

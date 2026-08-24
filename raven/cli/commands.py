@@ -20,6 +20,7 @@ group. The actual implementations live in per-feature modules:
     - ``sessions`` → ``raven/cli/session_commands.py``
     - ``import``   → ``raven/cli/import_commands.py``
     - ``skill``    → ``raven/cli/skill_commands.py``
+    - ``trajectory`` → ``raven/cli/trajectory_commands.py``
 
 Shared helpers used across multiple command modules live in
 ``raven/cli/_helpers.py``.
@@ -124,6 +125,7 @@ from raven.cli.provider_commands import provider_app
 from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
 from raven.cli.skill_commands import skill_app
+from raven.cli.trajectory_commands import trajectory_app
 
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
@@ -132,6 +134,7 @@ app.add_typer(provider_app, name="provider")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
 app.add_typer(skill_app, name="skill")
+app.add_typer(trajectory_app, name="trajectory")
 
 
 from raven.cli.tui_commands import tui_app
