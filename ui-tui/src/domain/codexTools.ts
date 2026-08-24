@@ -6,10 +6,10 @@
 //
 // The runtime normalises most transports into Raven's vocabulary at the read
 // boundary, and `OVERRIDES` in `episodeSummary.ts` is keyed by that vocabulary.
-// Codex is the exception on purpose: its rows keep codex's own names so a direct
-// chat reads as a codex conversation. That is why they need a table here -- with
-// no entry, every codex call falls to the generic rule and a run of six reads
-// stops collapsing to one line.
+// Codex is one of two exceptions on purpose (claude_code is the other): its rows
+// keep codex's own names so a direct chat reads as a codex conversation. That is
+// why they need a table here -- with no entry, every codex call falls to the
+// generic rule and a run of six reads stops collapsing to one line.
 //
 // The verb is the codex name verbatim, never a Raven synonym. Only `style` and
 // `unit` are ours. `unit` is what `phraseFor` in episodeSummary.ts reads to

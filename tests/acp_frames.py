@@ -147,3 +147,30 @@ CLAUDE_EXEC_UPDATE: dict[str, Any] = {
     "rawInput": {"command": "pwd"},
     "rawOutput": "/root\n",
 }
+
+# A Bash call carrying the model's own description of it. `_meta.claudeCode`
+# and `rawInput` hold the same string; the adapter keeps it out of ACP's
+# `title`, which clients use as the shell-command preview.
+CLAUDE_BASH_WITH_DESCRIPTION: dict[str, Any] = {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "toolu_019KgriiAGn9yJvTzSP6doNu",
+    "kind": "execute",
+    "status": "pending",
+    "title": "cd /repo/ui-tui && ls i18n",
+    "rawInput": {"command": "cd /repo/ui-tui && ls i18n", "description": "Locate messages.json and i18n dirs"},
+    "_meta": {"claudeCode": {"toolName": "Bash", "title": "Locate messages.json and i18n dirs"}},
+}
+
+# A completing frame that names the tool but repeats no `kind`. 146 of the 350
+# captured tool frames look like this, which is why `names_call` may not gate on
+# `kind` alone for this adapter.
+CLAUDE_UPDATE_WITHOUT_KIND: dict[str, Any] = {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "toolu_019KgriiAGn9yJvTzSP6doNu",
+    "_meta": {
+        "claudeCode": {
+            "toolName": "Bash",
+            "toolResponse": {"stdout": "messages.json\n", "stderr": "", "interrupted": False},
+        }
+    },
+}

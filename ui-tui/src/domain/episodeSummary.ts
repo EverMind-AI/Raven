@@ -5,12 +5,15 @@
 import type { Episode, EpisodeTool } from '../types.js'
 
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
+import { claudeRule } from './claudeCodeTools.js'
 import { codexRule } from './codexTools.js'
 
 // Per-tool phrasing. `style` decides how a run of the same tool collapses:
 //   count  — homogeneous info tools -> "read 6 files"; single -> the target
 //   target — heterogeneous/mutating tools -> show the target; many -> "ran 3 commands"
-// Verbs are deliberately Raven's own plain lowercase (not Claude Code's labels).
+// A rule's verb is whichever vocabulary its own table uses: Raven's own plain
+// lowercase in OVERRIDES below, or an adapter's label verbatim in CODEX_VERBS /
+// CLAUDE_VERBS.
 export interface VerbRule {
   verb: string
   unit: string
@@ -44,15 +47,18 @@ const OVERRIDES: Record<string, VerbRule> = {
 // "image_generate" -> "image generate". Never misleading, always maintenance-free.
 const humanize = (name: string) => name.split('_').filter(Boolean).join(' ')
 
-// The rule for any tool: its override if we have one, else codex's own table,
-// else a generic rule built from the humanized name. Codex is consulted second
-// rather than merged into OVERRIDES because the two are keyed by different
-// vocabularies -- OVERRIDES by Raven's names, CODEX_VERBS by codex's.
+// The rule for any tool: its override if we have one, else an adapter's own
+// table, else a generic rule built from the humanized name. The adapter tables
+// are consulted after OVERRIDES rather than merged into it because the three are
+// keyed by different vocabularies -- OVERRIDES by Raven's names, CODEX_VERBS by
+// codex's, CLAUDE_VERBS by Claude Code's.
 const ruleFor = (name: string): VerbRule =>
-  OVERRIDES[name] ?? codexRule(name) ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
+  OVERRIDES[name] ??
+  codexRule(name) ??
+  claudeRule(name) ?? { verb: humanize(name) || name, unit: 'calls', style: 'target' }
 
 // Search-like tools read better with the needle quoted: searched "DeviceFlow".
-const QUOTED = new Set(['grep', 'find', 'web_search'])
+const QUOTED = new Set(['grep', 'find', 'web_search', 'Grep', 'Glob', 'WebSearch'])
 
 // A shell command is an argument, never a label: a 100-char pipeline as the row
 // title is what made the transcript unreadable. Name the programs it runs
@@ -60,9 +66,8 @@ const QUOTED = new Set(['grep', 'find', 'web_search'])
 // leave the command itself for the expanded detail. Env assignments and `sudo`
 // are stepped over so the reported program is the one doing the work.
 //
-// This is the stopgap for `exec` having no `description` parameter: once the
-// backend can pass the model's own intent through `display_call`, that wins and
-// this stays as the fallback.
+// The model's own intent (`tool.intent`, read in `target()` below) wins when
+// the transport sends one; this is the fallback for a call that carries none.
 const SHELL_NOISE = new Set(['sudo', 'command', 'exec', 'time', 'nohup', 'env'])
 
 // Split on shell operators that are NOT inside quotes. Naively splitting on `;`
@@ -201,7 +206,12 @@ const PATHY = new Set([
   'fileChange',
   'imageView',
   'commandExecution.read',
-  'commandExecution.listFiles'
+  'commandExecution.listFiles',
+  'Read',
+  'Write',
+  'Edit',
+  'NotebookEdit',
+  'LS'
 ])
 
 const titleName = (name: string) =>
@@ -217,13 +227,26 @@ const clip = (s: string, n = 40) => {
   return one.length > n ? `${one.slice(0, n - 1)}…` : one
 }
 
+// Tools whose subject is a shell command, so the row names the programs it ran
+// rather than printing the pipeline.
+const SHELL = new Set(['exec', 'commandExecution', 'Bash', 'BashOutput'])
+
 // The visible target for a single call: a file basename for path-like tools, a
 // quoted needle for search tools, else the trimmed argument itself.
 // A URL's identity is its host and path; the scheme is noise on a row that
 // already says "fetched".
 const shortUrl = (raw: string) => raw.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
+// Tools whose subject is a URL, so the row strips the scheme instead of keeping it.
+const FETCHED_URL = new Set(['web_fetch', 'WebFetch'])
+
 const target = (tool: EpisodeTool, budget?: number): string => {
+  // The model's own description of the call, when the transport sent one. It
+  // names the intent, which every derived label below can only approximate.
+  if (tool.intent) {
+    return clip(tool.intent, budget)
+  }
+
   const raw = tool.summary.trim()
 
   if (!raw) {
@@ -240,11 +263,11 @@ const target = (tool: EpisodeTool, budget?: number): string => {
     return `"${clip(raw, Math.min(budget ?? 40, 72))}"`
   }
 
-  if (tool.name === 'exec' || tool.name === 'commandExecution') {
+  if (SHELL.has(tool.name)) {
     return execLabel(raw)
   }
 
-  if (tool.name === 'web_fetch') {
+  if (FETCHED_URL.has(tool.name)) {
     return clip(shortUrl(raw), budget ?? 40)
   }
 
@@ -289,7 +312,7 @@ export const toolParts = (tool: EpisodeTool): { verb: string; detail: string } =
   const verb = ruleFor(tool.name).verb
   const raw = tool.summary.trim()
   const stat = tool.added != null || tool.removed != null ? `+${tool.added ?? 0} -${tool.removed ?? 0}` : ''
-  const arg = PATHY.has(tool.name) ? clipPath(raw, 60) : target(tool, 60)
+  const arg = PATHY.has(tool.name) && !tool.intent ? clipPath(raw, 60) : target(tool, 60)
   const detail = [arg, stat].filter(Boolean).join(' ')
 
   return { verb: verb || titleName(tool.name), detail }

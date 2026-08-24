@@ -1005,15 +1005,19 @@ its output (`_backfill_subject`, used by codex's `apply_patch`), and a
 Raven's own tool names (`exec`, `read_file`, ...), and the mapping into them applied when a
 delegated run's rows go on the wire. A record carries the transport's name because
 presentation is recoverable from provenance and provenance is not recoverable from
-presentation, and the record is what a memory extractor reads; the wire carries raven's
-because every renderer's verb table is keyed by it, and the main session log stores the
-host's own calls under those same names. The same pass re-keys a call's subject onto that
-tool's own argument name, trying the tool's key first, then the keys adapters are known to
-use, then any string the payload carries. Applied at the three reads that serve a delegated
-transcript - an instance's history, a dag node's messages, a sub-agent's context - and
-deliberately not inside `_map_to_wire`, which also serves the session log whose calls are
-already raven-named. A name with no entry is passed through, which is how an openai step
-type and a claude tool the table never listed both reach a client under their own name.
+presentation, and the record is what a memory extractor reads; the wire carries raven's for
+the ACP spec's `kind` entries, but deliberately not for claude-agent-acp's twelve -- those
+keep Claude Code's own vocabulary, and the main session log stores the host's own calls
+under raven's names regardless, since those were never anything else. The same pass re-keys
+a call's subject onto that tool's own argument name, trying the tool's key first, then the
+keys adapters are known to use, then any string the payload carries. Applied at the three
+reads that serve a delegated transcript - an instance's history, a dag node's messages, a
+sub-agent's context - and deliberately not inside `_map_to_wire`, which also serves the
+session log whose calls are already raven-named. A name with no entry is passed through,
+which is how an openai step type reaches a client under its own name, and now every
+claude-agent-acp name does too; a renderer answers with one of three verb tables
+(`OVERRIDES`, `CODEX_VERBS`, `CLAUDE_VERBS`, unified by `ruleFor`) rather than one
+vocabulary keyed the same way throughout.
 _Avoid_: applying it at write time - that is what this replaced.
 
 **Closing Message** (`raven/agent/subagent/backends/acp_agent.py`, `activity.py`):

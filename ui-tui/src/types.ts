@@ -126,6 +126,12 @@ export interface EpisodeTool {
   id: string
   name: string
   summary: string
+  // The model's own one-line description of what a call is for, when the
+  // transport sends one -- claude-agent-acp puts Claude's Bash `description`
+  // in the call's arguments. Preferred over a derived label because it names
+  // the intent rather than the programs; absent for every transport that sends
+  // none, so a row without one is unaffected.
+  intent?: string
   resultPreview?: string
   // A run_subagent_dag call's graph, pinned here when the run reported one. The
   // live store is cleared at turn end and the tool result is clamped to 200

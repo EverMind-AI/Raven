@@ -17,11 +17,41 @@ def _call(name: str, arguments: dict) -> dict:
     }
 
 
-def test_a_claude_tool_name_becomes_ravens() -> None:
+def test_a_claude_tool_name_is_not_renamed() -> None:
+    """A claude_code row keeps Claude Code's own name, so a direct chat reads as
+    a Claude Code conversation rather than as a generic one. Same choice as
+    codex, and for the same reason.
+    """
     out = normalize_row(_call("Bash", {"command": "ls", "description": "list"}))
     fn = out["tool_calls"][0]["function"]
-    assert fn["name"] == "exec"
+    assert fn["name"] == "Bash"
     assert json.loads(fn["arguments"]) == {"command": "ls", "description": "list"}
+
+
+def test_every_claude_name_promotes_the_subject_its_raven_name_did() -> None:
+    """Re-keying ``ARGUMENT_KEY`` under the claude names must change nothing but
+    the name: each entry carries the value the old name resolved to.
+
+    The subject has to be the *first* key, not merely present -- a reader that
+    does not know the tool takes the first string value it finds.
+    """
+    cases = [
+        ("Bash", {"command": "ls"}, "command"),
+        ("BashOutput", {"bash_id": "b1"}, "command"),
+        ("Read", {"file_path": "a.py"}, "path"),
+        ("Write", {"file_path": "a.py", "content": "x"}, "path"),
+        ("Edit", {"file_path": "a.py", "old_string": "x", "new_string": "y"}, "path"),
+        ("NotebookEdit", {"file_path": "n.ipynb"}, "path"),
+        ("LS", {"path": "src/"}, "path"),
+        ("Glob", {"path": "src/", "pattern": "*.ts"}, "pattern"),
+        ("Grep", {"path": "src/", "pattern": "TODO"}, "pattern"),
+        ("WebFetch", {"url": "https://example.com"}, "url"),
+        ("WebSearch", {"query": "acp spec"}, "query"),
+    ]
+    for name, arguments, key in cases:
+        fn = normalize_row(_call(name, arguments))["tool_calls"][0]["function"]
+        assert fn["name"] == name, name
+        assert next(iter(json.loads(fn["arguments"]))) == key, name
 
 
 def test_an_acp_kind_becomes_ravens_and_the_subject_moves_onto_its_key() -> None:
@@ -61,7 +91,7 @@ def test_the_tools_own_key_beats_the_generic_order() -> None:
     """
     out = normalize_row(_call("Grep", {"pattern": "TODO", "path": "src/", "output_mode": "content"}))
     fn = out["tool_calls"][0]["function"]
-    assert fn["name"] == "grep"
+    assert fn["name"] == "Grep"
     assert json.loads(fn["arguments"]) == {"pattern": "TODO", "path": "src/", "output_mode": "content"}
 
 
@@ -140,7 +170,7 @@ def test_a_subject_under_an_unenumerated_key_still_reaches_the_tools_key() -> No
     a row that used to arrive keyed must still arrive keyed."""
     out = normalize_row(_call("Bash", {"weird": "foo"}))
     fn = out["tool_calls"][0]["function"]
-    assert fn["name"] == "exec"
+    assert fn["name"] == "Bash"
     assert json.loads(fn["arguments"]) == {"command": "foo"}
 
 

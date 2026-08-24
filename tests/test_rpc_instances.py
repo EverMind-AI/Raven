@@ -509,7 +509,7 @@ async def test_instance_history_names_a_stored_call_in_ravens_vocabulary(tmp_pat
     turns = await _history(session_dir, "Coder", "h1")
 
     call = next(t for t in turns if t.get("tool_calls"))
-    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["name"] == "Bash"
     assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
 
 

@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { Episode, EpisodeTool } from '../types.js'
 
+import { CLAUDE_VERBS, claudeRule } from '../domain/claudeCodeTools.js'
+import { CODEX_VERBS } from '../domain/codexTools.js'
 import {
   episodeFailed,
   execLabel,
@@ -294,7 +296,7 @@ describe('episodeFailed', () => {
   })
 })
 
-describe('codex tool rows', () => {
+describe('adapter tool rows', () => {
   it('keeps codex names as the verb so the conversation reads as codex', () => {
     expect(toolParts(tool('apply_patch', 'calc.py')).verb).toBe('apply_patch')
     expect(toolParts(tool('webSearch', 'gpt-5 codex')).verb).toBe('webSearch')
@@ -324,5 +326,104 @@ describe('codex tool rows', () => {
 
     expect(detail).toContain('python3')
     expect(detail).not.toContain('import sys')
+  })
+
+  it('folds a run of claude reads under the table verb and a files unit, not the generic calls fallback', () => {
+    const reads = [tool('Read', 'a.ts'), tool('Read', 'b.ts'), tool('Read', 'c.ts')]
+
+    expect(toolsPhrase(reads)).toBe('Read 3 files')
+  })
+
+  it('names an mcp tool by the whole name claude code gave it', () => {
+    const rule = claudeRule('mcp__playwright__browser_click')
+
+    expect(rule?.verb).toBe('mcp__playwright__browser_click')
+  })
+
+  it('leaves a claude tool outside the table to the generic humanised rule', () => {
+    expect(claudeRule('SendMessage')).toBeUndefined()
+  })
+
+  it('names the programs a claude Bash command ran, not the whole pipeline', () => {
+    const detail = toolParts(tool('Bash', 'cat x | python3 -c "import sys"')).detail
+
+    expect(detail).toContain('python3')
+    expect(detail).not.toContain('import sys')
+  })
+
+  it('keeps the filename of a long claude Read path, the way raven paths do', () => {
+    const long = `/repo/${'nested/'.repeat(12)}memory/agent_memory.go`
+    const { detail } = toolParts(tool('Read', long))
+
+    expect(detail.startsWith('…')).toBe(true)
+    expect(detail.endsWith('agent_memory.go')).toBe(true)
+  })
+
+  it('quotes the needle a claude Grep looked for', () => {
+    expect(toolParts(tool('Grep', 'DeviceFlow')).detail).toBe('"DeviceFlow"')
+  })
+
+  it('keeps the directory tail of a long claude LS path, the way raven paths do', () => {
+    const long = `/repo/${'nested/'.repeat(12)}memory`
+    const { detail } = toolParts(tool('LS', long))
+
+    expect(detail.startsWith('…')).toBe(true)
+    expect(detail.endsWith('memory')).toBe(true)
+  })
+
+  it('strips the scheme from a claude WebFetch row, the way web_fetch does', () => {
+    expect(toolParts(tool('WebFetch', 'https://example.com/a/b')).detail).toBe('example.com/a/b')
+  })
+})
+
+describe('adapter verb tables', () => {
+  it('names every claude tool by its own name, never a raven synonym', () => {
+    // The table exists only so a row names the tool Claude Code actually ran;
+    // a synonym here would make its conversation indistinguishable from a
+    // raven or codex one.
+    for (const [name, rule] of Object.entries(CLAUDE_VERBS)) {
+      expect(rule.verb).toBe(name)
+    }
+  })
+
+  it('names every codex tool by its own name, never a raven synonym', () => {
+    // Same invariant as the claude table, for the same reason: a substituted
+    // verb would erase the difference between a codex row and a raven one.
+    for (const [name, rule] of Object.entries(CODEX_VERBS)) {
+      expect(rule.verb).toBe(name)
+    }
+  })
+})
+
+describe('call intent', () => {
+  it('shows the model own description of a Bash call instead of the derived label', () => {
+    const call: EpisodeTool = {
+      id: 'c1',
+      intent: 'Locate messages.json and i18n dirs',
+      name: 'Bash',
+      ok: true,
+      summary: 'cd /repo/ui-tui && ls i18n'
+    }
+
+    expect(toolParts(call).detail).toBe('Locate messages.json and i18n dirs')
+  })
+
+  it('keeps the whole command in the expanded argument when the row shows a description', () => {
+    const call: EpisodeTool = {
+      id: 'c1',
+      intent: 'Locate messages.json and i18n dirs',
+      name: 'Bash',
+      ok: true,
+      summary: 'cd /repo/ui-tui && ls i18n'
+    }
+
+    expect(toolArgument(call)).toBe('cd /repo/ui-tui && ls i18n')
+  })
+
+  it('folds and expands one call to the same subject', () => {
+    const call: EpisodeTool = { id: 'c1', intent: 'List the repo', name: 'Bash', ok: true, summary: 'cd /repo && ls' }
+
+    expect(toolsPhrase([call])).toBe('Bash List the repo')
+    expect(toolParts(call).detail).toBe('List the repo')
   })
 })

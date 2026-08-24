@@ -367,9 +367,9 @@ async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace
 
 
 async def test_the_context_read_names_a_stored_call_in_ravens_vocabulary(workspace: Path) -> None:
-    """The record keeps the transport's name so an extractor can see which
-    agent ran what; the wire keeps raven's because every renderer's verb table
-    is keyed by it."""
+    """The record keeps the transport's name and so does the wire: a claude_code
+    row is rendered under Claude Code's own names, so a direct chat reads as a
+    Claude Code conversation. Raven's own tools keep raven's vocabulary."""
 
     class _TransportNamedBackend:
         async def run(self, task: str, **_kw: Any) -> str:
@@ -399,7 +399,7 @@ async def test_the_context_read_names_a_stored_call_in_ravens_vocabulary(workspa
     ctx = await subagent_context({"id": row["id"], "session_id": SESSION})
 
     call = next(m for m in ctx["messages"] if m.get("tool_calls"))
-    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["name"] == "Bash"
     assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
     del mgr
 

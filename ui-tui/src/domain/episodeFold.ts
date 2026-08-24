@@ -88,6 +88,30 @@ export const callSubject = (argumentsJson: string): string => {
   return ''
 }
 
+/** The model's own description of a call, when its arguments carry one.
+ *
+ * claude-agent-acp sends this both in `_meta.claudeCode.title` and in the call's
+ * arguments; the arguments are the copy that already reaches a client, so that
+ * is the one read here.
+ */
+export const callIntent = (argumentsJson: string): string => {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(argumentsJson)
+  } catch {
+    return ''
+  }
+
+  if (parsed === null || typeof parsed !== 'object') {
+    return ''
+  }
+
+  const value = (parsed as Record<string, unknown>).description
+
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 // The runtime marks a failed call by prefixing its result -- see
 // raven/agent/subagent/backends/turn_rows.py. Exported so `directEpisodes.ts`
 // reads the same literal instead of keeping a second copy that could drift.
@@ -252,12 +276,14 @@ export const foldRowsIntoEpisodes = (rows: readonly FoldRow[]): Msg[] => {
     }
 
     const tools = calls.map((call): EpisodeTool => {
+      const intent = callIntent(call.arguments)
       const tool: EpisodeTool = {
         done: true,
         id: call.id,
         name: call.name,
         ok: true,
         summary: callSubject(call.arguments),
+        ...(intent ? { intent } : {}),
         ...(row.atMs ? { startedAt: row.atMs } : {})
       }
 

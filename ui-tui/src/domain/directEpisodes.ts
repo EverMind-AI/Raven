@@ -12,11 +12,11 @@
 // chat folds, expands and reads exactly like a Raven turn, with no second
 // renderer to keep in step.
 //
-// The runtime hands over calls already named in Raven's own vocabulary (`exec`,
-// `read_file`, ...) -- see `raven/agent/subagent/tool_vocabulary.py`, which maps
-// them on the way out; the record underneath keeps the transport's own name --
-// so the verb table in `episodeSummary.ts` applies unchanged. A name it has no
-// entry for arrives as sent, and `ruleFor` humanises it.
+// The runtime hands over each call under its own transport's name: raven's own
+// tools keep raven's vocabulary, and codex and claude_code keep theirs, so a
+// direct chat reads as a conversation with that agent. `ruleFor` in
+// `episodeSummary.ts` consults one verb table per vocabulary, and humanises a
+// name that no table claims.
 
 import type { DirectTurn } from '../rpc/generated.js'
 import type { Msg } from '../types.js'

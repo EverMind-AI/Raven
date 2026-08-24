@@ -291,6 +291,14 @@ def test_the_claude_dialect_reports_claudes_own_tool_name() -> None:
     assert ClaudeCodeDialect().tool_name(update) == "Glob"
 
 
+def test_the_claude_plan_row_carries_claude_codes_own_name() -> None:
+    """`TodoWrite` never reaches a tool_call: the adapter's `shouldEmitToolCall`
+    excludes it and routes its state to a `plan` frame. The row that frame
+    becomes is named for the tool that produced it.
+    """
+    assert ClaudeCodeDialect().plan_tool_name == "TodoWrite"
+
+
 def test_arguments_keep_the_adapters_own_spelling() -> None:
     """No key is renamed at write time any more."""
     call = AcpDialect().call({"toolCallId": "t1", "kind": "read", "rawInput": {"filePath": "src/a.py"}})
@@ -299,6 +307,23 @@ def test_arguments_keep_the_adapters_own_spelling() -> None:
 
 
 from tests import acp_frames
+
+
+def test_a_claude_frame_without_kind_is_still_named_by_its_meta() -> None:
+    """The opening frame carries `kind`; 146 of 350 captured tool frames do not,
+    and `_meta.claudeCode.toolName` is the only name on those.
+    """
+    assert ClaudeCodeDialect().tool_name(acp_frames.CLAUDE_UPDATE_WITHOUT_KIND) == "Bash"
+
+
+def test_a_claude_bash_call_keeps_both_its_command_and_its_description() -> None:
+    """The row shows the description and the expanded block shows the command,
+    so both have to survive into the stored arguments.
+    """
+    call = ClaudeCodeDialect().call(acp_frames.CLAUDE_BASH_WITH_DESCRIPTION)
+    assert call.name == "Bash"
+    assert call.argument == "cd /repo/ui-tui && ls i18n"
+    assert json.loads(call.arguments_json())["description"] == "Locate messages.json and i18n dirs"
 
 
 def test_a_frame_without_a_kind_cannot_name_the_call() -> None:

@@ -449,7 +449,7 @@ async def test_a_dag_nodes_stored_call_reaches_the_panel_in_ravens_vocabulary() 
     answer = await dag_node({"run_id": RUN_ID, "node": "node-a"}, agent_loop_factory=_factory(tool))
 
     call = next(m for m in answer["node"]["messages"] if m.get("tool_calls"))
-    assert call["tool_calls"][0]["name"] == "exec"
+    assert call["tool_calls"][0]["name"] == "Bash"
     assert call["tool_calls"][0]["arguments"] == '{"command": "ls"}'
 
 
