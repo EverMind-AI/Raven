@@ -479,3 +479,85 @@ describe('createChatStream — cron.missed startup notice', () => {
     expect(sysCalls[0]).not.toMatch(/scheduled \d{2}-\d{2} /)
   })
 })
+
+describe('createChatStream — one turn cannot terminate another', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.clearStatusTimer()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // A lane is serial but its slots are per-lane, so a turn the runtime submitted
+  // itself can end while this client's turn is still queued behind it. The wire
+  // order observed on tui:default is message.start(client), then
+  // message.complete for the runtime turn, then the client's own.
+  it('ignores a completion for a turn other than the one it is watching', async () => {
+    const fake = makeFakeRpc()
+    const appended: Msg[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      appendMessage: m => appended.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('hi')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'answer' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        turn_id: 'runtime-turn',
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }
+      }
+    })
+
+    // The foreign completion neither commits the buffer nor releases the guard.
+    expect(appended).toEqual([])
+    expect(getUiState().status).not.toBe('ready')
+    // Usage is session-cumulative and belongs to neither turn, so it lands.
+    expect(getUiState().usage.total_tokens).toBe(3)
+
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        turn_id: 'turn-1',
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }
+      }
+    })
+
+    // The owner's completion still commits everything streamed, including the
+    // text that arrived while the runtime turn was ending.
+    expect(appended.map(m => m.text).join('')).toContain('answer')
+    expect(getUiState().status).toBe('ready')
+  })
+
+  it('still finalizes a completion that arrives with no turn being watched', async () => {
+    // Nothing set state.turnId: a resumed or replayed stream must not lose its
+    // streamed content to a guard that has no turn to compare against.
+    const fake = makeFakeRpc()
+    const appended: Msg[] = []
+    const stream = createChatStream({
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      appendMessage: m => appended.push(m)
+    })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'orphan' } })
+    fake.__pushEvent({
+      type: 'message.complete',
+      payload: {
+        turn_id: 'turn-9',
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      }
+    })
+
+    expect(appended.map(m => m.text).join('')).toContain('orphan')
+  })
+})

@@ -30,6 +30,14 @@ class ToolResult:
     talking Chat Completions — keeps using the text and must still make sense.
     So a tool setting ``blocks`` puts the metadata *and* the file path in
     ``model_text``, never "see the image above".
+
+    ``metadata`` and ``diff`` are the two client-only fields: neither is ever
+    shown to the model, and both ride out on the ``tool.complete`` lifecycle
+    event for an outlet to render. ``metadata`` is a structured payload the tool
+    chose to publish (a file manifest, say) that an outlet which does not
+    understand a key simply ignores; ``diff`` is a unified diff of what the call
+    changed on disk. A tool that leaves them ``None`` -- most of them -- costs
+    the wire two nulls.
     """
 
     model_text: str
@@ -37,6 +45,8 @@ class ToolResult:
     retryable: bool = True
     abort_action: bool = False
     blocks: list[ContentPart] | None = None
+    metadata: dict[str, Any] | None = None
+    diff: str | None = None
 
 
 class ToolOutput(str):
@@ -49,14 +59,17 @@ class ToolOutput(str):
     artifact, so the boundary has to return something that *is* a str; handing
     them a :class:`ToolResult` would format its repr into model context and
     user-facing replies. The agent loop reads ``display_text`` off it to render
-    the transcript row, ``blocks`` to build a multimodal tool result, and the
-    control flags to enforce terminal tool decisions.
+    the transcript row, ``blocks`` to build a multimodal tool result, the
+    control flags to enforce terminal tool decisions, and ``metadata``/``diff``
+    to fill the client-facing fields of the ``tool.complete`` event.
     """
 
     display_text: str | None
     retryable: bool
     abort_action: bool
     blocks: list[ContentPart] | None
+    metadata: dict[str, Any] | None
+    diff: str | None
 
     def __new__(
         cls,
@@ -66,12 +79,16 @@ class ToolOutput(str):
         retryable: bool = True,
         abort_action: bool = False,
         blocks: list[ContentPart] | None = None,
+        metadata: dict[str, Any] | None = None,
+        diff: str | None = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
         out.retryable = retryable
         out.abort_action = abort_action
         out.blocks = blocks
+        out.metadata = metadata
+        out.diff = diff
         return out
 
 

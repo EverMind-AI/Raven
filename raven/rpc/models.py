@@ -221,8 +221,8 @@ class ToolCompletePayload(_Strict):
     metadata: dict[str, JsonValue] | None = Field(
         default=None,
         description=(
-            "Opt-in structured payload a tool chose to publish (a deliver_files manifest, for "
-            "example). A client that does not understand a key ignores it."
+            "Opt-in structured payload a tool chose to publish (a file manifest, for example), "
+            "straight off ToolResult.metadata. A client that does not understand a key ignores it."
         ),
     )
     diff: str | None = Field(

@@ -325,3 +325,112 @@ def test_a_tool_that_failed_without_saying_anything_yields_no_detail() -> None:
     assert _first_line("\n   \n\t\n") == ""
     assert _first_line("") == ""
     assert _first_line(None) == ""
+
+
+async def test_the_blocked_sentence_is_not_also_emitted_as_the_model_s_answer(tmp_path) -> None:
+    """Routing the sentence to a notice is only half of it. ``_process_message``
+    still returns it as the reply, and the ``run_turn`` boundary emits a closing
+    ``Text`` whenever nothing streamed -- which ``TuiOutlet`` maps straight back
+    to ``token.delta``. The turn then shows the notice AND the same runtime
+    sentence wearing the model's voice, which is what the notice path existed to
+    prevent."""
+    from raven.spine.events import Notice, StreamDelta, Text
+
+    emitted: list = []
+
+    async def emit(event) -> None:
+        emitted.append(event)
+
+    def drain() -> list:
+        return []
+
+    agent = AgentLoop(provider=_StreamingProvider(), workspace=tmp_path, model="fake/model")
+    tool = ExecTool(executor=_Executor(), working_dir=str(tmp_path))
+    tool.start_approval_turn(_Responder(answer=False), conversation_id="session-a", turn_id="turn-a")
+    agent.tools.register(tool)
+
+    await agent.run_turn(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+            text="delete file.txt",
+            conversation="session-a",
+        ),
+        emit,
+        drain,
+        stream=True,
+    )
+
+    assert [e for e in emitted if isinstance(e, Notice)], "the notice is still the delivery"
+    sentence = "no alternative method will be attempted"
+    prose = [e for e in emitted if isinstance(e, Text) and sentence in e.content]
+    deltas = [e for e in emitted if isinstance(e, StreamDelta) and sentence in e.delta]
+    assert prose == [], f"the runtime sentence must not also arrive as the answer: {prose}"
+    assert deltas == [], f"nor as token deltas: {deltas}"
+
+
+async def test_a_normal_turn_still_gets_its_closing_text(tmp_path) -> None:
+    """The suppression is keyed on ACTION_BLOCKED, not on 'a notice fired'. A
+    progress notice accompanies the answer, so gating on any notice at all would
+    silence every non-streaming turn that reported progress."""
+    from raven.spine.events import Notice, NoticeKind, Text
+
+    emitted: list = []
+
+    async def emit(event) -> None:
+        emitted.append(event)
+
+    def drain() -> list:
+        return []
+
+    from typing import Any
+
+    from raven.agent.tools.base import Tool
+
+    class _Counter(Tool):
+        @property
+        def name(self) -> str:
+            return "count_files"
+
+        @property
+        def description(self) -> str:
+            return "count files"
+
+        @property
+        def parameters(self) -> dict[str, Any]:
+            return {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs: Any) -> str:
+            return "1 file"
+
+    class _HintingProvider(_Provider):
+        def __init__(self) -> None:
+            self.responses = [
+                LLMResponse(
+                    content="",
+                    tool_calls=[ToolCallRequest(id="call-c", name="count_files", arguments={})],
+                    finish_reason="tool_calls",
+                ),
+                LLMResponse(content="The file is still there.", finish_reason="stop"),
+            ]
+
+    agent = AgentLoop(provider=_HintingProvider(), workspace=tmp_path, model="fake/model")
+    agent.tools.register(_Counter())
+
+    outcome = await agent.run_turn(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+            text="hello",
+            conversation="session-b",
+        ),
+        emit,
+        drain,
+        stream=False,
+    )
+
+    assert outcome is not None
+    hints = [e for e in emitted if isinstance(e, Notice) and e.kind is NoticeKind.TOOL_HINT]
+    assert hints, f"this turn is only a discriminator if a notice fired at all: {emitted}"
+    assert not [e for e in emitted if isinstance(e, Notice) and e.kind is NoticeKind.ACTION_BLOCKED]
+    assert [e for e in emitted if isinstance(e, Text)], f"the answer must still be delivered: {emitted}"
