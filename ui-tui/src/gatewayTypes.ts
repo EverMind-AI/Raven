@@ -552,7 +552,17 @@ export type GatewayEvent =
       type: 'tool.complete'
     }
   | {
-      payload: { choices: string[] | null; question: string; request_id: string }
+      payload: {
+        batch?: { header?: string; question: string }[]
+        choices: string[] | null
+        header?: string
+        index?: number
+        question: string
+        recommended?: string
+        request_id: string
+        timeout_s?: number
+        total?: number
+      }
       session_id?: string
       type: 'clarify.request'
     }

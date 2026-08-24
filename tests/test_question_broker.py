@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from raven.tui_rpc.methods.question import question_respond, register_question_methods
-from raven.tui_rpc.question_broker import QuestionBroker
+from raven.tui_rpc.question_broker import QuestionBroker, QuestionUndeliverableError
 
 CID = "telegram:123"
 
@@ -182,3 +182,89 @@ async def test_register_question_methods_adds_respond() -> None:
     register_question_methods(dispatcher, question_broker=broker)
 
     assert "clarify.respond" in dispatcher.methods()
+
+
+async def test_undeliverable_question_fails_fast_to_default() -> None:
+    """A surface that cannot render the question must not cost the full budget.
+
+    The gateway drops a question whose conversation has no live source. Before,
+    the drop was invisible to the broker, which then waited out the whole
+    timeout on a question nobody would ever see.
+    """
+
+    async def send_frame(frame: dict) -> None:
+        raise QuestionUndeliverableError("no live source")
+
+    broker = QuestionBroker(send_frame, timeout_s=30.0)
+    started = asyncio.get_running_loop().time()
+
+    answer = await broker.await_question(CID, prompt="?", default="fallback")
+
+    assert answer == "fallback"
+    assert asyncio.get_running_loop().time() - started < 1.0
+    assert broker.pending_req(CID) is None
+
+
+async def test_construction_timeout_is_the_default_budget() -> None:
+    _frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame, timeout_s=0.05)
+
+    assert await broker.await_question(CID, prompt="?", default="d") == "d"
+
+
+async def test_per_call_timeout_overrides_the_construction_default() -> None:
+    _frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame, timeout_s=30.0)
+
+    assert await broker.await_question(CID, prompt="?", default="d", timeout_s=0.05) == "d"
+
+
+async def test_clarify_request_carries_header_and_batch_progress() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    batch = [{"question": "Base?", "header": "Base"}, {"question": "Squash?", "header": "Squash"}]
+
+    task = asyncio.create_task(
+        broker.await_question(CID, prompt="Squash?", header="Squash", index=1, total=2, batch=batch)
+    )
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["header"] == "Squash"
+    assert params["index"] == 1
+    assert params["total"] == 2
+    assert params["batch"] == batch
+
+    broker.reply(CID, "yes")
+    await task
+
+
+async def test_single_question_still_carries_a_one_item_batch() -> None:
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Which?"))
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["header"] == ""
+    assert params["index"] == 0
+    assert params["total"] == 1
+    assert params["batch"] == [{"question": "Which?", "header": ""}]
+
+    broker.reply(CID, "a")
+    await task
+
+
+async def test_clarify_request_carries_the_recommended_option_and_the_budget() -> None:
+    """The surface needs both to do its half: mark the recommended choice, and
+    tell the user how long the question will stand."""
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame, timeout_s=45.0)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="Ship?", choices=["hold", "ship"], recommended="ship"))
+    params = (await _wait_for_frame(frames))["params"]
+
+    assert params["recommended"] == "ship"
+    assert params["timeout_s"] == 45.0
+
+    broker.reply(CID, "ship")
+    await task

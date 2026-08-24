@@ -336,3 +336,32 @@ def test_risk_banner_silent_when_sandboxed_or_restricted() -> None:
     assert _risk_banner(_config_with(backend="boxlite", telegram_enabled=True, allow_from=["*"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=True, allow_from=["u1"])) is None
     assert _risk_banner(_config_with(backend="none", telegram_enabled=False, allow_from=["*"])) is None
+
+
+def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
+    """On a chat channel the batch has no dialog to show progress in, so the
+    position has to ride in the message text itself."""
+    from raven.cli.gateway_commands import _format_question_body
+
+    body = _format_question_body(
+        {"question": "Squash?", "choices": ["yes", "no"], "index": 1, "total": 3, "header": "Squash"}
+    )
+
+    assert body.splitlines() == ["(2/3) Squash?", "1. yes", "2. no"]
+
+
+def test_lone_question_carries_no_progress_prefix() -> None:
+    from raven.cli.gateway_commands import _format_question_body
+
+    assert _format_question_body({"question": "Which?", "choices": [], "index": 0, "total": 1}) == "Which?"
+
+
+@pytest.mark.asyncio
+async def test_question_for_a_dead_conversation_is_reported_not_swallowed() -> None:
+    """Swallowing the drop left the broker waiting out its whole budget on a
+    question nobody would ever see."""
+    from raven.cli.gateway_commands import _deliver_question_to_channel
+    from raven.tui_rpc.question_broker import QuestionUndeliverableError
+
+    with pytest.raises(QuestionUndeliverableError):
+        await _deliver_question_to_channel({"params": {"conversation_id": "gone"}}, sources={}, hub=None)

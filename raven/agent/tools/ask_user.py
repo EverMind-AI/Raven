@@ -6,13 +6,94 @@ conversation_id and the prompt to the broker, which emits a ``clarify.request``
 notification and blocks until an inbound answer arrives (or the broker's
 fail-safe default fires). The returned answer is rendered as a natural-language
 tool result; the loop never sees an exception.
+
+A batch shares one deadline rather than one per question, and a call whose
+shape would waste the user's time -- a single-option question, a repeated
+question, more questions than the cap -- is rejected before anything is
+rendered, with a message that steers the next attempt.
 """
 
+import asyncio
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.tui_rpc.question_broker import QuestionBroker
+from raven.tui_rpc.question_broker import DEFAULT_TIMEOUT_S, QuestionBroker
+
+MAX_QUESTIONS = 4
+"""Cap on one call. Each question is its own round-trip, so an uncapped
+batch is an uncapped number of prompts in front of one user."""
+
+_MAX_HEADER_CHARS = 12
+
+
+@dataclass(frozen=True)
+class _Question:
+    """One validated question: what to ask, and what to fall back on."""
+
+    question: str
+    header: str
+    options: list[str]
+    recommended: str
+
+
+def _dedup(labels: list[str]) -> list[str]:
+    seen: set[str] = set()
+    return [label for label in labels if not (label in seen or seen.add(label))]
+
+
+def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
+    """Validate and normalize the questions, or return why to reject the call.
+
+    Rejection happens before any question reaches a human, so a malformed
+    call costs the user nothing and the message is what steers the retry.
+    """
+    if len(entries) > MAX_QUESTIONS:
+        return [], (
+            f"Error: ask_user accepts at most {MAX_QUESTIONS} questions per call "
+            f"(got {len(entries)}); split them across calls."
+        )
+    prepared: list[_Question] = []
+    seen: set[str] = set()
+    for entry in entries:
+        question = str(entry.get("question", "")).strip()
+        if not question:
+            continue
+        if question in seen:
+            return [], (
+                f'Error: ask_user rejected the call -- duplicate question text "{question}". Ask each question once.'
+            )
+        seen.add(question)
+        # A repeated label is a typo with one obvious reading, so drop it; a
+        # repeated question would prompt the same human twice, so reject that.
+        submitted = [str(option) for option in entry.get("options") or []]
+        options = _dedup(submitted)
+        if len(options) == 1:
+            return [], (
+                f'Error: ask_user rejected the call -- question "{question}" has exactly one '
+                "option, which is not a decision. Do not retry with a filler second option: "
+                "state that single path as the approach you are taking and continue. A question "
+                "needs two or more options, or none at all for a free-form answer."
+            )
+        pick = entry.get("recommended")
+        # The index counts the options as submitted, so resolve it before dedup
+        # narrows the list. Dedup keeps every distinct label, so the label this
+        # resolves to is still one of the choices the surface can mark.
+        recommended = (
+            submitted[pick]
+            if isinstance(pick, int) and not isinstance(pick, bool) and 0 <= pick < len(submitted)
+            else ""
+        )
+        prepared.append(
+            _Question(
+                question=question,
+                header=str(entry.get("header", "")).strip()[:_MAX_HEADER_CHARS],
+                options=options,
+                recommended=recommended,
+            )
+        )
+    return prepared, ""
 
 
 class AskUserTool(Tool):
@@ -30,6 +111,7 @@ class AskUserTool(Tool):
         self,
         broker: QuestionBroker | None = None,
         conversation_id: str = "",
+        timeout_s: float | None = None,
     ) -> None:
         # The broker is the shared transport singleton (not per-turn). The
         # conversation_id is per-turn, so it lives in a ContextVar — a turn runs
@@ -37,6 +119,11 @@ class AskUserTool(Tool):
         # immutable, so a plain set/get is task-isolated without copy-on-write.
         self._broker = broker
         self._cid: ContextVar[str] = ContextVar("ask_user_cid", default=conversation_id)
+        # Configured budget for one whole call. It arrives here rather than at
+        # the broker because the broker is built before any config is loaded on
+        # the TUI transport, and re-reading config there would put a schema
+        # failure in the path of the RPC server coming up.
+        self._timeout_s = timeout_s
 
     def set_broker(self, broker: QuestionBroker | None) -> None:
         """Set the QuestionBroker. ``None`` disables the round-trip."""
@@ -57,9 +144,10 @@ class AskUserTool(Tool):
             "a preference, clarify an ambiguous request, or decide a choice with real "
             "trade-offs. Reach for it when the answer genuinely depends on the user; "
             "for low-stakes or reversible choices, pick a sensible default instead. "
-            "When you can name a few likely answers, pass them as 'options' (the user "
-            "can always type a free-form answer instead); if you recommend one, list "
-            "it first with '(Recommended)'. Batch related questions into one call."
+            "When you can name a few likely answers, pass them as 'options' -- two or "
+            "more, or none at all for a free-form question (the user can always type an "
+            "answer instead). Point at the one you would pick with 'recommended'. Batch "
+            f"related questions into one call, up to {MAX_QUESTIONS}; they share one deadline."
         )
 
     @property
@@ -80,23 +168,35 @@ class AskUserTool(Tool):
                                     "it in a separate title."
                                 ),
                             },
+                            "header": {
+                                "type": "string",
+                                "description": (
+                                    f"Very short label ({_MAX_HEADER_CHARS} chars or fewer) shown "
+                                    "as a chip beside the question, e.g. 'Base branch'. Optional."
+                                ),
+                            },
                             "options": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Optional list of suggested answers",
+                                "description": (
+                                    "Suggested answers: give two or more, or none at all for a "
+                                    "free-form question. One option is not a decision and is "
+                                    "rejected. Do not add an 'Other' entry -- the user always "
+                                    "has a free-form answer."
+                                ),
                             },
-                            "multiple": {
-                                "type": "boolean",
-                                "description": "Whether multiple options may be chosen",
-                            },
-                            "custom": {
-                                "type": "boolean",
-                                "description": "Whether a free-form answer is allowed",
+                            "recommended": {
+                                "type": "integer",
+                                "description": (
+                                    "0-based index into 'options' of the option you recommend. "
+                                    "Omit when you have no preference."
+                                ),
                             },
                         },
                         "required": ["question"],
                     },
-                    "description": "One or more questions to ask the user",
+                    "maxItems": MAX_QUESTIONS,
+                    "description": f"One to {MAX_QUESTIONS} questions to ask the user",
                 }
             },
             "required": ["questions"],
@@ -123,31 +223,54 @@ class AskUserTool(Tool):
         if not questions:
             return "Error: ask_user requires at least one question"
 
+        prepared, rejection = _prepare(questions)
+        if rejection:
+            return rejection
+        if not prepared:
+            return "Error: ask_user requires at least one non-empty question"
+
+        # One budget for the whole batch, not one per question: each question is
+        # its own round-trip, so a per-question timeout let three questions hold
+        # a turn open for three times the surface's wait.
+        budget = float(self._timeout_s or getattr(self._broker, "default_timeout_s", DEFAULT_TIMEOUT_S))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget
+        batch = [{"question": item.question, "header": item.header} for item in prepared]
+
         told: list[str] = []  # model-facing
         # Human-facing display: one "question -> answer" line per question, so a
         # batch shows which answer belongs to which question. The UI renders each
         # line as its own row.
         picks: list[str] = []
-        for entry in questions:
-            question = str(entry.get("question", "")).strip()
-            if not question:
-                continue
-            options = entry.get("options") or []
-
-            answer = await self._broker.await_question(
-                cid,
-                prompt=question,
-                choices=[str(o) for o in options],
+        for index, item in enumerate(prepared):
+            remaining = deadline - loop.time()
+            # A spent budget stops the batch rather than opening a fresh wait on
+            # every question that is left.
+            answer = (
+                await self._broker.await_question(
+                    cid,
+                    prompt=item.question,
+                    choices=item.options,
+                    timeout_s=remaining,
+                    header=item.header,
+                    recommended=item.recommended,
+                    index=index,
+                    total=len(prepared),
+                    batch=batch,
+                )
+                if remaining > 0
+                else ""
             )
             if answer:
-                told.append(f'User answered: "{question}" -> "{answer}".')
-                picks.append(f"{question} -> {answer}" if len(questions) > 1 else str(answer))
+                told.append(f'User answered: "{item.question}" -> "{answer}".')
+                picks.append(f"{item.question} -> {answer}" if len(prepared) > 1 else str(answer))
             else:
-                told.append(f'For "{question}": (user did not answer; proceed with best judgment).')
-                picks.append(f"{question} -> (no answer)" if len(questions) > 1 else "(no answer)")
+                # Naming the option the model recommended is what lets it carry on
+                # the way it intended; without it the only signal is "no answer".
+                hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
+                told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
+                picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
 
-        if not told:
-            return "Error: ask_user requires at least one non-empty question"
         return ToolResult(
             model_text=" ".join(told) + " Continue.",
             display_text="\n".join(picks) if len(picks) > 1 else f"answered: {picks[0]}",

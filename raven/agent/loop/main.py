@@ -100,7 +100,7 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
+    from raven.config.schema import AskUserToolConfig, ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
@@ -269,6 +269,7 @@ class AgentLoop:
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
+        ask_user_config: AskUserToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
@@ -319,7 +320,7 @@ class AgentLoop:
             OnUserInboundAdapter,
             ResponseModifierAdapter,
         )
-        from raven.config.schema import ExecToolConfig
+        from raven.config.schema import AskUserToolConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
         # Optional transform applied to the final assistant content right
@@ -379,6 +380,7 @@ class AgentLoop:
         self.media_config = media_config or MediaGenConfig()
         self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
+        self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
@@ -889,7 +891,7 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
-        self.tools.register(AskUserTool())
+        self.tools.register(AskUserTool(timeout_s=self.ask_user_config.timeout))
         if self.cron_service:
             # Lazy import: CronTool lives under raven.proactive_engine.schedulers.cron.tool
             # which (a) imports raven.agent.tools.base, triggering raven.agent.__init__,

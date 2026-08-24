@@ -256,6 +256,7 @@ def register(app: typer.Typer) -> None:
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
+            ask_user_config=config.tools.ask_user,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
