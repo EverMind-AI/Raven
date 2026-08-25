@@ -88,6 +88,26 @@ TITLE_DRIFT_IN = 0.2
 TITLE_WIDTH_DRIFT_IN = 0.6
 
 
+def _title_of(rows, house_width):
+    """Which of the shapes in the title band is the title.
+
+    Not the topmost one. A page that sets a kicker over its title -- "01 问题" above
+    "四类任务的差别" -- puts the kicker first, and taking it as the title measured a
+    row 0.29in above where the template's title sits: eight pages of a deck reported
+    for a title row that was in exactly the right place, and an author that could not
+    fix it because nothing was wrong.
+
+    A title runs the width of the safe area and is set larger than anything else up
+    there, so among the shapes that are as wide as the template's own title row, it is
+    the tallest. When none is that wide -- which is itself what `narrow` reports --
+    fall back to the whole band so the finding still lands.
+    """
+    from raven.ppt.services.measure.geometry import EMU_PER_INCH
+
+    wide = [shape for shape in rows if house_width - (shape.width or 0) / EMU_PER_INCH <= TITLE_WIDTH_DRIFT_IN]
+    return max(wide or rows, key=lambda shape: ((shape.height or 0), -(shape.top or 0)))
+
+
 def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object | None = None) -> list[Finding]:
     """Content pages whose title row is not where the template puts one.
 
@@ -132,7 +152,7 @@ def title_row_findings(pptx_path: Path, prototypes: Path | None, outline: object
         ]
         if not rows:
             continue
-        title = min(rows, key=lambda shape: (shape.top, -(shape.width or 0)))
+        title = _title_of(rows, wanted[2])
         left, top = title.left / EMU_PER_INCH, title.top / EMU_PER_INCH
         width = (title.width or 0) / EMU_PER_INCH
         off = max(abs(left - wanted[0]), abs(top - wanted[1]))

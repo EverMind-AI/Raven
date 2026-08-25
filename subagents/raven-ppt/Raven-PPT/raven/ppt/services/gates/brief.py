@@ -61,7 +61,7 @@ def material_findings(stated_chars: int | None, brief: DeckBrief | None) -> list
     ways are legitimate -- go and get more material, or agree fewer pages. What is not
     legitimate is the third way, which is what happens by default when nobody says
     anything: the pages past what the material carries get filled by inventing, and
-    the fact gate refuses those at the end of a build instead of here.
+    nothing downstream can tell an invented number from a read one.
 
     Said at the point the page count is recorded, because that is the first moment
     both numbers exist and the cheapest moment to act on either.
@@ -82,7 +82,7 @@ def material_findings(stated_chars: int | None, brief: DeckBrief | None) -> list
                 f"~{COPY_PER_PAGE} a finished page carries. This material says enough for about {carries} "
                 f"page(s). Go and get more -- web_search for what is missing, then ppt_fetch to bring a "
                 f"source into the deck, and ppt_ingest again -- or agree fewer pages. Pages past what the "
-                f"sources say get filled by inventing, and the fact gate refuses that once it is drawn"
+                f"sources say get filled by inventing, and nothing downstream can tell those from the read ones"
             ),
             detail={"stated_chars": stated_chars, "pages_low": brief.pages.low, "carries": carries},
         )

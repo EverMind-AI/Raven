@@ -79,14 +79,10 @@ def test_with_a_provider_the_design_pass_shares_the_stage_s_measurer(tmp_path: P
     assert tool.stage.design_pass.measure is tool.stage.measure
 
 
-def test_a_provider_alone_does_not_switch_the_design_pass_on(tmp_path: Path) -> None:
-    """It is off unless the install asks for it -- see PptDesignerConfig for the
-    measurements that made it opt-in: a round that deleted 224 characters of a
-    deck's copy, and an accent rail added to eight pages that the deck's own gate
-    reads as a colour band. A provider being available says nothing about that.
-    """
+def test_a_provider_uses_the_default_design_pass(tmp_path: Path) -> None:
+    """The normal PPT route keeps a second pair of eyes on finished decks."""
     tool = next(t for t in build_ppt_tools(tmp_path, provider=_Provider()) if t.name == "ppt_build")
-    assert tool.stage.design_pass is None
+    assert tool.stage.design_pass is not None
 
 
 def test_the_schema_never_offers_a_physical_quantity(tmp_path: Path) -> None:

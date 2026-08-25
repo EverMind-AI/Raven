@@ -64,6 +64,14 @@ from raven.ppt.services.template.inventory import (
 )
 from raven.ppt.services.template.prepare import PREPARED_FILE, Prepared, prepare, prepared_path
 from raven.ppt.services.template.theme import theme_name, theme_of
+from raven.ppt.services.template.defaults import (
+    DEFAULT_TEMPLATES,
+    DefaultTemplate,
+    default_template_catalog,
+    default_template_prompt,
+    fallback_default_template,
+    find_default_template,
+)
 
 __all__ = [
     "House",
@@ -98,4 +106,10 @@ __all__ = [
     "replace_picture",
     "replace_text",
     "template_path",
+    "DEFAULT_TEMPLATES",
+    "DefaultTemplate",
+    "default_template_catalog",
+    "default_template_prompt",
+    "fallback_default_template",
+    "find_default_template",
 ]

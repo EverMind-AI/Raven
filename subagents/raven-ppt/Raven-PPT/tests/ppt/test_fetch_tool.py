@@ -236,3 +236,77 @@ async def test_an_empty_body_is_not_a_document(fetch) -> None:
 async def test_ordinary_prose_with_punctuation_and_cjk_is_still_text(fetch) -> None:
     body = await _run(fetch("# 标题\n\n正文 — with an em dash, 90% coverage.\n".encode()))
     assert body["ok"] is True and Path(body["path"]).suffix == ".md"
+
+
+SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="240" height="60" viewBox="0 0 240 60">'
+    b'<rect width="240" height="60" fill="#155FFD"/><text x="12" y="40" fill="#fff">mem0</text></svg>'
+)
+
+
+def test_a_brand_mark_arrives_as_svg_and_is_kept_as_a_picture() -> None:
+    """A logo saved as `.md` is a competitor analysis with no competitor's mark on it.
+
+    Rasterising needs cairo's native library, which `cairosvg` cannot supply itself, so
+    this asserts the conversion only where the conversion is possible. The degraded path
+    is a case of its own below rather than a looser assertion here.
+    """
+    try:
+        # Not `importorskip`: it catches ImportError only, and a missing libcairo
+        # surfaces as OSError from cairocffi -- which would error this test rather
+        # than skip it, the same trap the guard under test exists for.
+        import cairosvg  # noqa: F401
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"rasterising an SVG needs the native cairo library: {exc}")
+    from raven.ppt.tools.fetch import _sniff
+
+    payload, suffix, kind = _sniff(SVG)
+
+    assert (suffix, kind) == (".png", "image")
+    assert payload.startswith(b"\x89PNG"), "python-pptx places rasters only"
+
+
+def test_an_svg_that_will_not_draw_is_still_the_text_it_is() -> None:
+    from raven.ppt.tools.fetch import _sniff
+
+    payload, suffix, kind = _sniff(b"<svg this is not really an svg at all")
+
+    assert kind == "document"
+    assert payload == b"<svg this is not really an svg at all"
+
+
+def test_the_other_three_kinds_come_back_byte_for_byte() -> None:
+    from raven.ppt.tools.fetch import _sniff
+
+    for blob, expected in (
+        (b"<html><body>hi</body></html>", ".html"),
+        (b"# a markdown note", ".md"),
+        (b"%PDF-1.4 trailer", ".pdf"),
+    ):
+        payload, suffix, _ = _sniff(blob)
+        assert suffix == expected
+        assert payload == blob
+
+
+def test_a_machine_without_libcairo_keeps_the_svg_instead_of_failing(monkeypatch) -> None:
+    """`import cairosvg` pulls in cairocffi, which raises OSError -- not ImportError --
+    when the native library is absent, so the guard has to catch that too."""
+    import builtins
+    import sys
+
+    from raven.ppt.tools.fetch import _sniff
+
+    real_import = builtins.__import__
+
+    def no_libcairo(name, *args, **kwargs):
+        if name == "cairosvg":
+            raise OSError("no library called 'cairo-2' was found")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "cairosvg", raising=False)
+    monkeypatch.setattr(builtins, "__import__", no_libcairo)
+
+    payload, suffix, kind = _sniff(SVG)
+
+    assert kind == "document", "an SVG that cannot be drawn is still the text it is"
+    assert payload == SVG

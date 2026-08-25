@@ -47,7 +47,7 @@ def mapping_findings(outcome: BuildOutcome | None) -> list[Finding]:
     return [
         Finding(
             kind="page_mapping",
-            severity=Severity.BLOCKING,
+            severity=Severity.WARNING,
             audience=Audience.AUTHOR,
             message=_MESSAGE,
             detail={"pages": outcome.pages, "mapped": len(outcome.sources), "distinct_starts": len(starts)},

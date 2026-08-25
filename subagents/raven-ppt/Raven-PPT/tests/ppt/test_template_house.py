@@ -119,3 +119,81 @@ def test_a_template_with_no_content_pages_measures_nothing(tmp_path: Path) -> No
     assert house.content_pages == ()
     assert house.title is None
     assert house.brief().get("title_row") is None
+
+
+def _deck_with(path: Path, *, title_top: float, kicker: bool) -> Path:
+    """One composed page whose title sits at `title_top`, optionally under a kicker."""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    page = presentation.slides.add_slide(presentation.slide_layouts[6])
+    if kicker:
+        eyebrow = page.shapes.add_textbox(Inches(0.72), Inches(0.14), Inches(11.9), Inches(0.2))
+        run = eyebrow.text_frame.paragraphs[0].add_run()
+        run.text = "01 问题：任务碎片化"
+        run.font.size = Pt(12)
+    heading = page.shapes.add_textbox(Inches(0.72), Inches(title_top), Inches(11.9), Inches(0.58))
+    run = heading.text_frame.paragraphs[0].add_run()
+    run.text = "四类任务的差别，主要在目标怎么定义"
+    run.font.size, run.font.bold = Pt(27), True
+    presentation.save(str(path))
+    return path
+
+
+def test_a_kicker_over_the_title_is_not_the_title(tmp_path: Path) -> None:
+    """The topmost text in the title band is not necessarily the title.
+
+    A page that sets a kicker over its heading -- "01 问题" above "四类任务的差别" --
+    puts the kicker 0.29in above where the template's title sits. Reading that as the
+    title reported eight pages of a live deck for a title row that was in exactly the
+    right place, and left the author nothing it could fix.
+    """
+    from raven.ppt.services.gates.house_style import title_row_findings
+
+    template = _template(tmp_path / "template.pptx")
+    deck = _deck_with(tmp_path / "deck.pptx", title_top=0.4, kicker=True)
+
+    assert title_row_findings(deck, template) == []
+
+
+def test_a_title_that_really_drifted_is_still_reported(tmp_path: Path) -> None:
+    """And the check still bites -- picking the tallest wide shape must not become
+    picking whichever shape makes the page pass."""
+    from raven.ppt.services.gates.house_style import title_row_findings
+
+    template = _template(tmp_path / "template.pptx")
+    deck = _deck_with(tmp_path / "deck.pptx", title_top=1.6, kicker=True)
+
+    findings = title_row_findings(deck, template)
+
+    assert [finding.kind for finding in findings] == ["title_row"]
+    assert findings[0].detail["at"][1] == pytest.approx(1.6, abs=0.01)
+
+
+def test_a_template_accent_too_pale_to_write_with_gets_one_that_reads(tmp_path: Path) -> None:
+    """An accent is mixed towards the background to make `accent_soft`, so the two
+    share a hue and the accent cannot be read on its own tint. One template's #78A4AF
+    measures 2.33:1 on its own #E7EFF1 and 2.69:1 on white -- there is no ground in
+    that deck it reads on, so a page that used the theme's own colour for a key
+    number was reported for contrast every time, with no colour to move to.
+    """
+    from raven.ppt.services.template.theme import _contrast, _readable
+
+    pale, tint, ink = "#78A4AF", "#E7EFF1", "#000000"
+    assert _contrast(pale, tint) < 3.0, "the case has to still bite"
+
+    written = _readable(pale, tint, ink)
+
+    assert _contrast(written, tint) >= 3.0
+    assert written != pale
+
+
+def test_an_accent_that_already_reads_is_left_exactly_as_the_template_set_it() -> None:
+    """Darkening a strong accent would put a colour in the deck that is in nobody's
+    house style."""
+    from raven.ppt.services.template.theme import _readable
+
+    strong = "#1A4C8B"
+    assert _readable(strong, "#FFFFFF", "#000000") == strong

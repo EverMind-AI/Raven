@@ -1,7 +1,6 @@
 """A page citing one figure while showing another is a provenance error.
 
-Every number on such a page is real and every entity is whitelisted, so no other
-gate can see it -- and a reader checks it in a second.
+Nothing else here looks for it -- and a reader checks it in a second.
 """
 
 from __future__ import annotations

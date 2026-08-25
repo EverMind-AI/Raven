@@ -201,6 +201,40 @@ def test_a_paper_read_in_full_carries_a_deck() -> None:
     assert material_findings(73989, brief) == []
 
 
+@pytest.mark.asyncio
+async def test_the_tool_reads_the_thin_material_off_the_ingested_file(project: Project) -> None:
+    """The count above is a pure function; this is the path that feeds it.
+
+    It is the whole of what `_thin_material` does -- find `materials.md`, count what
+    it states, hand that to the check -- and it was the one step no test walked. A
+    rename in the ingest package turned the module reference into a function of the
+    same name, every `ppt_brief` and `ppt_outline` call raised `AttributeError`, and
+    956 green tests said nothing. A live run found it in the first minute.
+    """
+    project.ingest_dir.mkdir(parents=True, exist_ok=True)
+    # Headings excluded, so the body has to carry the pages on its own.
+    (project.ingest_dir / "materials.md").write_text(
+        "# Source: notes.md\n\n" + "本文只有这一句话。" * 8, encoding="utf-8"
+    )
+
+    body = await _record(project, pages_low=20, pages_high=20)
+
+    assert body["ok"] is True
+    said = json.dumps(body, ensure_ascii=False)
+    assert "thin_material" in said, said[:400]
+
+
+@pytest.mark.asyncio
+async def test_material_enough_for_the_pages_leaves_the_tool_quiet(project: Project) -> None:
+    project.ingest_dir.mkdir(parents=True, exist_ok=True)
+    (project.ingest_dir / "materials.md").write_text("每页都有话说。" * 900, encoding="utf-8")
+
+    body = await _record(project, pages_low=20, pages_high=20)
+
+    assert body["ok"] is True
+    assert "thin_material" not in json.dumps(body, ensure_ascii=False)
+
+
 def test_no_index_yet_is_not_a_complaint() -> None:
     brief = DeckBrief(language="中文", audience="内部评审", pages=PageBudget(low=12, high=12))
     assert material_findings(None, brief) == []

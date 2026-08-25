@@ -21,12 +21,15 @@ from pathlib import Path
 
 from raven.ppt.contracts.findings import Audience, Finding, Severity
 from raven.ppt.services.measure.geometry import (
+    EMU_PER_POINT,
     Rect,
     has_text,
     is_panel,
     iter_shapes,
+    open_deck,
     pages,
     shape_rect_pt,
+    shows_picture,
 )
 from raven.ppt.services.measure.words import WordBox, by_page, rect
 
@@ -68,6 +71,15 @@ CARD_PADDING_PT = 4.0
 COLLISIONS_PER_PAGE = 4
 RULES_PER_PAGE = 3
 OVERFLOWS_PER_PAGE = 4
+
+BODY_TOP_PT = 1.25 * 72
+BODY_BOTTOM_PT = 6.90 * 72
+HEADER_BOTTOM_PT = 1.70 * 72
+EMPTY_GAP_PT = 0.95 * 72
+EMPTY_TRAILING_PT = 1.20 * 72
+EMPTY_PANEL_BOTTOM_PT = 0.75 * 72
+EMPTY_PANEL_USED_SHARE = 0.58
+LOOSE_HEADER_GAP_PT = 0.30 * 72
 
 
 def word_collisions(words: Sequence[WordBox], per_page: int = COLLISIONS_PER_PAGE) -> list[Finding]:
@@ -168,26 +180,46 @@ def card_overflows(
 
     `word_collisions` only sees text landing on text; copy that runs off the
     bottom of its card onto blank page, or onto the card's border, escapes it.
+
+    One card, one finding, and the finding carries the number to act on. Reporting
+    each escaped word separately put nine findings on one deck for three cards, and
+    saying only that copy "has outgrown the card" left the author guessing between
+    two moves: a live run spent fourteen requests alternating between this and
+    `word_collision`, shortening the copy until the card fit and lengthening the card
+    until it hit its neighbour. The height the copy actually needs is already
+    measured here -- withholding it is what made the two findings look like a
+    contradiction.
     """
     painted = by_page(words)
     findings: list[Finding] = []
     for page, panels in sorted(cards_by_page.items()):
-        reported = 0
+        escaped: dict[int, list[tuple[WordBox, Rect]]] = {}
         for word in painted.get(page, ()):
-            if reported >= per_page:
-                break
             box = rect(word)
             if box.area <= 0:
                 continue
             # The word belongs to the smallest card holding a real share of it,
             # because cards nest: a stat sits in its own tile inside a band.
-            candidates = [card for card in panels if card.overlap(box) / box.area >= WORD_IN_CARD_SHARE]
-            if not candidates:
+            home_at = None
+            for index, card in enumerate(panels):
+                if card.overlap(box) / box.area < WORD_IN_CARD_SHARE:
+                    continue
+                if home_at is None or card.area < panels[home_at].area:
+                    home_at = index
+            if home_at is None:
                 continue  # page furniture: titles and footers live on the page, not in a card
-            home = min(candidates, key=lambda card: card.area)
+            home = panels[home_at]
             escape = max(home.x0 - box.x0, home.y0 - box.y0, box.x1 - home.x1, box.y1 - home.y1)
             if escape <= CARD_SLOP_PT:
                 continue
+            escaped.setdefault(home_at, []).append((word, box))
+        shown = sorted(escaped.items())[:per_page]
+        for home_at, items in shown:
+            findings.append(_card_overflow(page, panels[home_at], items))
+        if len(escaped) > len(shown):
+            # A page where every card overflows is one layout decision, not N, and
+            # the list would bury the rest of the report. Say what was left out
+            # rather than letting the count read as the whole of it.
             findings.append(
                 Finding(
                     kind="card_overflow",
@@ -195,14 +227,47 @@ def card_overflows(
                     page=page,
                     audience=Audience.DESIGNER,
                     message=(
-                        f"in the render, {word.text[:28]!r} runs {escape / 72:.2f} in past the edge of the "
-                        "card it sits in -- the card's copy has outgrown the card"
+                        f"{len(escaped) - len(shown)} more card(s) on this page overflow the same way. "
+                        f"They are not listed one by one because the row itself is what is too small"
                     ),
-                    detail={"text": word.text[:28], "escape_in": round(escape / 72, 3)},
+                    detail={"unlisted_cards": len(escaped) - len(shown)},
                 )
             )
-            reported += 1
     return findings
+
+
+def _card_overflow(page: int, home: Rect, items: Sequence[tuple[WordBox, Rect]]) -> Finding:
+    """One card's overflow, with the move that fixes it."""
+    below = max(box.y1 for _, box in items) - home.y1
+    beside = max(max(home.x0 - box.x0, box.x1 - home.x1) for _, box in items)
+    sample = ", ".join(repr(word.text[:16]) for word, _ in items[:3])
+    detail: dict[str, object] = {
+        "words": [word.text[:28] for word, _ in items[:6]],
+        "card_in": [round(home.width / 72, 2), round(home.height / 72, 2)],
+    }
+    if below >= beside:
+        needed = (home.height + below + CARD_SLOP_PT) / 72
+        detail["needs_height_in"] = round(needed, 2)
+        advice = (
+            f"the card is {home.height / 72:.2f}in tall and this copy needs {needed:.2f}in. "
+            f"Give it that height, take the room from a neighbour, or say it in fewer words "
+            f"-- do not shrink the type to fit"
+        )
+    else:
+        needed = (home.width + beside + CARD_SLOP_PT) / 72
+        detail["needs_width_in"] = round(needed, 2)
+        advice = (
+            f"the card is {home.width / 72:.2f}in wide and this copy needs {needed:.2f}in across. "
+            f"Widen the card or break the line"
+        )
+    return Finding(
+        kind="card_overflow",
+        severity=Severity.WARNING,
+        page=page,
+        audience=Audience.DESIGNER,
+        message=f"{len(items)} word(s) of this card's copy escape it in the render ({sample}): {advice}",
+        detail=detail,
+    )
 
 
 def crowded_panels(
@@ -276,6 +341,180 @@ def crowded_panels(
             seen.add((home.x0, home.y0, home.x1, home.y1))
             reported += 1
     return findings
+
+
+def excessive_whitespace(
+    pptx_path: Path,
+    words: Sequence[WordBox],
+    structural: Sequence[int] = (),
+    per_page: int = 2,
+) -> list[Finding]:
+    """Large rendered gaps that leave a content page visibly unfinished."""
+    presentation = open_deck(pptx_path)
+    page_width = presentation.slide_width / EMU_PER_POINT
+    page_height = presentation.slide_height / EMU_PER_POINT
+    body_top = min(BODY_TOP_PT, page_height * 0.24)
+    body_bottom = min(BODY_BOTTOM_PT, page_height * 0.94)
+    painted = by_page(words)
+    skipped = set(structural)
+    panels = cards(pptx_path)
+    findings: list[Finding] = []
+
+    for number, slide in pages(pptx_path):
+        if number in skipped:
+            continue
+        on_page = painted.get(number, ())
+        reported = 0
+        header = [
+            (lines[0][0].y0, max(word.y1 for line in lines for word in line))
+            for _, box, lines in _boxes_with_lines(slide, on_page)
+            if lines
+            and box.width >= page_width * 0.55
+            and box.y0 < HEADER_BOTTOM_PT
+            and lines[0][0].y0 < HEADER_BOTTOM_PT
+        ]
+        header.sort()
+        header_gaps = [
+            (first[1], second[0], second[0] - first[1])
+            for first, second in zip(header, header[1:])
+            if second[0] > first[1]
+        ]
+        if header_gaps:
+            start, end, gap = max(header_gaps, key=lambda item: item[2])
+            if gap >= LOOSE_HEADER_GAP_PT:
+                findings.append(
+                    _empty_finding(
+                        number,
+                        "loose_header",
+                        gap,
+                        (
+                            f"two header text rows sit {gap / 72:.2f}in apart and read as separate regions. "
+                            "Pull the kicker, title and explanatory line into one compact group, then leave "
+                            "the larger gap below that group before the body"
+                        ),
+                        start,
+                        end,
+                    )
+                )
+                reported += 1
+        intervals = [
+            (max(body_top, word.y0), min(body_bottom, word.y1))
+            for word in on_page
+            if word.y1 > body_top and word.y0 < body_bottom
+        ]
+        for shape in iter_shapes(slide.shapes):
+            if not (shows_picture(shape) or getattr(shape, "has_chart", False)):
+                continue
+            box = shape_rect_pt(shape)
+            if box.y1 > body_top and box.y0 < body_bottom:
+                intervals.append((max(body_top, box.y0), min(body_bottom, box.y1)))
+
+        bands = _vertical_bands(intervals)
+        if bands:
+            gaps = [(left[1], right[0], right[0] - left[1]) for left, right in zip(bands, bands[1:])]
+            if gaps:
+                start, end, gap = max(gaps, key=lambda item: item[2])
+                if gap >= EMPTY_GAP_PT:
+                    findings.append(
+                        _empty_finding(
+                            number,
+                            "between_groups",
+                            gap,
+                            (
+                                f"the render leaves a {gap / 72:.2f}in vertical blank field between two body "
+                                "groups. Grow the load-bearing table, figure or type, or redistribute the groups; "
+                                "do not fill it with decoration"
+                            ),
+                            start,
+                            end,
+                        )
+                    )
+                    reported += 1
+            trailing = body_bottom - bands[-1][1]
+            if reported < per_page and trailing >= EMPTY_TRAILING_PT:
+                findings.append(
+                    _empty_finding(
+                        number,
+                        "trailing_body",
+                        trailing,
+                        (
+                            f"the page's last substantive body content ends {trailing / 72:.2f}in above the body "
+                            "boundary, leaving the lower field unfinished. Increase the main content's scale or "
+                            "use the space for the page's conclusion"
+                        ),
+                        bands[-1][1],
+                        body_bottom,
+                    )
+                )
+                reported += 1
+
+        for panel in panels.get(number, ()):
+            if reported >= per_page:
+                break
+            inside = [
+                rect(word)
+                for word in painted.get(number, ())
+                if panel.overlap(rect(word)) / max(rect(word).area, 1e-6) >= WORD_IN_CARD_SHARE
+            ]
+            if not inside:
+                continue
+            top = min(box.y0 for box in inside)
+            bottom = max(box.y1 for box in inside)
+            used_share = (bottom - top) / max(panel.height, 1e-6)
+            bottom_gap = panel.y1 - bottom
+            if bottom_gap < EMPTY_PANEL_BOTTOM_PT or used_share >= EMPTY_PANEL_USED_SHARE:
+                continue
+            findings.append(
+                _empty_finding(
+                    number,
+                    "empty_panel",
+                    bottom_gap,
+                    (
+                        f"a {panel.height / 72:.2f}in-high panel uses only {used_share:.0%} of its height for "
+                        f"copy and leaves {bottom_gap / 72:.2f}in blank at the bottom. Shorten the panel or "
+                        "increase and redistribute its content"
+                    ),
+                    bottom,
+                    panel.y1,
+                )
+            )
+            reported += 1
+    return findings
+
+
+def _vertical_bands(intervals: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if merged and start <= merged[-1][1] + 4:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _empty_finding(
+    page: int,
+    region: str,
+    gap: float,
+    message: str,
+    start: float,
+    end: float,
+) -> Finding:
+    return Finding(
+        kind="excessive_whitespace",
+        severity=Severity.WARNING,
+        page=page,
+        audience=Audience.DESIGNER,
+        message=message,
+        detail={
+            "region": region,
+            "gap_in": round(gap / 72, 2),
+            "from_y_in": round(start / 72, 2),
+            "to_y_in": round(end / 72, 2),
+        },
+    )
 
 
 # A block whose last line holds this much and no more broke one or two characters

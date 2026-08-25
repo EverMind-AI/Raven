@@ -1,12 +1,8 @@
-"""Material ingestion: source documents -> text + assets + a checkable index.
+"""Material ingestion: source documents -> text + assets + a catalogue of both.
 
 The one entry point is :func:`ingest_materials`. Everything else exported here
 exists because another part of the system has to agree with this one:
 
-* the fact gate must tokenise and normalise exactly as the index did, so it
-  takes ``canonical_number`` and the regexes from here rather than restating
-  them -- two copies of those rules drifting by one suffix is a gate that
-  rejects a number the source plainly prints;
 * a figure-cropping tool needs the same pixel operations the ingest used;
 * whatever reads the catalogue back needs the loader that wrote it.
 
@@ -16,17 +12,6 @@ built by.
 
 from raven.ppt.services.ingest.assets import load_catalogue, write_catalogue
 from raven.ppt.services.ingest.documents import TEXT_LAYER_CHARS_PER_PAGE, text_density
-from raven.ppt.services.ingest.facts import (
-    CAPS_PHRASE_RE,
-    ENTITY_RE,
-    NUMBER_RE,
-    build_source_index,
-    canonical_number,
-    iter_numbers,
-    load_source_index,
-    normalise,
-    write_source_index,
-)
 from raven.ppt.services.ingest.images import (
     DETAIL_INK_MAX,
     FIGURE_SUFFIXES,
@@ -45,10 +30,10 @@ from raven.ppt.services.ingest.pipeline import (
     FIGURES_DIR,
     MANIFEST_FILE,
     MATERIALS_FILE,
-    SOURCE_INDEX_FILE,
+    READ_FILE,
     ingest_materials,
 )
-from raven.ppt.services.ingest.sections import MAX_PARTS, Section, index, sections
+from raven.ppt.services.ingest.sections import MAX_PARTS, Section, index, sections, stated_chars
 from raven.ppt.services.ingest.sources import (
     ATTACHED,
     FETCH,
@@ -71,23 +56,19 @@ __all__ = [
     "Section",
     "index",
     "sections",
-    "CAPS_PHRASE_RE",
+    "stated_chars",
     "CATALOGUE_FILE",
     "DETAIL_INK_MAX",
-    "ENTITY_RE",
     "FIGURES_DIR",
     "FIGURE_SUFFIXES",
     "ATTACHED",
     "MANIFEST_FILE",
     "MATERIALS_FILE",
-    "NUMBER_RE",
+    "READ_FILE",
     "SOURCES_DIR",
-    "SOURCE_INDEX_FILE",
     "Source",
     "TEXT_LAYER_CHARS_PER_PAGE",
     "autocrop_border",
-    "build_source_index",
-    "canonical_number",
     "contain_scale",
     "crop_figure",
     "detect_panels",
@@ -104,15 +85,11 @@ __all__ = [
     "manifest_path",
     "mirror",
     "receive",
-    "iter_numbers",
     "load_catalogue",
-    "load_source_index",
-    "normalise",
     "segment_page_blocks",
     "sources_dir",
     "take",
     "write_source",
     "text_density",
     "write_catalogue",
-    "write_source_index",
 ]

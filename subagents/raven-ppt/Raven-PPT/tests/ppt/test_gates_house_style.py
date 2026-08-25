@@ -141,6 +141,131 @@ def test_the_theme_falls_back_rather_than_inventing_an_accent(tmp_path: Path):
     assert entry["font_family"] == "Arial"
 
 
+def test_what_the_master_paints_beats_what_the_colour_map_says(tmp_path: Path):
+    """A template may map `bg1` to a colour it then never paints.
+
+    One real template maps it to a #2F2F2F it does not use anywhere and covers
+    every page with `<p:bg>` in accent1 instead. Read off the map alone it came
+    back as a grey deck, and every plane derived from that grey -- `surface`
+    especially -- landed on the purple pages looking dirty.
+    """
+    from raven.ppt.services.template.inventory import TemplateInventory
+
+    declared_grey = TemplateInventory(
+        path=tmp_path / "purple.pptx",
+        width_in=13.333,
+        height_in=7.5,
+        theme_colours=(("dk1", "#2F2F2F"), ("lt1", "#FFFFFF"), ("accent1", "#5E31FF"), ("accent2", "#F98DD6")),
+        colour_map=(("bg1", "dk1"), ("tx1", "lt1")),
+        painted_ground="accent1",
+    )
+
+    entry = theme_of(declared_grey)
+
+    assert entry["background"] == "#5E31FF"
+    # A ground that is the accent leaves nothing to accent with, and the template
+    # answers that itself: it alternates accent1 grounds with accent2 ones.
+    assert entry["accent"] == "#F98DD6"
+
+
+def test_a_master_that_paints_nothing_keeps_the_mapped_ground(tmp_path: Path):
+    """The map is right whenever the master does not override it, which is most
+    templates -- nothing here may change what those already resolve to."""
+    from raven.ppt.services.template.inventory import TemplateInventory
+
+    plain = TemplateInventory(
+        path=tmp_path / "plain.pptx",
+        width_in=13.333,
+        height_in=7.5,
+        theme_colours=(("dk1", "#2F2F2F"), ("lt1", "#FFFFFF"), ("accent1", "#5E31FF")),
+        colour_map=(("bg1", "dk1"), ("tx1", "lt1")),
+    )
+
+    entry = theme_of(plain)
+
+    assert entry["background"] == "#2F2F2F"
+    assert entry["accent"] == "#5E31FF"
+
+
+def test_the_ground_the_master_paints_is_read_off_the_file(tmp_path: Path, template_file):
+    """And it comes from the XML, not from a caller passing it in."""
+    import zipfile
+
+    from raven.ppt.services.template.inventory import inspect_template
+
+    source = template_file("plain.pptx")
+    painted = tmp_path / "painted.pptx"
+    with zipfile.ZipFile(source) as reading, zipfile.ZipFile(painted, "w") as writing:
+        for entry in reading.infolist():
+            body = reading.read(entry.filename)
+            if entry.filename == "ppt/slideMasters/slideMaster1.xml":
+                body = body.replace(
+                    b"<p:cSld>",
+                    b'<p:cSld><p:bg><p:bgPr><a:solidFill><a:schemeClr val="accent1"/>'
+                    b"</a:solidFill><a:effectLst/></p:bgPr></p:bg>",
+                    1,
+                )
+            writing.writestr(entry, body)
+
+    assert inspect_template(source).painted_ground is None
+    assert inspect_template(painted).painted_ground == "accent1"
+
+
+def test_the_ground_measured_off_a_render_beats_everything_the_file_says(tmp_path: Path):
+    """Measured across 119 templates, what a file declares matched what it renders
+    73 times; eleven declared the inverse. So a reading taken off pixels wins."""
+    from raven.ppt.services.template.inventory import TemplateInventory
+
+    lying = TemplateInventory(
+        path=tmp_path / "lies.pptx",
+        width_in=13.333,
+        height_in=7.5,
+        theme_colours=(("dk1", "#2F2F2F"), ("lt1", "#FFFFFF"), ("accent1", "#5E31FF")),
+        colour_map=(("bg1", "lt1"), ("tx1", "dk1")),
+        painted_ground="dk1",
+        rendered_ground="#2484E4",
+    )
+
+    assert theme_of(lying)["background"] == "#2484E4"
+
+
+def test_a_page_of_one_colour_reports_it_and_a_page_of_many_reports_none(tmp_path: Path):
+    from PIL import Image
+
+    from raven.ppt.services.template.theme import ground_of
+
+    flat = tmp_path / "flat.png"
+    Image.new("RGB", (400, 225), "#2484E4").save(flat)
+    assert ground_of([flat]) == "#2484E4"
+
+    # Noise: no colour is more than a sliver of it, so there is no ground to name.
+    busy = tmp_path / "busy.png"
+    noise = Image.new("RGB", (400, 225))
+    noise.putdata([((x * 7) % 256, (y * 11) % 256, (x + y) % 256) for y in range(225) for x in range(400)])
+    noise.save(busy)
+    assert ground_of([busy]) is None
+
+    assert ground_of([]) is None
+    assert ground_of([tmp_path / "missing.png"]) is None
+
+
+def test_the_ground_is_the_one_most_pages_share(tmp_path: Path):
+    """One template runs a single white page between black ones. A sample that
+    caught it read the whole deck as white, so the count is over all the pixels
+    sampled rather than over pages."""
+    from PIL import Image
+
+    from raven.ppt.services.template.theme import ground_of
+
+    pages = []
+    for index, colour in enumerate(("#111111", "#FFFFFF", "#111111", "#111111")):
+        page = tmp_path / f"page{index}.png"
+        Image.new("RGB", (400, 225), colour).save(page)
+        pages.append(page)
+
+    assert ground_of(pages) == "#0C0C0C"
+
+
 # --- what the layout draws -------------------------------------------------
 
 

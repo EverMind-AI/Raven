@@ -343,6 +343,29 @@ async def test_a_prepared_deck_is_told_to_go_and_build(project: Project, materia
     assert body["figures"] == 1
 
 
+async def test_path_a_helpers_exist_before_the_prepare_reader_runs(project: Project, materials: Path):
+    from raven.ppt.backends.script import asset_helpers, provision
+
+    class CheckingComposer(FakeComposer):
+        async def ask(self, system: str, parts: list[dict[str, Any]], *, max_tokens: int) -> str:
+            assert (project.build_dir / "ppt_layout.py").is_file()
+            assert (project.build_dir / "ppt_icons.py").is_file()
+            assert (project.build_dir / "ppt_theme.py").is_file()
+            return await super().ask(system, parts, max_tokens=max_tokens)
+
+    composer = CheckingComposer(_plan())
+    stage = PrepareStage(composer=composer, ingest=ingest_materials)
+    tool = PptPrepareTool(
+        project.workspace,
+        stage,
+        provision=lambda deck: provision(deck, asset_helpers()),
+    )
+
+    body = json.loads(await tool.execute(project="talk", task="make a deck"))
+
+    assert body["ok"]
+
+
 async def test_a_project_name_that_is_not_one(project: Project):
     stage, _ = _stage(_plan())
     tool = PptPrepareTool(project.workspace, stage)
@@ -522,3 +545,136 @@ async def test_the_models_notes_do_not_crowd_out_the_brief(project: Project, mat
 
     assert len(load_brief(brief_path(project)).notes) == 3
     assert len(result.data["plan"].notes) == 9, "the plan keeps all of them"
+
+
+@pytest.mark.asyncio
+async def test_a_prepared_project_still_takes_in_a_file_attached_this_turn(
+    project: Project, workspace: Path, materials: Path
+) -> None:
+    """The resume shortcut bypassed the stage unconditionally, so a file attached to a
+    later turn was never copied in -- and this tool is the only attachment intake."""
+    import json as _json
+
+    from raven.ppt.backends.script import script_path
+    from raven.ppt.contracts import (
+        DeckBrief,
+        Outline,
+        PageBudget,
+        PagePlan,
+        StageResult,
+        brief_path,
+        intake_path,
+        load_plan,
+        outline_path,
+        write_brief,
+        write_outline,
+    )
+    from raven.ppt.tools.prepare import PptPrepareTool
+
+    write_brief(DeckBrief(language="en", audience="leadership", pages=PageBudget(low=5, high=5)), brief_path(project))
+    intake_path(project).parent.mkdir(parents=True, exist_ok=True)
+    intake_path(project).write_text(_json.dumps({"topic": "the old topic"}), encoding="utf-8")
+    write_outline(Outline(takeaway="t", pages=(PagePlan(page=1, claim="c"),)), outline_path(project))
+    script_path(project).parent.mkdir(parents=True, exist_ok=True)
+    script_path(project).write_text("# program\n", encoding="utf-8")
+
+    seen: list[tuple[str, tuple[str, ...]]] = []
+
+    class RecordingStage:
+        async def run(self, deck, task, files):
+            seen.append((task, tuple(files)))
+            from raven.ppt.services import state as deck_state
+
+            return StageResult(
+                ok=True,
+                data={"plan": load_plan(intake_path(deck)), "state": deck_state.read(deck)},
+            )
+
+    attached = workspace / "late-arrival.md"
+    attached.write_text("# numbers that arrived later\n", encoding="utf-8")
+
+    await PptPrepareTool(workspace, RecordingStage()).execute(
+        project=project.slug, task="now use the attached file too", files=[str(attached)]
+    )
+
+    assert seen, "the stage was never called, so the attachment was silently dropped"
+    assert seen[0][1] == (str(attached),)
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_prepared_project_does_not_raise(project: Project, workspace: Path) -> None:
+    """`_resume_payload` read `deck_state` without importing it, so the resume path --
+    the whole point of resuming a prepared deck at ppt_build -- raised NameError."""
+    import json as _json
+
+    from raven.ppt.backends.script import script_path
+    from raven.ppt.contracts import (
+        DeckBrief,
+        Outline,
+        PageBudget,
+        PagePlan,
+        StageResult,
+        brief_path,
+        intake_path,
+        outline_path,
+        write_brief,
+        write_outline,
+    )
+    from raven.ppt.tools.prepare import PptPrepareTool
+
+    write_brief(DeckBrief(language="en", audience="leadership", pages=PageBudget(low=5, high=5)), brief_path(project))
+    intake_path(project).parent.mkdir(parents=True, exist_ok=True)
+    intake_path(project).write_text(
+        _json.dumps({"topic": "the recorded topic", "request": "the recorded topic"}), encoding="utf-8"
+    )
+    write_outline(Outline(takeaway="t", pages=(PagePlan(page=1, claim="c"),)), outline_path(project))
+    script_path(project).parent.mkdir(parents=True, exist_ok=True)
+    script_path(project).write_text("# program\n", encoding="utf-8")
+
+    class UnusedStage:
+        async def run(self, deck, task, files):
+            return StageResult(ok=True)
+
+    reply = await PptPrepareTool(workspace, UnusedStage()).execute(project=project.slug, task="the recorded topic")
+
+    assert json.loads(reply)["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_revised_request_is_read_again_through_the_real_stage(
+    project: Project, workspace: Path, materials: Path
+) -> None:
+    """End to end through PptPrepareTool and a real PrepareStage: the tool's resume and
+    the stage's reuse cache are two separate short-circuits, and a revised request has
+    to get past both."""
+    from raven.ppt.backends.script import script_path
+    from raven.ppt.contracts import Outline, PagePlan, intake_path, load_plan, outline_path, write_outline
+
+    stage, composer = _stage(_plan(), _plan())
+    tool = PptPrepareTool(workspace, stage)
+
+    await tool.execute(project=project.slug, task="a deck about throughput")
+
+    # Make it a *prepared* project, so the tool's own resume path is live too.
+    write_outline(Outline(takeaway="t", pages=(PagePlan(page=1, claim="c"),)), outline_path(project))
+    script_path(project).parent.mkdir(parents=True, exist_ok=True)
+    script_path(project).write_text("# program\n", encoding="utf-8")
+
+    calls_before = len(composer.seen)
+    body = json.loads(await tool.execute(project=project.slug, task="actually make it about cost per deck"))
+
+    assert len(composer.seen) == calls_before + 1, "the revised request never reached the model"
+    assert load_plan(intake_path(project)).request == "actually make it about cost per deck"
+    assert body["ok"] is True
+
+
+async def test_a_revised_request_reopens_the_reading(project: Project, materials: Path):
+    """The reuse cache is keyed on the inputs' digest, and the request is not in the
+    digest -- so the same project answered a new request with the old reading."""
+    stage, composer = _stage(_plan(), _plan())
+    await stage.run(project, "make a deck about throughput")
+
+    result = await stage.run(project, "actually make it about cost per deck")
+
+    assert len(composer.seen) == 2, "the revised request was answered from the cache"
+    assert not result.data.get("reused")

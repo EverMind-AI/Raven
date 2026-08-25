@@ -14,6 +14,7 @@ envelope.
 
 from __future__ import annotations
 
+import ast
 import re
 
 from raven.ppt.backends.script.blocks import page_blocks
@@ -135,6 +136,8 @@ def blocks_rejection(
             f"the page numbers in build.py are {sorted(blocks)}, which is not 1..{slide_count}; "
             "renumber them to match the order the slides are created"
         )
+    if derived == "execution":
+        return None
     prelude = "".join(lines[: min(span[0] for span in blocks.values())])
     creators = slide_creators(prelude)
     for number, (start, end) in sorted(blocks.items()):
@@ -174,6 +177,19 @@ def block_rejection(replacement: str, original: str) -> str | None:
 # What a piece of copy has to be before this holds it: shorter than this and it is a
 # label the pass may legitimately re-letter ("01" to "1", "AP" to "mAP").
 COPY_MIN_CHARS = 4
+_NON_COPY_KEYWORDS = frozenset(
+    {
+        "align",
+        "anchor",
+        "colour",
+        "cjk_font",
+        "font",
+        "icon",
+        "name",
+        "style",
+        "tint",
+    }
+)
 
 
 def copy_rejection(replacement: str, original: str) -> str | None:
@@ -210,12 +226,37 @@ def _copy_pieces(block: str) -> list[str]:
     Punctuation and spacing are dropped because the pass reflows lines and a comma moved
     across a line break is not an edit to the copy; letters and digits going missing is.
     """
+    try:
+        tree = ast.parse(block)
+    except SyntaxError:
+        literals = [single or double for single, double in re.findall(r"'([^'\n]{2,})'|\"([^\"\n]{2,})\"", block)]
+    else:
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and not _non_copy_literal(node, parents.get(node))
+        ]
     found = []
-    for single, double in re.findall(r"'([^'\n]{2,})'|\"([^\"\n]{2,})\"", block):
-        piece = "".join(re.findall(r"[0-9A-Za-z\u4e00-\u9fff]+", single or double))
+    for literal in literals:
+        piece = "".join(re.findall(r"[0-9A-Za-z\u4e00-\u9fff]+", literal))
         if piece:
             found.append(piece)
     return found
+
+
+def _non_copy_literal(node: ast.Constant, parent: ast.AST | None) -> bool:
+    if isinstance(parent, ast.Subscript) and parent.slice is node:
+        return True
+    if isinstance(parent, ast.Dict) and any(key is node for key in parent.keys):
+        return True
+    if isinstance(parent, ast.Call):
+        name = parent.func.id if isinstance(parent.func, ast.Name) else getattr(parent.func, "attr", "")
+        if name == "replace_text" and len(parent.args) > 1 and parent.args[1] is node:
+            return True
+    return isinstance(parent, ast.keyword) and parent.value is node and parent.arg in _NON_COPY_KEYWORDS
 
 
 def _copy_of(block: str) -> str:

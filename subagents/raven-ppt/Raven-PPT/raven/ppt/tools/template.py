@@ -8,25 +8,19 @@ divider, its closing -- are the pages a reader recognises the house by, and they
 are cloned. A deck that draws its own cover announces itself as not the user's
 before a word of it is read.
 
-Its **content pages** are not prototypes for this deck's content, and three live
-runs proved it. The slots on those pages are drawn for the phrases a template ships
-in them ("单击添加小标题"), so a review deck's real sentences arrive in boxes that
-shrink their own text: measured on one deck, four cards holding one sentence each
-came out at 11.7, 13.7, 13.5 and 10.8pt from a single 18pt slot. A six-card grid
-filled with four cards leaves a hole where the other two were. A portrait picture
-frame cannot take a landscape figure, and the author, given no way to reshape it,
-spent three rounds permuting shape numbers. None of that is the template's fault:
-it is what filling a form does to content that is not the shape of the form.
-
-So the content pages are not offered. What comes back instead is the house style
-measured off them -- the layout their background lives on, where the title row sits,
-the type ladder the master declares, the face its pages actually use, the area it
-keeps content inside -- and the author draws each page inside that. The template
-supplies the style; the content decides the layout.
+Its **content pages** are examples, not immutable forms. A review deck may clone the
+nearest one, replace its words and pictures, delete unused repeated units, and move
+or resize the surviving regions when the actual content needs it. A six-card grid
+filled with four must remove the two spare units; a portrait picture frame receiving
+a landscape figure must be replaced, reshaped, or abandoned. If the page cannot
+carry the argument after those edits, the author composes inside the measured house
+style instead. The template supplies continuity; the content decides the final
+composition.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -35,7 +29,9 @@ from raven.agent.tools.base import Tool, ToolResult
 from raven.ppt.contracts import Project
 from raven.ppt.services.template import bind, bound, decompile
 from raven.ppt.services.template.house import house_style
+from raven.ppt.services.template.inventory import template_dir, write_ground
 from raven.ppt.services.template.menu import menu, roles
+from raven.ppt.services.template.theme import ground_of
 from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_ints
 from raven.utils.helpers import image_block, text_block
@@ -63,18 +59,25 @@ class PptTemplateTool(Tool):
     description = (
         "Build this deck inside a .pptx template the user supplied. Call it with the file's path to "
         "bind it: the deck is then built in a copy of that file, so the template's master, theme, "
-        "layouts, fonts and canvas are this deck's house style. What comes back is the template's own "
-        "cover, contents, section divider and closing as renders -- clone those -- and the house style "
-        "every other page keeps: the layout to add a page on, where the title row sits, the type "
-        "ladder in points, the face, and the area to stay inside. The content pages are yours to "
-        "compose: nothing about your page has to match the shape of one of the template's."
+        "layouts, fonts and canvas are this deck's house style. What comes back is every visible example "
+        "page with its role, capacity and render. Choose the nearest page for each content shape and "
+        "adapt it: replace its text and pictures, delete unused repeated units, and move or resize only "
+        "when the content needs it. The cover, contents, section divider and closing should retain their "
+        "native furniture; content pages may be substantially changed. If no example page can carry the "
+        "argument, compose inside the measured house style."
     )
     timeout_seconds = 300.0
 
-    def __init__(self, workspace: Path, views: Any) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        views: Any,
+        provision: Callable[[Project], Path] | None = None,
+    ) -> None:
         self.workspace = workspace
         self.views = views
         self.thumbnails = replace(views, dpi=RENDER_DPI) if is_dataclass(views) else views
+        self.provision = provision
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -95,9 +98,9 @@ class PptTemplateTool(Tool):
                     "items": {"type": "integer", "minimum": 1},
                     "maxItems": MAX_SOURCE_PAGES,
                     "description": (
-                        "which of the template's structural pages to read as python-pptx source -- its "
-                        "cover, contents, divider or closing, by the numbers the reply names. Its content "
-                        "pages are not offered: you compose those"
+                        "which example pages to read as python-pptx source, by the numbers the reply names. "
+                        "Any example page may be adapted; use the nearest content shape and change its "
+                        "text, pictures and repeated units to fit the actual page"
                     ),
                 },
             },
@@ -127,6 +130,8 @@ class PptTemplateTool(Tool):
         if template is None:
             error, detail = self._nothing(path)
             return _return.failed(error, **detail)
+        if self.provision is not None:
+            self.provision(deck)
 
         payload: dict[str, Any] = {
             "project": project,
@@ -186,31 +191,85 @@ class PptTemplateTool(Tool):
             {"hint": "call ppt_template with the path to the user's .pptx first, or build without one"},
         )
 
+    # How many of the template's own content pages are sampled for their ground. Two
+    # is not enough: one template runs a single white page between black ones, and a
+    # sample of two that caught it read the whole deck as white. The pages come from a
+    # PDF that has already been converted, so each extra one is a pdftoppm call.
+    _GROUND_PAGES = 4
+
+    def _palette(self, template: Any, measured: str | None) -> dict[str, Any]:
+        """The colours the script will be handed, and where each came from.
+
+        Handed over rather than imposed. The ground is the one field a file can be
+        wrong about and often is -- of 119 templates, 46 declared a ground their own
+        pages do not use -- so a reading off the render is the default and the pages
+        it was read from are in this same reply. A model that looks at them and
+        disagrees is better placed than any of this: it can see the template.
+        """
+        from raven.ppt.services.template.theme import theme_name, theme_of
+
+        entry = theme_of(template.inventory)
+        held = [value for _, value in template.inventory.theme_colours if str(value).startswith("#")]
+        return {
+            "name": theme_name(template.inventory),
+            "ground": str(entry["background"]),
+            "ground_read_from": "the renders above" if measured else "what the file declares",
+            "ink": str(entry["foreground"]),
+            "accent": str(entry["accent"]),
+            "the_template_also_holds": held[:10],
+            "yours_to_change": (
+                "THEMES gives you these as a starting point, not a rule. Look at the pages above: if the "
+                "ground you see is not the one named here, set it -- `T['background'] = '#RRGGBB'` in your "
+                "program -- and the planes and muted copy derived from it follow. The same goes for any "
+                "field. A colour you can see beats a colour something measured"
+            ),
+        }
+
+    async def _record_ground(self, deck: Project, pdf: Any, folder: Path, house: Any) -> str | None:
+        """Measure the ground off the template's own content pages and keep it.
+
+        The declared ground is wrong often enough to matter: across 119 templates it
+        agreed with the render 73 times, and eleven declared its inverse -- white over
+        a blue page, black over a white one -- because what a reader sees is painted by
+        a shape on the layout, not by the theme under it. Content pages rather than the
+        cover, since a content page is what a build script mostly draws on.
+        """
+        pages = list(getattr(house, "content_pages", ()) or ())[: self._GROUND_PAGES]
+        if pdf is None or not pages:
+            return None
+        shots = await self.thumbnails.pages_of(pdf, folder, pages)
+        colour = ground_of([path for _, path in sorted(shots.items())])
+        if colour:
+            write_ground(template_dir(deck), colour)
+        return colour
+
     async def _as_renders(self, deck: Project, template: Any, payload: dict[str, Any]) -> str | ToolResult:
-        """The template's structural pages as pictures, and the style the rest keep."""
+        """Every example page as pictures, plus the measured house style."""
         folder = deck.review_dir / "template"
         listing = menu(template.source, _unwritable_pages(template.source, template.example_pages))
         named = roles(listing)
         pdf = await self.thumbnails.pdf(template.source, folder)
-        wanted = sorted(named.values())
+        wanted = list(range(1, template.example_pages + 1))
         renders = await self.thumbnails.pages_of(pdf, folder, wanted) if pdf is not None and wanted else {}
         # The render is read twice: once as pictures for the author, once as type sizes
         # for the house style. A template's title placeholder usually declares no size
         # at all, so without the render the ladder is a guess -- and the conversion has
         # already been paid for here.
         house = house_style(template.source, listing, pdf)
+        measured = await self._record_ground(deck, pdf, folder, house)
+        payload["palette"] = self._palette(template, measured)
         if named:
             payload["house_pages"] = {role: number for role, number in named.items()}
         if house is not None:
             payload["house_style"] = house.brief()
         if listing:
             payload["structural_pages_are"] = [entry.line() for entry in listing if entry.role]
+            payload["template_pages"] = [entry.line() for entry in listing]
             payload["content_pages"] = (
-                f"{len(house.content_pages) if house else 0} of the template's pages are content pages. "
-                "They are not offered as prototypes and not rendered here: their slots are drawn for the "
-                "placeholder phrases they ship with, and filling them with real copy produced pages with "
-                "holes in the grid, body copy autofitted to 10.8pt, and figures that did not fit the frame. "
-                "Compose your own inside the house style above"
+                f"{len(house.content_pages) if house else 0} of the template's pages are content examples. "
+                "They are adaptable prototypes: replace example text and pictures, use adapt(items=...) "
+                "to fill the actual repeated units and remove spares, or compose inside the measured house "
+                "style when the example cannot carry the argument."
             )
         asks = []
         if named:
@@ -221,13 +280,20 @@ class PptTemplateTool(Tool):
                 "`adapt(prs, prototype(tpl, N), texts={...})`, where tpl is Presentation(the template's own file). "
                 "Those four are the deck's house frame and are not redrawn"
             )
+        asks.append(
+            "any listed example page may be a content prototype when its composition is close to the "
+            "page's information shape: use adapt to replace its text and pictures, items to fill the "
+            "actual repeated units and delete spares, and drop_shape for unused furniture. A prototype "
+            "is a starting composition, not an immutable form; if its capacity or picture geometry is "
+            "wrong, choose another page or compose inside the house style"
+        )
         if house is not None and house.layout:
             asks.append(
-                f"draw every other page yourself: `prs.slides.add_slide(layout)` on the {house.layout!r} layout "
-                "so the page inherits the template's background, put the page title in the title row exactly "
-                "as given above, and lay the content out inside body_area_in with `ppt_layout` -- Box.columns, "
-                ".rows, .grid, plane(), write(), table(). The arrangement is yours to decide from what the page "
-                "has to say"
+                f"for a page without a suitable prototype, draw it yourself: `prs.slides.add_slide(layout)` "
+                f"on the {house.layout!r} layout so it inherits the template's background, put the page title "
+                "in the title row exactly as given above, and lay the content out inside body_area_in with "
+                "`ppt_layout` -- Box.columns, .rows, .grid, plane(), write(), table(). The arrangement is "
+                "yours to decide from what the page has to say"
             )
         if house is not None and house.scale:
             asks.append(
@@ -241,7 +307,7 @@ class PptTemplateTool(Tool):
             "pages removed, so a page you add inherits its master, theme and canvas"
         )
         if named and not renders:
-            payload["renders"] = "unavailable on this machine; ask for the structural pages as code instead"
+            payload["renders"] = "unavailable on this machine; ask for selected example pages as code instead"
         body = _return.done(asks=asks, **payload)
         blocks: list[Any] = []
         by_number = {number: role for role, number in named.items()}
@@ -262,7 +328,6 @@ class PptTemplateTool(Tool):
         deck.build_dir.mkdir(parents=True, exist_ok=True)
         listing = menu(template.source)
         named = roles(listing)
-        structural = set(named.values())
         asked = sorted(set(pages))
         # Out of range first: "page 9 of a 2-page template" is a different mistake from
         # "page 5 is a content page", and answering the second for the first sends an
@@ -273,19 +338,7 @@ class PptTemplateTool(Tool):
                 f"none of pages {asked} could be read out of {template.source.name}",
                 hint=f"the template ships {template.example_pages} example pages, numbered from 1",
             )
-        refused = [number for number in asked if structural and number not in structural and number not in beyond]
-        if refused and not any(number in structural for number in asked):
-            return _return.failed(
-                f"page(s) {refused} are content pages, and those are not handed out as prototypes",
-                hint=(
-                    "the structural pages are "
-                    + ", ".join(f"{role}={number}" for role, number in named.items())
-                    + ". For a content page, compose your own inside the house style ppt_template "
-                    "returned: add_slide on its layout, the title row where it says, the type ladder "
-                    "it gives, everything inside body_area_in"
-                ),
-            )
-        asked = [number for number in asked if (not structural or number in structural) and number not in beyond]
+        asked = [number for number in asked if number not in beyond]
         sources = [
             page
             for number in asked[:MAX_SOURCE_PAGES]
@@ -301,9 +354,6 @@ class PptTemplateTool(Tool):
             "adapt what you read rather than reproducing it: the counts, the words and the pictures are "
             "this deck's, and only the design language is the template's"
         ]
-        if refused:
-            payload["pages_refused"] = refused
-            asks.append(f"page(s) {refused} were not read: they are content pages, which you compose rather than fill")
         unwritable = {page.index + 1: page.unredrawable for page in sources if page.unredrawable}
         if unwritable:
             payload["cannot_be_redrawn"] = {str(number): list(what) for number, what in unwritable.items()}

@@ -232,9 +232,13 @@ def test_a_word_running_past_its_card_is_reported() -> None:
     )
 
     assert len(findings) == 1
-    assert findings[0].detail["text"] == "identical"
+    assert findings[0].detail["words"] == ["identical"]
     assert findings[0].kind == "card_overflow"
     assert findings[0].audience is Audience.DESIGNER
+    # The number to act on, not just the fact that something spilled: the copy
+    # reaches 10pt past the card's bottom edge, so that is what it has to grow by.
+    assert findings[0].detail["needs_height_in"] == pytest.approx((_CARD.height + 10 + CARD_SLOP_PT) / 72, abs=0.01)
+    assert "do not shrink the type" in findings[0].message
 
 
 def test_the_slop_is_three_points_of_border_and_antialiasing() -> None:
@@ -258,7 +262,7 @@ def test_a_word_belongs_to_a_card_that_holds_a_third_of_it() -> None:
     held = _word("held", 320, 200, 440, 216)  # a third inside, centre outside
     gone = _word("gone", 326, 200, 446, 216)  # 28% inside
 
-    assert [finding.detail["text"] for finding in card_overflows({1: [_CARD]}, [held, gone])] == ["held"]
+    assert [finding.detail["words"] for finding in card_overflows({1: [_CARD]}, [held, gone])] == [["held"]]
 
 
 def test_a_word_belongs_to_the_smallest_card_holding_it() -> None:
@@ -274,11 +278,33 @@ def test_a_word_belongs_to_the_smallest_card_holding_it() -> None:
     assert len(findings) == 1
 
 
-def test_overflows_are_reported_a_few_per_page() -> None:
-    assert OVERFLOWS_PER_PAGE == 4
+def test_one_card_is_one_finding_however_many_words_escape() -> None:
+    """Eight words out of one card is one card too small, not eight problems.
+
+    Reporting each word put nine findings on one deck for three cards, and the author
+    read them as nine separate things to move.
+    """
     words = [_word(f"word{index}", 100 + 10 * index, 210, 180 + 10 * index, 226) for index in range(8)]
 
-    assert len(card_overflows({1: [_CARD]}, words)) == OVERFLOWS_PER_PAGE
+    findings = card_overflows({1: [_CARD]}, words)
+
+    assert len(findings) == 1
+    assert len(findings[0].detail["words"]) == 6, "and it names a few of them, not all eight"
+
+
+def test_overflowing_cards_are_reported_a_few_per_page_and_the_rest_are_counted() -> None:
+    """The cap keeps a page of broken cards from burying the rest of the report, but
+    a silent cap reads as "four cards overflow" when eight do."""
+    assert OVERFLOWS_PER_PAGE == 4
+    cards = [Rect(72 + 200 * index, 72, 172 + 200 * index, 172) for index in range(8)]
+    words = [_word(f"word{index}", 80 + 200 * index, 166, 160 + 200 * index, 182) for index in range(8)]
+
+    findings = card_overflows({1: cards}, words)
+
+    listed = [finding for finding in findings if "unlisted_cards" not in finding.detail]
+    rest = [finding for finding in findings if "unlisted_cards" in finding.detail]
+    assert len(listed) == OVERFLOWS_PER_PAGE
+    assert [finding.detail["unlisted_cards"] for finding in rest] == [8 - OVERFLOWS_PER_PAGE]
 
 
 def test_a_page_with_no_cards_has_nothing_to_escape() -> None:
@@ -389,6 +415,77 @@ def test_one_finding_per_panel_not_per_word() -> None:
     words = [_word(f"w{index}", 110 + index * 30, 186, 135 + index * 30, 200) for index in range(8)]
 
     assert len(crowded_panels({1: [Rect(100, 100, 400, 200)]}, words)) == 1
+
+
+def _blank_wide_deck(tmp_path: Path, *, panel: bool = False) -> Path:
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    if panel:
+        shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(1), Inches(1.5), Inches(5), Inches(3.5))
+        shape.fill.solid()
+    deck = tmp_path / ("panel.pptx" if panel else "blank.pptx")
+    presentation.save(str(deck))
+    return deck
+
+
+def test_a_large_rendered_gap_between_body_groups_is_reported(tmp_path: Path) -> None:
+    from raven.ppt.services.measure.rendered import excessive_whitespace
+
+    deck = _blank_wide_deck(tmp_path)
+    words = [
+        _word("upper", 72, 110, 150, 128),
+        _word("upper", 72, 136, 150, 154),
+        _word("lower", 72, 300, 150, 318),
+    ]
+
+    findings = excessive_whitespace(deck, words)
+    assert findings[0].kind == "excessive_whitespace"
+    assert findings[0].detail["region"] == "between_groups"
+    assert findings[0].detail["gap_in"] > 1.5
+
+
+def test_a_page_that_uses_the_body_height_is_not_sparse(tmp_path: Path) -> None:
+    from raven.ppt.services.measure.rendered import excessive_whitespace
+
+    deck = _blank_wide_deck(tmp_path)
+    words = [_word(f"line{top}", 72, top, 180, top + 18) for top in range(100, 481, 45)]
+
+    assert excessive_whitespace(deck, words) == []
+    assert excessive_whitespace(deck, [_word("small", 72, 110, 140, 128)], structural=[1]) == []
+
+
+def test_a_large_panel_with_copy_only_at_the_top_is_reported(tmp_path: Path) -> None:
+    from raven.ppt.services.measure.rendered import excessive_whitespace
+
+    deck = _blank_wide_deck(tmp_path, panel=True)
+    words = [_word("heading", 90, 125, 180, 145), _word("one line", 90, 155, 220, 175)]
+
+    findings = excessive_whitespace(deck, words)
+    assert "empty_panel" in {finding.detail["region"] for finding in findings}
+
+
+def test_header_rows_that_are_too_far_apart_are_reported(tmp_path: Path) -> None:
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven.ppt.services.measure.rendered import excessive_whitespace
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(0.20), Inches(8), Inches(0.35)).text = "title"
+    slide.shapes.add_textbox(Inches(1), Inches(0.95), Inches(8), Inches(0.30)).text = "explanation"
+    deck = tmp_path / "loose-header.pptx"
+    presentation.save(str(deck))
+    words = [_word("title", 72, 18, 150, 38), _word("explanation", 72, 72, 180, 90)]
+
+    findings = excessive_whitespace(deck, words)
+    assert "loose_header" in {finding.detail["region"] for finding in findings}
 
 
 def test_a_label_broken_one_character_short_is_reported(tmp_path: Path) -> None:

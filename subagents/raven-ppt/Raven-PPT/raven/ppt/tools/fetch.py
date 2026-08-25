@@ -7,8 +7,8 @@ and then has nowhere to put the figure it found on it.
 
 Where a download lands is decided here rather than asked for, and that is the
 point: a document or an image goes into the materials directory, so the next
-`ppt_ingest` reads it like any other source and its figures and numbers enter the
-fact index. A `.pptx` goes to the project's template slot instead, because a deck
+`ppt_ingest` reads it like any other source and its figures enter the catalogue.
+A `.pptx` goes to the project's template slot instead, because a deck
 is not a source to quote -- it is a house style to work inside.
 
 The format is decided by looking at the bytes, not by trusting the server. A URL
@@ -104,7 +104,7 @@ class PptFetchTool(Tool):
             return _return.failed(str(exc))
 
         try:
-            suffix, kind = _sniff(payload)
+            payload, suffix, kind = _sniff(payload)
         except ValueError as exc:
             return _return.failed(str(exc))
 
@@ -131,7 +131,7 @@ class PptFetchTool(Tool):
             path=str(source.path),
             bytes=len(payload),
             **({"sources_read": read} if read else {}),
-            asks=([] if read else ["run ppt_ingest so this reaches the fact index and the figure catalogue"]),
+            asks=([] if read else ["run ppt_ingest so this reaches the materials and the figure catalogue"]),
         )
 
     async def _read(self, deck: Project) -> int:
@@ -187,7 +187,12 @@ class PptFetchTool(Tool):
         nothing, and then the bytes as they arrive, because a server may not
         declare one.
         """
-        async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, timeout=TIMEOUT_S) as client:
+        async with httpx.AsyncClient(
+            proxy=self.proxy,
+            follow_redirects=True,
+            timeout=TIMEOUT_S,
+            trust_env=False,
+        ) as client:
             async with client.stream("GET", url) as response:
                 response.raise_for_status()
                 declared = response.headers.get("content-length")
@@ -203,10 +208,20 @@ class PptFetchTool(Tool):
         return b"".join(chunks)
 
 
-def _sniff(payload: bytes) -> tuple[str, str]:
-    """(suffix, kind) from the bytes themselves."""
+def _sniff(payload: bytes) -> tuple[bytes, str, str]:
+    """(payload, suffix, kind) from the bytes themselves.
+
+    The payload comes back because one kind is not usable as it arrives: a brand
+    ships its mark as SVG, python-pptx places raster images only, and an SVG is
+    text -- so it fell through to the document branch and a logo was saved as
+    `mem0-logo.md` holding path data. The deck that followed had a competitor
+    analysis with none of the competitor's marks on it. Rasterised here rather
+    than at placement time, because every reader downstream -- the ingest
+    catalogue, the figure inspector, the author -- asks the same question of it,
+    and one of them answering "it is a document" is what happened.
+    """
     if payload.startswith(b"%PDF-"):
-        return ".pdf", _DOCUMENT
+        return payload, ".pdf", _DOCUMENT
     if payload.startswith(b"PK\x03\x04"):
         try:
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
@@ -214,16 +229,44 @@ def _sniff(payload: bytes) -> tuple[str, str]:
         except zipfile.BadZipFile as exc:
             raise ValueError("that download is a broken ZIP archive") from exc
         if {"[Content_Types].xml", "ppt/presentation.xml"}.issubset(names):
-            return ".pptx", _TEMPLATE
+            return payload, ".pptx", _TEMPLATE
         raise ValueError("that download is a ZIP archive but not a PowerPoint file")
     if (image := _image_suffix(payload)) is not None:
-        return image, _IMAGE
+        return payload, image, _IMAGE
     text = _as_text(payload)
     if text is None:
         raise ValueError("that download is not a PDF, a PowerPoint file, an image, or text")
+    if (raster := _rasterised_svg(payload, text)) is not None:
+        return raster, ".png", _IMAGE
     # Markup or not, it is text a reader can use, and the ingest strips the tags.
     # The distinction is kept because the ingest reads the two differently.
-    return (".html" if "<html" in text[:2000].casefold() else ".md"), _DOCUMENT
+    return payload, (".html" if "<html" in text[:2000].casefold() else ".md"), _DOCUMENT
+
+
+# Wide enough that a mark stays crisp across a title bar, and small enough that a
+# logo is not a megabyte. A vector has no size of its own, so one has to be chosen.
+SVG_WIDTH_PX = 1600
+
+
+def _rasterised_svg(payload: bytes, text: str) -> bytes | None:
+    """An SVG as PNG bytes, or None when this is not an SVG or cannot be drawn.
+
+    None rather than an error on a failure to convert: an SVG that will not
+    rasterise is still text, and the document branch below can still keep it.
+    """
+    if "<svg" not in text[:4096].casefold():
+        return None
+    try:
+        import cairosvg
+    except (ImportError, OSError):
+        # OSError, not just ImportError: cairosvg imports cairocffi, which raises
+        # OSError when libcairo itself is absent. An unhandled one here loses the
+        # SVG that the document branch below can still keep.
+        return None
+    try:
+        return cairosvg.svg2png(bytestring=payload, output_width=SVG_WIDTH_PX)
+    except Exception:  # noqa: BLE001 -- any failure here means "not an image after all"
+        return None
 
 
 def _as_text(payload: bytes) -> str | None:

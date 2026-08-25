@@ -16,11 +16,13 @@ can carry a page or has to sit beside the copy.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.ppt.contracts import Project
+from raven.ppt.contracts import Project, brief_path, load_brief
 from raven.ppt.services.ingest import CATALOGUE_FILE, FIGURES_DIR
 from raven.ppt.tools import _return
 from raven.ppt.tools._args import ArgumentError, as_strings
@@ -35,6 +37,14 @@ MAX_FIGURES = 6
 # figure 640px wide holds up to about 6.7in and not past it.
 LEGIBLE_PPI = 96.0
 
+CAPTION_BRIEF = """Describe this visual for presentation planning in {language}. Use only what is
+visible in the image and the source metadata supplied with it. Write one concise
+caption that says what the visual shows; do not claim provenance, results or meaning
+the pixels do not establish. Reply as JSON and nothing else:
+
+{{"visual_caption": "one sentence"}}
+"""
+
 
 class PptFigureInspectTool(Tool):
     name = "ppt_figure_inspect"
@@ -43,13 +53,16 @@ class PptFigureInspectTool(Tool):
         "each one as an image, with the label its own source gave it, anything the extraction was unsure "
         "about, and the width past which it will look soft. Worth doing for every figure a page depends "
         "on: the catalogue tells you what a figure is called, not whether it is legible, whether it is "
-        "really a figure rather than a logo, or whether it is a composite you should be cropping."
+        "really a figure rather than a logo, or whether it is a composite you should be cropping. When "
+        "the source supplied no caption, visual inspection writes a separate visual_caption back to the "
+        "catalogue; it never overwrites or impersonates a source-authored caption."
     )
     timeout_seconds = 120.0
 
-    def __init__(self, workspace: Path, views: Any) -> None:
+    def __init__(self, workspace: Path, views: Any, composer: Any | None = None) -> None:
         self.workspace = workspace
         self.views = views
+        self.composer = composer
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -98,6 +111,7 @@ class PptFigureInspectTool(Tool):
                 hint=f"the ids it holds are {', '.join(sorted(catalogue)[:20])}",
             )
 
+        await self._enrich_captions(deck, catalogue, seen)
         payload: dict[str, Any] = {"project": project, "figures": [_described(name, e) for name, e in seen]}
         if unknown:
             payload["not_in_the_catalogue"] = unknown
@@ -113,6 +127,47 @@ class PptFigureInspectTool(Tool):
         if not blocks:
             payload["renders"] = "the figure files could not be read from the project"
         return _return.with_images(_return.done(asks=asks, **payload), blocks)
+
+    async def _enrich_captions(
+        self,
+        deck: Project,
+        catalogue: dict[str, dict[str, Any]],
+        seen: list[tuple[str, dict[str, Any]]],
+    ) -> None:
+        if self.composer is None:
+            return
+        brief = load_brief(brief_path(deck))
+        language = brief.language if brief is not None else "the deck's language"
+
+        async def one(name: str, entry: dict[str, Any]) -> tuple[str, str] | None:
+            if entry.get("caption") or entry.get("visual_caption"):
+                return None
+            path = deck.ingest_dir / FIGURES_DIR / str(entry.get("file") or "")
+            shown = self._shown(path, deck.review_dir / "figures")
+            if shown is None:
+                return None
+            reply = await self.composer.ask(
+                CAPTION_BRIEF.format(language=language),
+                [text_block(_label(name, entry)), image_block(self.views.data_uri(shown))],
+                max_tokens=1200,
+            )
+            try:
+                payload = json.loads(reply[reply.index("{") : reply.rindex("}") + 1])
+            except (ValueError, AttributeError):
+                return None
+            caption = str(payload.get("visual_caption") or "").strip()
+            return (name, caption) if caption else None
+
+        described = await asyncio.gather(*(one(name, entry) for name, entry in seen))
+        changed = False
+        for result in described:
+            if result is None:
+                continue
+            name, caption = result
+            catalogue[name]["visual_caption"] = caption
+            changed = True
+        if changed:
+            _write_catalogue(deck, catalogue)
 
     def _shown(self, path: Path, out_dir: Path) -> Path | None:
         """The figure as a PNG this tool can hand over.
@@ -138,8 +193,6 @@ class PptFigureInspectTool(Tool):
 
 
 def _catalogue(deck: Project) -> dict[str, dict[str, Any]]:
-    import json
-
     try:
         loaded = json.loads((deck.ingest_dir / CATALOGUE_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -148,10 +201,18 @@ def _catalogue(deck: Project) -> dict[str, dict[str, Any]]:
     return {str(k): v for k, v in (assets or {}).items() if isinstance(v, dict)}
 
 
+def _write_catalogue(deck: Project, catalogue: dict[str, dict[str, Any]]) -> None:
+    path = deck.ingest_dir / CATALOGUE_FILE
+    path.write_text(
+        json.dumps({"schema": "raven.ppt.assets.v1", "assets": catalogue}, ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
+
+
 def _described(name: str, entry: dict[str, Any]) -> dict[str, Any]:
     width, height = int(entry.get("width_px") or 0), int(entry.get("height_px") or 0)
     described: dict[str, Any] = {"figure_id": name, "kind": entry.get("kind") or "figure"}
-    for field in ("source_label", "caption", "source_file", "source_page"):
+    for field in ("source_label", "caption", "visual_caption", "source_file", "source_page"):
         if entry.get(field):
             described[field] = entry[field]
     if width and height:
@@ -170,6 +231,8 @@ def _label(name: str, entry: dict[str, Any]) -> str:
     lines = [f"{name} — {said}" + (f", holds up to {width / LEGIBLE_PPI:.1f}in wide" if width else "")]
     if entry.get("caption"):
         lines.append(f"  its source's caption: {str(entry['caption'])[:200]}")
+    elif entry.get("visual_caption"):
+        lines.append(f"  visual caption added during inspection: {str(entry['visual_caption'])[:200]}")
     if entry.get("concerns"):
         lines.append(f"  the extraction was unsure about: {', '.join(entry['concerns'])}")
     return "\n".join(lines)

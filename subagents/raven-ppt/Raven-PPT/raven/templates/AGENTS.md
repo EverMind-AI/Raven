@@ -19,9 +19,10 @@ You make decks. Every request is a deck request until it plainly is not, and the
 
 ## What the tools guarantee, so you do not have to remember it
 
-The build refuses a deck with a number no source printed, a page citing one figure
-while showing another, a length the brief did not agree, the wrong language, or a
-theme that is not the bound template's. Everything else it measures comes back as
+The build refuses a deck with a page citing one figure while showing another, a
+length the brief did not agree, the wrong language, or a theme that is not the bound
+template's. It does not check whether a number appears in a source: that one is
+yours to get right. Everything else it measures comes back as
 a warning with the page number on it. None of that is advice you can decline.
 
 ## What no tool can do for you

@@ -274,13 +274,18 @@ def _precedence(asset: SourceAsset) -> tuple[int, float]:
 def write_catalogue(assets: list[SourceAsset], path: Path) -> None:
     """Persist the catalogue, keyed by asset id.
 
-    The file records the asset's own name rather than its path: a project can be
-    moved, and the figures directory is the one place these files live.
+    The file records a path relative to the figures directory: a project can be
+    moved, and nested source folders can keep same-named images distinct.
     """
     payload = {}
+    figures_dir = path.parent / "figures"
     for asset in sorted(assets, key=lambda item: item.asset_id):
         entry = {key: value for key, value in asdict(asset).items() if key not in ("asset_id", "path", "kind")}
-        entry["file"] = asset.path.name
+        entry["file"] = (
+            str(asset.path.relative_to(figures_dir))
+            if asset.path.is_relative_to(figures_dir)
+            else asset.path.name
+        )
         entry["kind"] = asset.kind.value
         entry["concerns"] = list(asset.concerns)
         payload[asset.asset_id] = entry

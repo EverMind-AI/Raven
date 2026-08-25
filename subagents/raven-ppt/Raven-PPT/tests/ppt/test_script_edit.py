@@ -19,6 +19,7 @@ from raven.ppt.backends.script import (
     slide_creators,
     with_banner,
 )
+from raven.ppt.backends.script.edit import copy_rejection
 
 PRELUDE = textwrap.dedent(
     """
@@ -175,6 +176,15 @@ def test_the_advice_differs_by_where_the_mapping_came_from() -> None:
     assert "shared loop" in (from_execution or "")
 
 
+def test_execution_mapping_accepts_a_page_created_through_nested_helpers() -> None:
+    script = PRELUDE + "\n# SLIDE 1\nslide, body = content_page('title')\n"
+    lines = script.splitlines(keepends=True)
+    blocks = page_blocks(lines)
+
+    assert "creates 0 slides" in (blocks_rejection(lines, blocks, 1, derived="comments") or "")
+    assert blocks_rejection(lines, blocks, 1, derived="execution") is None
+
+
 def test_pages_numbered_out_of_range_are_refused() -> None:
     script = SCRIPT.replace("# SLIDE 2", "# SLIDE 5")
     lines = script.splitlines(keepends=True)
@@ -191,6 +201,19 @@ def test_a_block_that_draws_two_slides_is_refused() -> None:
 
 def test_a_returned_block_that_saves_the_deck_is_refused() -> None:
     assert "saving belongs at the end" in (block_rejection("prs.save('x')\n", "one = new_slide()\n") or "")
+
+
+def test_copy_guard_ignores_template_keys_and_style_arguments() -> None:
+    original = """
+texts = {"template placeholder": "Visible claim"}
+replace_text(shape, "Click to add title", "Visible title")
+plane(slide, box, tint="accent_soft", style="row_rules", align="left")
+colour = T["accent_soft"]
+"""
+    replacement = 'write(slide, box, "Visible claim")\nwrite(slide, title, "Visible title")\n'
+
+    assert copy_rejection(replacement, original) is None
+    assert "Visibleclaim" in (copy_rejection('write(slide, box, "Other")\n', original) or "")
 
 
 def test_an_empty_block_is_refused() -> None:

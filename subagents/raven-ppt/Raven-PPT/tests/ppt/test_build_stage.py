@@ -286,3 +286,72 @@ async def test_a_draft_is_not_polished_and_the_reply_says_why(project: Project) 
     assert result.ok
     assert design.calls == 0
     assert "yours to answer" in result.data["design_pass"]["skipped"]
+
+
+def _planned(project: Project, figures: dict[int, list[str]]) -> None:
+    """An outline that gives these pages these figures."""
+    import json
+
+    from raven.ppt.contracts import outline_path
+
+    outline_path(project).parent.mkdir(parents=True, exist_ok=True)
+    outline_path(project).write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": n,
+                        "claim": f"page {n}",
+                        "carries": "prose",
+                        "says": ["a", "b"],
+                        "figures": figures.get(n, []),
+                    }
+                    for n in (1, 2)
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _deck_with(path: Path, pictures: dict[int, bool]) -> None:
+    """Two slides, each with a picture or without one."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    png = path.parent / "dot.png"
+    png.write_bytes(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+            "01f15c4890000000a49444154789c6300010000050001-0d0a2db40000000049454e44ae426082".replace("-", "")
+        )
+    )
+    prs = Presentation()
+    for n in (1, 2):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        if pictures.get(n):
+            slide.shapes.add_picture(str(png), Inches(1), Inches(1), Inches(1), Inches(1))
+    prs.save(path)
+
+
+def test_a_page_the_plan_gave_a_figure_and_the_build_left_bare_is_reported(project: Project) -> None:
+    """Twenty pages were built carrying no picture while the plan named two."""
+    from raven.ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    _deck_with(deck, {1: False, 2: True})
+    _planned(project, {1: ["mem0-logo-2afc7b9e29"], 2: ["arch-7979644ab7"]})
+    found = _unplaced_figure_findings(project, BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x"))
+
+    assert [f.page for f in found] == [1], "only the page built without one"
+    assert "mem0-logo-2afc7b9e29" in found[0].message
+    assert found[0].audience is Audience.AUTHOR
+
+
+def test_a_plan_that_promises_no_figure_is_not_asked_for_one(project: Project) -> None:
+    from raven.ppt.stages.build import _unplaced_figure_findings
+
+    deck = project.build_dir / "deck.pptx"
+    _deck_with(deck, {1: False, 2: False})
+    _planned(project, {})
+    assert _unplaced_figure_findings(project, BuildOutcome(ok=True, pptx_path=deck, pages=2, source_digest="x")) == []

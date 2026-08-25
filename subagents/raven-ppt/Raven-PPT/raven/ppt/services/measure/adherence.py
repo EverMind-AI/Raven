@@ -394,7 +394,7 @@ def prototype_kept(pptx_path: Path, template: Path | None, outline: Any | None) 
         findings.append(
             Finding(
                 kind="prototype_kept",
-                severity=Severity.BLOCKING,
+                severity=Severity.WARNING,
                 page=page.page,
                 audience=Audience.AUTHOR,
                 message=(

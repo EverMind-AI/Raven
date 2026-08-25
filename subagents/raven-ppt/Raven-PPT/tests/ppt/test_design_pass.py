@@ -155,6 +155,30 @@ async def test_a_page_edit_is_written_and_the_deck_rebuilt(project: Project) -> 
     assert result.ok, result.note
     assert "ACC" in script_path(project).read_text(encoding="utf-8")
     assert result.data["vocabulary"] == ["keep the rail"]
+    assert result.data["changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_design_pass_saves_before_and_after_rendered_artifacts(project: Project) -> None:
+    result = await _pass(project, []).run(project, _outcome(project))
+
+    assert result.ok
+    for label in ("before", "after"):
+        root = project.review_dir / "design_pass" / label
+        assert (root / "deck.pptx").is_file()
+        assert (root / "page-01.png").is_file()
+        assert (root / "page-02.png").is_file()
+        assert (root / "contact.png").is_file()
+        assert (root / "manifest.json").is_file()
+    assert result.data["artifacts"] == {
+        "before": str(project.review_dir / "design_pass" / "before"),
+        "after": str(project.review_dir / "design_pass" / "after"),
+        "report": str(project.review_dir / "design_pass" / "report.json"),
+    }
+    report = json.loads((project.review_dir / "design_pass" / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "completed"
+    assert report["changed"] is False
+    assert report["rounds"][0]["pages"]["1"]["verdict"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -212,29 +236,84 @@ async def test_a_prelude_that_would_take_every_page_down_is_refused(project: Pro
     assert "def title" in script_path(project).read_text(encoding="utf-8")
 
 
-@pytest.mark.asyncio
-async def test_a_round_that_breaks_the_build_is_reverted_and_attributed(project: Project) -> None:
-    """The next actor needs a deck to work from more than it needs this round."""
+def _died_in_page_one() -> BuildOutcome:
+    """A build that failed on a line inside the block that draws page 1."""
     lines = SCRIPT.splitlines(keepends=True)
     marker = next(i for i, line in enumerate(lines) if "# SLIDE 1" in line)
-    broken_build = BuildOutcome(
+    return BuildOutcome(
         ok=False,
         stderr=f'  File "/w/build/build.py", line {marker + 2}, in <module>\nNameError: nope\n',
     )
+
+
+# The block keeps the page's copy -- a round that dropped it would be refused
+# before it ever built (see `copy_rejection`), and these are about the build.
+BREAKS_PAGE_ONE = json.dumps(
+    {
+        "slide": 1,
+        "verdict": "edited",
+        "notes": ["x"],
+        "block": '# SLIDE 1\none = new_slide()\ntitle(one, "Unified video segmentation")\nnope\n',
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_the_page_that_will_not_run_costs_itself_and_not_the_round(project: Project) -> None:
+    """One page's bad edit used to discard every other page's good one."""
     replies = [
         json.dumps({"verdict": "ok"}),
-        # The block keeps the page's copy -- a round that dropped it would be refused
-        # before it ever built (see `copy_rejection`), and this is about the build.
+        BREAKS_PAGE_ONE,
         json.dumps(
             {
-                "slide": 1,
+                "slide": 2,
                 "verdict": "edited",
-                "notes": ["x"],
-                "block": '# SLIDE 1\none = new_slide()\ntitle(one, "Unified video segmentation")\nnope\n',
+                "notes": ["y"],
+                "block": '# SLIDE 2\ntwo = new_slide()\ntitle(two, "Target queries")\nACC  # page two stayed\n',
             }
         ),
+    ]
+    result = await _pass(project, replies, builds=[_died_in_page_one(), _outcome(project)]).run(
+        project, _outcome(project)
+    )
+
+    written = script_path(project).read_text(encoding="utf-8")
+    assert result.ok, result.note
+    assert "nope" not in written, "page 1's edit had to go"
+    assert "page two stayed" in written, "page 2's edit had nothing to do with it"
+    round_one = result.data["rounds"][0]
+    assert round_one["rewrote"] == [2]
+    assert "NameError: nope" in round_one["would_not_run"][1]
+
+
+@pytest.mark.asyncio
+async def test_the_next_round_is_told_what_would_not_run(project: Project) -> None:
+    """Otherwise round two makes the same call to the same helper again."""
+    replies = [
+        json.dumps({"verdict": "ok"}),
+        BREAKS_PAGE_ONE,
+        json.dumps({"slide": 2, "verdict": "ok"}),
+        json.dumps({"slide": 1, "verdict": "ok"}),
         json.dumps({"slide": 2, "verdict": "ok"}),
     ]
+    passes = _pass(project, replies, builds=[_died_in_page_one(), _outcome(project)], rounds=2)
+    result = await passes.run(project, _outcome(project))
+
+    assert result.ok, result.note
+    assert "would not run and was dropped" in passes.composer.texts()
+    assert "NameError: nope" in passes.composer.texts()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_that_names_no_page_is_reverted_and_attributed(project: Project) -> None:
+    """The next actor needs a deck to work from more than it needs this round."""
+    lines = SCRIPT.splitlines(keepends=True)
+    in_prelude = next(i for i, line in enumerate(lines) if "def new_slide" in line)
+    broken_build = BuildOutcome(
+        ok=False,
+        stderr=f'  File "/w/build/build.py", line {in_prelude + 1}, in new_slide\nNameError: nope\n',
+    )
+    replies = [json.dumps({"verdict": "ok"}), BREAKS_PAGE_ONE, json.dumps({"slide": 2, "verdict": "ok"})]
     result = await _pass(project, replies, builds=[broken_build, _outcome(project)]).run(project, _outcome(project))
 
     assert not result.ok
@@ -264,6 +343,53 @@ async def test_the_loop_stops_early_when_a_round_changes_nothing(project: Projec
     assert result.ok
     assert len(result.data["rounds"]) == 1
     assert result.data["rounds"][0]["stopped"] == "nothing left to change"
+
+
+@pytest.mark.asyncio
+async def test_targeted_replay_skips_deck_setup_and_only_sends_selected_pages(project: Project) -> None:
+    stage = _pass(project, [json.dumps({"slide": 2, "verdict": "ok"})])
+
+    result = await stage.run(project, _outcome(project), pages=[2])
+
+    assert result.ok
+    assert len(stage.composer.seen) == 1  # type: ignore[attr-defined]
+    assert "Slide 2 as it renders" in stage.composer.texts()  # type: ignore[attr-defined]
+    assert "Slide 1 as it renders" not in stage.composer.texts()  # type: ignore[attr-defined]
+    assert result.data["rounds"][0]["selected"] == [2]
+    assert result.data["rounds"][0]["deck"]["skipped"] == "targeted replay keeps the shared setup"
+
+
+@pytest.mark.asyncio
+async def test_targeted_replay_can_rewrite_the_shared_setup_once(project: Project) -> None:
+    stage = _pass(
+        project,
+        [json.dumps({"verdict": "ok"}), json.dumps({"slide": 2, "verdict": "ok"})],
+    )
+
+    result = await stage.run(project, _outcome(project), pages=[2], setup=True)
+
+    assert result.ok
+    assert len(stage.composer.seen) == 2  # type: ignore[attr-defined]
+    assert result.data["rounds"][0]["deck"]["verdict"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_later_round_can_remove_copy_added_by_an_earlier_design_round(project: Project) -> None:
+    first = '# SLIDE 1\none = new_slide()\ntitle(one, "Unified video segmentation")\ntitle(one, "temporary caption")\n'
+    second = '# SLIDE 1\none = new_slide()\ntitle(one, "Unified video segmentation")\n'
+    replies = [
+        json.dumps({"verdict": "ok"}),
+        json.dumps({"slide": 1, "verdict": "edited", "block": first}),
+        json.dumps({"slide": 2, "verdict": "ok"}),
+        json.dumps({"slide": 1, "verdict": "edited", "block": second}),
+        json.dumps({"slide": 2, "verdict": "ok"}),
+    ]
+
+    result = await _pass(project, replies, rounds=2).run(project, _outcome(project))
+
+    assert result.ok
+    assert "temporary caption" not in script_path(project).read_text(encoding="utf-8")
+    assert result.data["rounds"][1]["rewrote"] == [1]
 
 
 @pytest.mark.asyncio
@@ -325,7 +451,45 @@ async def test_a_page_that_adapts_a_template_page_is_told_so(project: Project) -
 
     await stage.run(project, _outcome(project))
 
-    assert "adapts the template's page 5" in stage.composer.texts()
+    assert "started from the template's page 5" in stage.composer.texts()
+    assert "designed reference, not an immutable form" in stage.composer.texts()
+
+
+@pytest.mark.asyncio
+async def test_each_page_receives_its_outline_during_design(project: Project) -> None:
+    from raven.ppt.contracts.outline import Outline, PagePlan, outline_path, write_outline
+
+    write_outline(
+        Outline(
+            takeaway="one model, four tasks",
+            pages=(
+                PagePlan(
+                    page=1,
+                    claim="one model handles four tasks",
+                    carries="dominant architecture figure",
+                    says=("shared representation", "task-specific queries"),
+                    figures=("architecture-01",),
+                    table_plan={
+                        "columns": ("dimension", "system A", "system B"),
+                        "rows": (("latency", "1s", "2s"),),
+                        "reading": "compare on one baseline",
+                    },
+                ),
+            ),
+        ),
+        outline_path(project),
+    )
+    stage = _pass(project, [json.dumps({"verdict": "ok"}), json.dumps({"slide": 1, "verdict": "ok"})])
+
+    await stage.run(project, _outcome(project))
+
+    seen = stage.composer.texts()
+    assert "one model handles four tasks" in seen
+    assert "dominant architecture figure" in seen
+    assert "shared representation" in seen
+    assert "architecture-01" in seen
+    assert "planned table information shape" in seen
+    assert "compare on one baseline" in seen
 
 
 def test_the_house_numbers_reach_the_brief(tmp_path) -> None:
