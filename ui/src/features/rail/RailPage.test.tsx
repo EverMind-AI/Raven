@@ -266,6 +266,25 @@ describe('rail island', () => {
     expect(screen.getByText('11:24')).toBeTruthy()
   })
 
+  it('gives the placeholder a width that does not depend on its parent', () => {
+    /* `.sess .t` is a flex row. The first version wrapped the bar in a span and
+       sized it in percent, so the percentage resolved against a shrink-to-fit
+       item whose width came from the bar itself: it collapsed to zero and the
+       row rendered as simply empty for the whole wait. Pixels, and a direct
+       child of `.t` so `.skel .sk` still matches. */
+    install({ rows: [row({ naming: true, title: 'gui.new_task' })] })
+    const host = mount()
+
+    const bar = host.querySelector('.sess .t .sk') as HTMLElement
+    expect(bar.parentElement!.classList.contains('t')).toBe(true)
+    expect(bar.style.width).toMatch(/px$/)
+    /* `flex: none` expands to `0 0 auto`; the shrink of 0 is the half that
+       stops the row from squeezing the bar back to nothing. */
+    expect(bar.style.flexShrink).toBe('0')
+    /* The shimmer keyframes hang off `.skel .sk`, so an ancestor must carry it. */
+    expect(bar.closest('.skel')).not.toBeNull()
+  })
+
   it('draws the title once the name has landed', () => {
     install({ rows: [row({ naming: false, title: 'Cut a desktop release' })] })
     const host = mount()

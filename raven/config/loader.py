@@ -55,6 +55,12 @@ EXTENSION_KEYS = (
     "runtime",
     # In-tree observability tracing (raven.tracing).
     "tracing",
+    # Model-generated session titles (raven.session.title). Absent from this
+    # tuple the block is not merely ignored: the base loader forbids extras, so
+    # a config file carrying it fails validation and takes the whole config
+    # down with it -- including the documented way to turn the feature off.
+    "sessionTitle",
+    "session_title",
 )
 
 # Global variable to store current config path (for multi-instance support)
