@@ -596,6 +596,8 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     pool = src.index("await close_pool()")
 
     assert drain < cancel < web < pool
+
+
 def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
     """On a chat channel the batch has no dialog to show progress in, so the
     position has to ride in the message text itself."""

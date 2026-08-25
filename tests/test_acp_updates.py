@@ -194,7 +194,9 @@ class TestTranslatedFrames:
     def test_a_successful_tool_without_the_flag_stays_completed(self):
         """``ok`` defaults to true -- every pre-existing emit site, and the
         verdict is the emit site's job, not the translator's guess."""
-        update = translate({"type": "tool.complete", "payload": {"tool_call_id": "t", "result_preview": "ok"}}).updates[0]
+        update = translate({"type": "tool.complete", "payload": {"tool_call_id": "t", "result_preview": "ok"}}).updates[
+            0
+        ]
 
         assert update["status"] == "completed"
         validate_def("SessionUpdate", update)

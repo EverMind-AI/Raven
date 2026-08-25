@@ -1294,8 +1294,8 @@ class TestConnectMcpSandboxGuard:
         import mcp
         import mcp.client.streamable_http
 
-        from raven.mcp.client import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         attempted = []
 
@@ -1362,8 +1362,8 @@ class TestConnectMcpSandboxGuard:
         import mcp
         import mcp.client.streamable_http
 
-        from raven.mcp.client import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         entered = asyncio.Event()
 
@@ -1414,8 +1414,8 @@ class TestConnectMcpSandboxGuard:
         import mcp
         import mcp.client.sse
 
-        from raven.mcp.client import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_servers
 
         clients = []
 
@@ -1483,8 +1483,8 @@ class TestConnectMcpSandboxGuard:
         from contextlib import AsyncExitStack
         from types import SimpleNamespace
 
-        from raven.mcp import client as mcp_tools
         from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp import client as mcp_tools
 
         attempted = False
 

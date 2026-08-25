@@ -531,15 +531,18 @@ async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> No
 
 @pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
 def test_litellm_catalogue_fills_providers_with_no_curated_shortlist(slug: str) -> None:
-    """Eleven providers had no shortlist, so the picker offered them nothing.
+    """The catalogue tier has to answer for a provider the shortlist does not.
 
     Ollama is the case that proves the lookup has to go through every name the
     provider answers to: LiteLLM files its models under "ollama" while the
     section is "ollama_chat", so a lookup by section name alone finds none.
-    """
-    from raven.providers.common_models import common_models_for, litellm_models_for
 
-    assert not common_models_for(slug), f"{slug} now has a shortlist; pick another provider for this test"
+    Upstream guarded this with ``not common_models_for(slug)``; this trunk
+    curates a shortlist for all five, so the premise is gone while the lookup it
+    was protecting is not. The catalogue tier is asked directly instead.
+    """
+    from raven.providers.common_models import litellm_models_for
+
     models = litellm_models_for(slug)
     assert models, f"{slug}: the catalogue tier found nothing"
     assert all("/" in m for m in models), models[:3]

@@ -33,7 +33,6 @@ from raven.providers.binding import ModelBinding
 NEW_MODEL = "anthropic/claude-opus-4-8"
 
 
-
 class _StubExecutor:
     """``_run_subagent_inner`` only passes this to ExecTool; no command runs."""
 
@@ -54,6 +53,7 @@ class _StubExecutor:
 def _noop_submit(*args, **kwargs) -> None:
     """``_announce_result`` calls the spine submit without awaiting it."""
     return None
+
 
 class _Provider:
     """Minimal provider stand-in; identity is what the assertions track."""

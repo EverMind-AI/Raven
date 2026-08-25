@@ -6,7 +6,6 @@
 import { renderSync } from '@hermes/ink'
 import React from 'react'
 import { PassThrough } from 'stream'
-import { afterEach, describe, expect, it } from 'vitest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Theme } from '../theme.js'
@@ -517,6 +516,8 @@ describe('MessageLine', () => {
     expect(rendered).toContain('Final report')
     expect(rendered).toContain('[missing]')
     expect(rendered).toContain('pricing.csv')
+  })
+
   describe('the prompt block', () => {
     afterEach(() => {
       vi.unstubAllEnvs()

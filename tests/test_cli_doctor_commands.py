@@ -744,6 +744,8 @@ class TestTheInstallationSection:
         payload = json.loads(r.stdout[r.stdout.index("{") :])
         assert payload["install"]["complete"] is False
         assert payload["install"]["missing"] == ["the page"]
+
+
 # ── raven doctor --fix ──────────────────────────────────────────────────
 #
 # The migrations run at load, so nothing is ever "pending" by the time this

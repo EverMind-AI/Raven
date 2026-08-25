@@ -186,7 +186,12 @@ async def stream_llm_call(
         tool_calls=tool_calls,
     )
 
-    finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
+    # No terminal reason arrived means none may be fabricated: a reply that died
+    # mid-stream has to stay distinguishable from one that finished. Upstream
+    # changed this in v0.1.13; the change could not reach here because this file
+    # is the extraction of the loop's inline stream call and upstream has no
+    # counterpart to merge against.
+    finish_reason = upstream_finish_reason or "unknown"
 
     # A call that emitted nothing but thought still thought for a measurable
     # time; the end of the stream is where that thought stopped.
