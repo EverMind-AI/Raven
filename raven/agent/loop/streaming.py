@@ -23,10 +23,37 @@ from loguru import logger
 from raven.agent.tools.registry import RAW_ARGUMENTS_KEY
 from raven.providers.base import ErrorClassification, LLMResponse, RunMeta, ToolCallRequest
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.transport_failure import flag_transport_failure, prompt_chars
 from raven.providers.truncation import flag_truncation
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
+
+
+def _transport_failed(
+    finish_reason: str | None,
+    content_buf: list[str],
+    reasoning_buf: list[str],
+    tool_call_slots: list[dict[str, Any]],
+    usage: dict[str, Any] | None,
+    messages: list[dict[str, Any]],
+) -> str | None:
+    """Whether this attempt's stream was a request the upstream never processed.
+
+    The same question the non-streaming response exit asks, on the same
+    evidence, so one fault does not read differently inside the TUI than
+    outside it.
+    """
+    return flag_transport_failure(
+        # The upstream's own word, not a value synthesised for a stream that
+        # ended without a terminal delta.
+        finish_reason=finish_reason,
+        content="".join(content_buf),
+        reasoning="".join(reasoning_buf),
+        tool_calls=_finalize_tool_calls(tool_call_slots),
+        usage=usage,
+        sent_chars=prompt_chars(messages),
+    )
 
 
 async def stream_llm_call(
@@ -135,6 +162,27 @@ async def stream_llm_call(
                         )
                     if delta.usage is not None:
                         final_usage = delta.usage
+            # Asked inside the attempt loop so the answer can be acted on. The
+            # verdict requires that nothing was emitted, so a second attempt
+            # duplicates no rendered output -- the same condition the reconnect
+            # below already tests before retrying a mid-stream error. Returning
+            # `finish_reason="error"` here instead would end the turn: this path
+            # has no ladder of its own, and the loop breaks on an error response
+            # before `classify_empty_response` can recover it.
+            if attempt < max_reconnects and _transport_failed(
+                upstream_finish_reason, content_buf, reasoning_buf, tool_call_slots, final_usage, messages
+            ):
+                logger.warning(
+                    "upstream reported a failed call as a normal end (attempt {}/{}), reconnecting",
+                    attempt + 1,
+                    max_reconnects + 1,
+                )
+                content_buf.clear()
+                reasoning_buf.clear()
+                tool_call_slots.clear()
+                final_usage = None
+                upstream_finish_reason = None
+                continue
             break
         except TimeoutError:
             # The idle cap already waited the full timeout; reconnecting would
@@ -202,6 +250,10 @@ async def stream_llm_call(
         split_reasoning, content = split_orphan_think(content)
         reasoning_content = split_reasoning
 
+    # No verdict here: it was asked inside the attempt loop, where a reconnect
+    # is still possible. Once the reconnects are spent the response is returned
+    # as what it is -- an empty one -- so the loop's own empty-response
+    # recovery still owns it rather than being pre-empted by an error.
     return LLMResponse(
         content=content,
         tool_calls=tool_calls,
